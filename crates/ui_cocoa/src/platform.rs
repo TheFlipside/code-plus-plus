@@ -127,7 +127,12 @@ impl CocoaUi {
         // Unlike the bottom dock this one splits the band *horizontally*,
         // so it comes out of the editor's width rather than its height.
         let map_w = crate::docmap::width_for_layout(size.width);
-        let editor_w = (size.width - map_w).max(0.0);
+        // The workspace tree takes the *left* of the same band the map
+        // takes the right of, so it is clamped against what is left after
+        // the map — the map is asked first and keeps its width, which
+        // makes the two deterministic rather than order-dependent.
+        let ws_w = crate::workspace::width_for_layout(size.width, map_w);
+        let editor_w = (size.width - map_w - ws_w).max(0.0);
         self.status.container.setFrame(NSRect::new(
             NSPoint::new(0.0, 0.0),
             NSSize::new(size.width, status_h),
@@ -137,9 +142,18 @@ impl CocoaUi {
             NSSize::new(size.width, dock_h),
         ));
         self.sci_view.setFrame(NSRect::new(
-            NSPoint::new(0.0, status_h + dock_h),
+            NSPoint::new(ws_w, status_h + dock_h),
             NSSize::new(editor_w, editor_h),
         ));
+        // Same guard as the map's below, for the same reason: a closed
+        // panel keeps its frame rather than being squashed to zero, which
+        // would collapse its width-sizable subviews irrecoverably.
+        if ws_w > 0.0 {
+            self.workspace.container.setFrame(NSRect::new(
+                NSPoint::new(0.0, status_h + dock_h),
+                NSSize::new(ws_w, editor_h),
+            ));
+        }
         // The map shares the editor's band, pinned to the right edge. The
         // status bar, the results dock and both top strips stay full
         // width — the same arrangement Notepad++ and `ui_gtk` use, where
@@ -155,7 +169,7 @@ impl CocoaUi {
         // is unobservable, so leaving it untouched costs nothing.
         if map_w > 0.0 {
             self.docmap.container.setFrame(NSRect::new(
-                NSPoint::new(editor_w, status_h + dock_h),
+                NSPoint::new(ws_w + editor_w, status_h + dock_h),
                 NSSize::new(map_w, editor_h),
             ));
         }

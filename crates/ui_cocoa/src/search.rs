@@ -147,6 +147,44 @@ pub(crate) fn show_find_in_files() {
     open_panel(PAGE_FIND_IN_FILES);
 }
 
+/// Open the Find-in-Files tab pre-filled with `directory`, for the
+/// workspace tree's "Find in Files…" context action.
+///
+/// The directory **overwrites** whatever was there, unlike the
+/// empty-only auto seed in [`open_panel`]: this one is an explicit user
+/// choice made by right-clicking a specific folder.
+///
+/// **But it is still refused when it would display misleadingly**, on
+/// exactly the reasoning [`open_panel`]'s own guard states: this field is
+/// *functional* — it becomes the search root — so it cannot be sanitized
+/// in place without corrupting the path, and a folder name carrying bidi
+/// or control characters would otherwise render reordered into a field
+/// that drives a bulk Replace-in-Files. A user could be misled about
+/// which folder they are about to rewrite.
+///
+/// The first version of this function set it unconditionally, which was
+/// the one hostile-name path in this milestone that skipped the panel's
+/// own doctrine — the same class DESIGN.md §7.4 catalogues, one function
+/// away from the tree that gets it right. Refusing leaves the user the
+/// Browse button rather than a wrong search, and says so rather than
+/// silently doing nothing.
+pub(crate) fn show_find_in_files_at(directory: &str) {
+    open_panel(PAGE_FIND_IN_FILES);
+    if codepp_shell::sanitize_str_for_display(directory) != *directory {
+        set_fif_status(
+            "That folder's name contains characters that would display \
+             misleadingly — choose it with Browse… instead.",
+        );
+        return;
+    }
+    with_state(|st| {
+        if let Some(d) = &st.find_replace {
+            d.fif_directory
+                .setStringValue(&NSString::from_str(directory));
+        }
+    });
+}
+
 /// Show the panel on `page`, seeding the query from the selection.
 ///
 /// Seeding matches every editor's Find: whatever is selected is almost

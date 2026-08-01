@@ -53,6 +53,7 @@ mod status;
 mod tabs;
 mod toolbar;
 mod window;
+mod workspace;
 
 use std::cell::{Cell, RefCell};
 use std::fmt;
@@ -392,7 +393,7 @@ pub fn run(initial_path: Option<PathBuf>, perf: Perf) -> Result<(), CocoaUiError
 
     let (map_view, map_editor) = create_map_miniature()?;
 
-    let (status, tab_strip, toolbar, fif_dock, docmap) = build_content(
+    let (status, tab_strip, toolbar, fif_dock, docmap, workspace) = build_content(
         &window,
         content_rect,
         &sci_view,
@@ -416,6 +417,7 @@ pub fn run(initial_path: Option<PathBuf>, perf: Perf) -> Result<(), CocoaUiError
         fif_dock,
         fif_job: fif::FifJob::default(),
         docmap,
+        workspace,
         find_replace: None,
         shell,
     }));
@@ -442,6 +444,9 @@ pub fn run(initial_path: Option<PathBuf>, perf: Perf) -> Result<(), CocoaUiError
     // opening the map relayouts the chrome, and doing that once at the
     // end is one fewer frame of the editor at the wrong width.
     docmap::apply_saved();
+    // And the workspace panel's width, root and open state. After the
+    // map for the same reason: each one that opens relayouts the chrome.
+    workspace::apply_saved();
 
     // The auto-save timer is retained by the run loop; `actions` must
     // outlive it, which the binding below guarantees.
@@ -838,6 +843,7 @@ fn build_content(
     Toolbar,
     fif::FifDock,
     docmap::DocMapPanel,
+    workspace::WorkspacePanel,
 ) {
     // Content layout, bottom-up in Cocoa's flipped-origin coordinates:
     // status bar, then the editor, then the tab strip at the top. The
@@ -860,6 +866,8 @@ fn build_content(
     // Also hidden at first, and likewise contributes no width — so a
     // session that never opens the map lays out exactly as before.
     let docmap = docmap::DocMapPanel::new(map_view, map_editor, editor_height, actions, mtm);
+    // Likewise hidden and contributing no width until a folder is opened.
+    let workspace = workspace::WorkspacePanel::new(editor_height, actions, mtm);
     sci_view.setFrame(NSRect::new(
         NSPoint::new(0.0, STATUS_BAR_HEIGHT),
         NSSize::new(DEFAULT_WIDTH, editor_height),
@@ -902,7 +910,7 @@ fn build_content(
     content.addSubview(&toolbar.container);
     window.setContentView(Some(&content));
 
-    (status, tab_strip, toolbar, fif_dock, docmap)
+    (status, tab_strip, toolbar, fif_dock, docmap, workspace)
 }
 
 /// Observe key presses so `--perf` can measure keystroke latency.
@@ -2427,6 +2435,7 @@ pub(crate) fn save_session_now() {
     // before the save reads the session. Same shape as the geometry sync
     // above and as `ui_gtk`'s `docmap::sync_to_shell`.
     docmap::sync_to_shell();
+    workspace::sync_to_shell();
     with_state(|st| {
         let (shell, mut ui) = st.split();
         if let Err(e) = shell.save_session(&mut ui) {
@@ -3562,6 +3571,111 @@ let msg = \"found scintilla_cocoa_new() calls\";
         );
     }
 
+    /// The workspace tree must sanitize what it *renders* and must never
+    /// launch what it has not re-checked.
+    ///
+    /// Both halves are the bug DESIGN.md §7.4 records shipping on Win32:
+    /// a file named `invoice\u{202E}fdp.exe` rendered as a `.pdf`, and the
+    /// context menu's "Run by system" then handed the real `.exe` to
+    /// `ShellExecuteW`. The defence is the value-vs-label split — the
+    /// label is sanitized once, at insert, and no action ever derives a
+    /// path from it — plus a `within_root` re-check at *click* time
+    /// rather than at menu-build time.
+    ///
+    /// A source scan because neither property fails loudly: an
+    /// unsanitized label looks like a filename, and a missing re-check
+    /// only matters on a root change mid-menu. Both were verified against
+    /// the live app as well — the rendered label comes back with U+FFFD
+    /// where the override was, while the row's path keeps the real
+    /// character.
+    #[test]
+    fn the_workspace_tree_sanitizes_labels_and_rechecks_before_launching() {
+        let src = include_str!("workspace.rs");
+        let src = match src.find("#[cfg(test)]") {
+            Some(i) => &src[..i],
+            None => src,
+        };
+
+        // Exactly one place turns a real filename into a label, so there
+        // is one place to get it wrong.
+        assert_eq!(
+            src.matches("sanitize_filename_for_display(").count(),
+            1,
+            "the workspace tree must sanitize display names in exactly one place — \
+             `insert_node`. A second call site is a second thing to forget."
+        );
+        assert!(
+            fn_body(src, "insert_node").contains("sanitize_filename_for_display("),
+            "`insert_node` no longer sanitizes the label, so a filename carrying a \
+             bidi override can spoof its extension in the panel"
+        );
+
+        // Every action that opens or launches re-checks at click time.
+        //
+        // Matched on the **early-return gate** rather than on the bare
+        // identifier, and that is not pedantry: the first version of this
+        // assertion looked for `within_root(` anywhere in the body, and a
+        // mutation that deleted the gate outright still passed, because
+        // one *arm* of the same function happens to call it too. A guard
+        // satisfied by a different call than the one it is guarding is
+        // not a guard.
+        for (function, gate) in [
+            ("context_command", "if !within_root(&path) {"),
+            ("activate_selected_row", "if !within_root(&path) {"),
+        ] {
+            assert!(
+                fn_body(src, function).contains(gate),
+                "`{function}` no longer opens with `{gate}`, so a root change \
+                 between building the action and invoking it could reach a path \
+                 outside the workspace"
+            );
+        }
+
+        // And the one function that hands a path to the system is only
+        // ever reached from a checked caller.
+        assert!(
+            fn_body(src, "open_in_default_app").contains("NSWorkspace"),
+            "`open_in_default_app` no longer looks like the single launch site; \
+             if launching moved, the `within_root` guards above may no longer \
+             cover it"
+        );
+    }
+
+    /// Unfold All's ceilings must not be defeated by the final reveal.
+    ///
+    /// `expandItem:expandChildren:YES` walks every reachable row and
+    /// fires `outlineViewItemWillExpand:` for each — which is the lazy
+    /// *loader*. So using it to reveal the result of a walk that stopped
+    /// at a ceiling re-reads every folder the ceiling declined,
+    /// recursively and synchronously, with no bound at all. Measured on a
+    /// 340-directory tree with the folder ceiling lowered to 5: the
+    /// correct reveal populates 20 directories, the recursive one
+    /// populates all 341.
+    ///
+    /// A source scan because the failure is a *hang* on a pathological
+    /// tree, which is exactly what no test suite wants to reproduce, and
+    /// because the wrong call is the one that reads as obviously correct.
+    #[test]
+    fn the_unfold_reveal_cannot_re_enter_the_lazy_loader() {
+        let src = include_str!("workspace.rs");
+        let src = match src.find("#[cfg(test)]") {
+            Some(i) => &src[..i],
+            None => src,
+        };
+        assert!(
+            !src.contains("expandItem_expandChildren("),
+            "the workspace tree uses `expandItem:expandChildren:`, which fires \
+             `outlineViewItemWillExpand:` for every row it reaches and so re-enters \
+             `populate_if_needed` — defeating UNFOLD_MAX_FOLDERS/UNFOLD_MAX_ROWS \
+             entirely. Reveal with `expand_populated`, which expands only folders \
+             already read."
+        );
+        assert!(
+            fn_body(src, "tick_unfold").contains("expand_populated("),
+            "the walk no longer reveals its result through `expand_populated`"
+        );
+    }
+
     /// The map's column must be recomputed on every layout, and a closed
     /// panel must never be resized to zero.
     ///
@@ -3582,12 +3696,13 @@ let msg = \"found scintilla_cocoa_new() calls\";
         };
         let body = fn_body(src, "relayout_chrome");
         assert!(
-            body.contains("docmap::width_for_layout("),
+            body.contains("docmap::width_for_layout(")
+                && body.contains("workspace::width_for_layout("),
             "`relayout_chrome` no longer clamps the Document Map's width against \
              the live window, so a persisted width can starve the editor"
         );
         assert!(
-            body.contains("if map_w > 0.0"),
+            body.contains("if map_w > 0.0") && body.contains("if ws_w > 0.0"),
             "`relayout_chrome` no longer guards the map's frame update. Resizing a \
              hidden panel to zero collapses its width-sizable subviews, and they do \
              not come back proportionally when it reopens."

@@ -279,6 +279,115 @@ define_class!(
             );
         }
 
+        // ---- m4d: the workspace tree -------------------------------
+
+        /// The View menu's "Folder as Workspace" entry. With no folder
+        /// open yet this routes to the picker rather than showing an
+        /// empty panel — see `workspace::set_visible`.
+        #[unsafe(method(codeppToggleWorkspace:))]
+        fn toggle_workspace(&self, _sender: Option<&NSObject>) {
+            crate::at_callback_boundary("view:toggleWorkspace", (), || {
+                crate::workspace::set_visible(!crate::workspace::is_visible());
+            });
+        }
+
+        /// File → Open Folder as Workspace…
+        #[unsafe(method(codeppOpenFolderAsWorkspace:))]
+        fn open_folder_as_workspace(&self, _sender: Option<&NSObject>) {
+            crate::at_callback_boundary(
+                "file:openFolderAsWorkspace",
+                (),
+                crate::workspace::open_folder_flow,
+            );
+        }
+
+        /// The toolbar's toggle. `PushOnPushOff`, so apply the button's
+        /// state rather than inverting the model.
+        #[unsafe(method(codeppToolbarWorkspace:))]
+        fn toolbar_workspace(&self, sender: Option<&NSButton>) {
+            crate::at_callback_boundary("toolbar:workspace", (), || {
+                if let Some(sender) = sender {
+                    crate::workspace::set_visible(sender.state() != 0);
+                }
+            });
+        }
+
+        #[unsafe(method(codeppWorkspaceClose:))]
+        fn workspace_close(&self, _sender: Option<&NSObject>) {
+            crate::at_callback_boundary("workspace:close", (), || {
+                crate::workspace::set_visible(false);
+            });
+        }
+
+        #[unsafe(method(codeppWorkspaceFoldAll:))]
+        fn workspace_fold_all(&self, _sender: Option<&NSObject>) {
+            crate::at_callback_boundary("workspace:foldAll", (), crate::workspace::fold_all);
+        }
+
+        #[unsafe(method(codeppWorkspaceUnfoldAll:))]
+        fn workspace_unfold_all(&self, _sender: Option<&NSObject>) {
+            crate::at_callback_boundary("workspace:unfoldAll", (), crate::workspace::unfold_all);
+        }
+
+        #[unsafe(method(codeppWorkspaceLocate:))]
+        fn workspace_locate(&self, _sender: Option<&NSObject>) {
+            crate::at_callback_boundary(
+                "workspace:locate",
+                (),
+                crate::workspace::locate_current,
+            );
+        }
+
+        /// A double-clicked tree row.
+        #[unsafe(method(codeppWorkspaceActivate:))]
+        fn workspace_activate(&self, _sender: Option<&NSObject>) {
+            crate::at_callback_boundary(
+                "workspace:activate",
+                (),
+                crate::workspace::activate_selected_row,
+            );
+        }
+
+        // The context menu. Each item carries its row's node id in its
+        // `tag`, never a row index — a row index would address a
+        // different file if the tree changed between opening the menu and
+        // clicking it, which is the same class of bug DESIGN.md §7.4
+        // records for the Win32 tab strip's arm/commit race.
+        #[unsafe(method(codeppWorkspaceOpen:))]
+        fn workspace_open(&self, sender: Option<&NSMenuItem>) {
+            workspace_command(sender, crate::workspace::Command::Open);
+        }
+
+        #[unsafe(method(codeppWorkspaceCopyPath:))]
+        fn workspace_copy_path(&self, sender: Option<&NSMenuItem>) {
+            workspace_command(sender, crate::workspace::Command::CopyPath);
+        }
+
+        #[unsafe(method(codeppWorkspaceCopyName:))]
+        fn workspace_copy_name(&self, sender: Option<&NSMenuItem>) {
+            workspace_command(sender, crate::workspace::Command::CopyName);
+        }
+
+        #[unsafe(method(codeppWorkspaceRunBySystem:))]
+        fn workspace_run_by_system(&self, sender: Option<&NSMenuItem>) {
+            workspace_command(sender, crate::workspace::Command::RunBySystem);
+        }
+
+        #[unsafe(method(codeppWorkspaceRevealInFinder:))]
+        fn workspace_reveal(&self, sender: Option<&NSMenuItem>) {
+            workspace_command(sender, crate::workspace::Command::RevealInFinder);
+        }
+
+        #[unsafe(method(codeppWorkspaceFindInFiles:))]
+        fn workspace_find_in_files(&self, sender: Option<&NSMenuItem>) {
+            workspace_command(sender, crate::workspace::Command::FindInFiles);
+        }
+
+        #[unsafe(method(codeppWorkspaceRemoveRoot:))]
+        fn workspace_remove_root(&self, sender: Option<&NSMenuItem>) {
+            workspace_command(sender, crate::workspace::Command::RemoveRoot);
+        }
+
         // ---- m4a: search -------------------------------------------
 
         #[unsafe(method(codeppShowFind:))]
@@ -481,6 +590,24 @@ define_class!(
     }
 );
 
+/// Run one workspace context-menu command, reading the row's node id out
+/// of the sender's tag.
+///
+/// A **node id**, not a row index: ids are allocated monotonically and
+/// never reused, so a tree that changed between opening the menu and
+/// clicking it resolves to "gone" rather than to a different file. The
+/// same rule the tab strip follows, and for the same reason — DESIGN.md
+/// §7.4 records the index-keyed version of this bug on Win32.
+fn workspace_command(sender: Option<&NSMenuItem>, command: crate::workspace::Command) {
+    crate::at_callback_boundary("workspace:contextCommand", (), || {
+        if let Some(sender) = sender {
+            if let Ok(id) = u64::try_from(sender.tag()) {
+                crate::workspace::context_command(command, id);
+            }
+        }
+    });
+}
+
 /// Compute (and apply) the display state of one menu item.
 ///
 /// Returns whether the item is enabled. Items with no action, or with an
@@ -501,6 +628,8 @@ fn validate(item: &NSMenuItem) -> bool {
         item.setState(isize::from(crate::view_setting_by_tag(tag)));
     } else if action == sel!(codeppSelectTabMenu:) {
         item.setState(isize::from(crate::active_tab_id() == Some(tag as i32)));
+    } else if action == sel!(codeppToggleWorkspace:) {
+        item.setState(isize::from(crate::workspace::is_visible()));
     } else if action == sel!(codeppToggleDocMap:) {
         // A panel rather than a persisted editor setting, so it carries
         // no `VIEW_TOGGLES` tag and is matched on its selector. The mark
@@ -647,6 +776,18 @@ fn build_file_menu(actions: &Actions, mtm: MainThreadMarker) -> Retained<NSMenuI
         "Open…",
         sel!(codeppOpenFile:),
         "o",
+        Some(actions),
+    );
+    // Notepad++'s own File-menu entry, and the discoverable way in to the
+    // workspace panel — the View toggle and the toolbar button both route
+    // to the same picker when no root is set, but neither reads as "open
+    // a folder".
+    add(
+        &file_menu,
+        mtm,
+        "Open Folder as Workspace…",
+        sel!(codeppOpenFolderAsWorkspace:),
+        "",
         Some(actions),
     );
     add(
@@ -897,6 +1038,14 @@ fn build_view_menu(actions: &Actions, mtm: MainThreadMarker) -> Retained<NSMenuI
     // the panel's live visibility rather than from `VIEW_TOGGLES` — it is
     // a panel, not a persisted editor setting, so it carries no tag and
     // is matched on its selector.
+    add(
+        &menu,
+        mtm,
+        "Folder as Workspace",
+        sel!(codeppToggleWorkspace:),
+        "",
+        Some(actions),
+    );
     add(
         &menu,
         mtm,

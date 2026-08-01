@@ -41,6 +41,7 @@ use crate::menu::Actions;
 use crate::status::StatusBar;
 use crate::tabs::TabStrip;
 use crate::toolbar::Toolbar;
+use crate::workspace::WorkspacePanel;
 
 /// Everything the Cocoa backend owns for the lifetime of the window.
 pub struct CocoaUiState {
@@ -114,6 +115,9 @@ pub struct CocoaUiState {
     /// at startup — it owns the second permanent Scintilla view — and
     /// hidden until the user opens it.
     pub docmap: DocMapPanel,
+    /// The "Folder as Workspace" tree, along the left edge of the editor
+    /// band. Built at startup and hidden until a folder is opened.
+    pub workspace: WorkspacePanel,
     /// The modeless Find/Replace panel, built on first use and then kept
     /// for the session — its controls are read by every search command,
     /// so they have to outlive the click that opened it. `None` until
@@ -150,6 +154,9 @@ pub struct CocoaUi {
     /// The Document Map, for the same reason: `relayout_chrome` has to
     /// take its column out of the editor's width while it is open.
     pub docmap: DocMapPanel,
+    /// The workspace tree, for the same reason — it takes the *other*
+    /// side of the same band.
+    pub workspace: WorkspacePanel,
 }
 
 impl CocoaUiState {
@@ -166,6 +173,7 @@ impl CocoaUiState {
             toolbar: self.toolbar.clone(),
             fif_dock: self.fif_dock.clone(),
             docmap: self.docmap.clone(),
+            workspace: self.workspace.clone(),
         };
         (&mut self.shell, ui)
     }

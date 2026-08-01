@@ -105,6 +105,8 @@ pub struct Toolbar {
     /// because it tracks a *panel*, not one of the persisted View
     /// settings that array is zipped against.
     docmap: Retained<NSButton>,
+    /// The Folder as Workspace toggle, held for the same reason.
+    workspace: Retained<NSButton>,
 }
 
 impl Toolbar {
@@ -210,7 +212,11 @@ impl Toolbar {
         );
         bar.disabled_toggle(icon!("document-list"), "Document List");
         bar.disabled_toggle(icon!("function-list"), "Function List");
-        bar.disabled_toggle(icon!("folder-workspace"), "Folder as Workspace");
+        let workspace = bar.toggle(
+            icon!("folder-workspace"),
+            "Folder as Workspace",
+            sel!(codeppToolbarWorkspace:),
+        );
         bar.separator();
 
         // Group 9 — monitoring.
@@ -228,7 +234,15 @@ impl Toolbar {
             container,
             toggles,
             docmap,
+            workspace,
         }
+    }
+
+    /// Repaint the workspace toggle from the panel's real visibility.
+    /// Same reasoning as [`Self::refresh_docmap_toggle`].
+    pub fn refresh_workspace_toggle(&self) {
+        self.workspace
+            .setState(isize::from(crate::workspace::is_visible()));
     }
 
     /// Repaint the Document Map toggle from the panel's real visibility.
