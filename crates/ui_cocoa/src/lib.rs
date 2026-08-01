@@ -3736,8 +3736,30 @@ let msg = \"found scintilla_cocoa_new() calls\";
              already read."
         );
         assert!(
-            fn_body(src, "tick_unfold").contains("expand_populated("),
-            "the walk no longer reveals its result through `expand_populated`"
+            fn_body(src, "tick_unfold").contains("begin_reveal("),
+            "the walk no longer hands off to the batched reveal phase"
+        );
+
+        // And the reveal itself must stay batched. Expanding 3 682
+        // folders in one pass froze the app for 18 seconds — reported by
+        // a user, and a freeze here blocks the editor and every other
+        // tab, not just this panel. Both halves matter: the coalescing
+        // (185× on its own) and the yielding.
+        let reveal = fn_body(src, "tick_reveal");
+        assert!(
+            reveal.contains("beginUpdates()") && reveal.contains("endUpdates()"),
+            "the reveal no longer coalesces its expansions — each `expandItem:` \
+             recomputes the view's row array, so without this the cost is \
+             quadratic in the tree (measured: 18s versus 97ms on 3 682 folders)"
+        );
+        assert!(
+            reveal.contains("UNFOLD_TICK_BUDGET_MS"),
+            "the reveal no longer yields on a time budget, so one tick can grow \
+             without bound on a large tree"
+        );
+        assert!(
+            reveal.contains("schedule_reveal_tick("),
+            "the reveal no longer reschedules itself, so it would stop partway"
         );
     }
 

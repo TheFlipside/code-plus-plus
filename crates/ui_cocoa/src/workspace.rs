@@ -82,8 +82,15 @@ const MAX_RESTORED_WIDTH: f64 = 10_000.0;
 /// Smallest divider movement worth acting on, in points.
 const DRAG_EPSILON: f64 = 0.5;
 
-/// The panel's own header row.
+/// The panel's title row.
 const HEADER_HEIGHT: f64 = 24.0;
+/// The action-button row beneath the title. A second row rather than
+/// sharing the title's — see [`build_header`].
+const TOOLBAR_ROW_HEIGHT: f64 = 22.0;
+/// Both header rows together, which is what the tree body sits below.
+const HEADER_TOTAL: f64 = HEADER_HEIGHT + TOOLBAR_ROW_HEIGHT;
+/// Edge of one header action button.
+const BUTTON_EDGE: f64 = 20.0;
 /// The drag handle down the panel's right edge.
 const DIVIDER_WIDTH: f64 = 5.0;
 /// Row height in the tree.
@@ -96,12 +103,20 @@ const ROW_HEIGHT: f64 = 18.0;
 /// behaved. Applies to ordinary lazy expansion too, not only Unfold All.
 const MAX_DIR_ENTRIES: usize = 5_000;
 
-/// Unfold All tuning, mirroring the other backends' batched walks.
-/// Folders are read [`UNFOLD_BATCH`] per [`UNFOLD_TICK_SECS`], and the
-/// tree is expanded *once* at the end rather than row-by-row, so no
-/// per-folder repaint happens.
-const UNFOLD_BATCH: usize = 20;
-const UNFOLD_TICK_SECS: f64 = 0.015;
+/// Unfold All tuning.
+///
+/// **A time budget per tick, not a fixed item count.** A count has to
+/// guess at cost, and the guess is wrong in both directions: it stalls
+/// when a batch turns out expensive (twenty `read_dir`s on a cold cache)
+/// and wastes wall-clock when it turns out cheap, because the interval
+/// then dominates. A deadline yields on time whatever the work costs, so
+/// no tick can exceed roughly one frame plus one item — which is the
+/// property that actually matters, since a stall here freezes the editor
+/// and every other tab, not just this panel.
+const UNFOLD_TICK_BUDGET_MS: f64 = 8.0;
+/// Gap between ticks. Short enough to keep a large tree moving, long
+/// enough that the run loop gets its turn.
+const UNFOLD_TICK_SECS: f64 = 0.004;
 /// Ceiling on folders one walk will descend into. Bounds the directory
 /// reads a pathological tree (a huge `node_modules`, a fan-out of empty
 /// directories) turns a single click into.
@@ -161,6 +176,13 @@ thread_local! {
     /// Fold-then-Unfold inside one tick interval cannot leave the previous
     /// walk's timer draining the new walk's queue.
     static UNFOLD_GEN: Cell<u64> = const { Cell::new(0) };
+    /// Folder ids still to *reveal*, once the read phase has finished.
+    ///
+    /// Held **reversed**, so `pop()` — which takes from the tail —
+    /// hands them back in the parent-first order `expansion_order`
+    /// produced. Seeded once by `begin_reveal` and only ever shrinks, so
+    /// that order survives being split across ticks.
+    static REVEAL_QUEUE: RefCell<Vec<u64>> = const { RefCell::new(Vec::new()) };
 }
 
 // --- Model helpers ----------------------------------------------------
@@ -533,7 +555,7 @@ impl WorkspacePanel {
             NSPoint::new(0.0, 0.0),
             NSSize::new(
                 (width - DIVIDER_WIDTH).max(0.0),
-                (height - HEADER_HEIGHT).max(0.0),
+                (height - HEADER_TOTAL).max(0.0),
             ),
         );
         let tree = Tree::new(body, mtm);
@@ -590,8 +612,15 @@ impl WorkspacePanel {
     }
 }
 
-/// Build the header row — title plus the four action buttons — and
-/// return the title, which doubles as the Unfold All progress counter.
+/// Build the header — a title row with the panel's own close button, and
+/// a **second row beneath it** carrying the action buttons. Returns the
+/// title, which doubles as the Unfold All progress counter.
+///
+/// **Two rows, not one.** The panel is narrow by design, so a title and
+/// four buttons sharing a line leaves the title a few characters wide and
+/// the buttons crowding it. This is the layout `ui_gtk` was corrected to
+/// after the same report; the Cocoa port copied GTK's *original* single
+/// row and inherited the problem.
 ///
 /// `ViewMinYMargin` on every one of these is load-bearing: they have to
 /// stay pinned to the panel's top edge as the window makes it taller. The
@@ -604,12 +633,18 @@ fn build_header(
     actions: &Actions,
     mtm: MainThreadMarker,
 ) -> Retained<NSTextField> {
-    let header_y = height - HEADER_HEIGHT;
-    let mut x = width - DIVIDER_WIDTH - 22.0;
-    let mut header_button = |glyph: &str, tip: &str, action| {
+    let title_y = height - HEADER_HEIGHT;
+    let tools_y = height - HEADER_HEIGHT - TOOLBAR_ROW_HEIGHT;
+    // The action row fills from the left; only the close button shares
+    // the title row, where a window's close control belongs.
+    let mut x = 4.0;
+    let mut header_button = |glyph: &str, tip: &str, action, row_y: f64| {
         let button = NSButton::initWithFrame(
             NSButton::alloc(mtm),
-            NSRect::new(NSPoint::new(x, header_y), NSSize::new(20.0, HEADER_HEIGHT)),
+            NSRect::new(
+                NSPoint::new(x, row_y),
+                NSSize::new(BUTTON_EDGE, TOOLBAR_ROW_HEIGHT),
+            ),
         );
         button.setTitle(&NSString::from_str(glyph));
         button.setBezelStyle(NSBezelStyle::AccessoryBarAction);
@@ -617,9 +652,7 @@ fn build_header(
             NSFont::smallSystemFontSize(),
         )));
         button.setToolTip(Some(&NSString::from_str(tip)));
-        button.setAutoresizingMask(
-            NSAutoresizingMaskOptions::ViewMinXMargin | NSAutoresizingMaskOptions::ViewMinYMargin,
-        );
+        button.setAutoresizingMask(NSAutoresizingMaskOptions::ViewMinYMargin);
         // SAFETY: the target is a weak reference to an object the window
         // state owns for the process lifetime, and the action is a
         // compile-time `sel!` literal `Actions` implements.
@@ -628,17 +661,48 @@ fn build_header(
             button.setAction(Some(action));
         }
         container.addSubview(&button);
-        x -= 21.0;
+        x += BUTTON_EDGE + 2.0;
     };
-    header_button("✕", "Close", sel!(codeppWorkspaceClose:));
-    header_button("◎", "Locate Current File", sel!(codeppWorkspaceLocate:));
-    header_button("▾", "Unfold All", sel!(codeppWorkspaceUnfoldAll:));
-    header_button("▸", "Fold All", sel!(codeppWorkspaceFoldAll:));
+    header_button("▸", "Fold All", sel!(codeppWorkspaceFoldAll:), tools_y);
+    header_button("▾", "Unfold All", sel!(codeppWorkspaceUnfoldAll:), tools_y);
+    header_button(
+        "◎",
+        "Locate Current File",
+        sel!(codeppWorkspaceLocate:),
+        tools_y,
+    );
+
+    // The close button keeps the title row, pinned to the trailing edge.
+    let close = NSButton::initWithFrame(
+        NSButton::alloc(mtm),
+        NSRect::new(
+            NSPoint::new(width - DIVIDER_WIDTH - BUTTON_EDGE - 2.0, title_y),
+            NSSize::new(BUTTON_EDGE, HEADER_HEIGHT),
+        ),
+    );
+    close.setTitle(&NSString::from_str("✕"));
+    close.setBezelStyle(NSBezelStyle::AccessoryBarAction);
+    close.setFont(Some(&NSFont::systemFontOfSize(
+        NSFont::smallSystemFontSize(),
+    )));
+    close.setToolTip(Some(&NSString::from_str("Close")));
+    close.setAutoresizingMask(
+        NSAutoresizingMaskOptions::ViewMinXMargin | NSAutoresizingMaskOptions::ViewMinYMargin,
+    );
+    // SAFETY: as above.
+    unsafe {
+        close.setTarget(Some(&**actions));
+        close.setAction(Some(sel!(codeppWorkspaceClose:)));
+    }
+    container.addSubview(&close);
 
     let title = NSTextField::labelWithString(&NSString::from_str(PANEL_TITLE), mtm);
     title.setFrame(NSRect::new(
-        NSPoint::new(6.0, header_y),
-        NSSize::new((x - 6.0).max(0.0), HEADER_HEIGHT),
+        NSPoint::new(6.0, title_y),
+        NSSize::new(
+            (width - DIVIDER_WIDTH - BUTTON_EDGE - 12.0).max(0.0),
+            HEADER_HEIGHT,
+        ),
     ));
     title.setFont(Some(&NSFont::systemFontOfSize(
         NSFont::smallSystemFontSize(),
@@ -1287,10 +1351,16 @@ pub(crate) fn locate_current() {
 
 /// Expand every folder, reading each unread directory once.
 ///
-/// Batched on a timer rather than done in one pass: a deep tree is
-/// unbounded work, and doing it synchronously would freeze the UI for as
-/// long as the walk took. The tree is expanded *once* at the end rather
-/// than row-by-row, so no per-folder repaint happens meanwhile.
+/// **Two phases, both batched on the same timer**, because either one
+/// done in a single pass freezes the app — and a freeze here blocks the
+/// editor and every other tab, not just this panel.
+///
+/// [`tick_unfold`] reads directories into the model; when it drains or
+/// hits a ceiling it hands off to [`begin_reveal`], and [`tick_reveal`]
+/// then expands the folders it read. Each tick yields on a time budget,
+/// and the reveal coalesces its expansions with
+/// `beginUpdates`/`endUpdates` so no per-folder repaint happens. See
+/// [`tick_reveal`] for the measurements behind both.
 pub(crate) fn unfold_all() {
     let root = ROOT_ID.with(Cell::get);
     if root == NO_ID {
@@ -1311,6 +1381,7 @@ pub(crate) fn unfold_all() {
 /// Stop an in-flight walk and restore the header title.
 fn cancel_unfold() {
     UNFOLD_QUEUE.with(|q| q.borrow_mut().clear());
+    REVEAL_QUEUE.with(|q| q.borrow_mut().clear());
     // Bumping the generation is what actually stops an already-scheduled
     // tick: it captured the old value and bails on mismatch. Clearing the
     // queue alone would not, because the tick could refill it.
@@ -1341,21 +1412,84 @@ fn cancel_unfold() {
 /// `ui_gtk`'s walk ends in an unconditional `expand_all()` with a comment
 /// asserting every row is already populated — true when the queue
 /// drained, false when a ceiling stopped it. Tracked in §7.4.
-fn expand_populated(panel: &WorkspacePanel) {
+fn begin_reveal(generation: u64) {
     let order = expansion_order(ROOT_ID.with(Cell::get), |id| {
         with_node(id, |n| (n.is_dir && n.populated, n.children.clone()))
     });
-    for id in order {
-        // SAFETY: an id this model owns, on the main thread. Expanding a
-        // populated folder cannot re-enter `read_dir`, which is the whole
-        // reason this walks rather than calling `expandChildren:`.
-        unsafe { panel.tree.expandItem(Some(&item_for(id))) };
+    with_state(|st| st.workspace.reload());
+    // Reversed, so a batch is one `split_off` from the tail and the
+    // stepper walks it back into parent-first order.
+    REVEAL_QUEUE.with(|q| {
+        let mut q = q.borrow_mut();
+        *q = order;
+        q.reverse();
+    });
+    schedule_reveal_tick(generation);
+}
+
+/// One batch of the reveal.
+///
+/// **Both halves of this are load-bearing, and each was measured.**
+/// Expanding 3 682 folders one at a time against the resulting 60 000-row
+/// model took **18 seconds** of frozen main thread — every `expandItem:`
+/// recomputes the view's row array, so the cost is quadratic in the tree.
+/// Wrapping the run in `beginUpdates`/`endUpdates` coalesces that into
+/// one recompute and brings it to **97 ms**, a 185× difference.
+///
+/// 97 ms would be tolerable on its own, but it scales with the tree: at
+/// [`UNFOLD_MAX_FOLDERS`] the same rate is over half a second of dead UI.
+/// So the reveal is *also* batched onto the same timer as the read, which
+/// bounds any single tick however large the tree turns out to be — the
+/// property the read phase already had, and the one that actually
+/// matters, because a freeze here blocks the editor and every other tab
+/// rather than just this panel. Reported by a user as exactly that.
+fn tick_reveal(generation: u64) {
+    if UNFOLD_GEN.with(Cell::get) != generation {
+        return;
     }
+    if REVEAL_QUEUE.with(|q| q.borrow().is_empty()) {
+        with_state(|st| st.workspace.set_title(PANEL_TITLE));
+        return;
+    }
+    with_state(|st| {
+        let tree = &st.workspace.tree;
+        let deadline = std::time::Instant::now();
+        // SAFETY: balanced begin/end around expansions of ids this model
+        // owns, on the main thread. Expanding an already-populated folder
+        // cannot re-enter `read_dir`, which is why this walks a
+        // precomputed order rather than calling `expandChildren:`.
+        unsafe {
+            tree.beginUpdates();
+            loop {
+                if deadline.elapsed().as_secs_f64() * 1000.0 >= UNFOLD_TICK_BUDGET_MS {
+                    break;
+                }
+                let Some(id) = REVEAL_QUEUE.with(|q| q.borrow_mut().pop()) else {
+                    break;
+                };
+                tree.expandItem(Some(&item_for(id)));
+            }
+            tree.endUpdates();
+        }
+    });
+    let left = REVEAL_QUEUE.with(|q| q.borrow().len());
+    with_state(|st| {
+        st.workspace
+            .set_title(&format!("Revealing folders: {left} left"));
+    });
+    schedule_reveal_tick(generation);
+}
+
+fn schedule_reveal_tick(generation: u64) {
+    let when = dispatch2::DispatchTime::NOW.time((UNFOLD_TICK_SECS * 1e9) as i64);
+    let _ = dispatch2::DispatchQueue::main().after(when, move || {
+        crate::at_callback_boundary("workspace:revealTick", (), || tick_reveal(generation));
+    });
 }
 
 /// The ids to expand, parents before children.
 ///
-/// Split out of [`expand_populated`] as a pure walk over a lookup so the
+/// Split out of [`begin_reveal`] as a pure walk over a lookup so the
 /// traversal has `cargo test` coverage — the toolkit half is one
 /// `expandItem:` per returned id and has nothing left to get wrong.
 ///
@@ -1415,7 +1549,11 @@ fn tick_unfold(generation: u64) {
     }
     let mut folders = UNFOLD_FOLDERS.with(Cell::get);
     let mut rows = UNFOLD_ROWS.with(Cell::get);
-    for _ in 0..UNFOLD_BATCH {
+    let deadline = std::time::Instant::now();
+    loop {
+        if deadline.elapsed().as_secs_f64() * 1000.0 >= UNFOLD_TICK_BUDGET_MS {
+            break;
+        }
         let Some(id) = UNFOLD_QUEUE.with(|q| q.borrow_mut().pop()) else {
             break;
         };
@@ -1438,11 +1576,7 @@ fn tick_unfold(generation: u64) {
     let drained = UNFOLD_QUEUE.with(|q| q.borrow().is_empty());
     if unfold_should_stop(drained, folders, rows) {
         UNFOLD_QUEUE.with(|q| q.borrow_mut().clear());
-        with_state(|st| {
-            st.workspace.set_title(PANEL_TITLE);
-            st.workspace.reload();
-            expand_populated(&st.workspace);
-        });
+        begin_reveal(generation);
         return;
     }
     with_state(|st| {
