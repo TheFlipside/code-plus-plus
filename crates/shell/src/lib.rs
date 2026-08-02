@@ -939,6 +939,33 @@ pub struct Tab {
     /// has been attached to a Scintilla view. Milestone 6b's UI
     /// populates this; milestone 6a leaves it 0.
     pub scintilla_doc: isize,
+    /// Set when a load finishes onto a tab that is **not** the active
+    /// one *and* already owns a Scintilla document, so
+    /// [`Shell::bind_active_view`] knows the document's contents are
+    /// stale and pushes [`Self::text`] into it on first activation.
+    ///
+    /// Without it that tab shows the right filename and an empty
+    /// buffer, forever. `bind_active_view` used to fill a document only
+    /// when `scintilla_doc == 0`, which is a correct proxy for "never
+    /// populated" *only* while every background load lands on a fresh
+    /// tab — the assumption `apply_load_result`'s own comment states.
+    /// `open_file_replacing_scratch` broke it by re-targeting a load
+    /// onto the startup `new 1`, whose document already exists.
+    ///
+    /// Reported as: File → Open All Recent Files opens every file, and
+    /// the first one is blank. The first is the only one that reuses
+    /// the scratch, and it is non-active by the time its load lands
+    /// because the opens that follow move `active_tab` on.
+    ///
+    /// **Anything that binds this tab's document must honour this flag,
+    /// and the way to do that is to go through [`Shell::bind_and_fill`]
+    /// rather than calling [`UiPlatform::activate_tab`] directly.** Two
+    /// callers were doing the latter when the flag was introduced, and
+    /// the more serious of them — [`Shell::save_all`] — reads the bound
+    /// document straight back out and writes it to disk, so a stale
+    /// binding there overwrites the real file with the wrong bytes
+    /// rather than merely showing them.
+    pub doc_needs_text: bool,
     /// N++-compatible `LangType` for this buffer. Phase 4 m1 derives
     /// it from the path extension on first load; later milestones
     /// expose `NPPM_SETBUFFERLANGTYPE` so plugins can override. New
@@ -1001,6 +1028,7 @@ impl Default for Tab {
             text: String::new(),
             pending_load: None,
             scintilla_doc: 0,
+            doc_needs_text: false,
             lang: L_TEXT,
             untitled_seq: None,
             dirty: false,
@@ -2914,17 +2942,21 @@ impl Shell {
             if skip {
                 continue;
             }
-            // Bind the editor to this tab's document. Re-read the
-            // returned doc pointer — `activate_tab` may have
-            // lazy-created it (background-loaded tab being saved
-            // for the first time would land here in theory; in
-            // practice that combination doesn't occur because
-            // `pending_load.is_some()` filters it above).
-            let stored_doc = self.tabs[idx].scintilla_doc;
-            let bound_doc = ui.activate_tab(idx, stored_doc);
-            if let Some(tab) = self.tabs.get_mut(idx) {
-                tab.scintilla_doc = bound_doc;
-            }
+            // Bind the editor to this tab's document — and fill it if
+            // it is absent or stale, which is why this cannot be a bare
+            // `activate_tab`. An older comment here claimed the
+            // never-created case "doesn't occur in practice because
+            // `pending_load.is_some()` filters it above". That is
+            // false: a background load clears `pending_load` while
+            // leaving `scintilla_doc` at 0, and `activate_tab(idx, 0)`
+            // hands back an *empty* document — which the save below
+            // would then write over the user's file.
+            // Through `bind_and_fill`, never a bare `activate_tab`: the
+            // save below reads this document straight back out with
+            // `get_buffer_text` and writes it to disk, so binding a
+            // document whose tab has been loaded into in the background
+            // would overwrite the file with stale bytes.
+            self.bind_and_fill(ui, idx);
             self.active_tab = Some(idx);
 
             // Wrap the per-tab save in `catch_unwind` so a panic in
@@ -3716,7 +3748,11 @@ impl Shell {
             };
         }
 
-        if ui.is_doc_dirty(doc) {
+        // `has_unsaved_work`, not `is_doc_dirty`: a crash-recovered
+        // buffer sits at its Scintilla save point and so reads clean,
+        // while its contents exist nowhere but memory. Replacing into
+        // one would discard exactly the work the recovery preserved.
+        if self.has_unsaved_work(ui, idx) {
             return FifEvent::ReplacedInOpenBuffer {
                 job,
                 path,
@@ -3738,6 +3774,16 @@ impl Shell {
         // nothing else will refresh it.
         self.tabs[idx].dirty = true;
         self.tabs[idx].text = new_text.to_string();
+        // The document and `Tab.text` now agree, so any pending
+        // "fill this on activation" is not only unnecessary but
+        // harmful: `bind_and_fill` fills through `set_buffer_text`,
+        // which would drop the undo entry this replace deliberately
+        // left in place. Reachable because a background load can flag
+        // the tab before the user ever activates it, and a
+        // Replace-in-Files run can then target the same still-inactive
+        // buffer. The `is_doc_dirty` guard above is checked at *this*
+        // moment, so it does not cover the reverse order on its own.
+        self.tabs[idx].doc_needs_text = false;
         FifEvent::ReplacedInOpenBuffer {
             job,
             path,
@@ -3805,6 +3851,83 @@ impl Shell {
         }
     }
 
+    /// Whether `idx`'s buffer holds work that is not on disk.
+    ///
+    /// **Not the same question as `SCI_GETMODIFY`**, and the difference
+    /// is the whole reason this exists. A buffer restored from a
+    /// crash-recovery backup is seeded through
+    /// [`UiPlatform::set_buffer_text`], which *sets the save point* — so
+    /// Scintilla reports it clean while its contents exist nowhere but
+    /// memory. [`Self::unsaved_restore_ids`] is the durable record, and
+    /// [`Self::tab_needs_backup`] has always or-ed the two for exactly
+    /// this reason.
+    ///
+    /// Every guard deciding whether a document is safe to overwrite has
+    /// to ask *this*, not `is_doc_dirty` alone. Asking the raw bit lets
+    /// a plugin's `NPPM_RELOADBUFFERID`, a file-watcher reload or a
+    /// Replace-in-Files run discard crash-recovered content with no
+    /// prompt — the safety net a user reaches for precisely when
+    /// something has already gone wrong. Caught by an audit, which
+    /// reproduced it against a real `Shell` before it shipped.
+    fn has_unsaved_work<U: UiPlatform>(&self, ui: &mut U, idx: usize) -> bool {
+        let Some(tab) = self.tabs.get(idx) else {
+            return false;
+        };
+        let (doc, id) = (tab.scintilla_doc, tab.id);
+        ui.is_doc_dirty(doc) || self.unsaved_restore_ids.contains(&id)
+    }
+
+    /// Bind the view to `idx`'s document, creating it and/or filling it
+    /// from [`Tab::text`] when it does not already match, and return the
+    /// bound pointer.
+    ///
+    /// **The single place that knows how to make a tab's document match
+    /// its text.** Every caller that binds a document has to come
+    /// through here: `Shell::save_all` reads the bound document straight
+    /// back out and writes it to disk, so binding a stale one there
+    /// overwrites the real file with the wrong bytes — which is what it
+    /// did before this was factored out.
+    ///
+    /// Fills in two cases: a document that was never created, and one
+    /// whose tab was loaded into while it sat in the background (see
+    /// [`Tab::doc_needs_text`]).
+    ///
+    /// **Never over unsaved edits.** Filling goes through
+    /// [`UiPlatform::set_buffer_text`], which empties the undo buffer
+    /// and sets the save point, so a dirty document is left alone and
+    /// the loaded text is dropped. The check is made here rather than
+    /// trusted from where the flag was set, because Replace-in-Files
+    /// can dirty a *background* document through
+    /// [`UiPlatform::replace_doc_text`] in between. The flag clears
+    /// either way: the loaded text has been superseded, and a flag left
+    /// pending would fire on some later activation — costing the undo
+    /// history and resetting the save point on content that never
+    /// reached disk, rather than restoring stale text (`Tab::text` is
+    /// kept current by whoever wrote the document).
+    fn bind_and_fill<U: UiPlatform>(&mut self, ui: &mut U, idx: usize) -> isize {
+        let Some(tab) = self.tabs.get(idx) else {
+            return 0;
+        };
+        let (existing_doc, text, stale) = (tab.scintilla_doc, tab.text.clone(), tab.doc_needs_text);
+        let bound = ui.activate_tab(idx, existing_doc);
+        let clobbers_edits = stale && existing_doc != 0 && self.has_unsaved_work(ui, idx);
+        if existing_doc == 0 || (stale && !clobbers_edits) {
+            // Caret to 0: a tab reached this way was never displayed,
+            // so there is no caret position to preserve. The session's
+            // stored cursor is applied by the `Ok` arm of
+            // `apply_load_result` when a load completes onto the active
+            // tab, which is a different path.
+            ui.set_buffer_text(&text, 0);
+        }
+        if let Some(tab) = self.tabs.get_mut(idx) {
+            if existing_doc == 0 {
+                tab.scintilla_doc = bound;
+            }
+            tab.doc_needs_text = false;
+        }
+        bound
+    }
+
     /// Bind the editor view to the active tab's document, creating and
     /// filling that document first if it does not have one yet.
     ///
@@ -3841,22 +3964,7 @@ impl Shell {
         let Some(idx) = self.active_tab else {
             return;
         };
-        let Some(tab) = self.tabs.get(idx) else {
-            return;
-        };
-        let (existing_doc, text) = (tab.scintilla_doc, tab.text.clone());
-        let bound = ui.activate_tab(idx, existing_doc);
-        if existing_doc == 0 {
-            // Caret to 0: a tab reached this way was never displayed,
-            // so there is no caret position to preserve. The session's
-            // stored cursor is applied by the `Ok` arm of
-            // `apply_load_result` when a load completes onto the active
-            // tab, which is a different path.
-            ui.set_buffer_text(&text, 0);
-            if let Some(tab) = self.tabs.get_mut(idx) {
-                tab.scintilla_doc = bound;
-            }
-        }
+        self.bind_and_fill(ui, idx);
         let Some(tab) = self.tabs.get(idx) else {
             return;
         };
@@ -4003,6 +4111,38 @@ impl Shell {
                     .push(Notification::FileOpened { buffer_id });
 
                 let is_active = self.active_tab == Some(target_idx);
+                if !is_active && stored_doc != 0 {
+                    // The load landed on a background tab that already
+                    // owns a document, so that document now holds the
+                    // wrong text. Nothing rebinds it here — doing so
+                    // would point the single view at the wrong buffer
+                    // for the rest of the drain — so flag it and let
+                    // `bind_active_view` fill it on first activation.
+                    //
+                    // **Never over unsaved edits.** `confirm_reload`
+                    // re-targets a load onto whichever tab holds the
+                    // path, active or not, and it is reached from the
+                    // file-watcher prompt, File → Reload and — with no
+                    // prompt at all — a plugin's `NPPM_RELOADBUFFERID`.
+                    // A background buffer holding unsaved work therefore
+                    // reaches here, and filling it later would destroy
+                    // that work silently: `bind_and_fill` fills through
+                    // `set_buffer_text`, which empties the undo buffer
+                    // and sets the save point. Leaving it unflagged
+                    // keeps the work and drops the loaded text, which is
+                    // what happened before this flag existed.
+                    //
+                    // `has_unsaved_work`, not `is_doc_dirty` — see its
+                    // docs. A crash-recovered buffer reads *clean*.
+                    if self.has_unsaved_work(ui, target_idx) {
+                        tracing::debug!(
+                            path = ?loaded.path,
+                            "background load onto a buffer with unsaved work; keeping it"
+                        );
+                    } else if let Some(tab) = self.tabs.get_mut(target_idx) {
+                        tab.doc_needs_text = true;
+                    }
+                }
                 if is_active {
                     let bound_doc = ui.activate_tab(target_idx, stored_doc);
                     if let Some(tab) = self.tabs.get_mut(target_idx) {
@@ -5443,6 +5583,7 @@ impl Shell {
             text: text.clone(),
             pending_load: None,
             scintilla_doc: 0,
+            doc_needs_text: false,
             lang: resolved_lang,
             untitled_seq,
             // A restored untitled buffer has never been written to a
@@ -5568,6 +5709,7 @@ impl Shell {
             text: text.clone(),
             pending_load: None,
             scintilla_doc: 0,
+            doc_needs_text: false,
             lang,
             untitled_seq: None,
             // Backup-restored buffers carry edits the user never
@@ -8312,10 +8454,25 @@ mod tests {
         toolbar_hidden: bool,
         menu_hidden: bool,
         statusbar_hidden: bool,
-        /// Single-buffer dirty flag the test fixture maintains.
-        /// `is_doc_dirty` returns this verbatim — tests that exercise
-        /// the dirty-aware save path flip the flag manually.
+        /// Per-document text, so the fixture models what a real
+        /// backend does: `SCI_SETDOCPOINTER` swaps the *whole* buffer,
+        /// and a freshly created document is empty. The fixture used to
+        /// hold one text slot that survived every `activate_tab`, which
+        /// is why `save_all_writes_every_titled_tab` could pass while
+        /// `save_all` was writing an unpopulated document to disk.
+        doc_text: std::collections::HashMap<isize, String>,
+        /// The document [`Self::buffer_text`] currently mirrors.
+        current_doc: isize,
+        /// Fixture-wide dirty flag, used as the default answer for any
+        /// document without an entry in [`Self::doc_dirty`]. Tests that
+        /// exercise the dirty-aware save path flip it manually.
         dirty: bool,
+        /// Per-document dirty overrides. A single global flag cannot
+        /// express "this buffer is dirty and that one is not", which is
+        /// the distinction every overwrite guard turns on — so a test
+        /// written against the global flag alone can look like it
+        /// covers a guard while never exercising it.
+        doc_dirty: std::collections::HashMap<isize, bool>,
         /// Recorded N++-ABI menu command ids dispatched through
         /// `dispatch_npp_menu_command` — one entry per call, in
         /// order. Lets `NPPM_MENUCOMMAND` tests assert the
@@ -8348,11 +8505,23 @@ mod tests {
                 self.next_fake_doc += 1;
                 self.next_fake_doc
             };
+            // Park the outgoing document's text and adopt the incoming
+            // one's — empty for a document that has just been created,
+            // which is what `SCI_CREATEDOCUMENT` hands back.
+            if self.current_doc != 0 {
+                self.doc_text
+                    .insert(self.current_doc, self.buffer_text.clone());
+            }
+            self.current_doc = bound;
+            self.buffer_text = self.doc_text.get(&bound).cloned().unwrap_or_default();
             self.activate_tab_calls.push((idx, scintilla_doc, bound));
             bound
         }
         fn set_buffer_text(&mut self, text: &str, cursor: u64) {
             self.buffer_text = text.to_string();
+            if self.current_doc != 0 {
+                self.doc_text.insert(self.current_doc, text.to_string());
+            }
             self.cursor = cursor;
             self.set_text_calls.push((text.to_string(), cursor));
         }
@@ -8646,23 +8815,30 @@ mod tests {
         ) -> codepp_plugin_host::Hwnd {
             core::ptr::null_mut()
         }
-        fn capture_text_from_doc(&mut self, _scintilla_doc: isize) -> String {
-            // Tests don't model per-doc text storage — they share
-            // one buffer. Return whatever the active buffer holds.
-            self.buffer_text.clone()
+        fn capture_text_from_doc(&mut self, scintilla_doc: isize) -> String {
+            if scintilla_doc == self.current_doc {
+                return self.buffer_text.clone();
+            }
+            self.doc_text
+                .get(&scintilla_doc)
+                .cloned()
+                .unwrap_or_default()
         }
-        fn is_doc_dirty(&mut self, _scintilla_doc: isize) -> bool {
-            // Tests use the global `dirty` flag — sufficient for
-            // the current single-buffer test fixtures. Per-doc
-            // tracking can be added when a test needs it.
-            self.dirty
+        fn is_doc_dirty(&mut self, scintilla_doc: isize) -> bool {
+            self.doc_dirty
+                .get(&scintilla_doc)
+                .copied()
+                .unwrap_or(self.dirty)
         }
         fn replace_doc_text(&mut self, doc: isize, text: &str) -> bool {
+            self.doc_text.insert(doc, text.to_string());
+            if doc == self.current_doc {
+                self.buffer_text = text.to_string();
+            }
             if doc == 0 {
                 return false;
             }
             self.replaced_docs.push((doc, text.to_string()));
-            self.buffer_text = text.to_string();
             true
         }
         #[cfg(target_os = "windows")]
@@ -10884,10 +11060,12 @@ mod tests {
             Duration::from_secs(2),
         );
 
-        // FakeUi has one buffer slot, so save_all reads the same
-        // text into both files — that's fine for this unit test;
-        // the per-tab content selection is a Win32-side concern
-        // that the SCI_GETTEXT round-trip handles.
+        // `FakeUi` models one text per document, so this edits the
+        // buffer that is actually current — tab B, the one whose load
+        // landed last. Tab A is left as loaded. The fixture used to
+        // share a single slot across every document, which is what let
+        // this test pass while `save_all` was binding an unpopulated
+        // document and writing it to disk.
         let activate_calls_before = ui.activate_tab_calls.len();
         let mark_saved_before = ui.mark_saved_calls;
         ui.buffer_text = "new B\n".to_string();
@@ -10897,10 +11075,14 @@ mod tests {
             "all tabs should save cleanly: {errors:?}"
         );
 
-        // Both on-disk files have the post-Save-All content.
+        // Each file gets *its own* buffer's content: A was never
+        // edited, so it round-trips what was loaded; B carries the
+        // edit made above. Before per-document modelling both
+        // assertions read `"new B\n"`, which is precisely the leak
+        // that hid the stale-bind data loss.
         let on_disk_a = std::fs::read_to_string(&a_path).unwrap();
         let on_disk_b = std::fs::read_to_string(&b_path).unwrap();
-        assert_eq!(on_disk_a, "new B\n");
+        assert_eq!(on_disk_a, "old A\n");
         assert_eq!(on_disk_b, "new B\n");
 
         // Verify that save_all *actually iterated*: at least 3
@@ -10952,6 +11134,13 @@ mod tests {
         shell.new_untitled(&mut ui);
         shell.new_untitled(&mut ui);
 
+        // Simulate the user editing the *titled* buffer. `FakeUi` now
+        // models one text per document, so poking `buffer_text` while
+        // an untitled tab is current would edit that one instead — the
+        // fixture used to share a single slot, which made the
+        // distinction invisible.
+        shell.active_tab = Some(0);
+        shell.bind_active_view(&mut ui);
         ui.buffer_text = "saved\n".to_string();
         let errors = shell.save_all(&mut ui);
         assert!(errors.is_empty());
@@ -11369,6 +11558,414 @@ mod tests {
         assert_eq!(shell.tabs[0].untitled_seq, None);
         shell.new_untitled(&mut ui);
         assert_eq!(shell.tabs[1].untitled_seq, Some(1));
+    }
+
+    /// Save All must not write a stale document over the real file.
+    ///
+    /// `save_all` binds each titled tab's document and reads it straight
+    /// back with `get_buffer_text` — so if it binds one that a
+    /// background load has not filled yet, it writes the wrong bytes to
+    /// disk. Reachable exactly as reported: Open All Recent Files, then
+    /// Save All without ever clicking the first tab. That is on-disk
+    /// data loss, and it predates `doc_needs_text` — the flag is what
+    /// makes it fixable, not what caused it.
+    ///
+    /// `FakeUi` models one buffer slot, which is what makes this
+    /// observable: an unfilled bind leaves the *previous* tab's text in
+    /// place, so the assertion below catches file one being overwritten
+    /// with file two's contents.
+    #[test]
+    fn save_all_does_not_write_a_stale_document_over_the_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let first = dir.path().join("first.txt");
+        let second = dir.path().join("second.txt");
+        std::fs::write(&first, "FIRST\n").unwrap();
+        std::fs::write(&second, "SECOND\n").unwrap();
+
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+        shell.new_untitled(&mut ui);
+        assert_ne!(
+            shell.tabs[0].scintilla_doc, 0,
+            "precondition: scratch owns a doc"
+        );
+
+        shell.open_file_replacing_scratch(first.clone(), true);
+        shell.open_file_replacing_scratch(second.clone(), true);
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while Instant::now() < deadline {
+            shell.drain(&mut ui);
+            if shell.tabs.len() == 2 && shell.tabs.iter().all(|t| t.pending_load.is_none()) {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(
+            shell.tabs[0].doc_needs_text,
+            "precondition: tab 0's document is stale, or this proves nothing"
+        );
+
+        // Never activated by the user — straight to Save All.
+        let errors = shell.save_all(&mut ui);
+        assert!(errors.is_empty(), "save_all reported {errors:?}");
+        assert_eq!(
+            std::fs::read_to_string(&first).unwrap(),
+            "FIRST\n",
+            "Save All wrote a stale document over the first file"
+        );
+        // Both files, now that `FakeUi` models one text per document.
+        // Its previous single-slot model is exactly why the existing
+        // `save_all_writes_every_titled_tab` could not have caught this.
+        assert_eq!(std::fs::read_to_string(&second).unwrap(), "SECOND\n");
+    }
+
+    /// `FakeUi` must model one text per document, or a shell-level test
+    /// can pass while the code under it is wrong.
+    ///
+    /// Two fixture fictions hid real data loss in this area: a single
+    /// text slot shared by every document (so a stale bind silently read
+    /// the previous tab's text, which is why
+    /// `save_all_writes_every_titled_tab` passed while `save_all` was
+    /// writing an unpopulated document to disk), and a single dirty flag
+    /// shared by every document. This pins the text half — a
+    /// `replace_doc_text` on a *background* document must not disturb
+    /// the mirror of the one actually bound. Found by review: the
+    /// per-document rewrite left the original unconditional write in
+    /// place below the early return, so the fidelity it claimed was
+    /// undone two lines later.
+    #[test]
+    fn the_fixture_keeps_one_text_per_document() {
+        let mut ui = FakeUi::default();
+        let doc_a = ui.activate_tab(0, 0);
+        ui.set_buffer_text("A", 0);
+        assert_eq!(ui.buffer_text, "A");
+
+        // A background document, not the bound one.
+        ui.replace_doc_text(doc_a + 100, "B");
+        assert_eq!(
+            ui.buffer_text, "A",
+            "replacing a background document's text disturbed the bound document's mirror"
+        );
+        assert_eq!(ui.capture_text_from_doc(doc_a + 100), "B");
+
+        // Switching to it shows its own text; switching back shows A's.
+        ui.activate_tab(1, doc_a + 100);
+        assert_eq!(ui.buffer_text, "B");
+        ui.activate_tab(0, doc_a);
+        assert_eq!(ui.buffer_text, "A");
+
+        // And a freshly created document is empty, as
+        // `SCI_CREATEDOCUMENT` hands back — the fiction that let a
+        // never-populated bind read as the previous tab's content.
+        ui.activate_tab(2, 0);
+        assert_eq!(ui.buffer_text, "");
+    }
+
+    /// A crash-recovered buffer must never be filled over, even though
+    /// Scintilla reports it clean.
+    ///
+    /// `restore_dirty_with_text` seeds the buffer through
+    /// `set_buffer_text`, which *sets the save point* — so
+    /// `SCI_GETMODIFY` says clean while the content exists nowhere but
+    /// memory. `unsaved_restore_ids` is the durable record, which is why
+    /// every overwrite guard asks `has_unsaved_work` rather than
+    /// `is_doc_dirty`.
+    ///
+    /// Found by an audit, which reproduced it against a real `Shell`:
+    /// a plugin's `NPPM_RELOADBUFFERID` on a background restored buffer
+    /// set the flag, and the next click replaced the recovered work with
+    /// the on-disk text — no prompt anywhere. `save_all` then persisted
+    /// the result and cleared the recovery marker, so nothing recorded
+    /// that the work had ever existed.
+    #[test]
+    fn a_crash_recovered_buffer_is_not_filled_over_despite_reading_clean() {
+        let dir = tempfile::tempdir().unwrap();
+        let recovered = dir.path().join("recovered.txt");
+        let other = dir.path().join("other.txt");
+        std::fs::write(&recovered, "ON DISK\n").unwrap();
+        std::fs::write(&other, "OTHER\n").unwrap();
+
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+        shell.restore_dirty_with_text(
+            &mut ui,
+            recovered.clone(),
+            "RECOVERED UNSAVED WORK\n".into(),
+            0,
+            Encoding::Utf8,
+            Eol::Lf,
+            false,
+            false,
+            None,
+            false,
+        );
+        let idx = shell.active_tab.expect("a tab was just restored");
+        let doc = shell.tabs[idx].scintilla_doc;
+        // The precondition that makes this bug possible, asserted so the
+        // test cannot pass by the buffer simply reading dirty.
+        assert!(
+            !ui.is_doc_dirty(doc),
+            "a restored buffer sits at its save point; if it reads dirty this test \
+             proves nothing about the `unsaved_restore_ids` half of the guard"
+        );
+        assert!(shell.is_unsaved_restore(shell.tabs[idx].id));
+
+        // Push it into the background, then reload it there — the
+        // `NPPM_RELOADBUFFERID` shape, with no prompt.
+        shell.open_file(other.clone());
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while Instant::now() < deadline {
+            shell.drain(&mut ui);
+            if shell.tabs.len() == 2 && shell.tabs.iter().all(|t| t.pending_load.is_none()) {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let recovered_idx = shell
+            .tabs
+            .iter()
+            .position(|t| t.path.as_deref() == Some(recovered.as_path()))
+            .expect("the restored tab is still open");
+        assert_ne!(
+            shell.active_tab,
+            Some(recovered_idx),
+            "it must be in the background"
+        );
+
+        shell.confirm_reload(recovered.clone());
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while Instant::now() < deadline {
+            shell.drain(&mut ui);
+            if shell.tabs.iter().all(|t| t.pending_load.is_none()) {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(
+            !shell.tabs[recovered_idx].doc_needs_text,
+            "a reload flagged a crash-recovered buffer; the next click would replace \
+             the recovered work with the on-disk text, with no prompt"
+        );
+
+        // And activating it really does leave the recovered text alone.
+        shell.active_tab = Some(recovered_idx);
+        shell.bind_active_view(&mut ui);
+        assert_eq!(
+            ui.get_buffer_text(),
+            "RECOVERED UNSAVED WORK\n",
+            "activation discarded the crash-recovered content"
+        );
+    }
+
+    /// A Replace-in-Files edit into a background buffer must clear any
+    /// pending "fill this on activation".
+    ///
+    /// The two can be queued in either order, and only one of them is
+    /// guarded: `apply_open_buffer_replacement` checks `is_doc_dirty`
+    /// at the moment it replaces, which does not cover a tab that was
+    /// flagged while still clean and replaced afterwards. Left set, the
+    /// next activation fills through `set_buffer_text` — which empties
+    /// the undo buffer and sets the save point — so the replacement
+    /// becomes un-undoable *and* the buffer reads clean while holding
+    /// content that was never written to disk.
+    #[test]
+    fn a_replace_in_files_edit_clears_a_pending_fill() {
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi {
+            dirty: false,
+            ..FakeUi::default()
+        };
+        shell.tabs = vec![Tab {
+            id: 1,
+            path: Some(PathBuf::from("/tmp/open.txt")),
+            scintilla_doc: 42,
+            text: "before".to_string(),
+            // Flagged by an earlier background load, not yet activated.
+            doc_needs_text: true,
+            ..Tab::default()
+        }];
+        shell.active_tab = Some(0);
+
+        let out = shell.apply_open_buffer_replacement(
+            &mut ui,
+            FifJobId::for_test(1),
+            PathBuf::from("/tmp/open.txt"),
+            "after",
+            1,
+        );
+        assert!(matches!(
+            out,
+            FifEvent::ReplacedInOpenBuffer {
+                outcome: OpenBufferOutcome::Replaced,
+                ..
+            }
+        ));
+        assert!(
+            !shell.tabs[0].doc_needs_text,
+            "the replacement left a pending fill queued, so activating the tab would \
+             overwrite it and reset the save point on content never written to disk"
+        );
+
+        // And activating really does leave the replacement alone.
+        let before = ui.set_text_calls.len();
+        shell.bind_active_view(&mut ui);
+        assert_eq!(
+            ui.set_text_calls.len(),
+            before,
+            "activation overwrote the Replace-in-Files result"
+        );
+    }
+
+    /// A background load must never silently discard unsaved edits.
+    ///
+    /// `confirm_reload` re-targets a load onto whichever tab holds the
+    /// path, active or not, and it is reached from the file-watcher
+    /// prompt, File → Reload, and — with no prompt at all — a plugin's
+    /// `NPPM_RELOADBUFFERID`. Filling such a tab later goes through
+    /// `set_buffer_text`, which empties the undo buffer and sets the
+    /// save point, so an unguarded flag turns a previously inert
+    /// background reload into silent, unrecoverable data loss.
+    #[test]
+    fn a_background_load_never_flags_a_buffer_with_unsaved_edits() {
+        let dir = tempfile::tempdir().unwrap();
+        let first = dir.path().join("first.txt");
+        let second = dir.path().join("second.txt");
+        std::fs::write(&first, "FIRST\n").unwrap();
+        std::fs::write(&second, "SECOND\n").unwrap();
+
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+        shell.new_untitled(&mut ui);
+        shell.open_file_replacing_scratch(first.clone(), true);
+        shell.open_file_replacing_scratch(second.clone(), true);
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while Instant::now() < deadline {
+            shell.drain(&mut ui);
+            if shell.tabs.len() == 2 && shell.tabs.iter().all(|t| t.pending_load.is_none()) {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        // Settle tab 0 so it is clean and bound, then leave it in the
+        // background with unsaved edits.
+        shell.active_tab = Some(0);
+        shell.bind_active_view(&mut ui);
+        assert!(!shell.tabs[0].doc_needs_text);
+        shell.active_tab = Some(1);
+        ui.dirty = true;
+
+        // A reload lands on the background, dirty tab 0.
+        shell.confirm_reload(first.clone());
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while Instant::now() < deadline {
+            shell.drain(&mut ui);
+            if shell.tabs.iter().all(|t| t.pending_load.is_none()) {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(
+            !shell.tabs[0].doc_needs_text,
+            "a background load flagged a buffer holding unsaved edits; activating that \
+             tab would empty its undo buffer and set its save point, destroying the work"
+        );
+
+        // And activating it must not push text over those edits.
+        shell.active_tab = Some(0);
+        let before = ui.set_text_calls.len();
+        shell.bind_active_view(&mut ui);
+        assert_eq!(
+            ui.set_text_calls.len(),
+            before,
+            "activation overwrote a dirty background buffer"
+        );
+    }
+
+    /// A load that lands on a **background** tab which already owns a
+    /// Scintilla document must leave that document marked stale, so the
+    /// text reaches it on first activation.
+    ///
+    /// Reported by a user: File → Open All Recent Files opened every
+    /// file, and the first one showed its filename over an empty
+    /// buffer. The first is the only one that reuses the startup
+    /// scratch — so it is the only one whose tab already owns a
+    /// document — and the opens that follow move `active_tab` off it
+    /// before its load lands, so `apply_load_result` takes the
+    /// background path and only fills `tab.text`.
+    ///
+    /// `bind_active_view` then used to push text only when
+    /// `scintilla_doc == 0`, a correct proxy for "never populated"
+    /// exactly while every background load targets a fresh tab. Opening
+    /// the same file again through File → Open worked, because that
+    /// allocates a new tab with no document — which is what made the
+    /// report look like a loader bug rather than a binding one.
+    #[test]
+    fn a_background_load_onto_a_reused_scratch_still_reaches_the_editor() {
+        let dir = tempfile::tempdir().unwrap();
+        let first = dir.path().join("first.txt");
+        let second = dir.path().join("second.txt");
+        std::fs::write(&first, "FIRST\n").unwrap();
+        std::fs::write(&second, "SECOND\n").unwrap();
+
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+        shell.new_untitled(&mut ui);
+
+        // The precondition the whole bug rests on: the scratch owns a
+        // real document. Asserted rather than assumed — if `new_untitled`
+        // ever stopped binding one, this test would still pass while
+        // testing nothing.
+        assert_ne!(
+            shell.tabs[0].scintilla_doc, 0,
+            "the scratch must own a document, or this test cannot reproduce the bug"
+        );
+
+        // Exactly what Open All Recent Files does: open every path in a
+        // tight loop, so the later opens move `active_tab` on while the
+        // first load is still in flight.
+        shell.open_file_replacing_scratch(first.clone(), true);
+        shell.open_file_replacing_scratch(second.clone(), true);
+        // Hand-rolled rather than `drain_until`, whose predicate sees
+        // the UI and the dialog queue but not the shell — and the
+        // condition here is "both loads have landed", which is shell
+        // state.
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while Instant::now() < deadline {
+            shell.drain(&mut ui);
+            if shell.tabs.len() == 2 && shell.tabs.iter().all(|t| t.pending_load.is_none()) {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+
+        assert_eq!(shell.tabs[0].path.as_deref(), Some(first.as_path()));
+        assert_eq!(shell.tabs[0].text, "FIRST\n");
+        assert_ne!(shell.active_tab, Some(0), "tab 0 must have gone background");
+        assert!(
+            shell.tabs[0].doc_needs_text,
+            "the background load left the scratch's document holding the wrong text \
+             without flagging it, so activating the tab will show an empty buffer"
+        );
+
+        // Activating it must now push the text into that document.
+        shell.active_tab = Some(0);
+        let before = ui.set_text_calls.len();
+        shell.bind_active_view(&mut ui);
+        assert_eq!(
+            ui.set_text_calls.get(before).map(|c| c.0.as_str()),
+            Some("FIRST\n"),
+            "activating the reused-scratch tab did not fill its document"
+        );
+        assert!(
+            !shell.tabs[0].doc_needs_text,
+            "the stale flag must clear once the text has been pushed, or every \
+             later activation re-sends it and discards the caret position"
+        );
     }
 
     #[test]
