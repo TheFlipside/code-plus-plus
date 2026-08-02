@@ -281,6 +281,7 @@ dependencies = [
  "codepp-platform",
  "codepp-scintilla-sys",
  "codepp-shell",
+ "codepp-udl",
  "dispatch2",
  "objc2",
  "objc2-app-kit",

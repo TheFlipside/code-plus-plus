@@ -157,12 +157,37 @@ pub struct CocoaUi {
     /// The workspace tree, for the same reason — it takes the *other*
     /// side of the same band.
     pub workspace: WorkspacePanel,
+    /// Read-only pointer to `Shell.udl_registry` for the UDL
+    /// container-lexer path. `apply_lang` runs inside a `drain` (the
+    /// split `&mut Shell` borrow is live), so it cannot reach the
+    /// registry through `with_state` — a nested borrow is declined, and
+    /// a decline here would read as "not a UDL" and silently apply the
+    /// Lexilla theme instead. This raw pointer is the same escape hatch
+    /// `GtkUi.udl_registry` and `Win32Ui.udl_registry` use.
+    ///
+    /// **Aliasing discipline** (mirrors both). Today the registry is
+    /// populated once at `Shell::new` and never mutated on this backend
+    /// — the UDL editor modal (Phase 4.6 m3) is Win32-only — so every
+    /// read through this pointer is shared and never races the
+    /// `&mut Shell` the split hands out. If a Cocoa UDL editor ever
+    /// lands, its "save UDL → rescan" must mutate `shell.udl_registry`
+    /// through `with_state` **only** (no `CocoaUi` on the stack), so
+    /// this pointer never observes a `&mut UdlRegistry`. All three
+    /// backends rely on the same hand-maintained discipline.
+    pub udl_registry: *const codepp_udl::UdlRegistry,
 }
 
 impl CocoaUiState {
     /// Split into a `(shell, ui-platform)` pair so `shell.drain(ui)` can
     /// be called without aliasing `&mut self`.
     pub fn split(&mut self) -> (&mut Shell, CocoaUi) {
+        // SAFETY of `&raw const`: the pointer is created without forming
+        // a reference, so it does not conflict with the `&mut self.shell`
+        // returned below. It is only dereferenced (read-only) later while
+        // a `CocoaUi` is in scope, and the registry is never mutated
+        // after `Shell::new` on this backend. Same pattern as `GtkUi`'s
+        // and `Win32Ui`'s capture; see the field doc for the discipline.
+        let udl_registry = &raw const self.shell.udl_registry;
         let ui = CocoaUi {
             window: self.window.clone(),
             sci_view: self.sci_view.clone(),
@@ -174,6 +199,7 @@ impl CocoaUiState {
             fif_dock: self.fif_dock.clone(),
             docmap: self.docmap.clone(),
             workspace: self.workspace.clone(),
+            udl_registry,
         };
         (&mut self.shell, ui)
     }

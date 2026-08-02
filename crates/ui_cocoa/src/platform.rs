@@ -397,13 +397,16 @@ impl UiPlatform for CocoaUi {
             Eol::Lf | Eol::Mixed => SC_EOL_LF,
         };
         self.editor.send(SCI_SETEOLMODE, mode, 0);
-        // UDL label resolution needs the registry, which m2 does not
-        // reach yet (the UDL container-lexer path is a later milestone —
-        // see `apply_lang`). Built-in languages resolve here; a UDL
-        // buffer would read as its fallback name until then.
-        let lang_label = lang.language_name().unwrap_or("Normal Text");
+        // A UDL's own `<UserLang name>` for a UDL id, the built-in name
+        // otherwise. Resolved through the registry pointer rather than
+        // `with_state`, because this runs inside a live borrow — see the
+        // `CocoaUi::udl_registry` field doc.
+        //
+        // SAFETY: `self.udl_registry` is the pointer `CocoaUiState::split`
+        // captured from `Shell.udl_registry`, read-only, per that doc.
+        let lang_label = crate::udl::resolve_lang_label(lang, self.udl_registry);
         self.status
-            .set_static_parts(lang_label, eol.long_label(), encoding.label());
+            .set_static_parts(&lang_label, eol.long_label(), encoding.label());
         self.refresh_dynamic_status();
     }
 
@@ -416,10 +419,23 @@ impl UiPlatform for CocoaUi {
     }
 
     fn apply_lang(&mut self, lang: LangType) {
-        // The shared Lexilla theme table, exactly as GTK uses it. The UDL
-        // container-lexer branch GTK has in front of this is not ported
-        // yet — `crate::udl` is a later milestone — so a UDL id falls
-        // through to the table and renders unstyled rather than wrongly.
+        // A UDL has no Lexilla lexer, so it takes the container-lexer
+        // path instead of the theme table: `SCLEX_CONTAINER` plus its own
+        // palette, then `SCN_STYLENEEDED` drives the host-side tokeniser
+        // (see `crate::udl::on_style_needed`). Returns `false` for every
+        // built-in id, which falls through to the shared table below.
+        //
+        // SAFETY: `self.udl_registry` is the pointer `CocoaUiState::split`
+        // captured from `Shell.udl_registry`, read-only, per its doc.
+        if crate::udl::apply_lang(&self.editor, self.udl_registry, lang) {
+            // Re-assert the built-in number margin: `apply_udl_lang`
+            // routes through `apply_default_styles`, which resets margin
+            // 0 to `SC_MARGIN_TEXT` for Win32's manual renderer — the
+            // same fixup the Lexilla branch below needs.
+            self.editor.enable_line_number_margin(LINE_NUMBER_MARGIN);
+            return;
+        }
+        // The shared Lexilla theme table, exactly as GTK uses it.
         codepp_editor::theme::apply_lang_theme(&self.editor, lang);
         // `apply_lang_theme` routes through `apply_default_styles`, which
         // resets margin 0 to `SC_MARGIN_TEXT` for Win32's manual

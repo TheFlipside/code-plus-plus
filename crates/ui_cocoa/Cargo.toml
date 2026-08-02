@@ -34,6 +34,7 @@ codepp-editor        = { workspace = true }
 codepp-platform      = { workspace = true }
 codepp-scintilla-sys = { workspace = true }
 codepp-shell         = { workspace = true }
+codepp-udl           = { workspace = true }
 dispatch2            = { workspace = true }
 objc2                = { workspace = true }
 objc2-app-kit        = { workspace = true }

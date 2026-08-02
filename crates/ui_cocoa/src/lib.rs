@@ -52,6 +52,7 @@ mod state;
 mod status;
 mod tabs;
 mod toolbar;
+mod udl;
 mod window;
 mod workspace;
 
@@ -732,6 +733,30 @@ unsafe fn on_sci_notify_inner(message: u32, lparam: usize) {
             if LAST_DIRTY.with(std::cell::Cell::get) != live {
                 LAST_DIRTY.with(|c| c.set(live));
                 refresh_tab_chrome();
+            }
+        }
+        // The container lexer's request for styling. Only a UDL buffer
+        // can produce one — every other language is a Lexilla lexer,
+        // which styles itself and never asks the host — so the handler
+        // re-checks the active language and does nothing otherwise.
+        //
+        // `position` is read through `Sci_NotificationText`, the
+        // `#[repr(C)]` prefix of the real notification, which is a prefix
+        // read rather than a reinterpretation. Same trick GTK's
+        // `style_needed_position` uses on its boxed payload.
+        codepp_scintilla_sys::SCN_STYLENEEDED => {
+            // SAFETY: as for the `code` read above — `lparam` is a live
+            // `SCNotification*` for this synchronous call, and
+            // `Sci_NotificationText` lays out `nmhdr` then `position` at
+            // the same offsets `Scintilla.h` does.
+            let position = unsafe {
+                (*(lparam as *const codepp_scintilla_sys::Sci_NotificationText)).position
+            };
+            // A negative `position` would be a Scintilla contract
+            // violation; treat it as nothing to style rather than
+            // wrapping it into a huge range.
+            if let Ok(target) = usize::try_from(position) {
+                udl::on_style_needed(target);
             }
         }
         codepp_scintilla_sys::SCN_SAVEPOINTLEFT => {
@@ -3807,6 +3832,108 @@ let msg = \"found scintilla_cocoa_new() calls\";
         assert!(
             src.contains("activate_main_window"),
             "applicationDidFinishLaunching: no longer activates the window"
+        );
+    }
+
+    /// The Language menu's group marks must match on the **action** as
+    /// well as the tag.
+    ///
+    /// A menu item's tag defaults to 0, which is `L_TEXT`'s own language
+    /// id — so a submenu whose children are not language rows is marked
+    /// for every buffer whose language is Normal Text, i.e. every
+    /// untitled one. That is not hypothetical: adding the
+    /// "User-Defined language" submenu, whose three items carry no tag,
+    /// produced exactly this, and it was caught by driving the real app
+    /// (`active_lang=Some(0)`, submenu ticked) rather than by the suite.
+    ///
+    /// A source scan because painting a mark needs a real `NSMenu` and
+    /// a delegate callback AppKit makes only at display time.
+    #[test]
+    fn the_language_marks_match_the_action_not_only_the_tag() {
+        let src = include_str!("menu.rs");
+        let src = match src.find("#[cfg(test)]") {
+            Some(i) => &src[..i],
+            None => src,
+        };
+        assert!(src.len() > 5_000, "source scan read too little to be real");
+        let body = fn_body(src, "mark_language_letter_groups");
+        assert!(
+            body.contains("child.action() == Some(sel!(codeppSetLanguage:))"),
+            "`mark_language_letter_groups` matches on the tag alone again. Tag 0 is \
+             `L_TEXT`, so any submenu holding a tagless item — the \"User-Defined \
+             language\" submenu does — will tick for every untitled buffer."
+        );
+    }
+
+    /// The loaded-UDL rows must be rebuilt *before* the marks are set.
+    ///
+    /// Both run from one `menuNeedsUpdate:`, and the order decides
+    /// whether a UDL row added on this pass can carry the mark on the
+    /// same pass. Reversed, the first open after a UDL is installed
+    /// shows the row unmarked even when it is the active language.
+    #[test]
+    fn the_udl_rows_are_rebuilt_before_the_marks_are_set() {
+        let src = include_str!("menu.rs");
+        let src = match src.find("#[cfg(test)]") {
+            Some(i) => &src[..i],
+            None => src,
+        };
+        let body = fn_body(src, "menu_needs_update");
+        let rebuild = body
+            .find("rebuild_udl_rows(")
+            .expect("`menuNeedsUpdate:` no longer rebuilds the loaded-UDL rows");
+        let mark = body
+            .find("mark_language_letter_groups(")
+            .expect("`menuNeedsUpdate:` no longer refreshes the Language menu marks");
+        assert!(
+            rebuild < mark,
+            "the Language menu marks are set before the UDL rows exist, so a row \
+             added on this pass cannot be marked on it"
+        );
+    }
+
+    /// `SCN_STYLENEEDED` must reach the UDL tokeniser.
+    ///
+    /// A UDL runs in `SCLEX_CONTAINER`, where Scintilla does no
+    /// tokenising of its own — it asks the host. A backend that drops
+    /// the notification renders every UDL buffer entirely unstyled, and
+    /// nothing else misbehaves, so the symptom reads as "the UDL is
+    /// broken" rather than "the host never answered".
+    #[test]
+    fn style_needed_drives_the_udl_tokeniser() {
+        let src = production_src();
+        let body = fn_body(src, "on_sci_notify_inner");
+        assert!(
+            body.contains("SCN_STYLENEEDED") && body.contains("udl::on_style_needed("),
+            "`on_sci_notify_inner` no longer routes SCN_STYLENEEDED to the UDL \
+             tokeniser, so UDL buffers render unstyled"
+        );
+    }
+
+    /// The UDL paint must happen **after** the state borrow is released.
+    ///
+    /// Every `SCI_SETSTYLING` re-enters this backend's notification
+    /// dispatch, and `with_state` declines a nested borrow rather than
+    /// panicking — so painting inside the closure would silently skip
+    /// each refresh those notifications drive. This backend has been
+    /// caught by that contract three times already (m4a's Replace, the
+    /// save-then-close gate, and the save-point marker), which is why it
+    /// is pinned here rather than left to the comment.
+    #[test]
+    fn the_udl_paint_runs_outside_the_state_borrow() {
+        let src = include_str!("udl.rs");
+        let body = fn_body(src, "on_style_needed");
+        let closure_end = body
+            .find("});")
+            .expect("`on_style_needed` no longer captures under a with_state closure");
+        let paint = body
+            .find("paint_style_needed(")
+            .expect("`on_style_needed` no longer paints");
+        assert!(
+            paint > closure_end,
+            "`on_style_needed` paints inside the `with_state` closure. Each \
+             SCI_SETSTYLING re-enters the notification dispatch, where the held \
+             borrow makes every refresh a silent no-op."
         );
     }
 }

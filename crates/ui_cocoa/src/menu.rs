@@ -94,18 +94,27 @@ define_class!(
         /// Regenerate a menu whose contents depend on live model state,
         /// just before it is shown.
         ///
-        /// Only the Window menu needs it today: its buffer list changes
-        /// with every open, close and reorder, and rebuilding on demand
-        /// beats pushing an update from every one of those paths — the
-        /// same reasoning that makes `TabStrip::sync` total rather than
-        /// incremental. The menu is identified by its tag so one delegate
-        /// can serve any future menu with the same need.
+        /// Two menus need it. The Window menu's buffer list changes with
+        /// every open, close and reorder; the Language menu's loaded-UDL
+        /// rows cannot be built at construction at all, because
+        /// [`build_language_menu`] runs before `Shell::new` and so before
+        /// any UDL registry exists. In both cases rebuilding on demand
+        /// beats pushing an update from every path that could invalidate
+        /// the list — the same reasoning that makes `TabStrip::sync`
+        /// total rather than incremental.
+        ///
+        /// Each menu is identified by its **title** ([`is_window_menu`],
+        /// [`is_language_menu`]), so one delegate serves both and any
+        /// future menu with the same need.
         #[unsafe(method(menuNeedsUpdate:))]
         fn menu_needs_update(&self, menu: &NSMenu) {
             crate::at_callback_boundary("menu:needsUpdate", (), || {
                 if is_window_menu(menu) {
                     rebuild_window_menu(menu, self);
                 } else if is_language_menu(menu) {
+                    rebuild_udl_rows(menu, self);
+                    // After the rebuild, so a UDL row added just now can
+                    // carry the mark on the pass that created it.
                     mark_language_letter_groups(menu);
                 }
             });
@@ -527,6 +536,24 @@ define_class!(
             });
         }
 
+        /// Reveal the `userDefineLangs` folder in Finder, so a user can
+        /// drop a `.udl.xml` in without leaving the app.
+        #[unsafe(method(codeppOpenUdlFolder:))]
+        fn open_udl_folder(&self, _sender: Option<&NSObject>) {
+            crate::at_callback_boundary("menu:openUdlFolder", (), open_udl_folder);
+        }
+
+        /// Open the N++ community UDL collection in the browser.
+        #[unsafe(method(codeppOpenUdlCollection:))]
+        fn open_udl_collection(&self, _sender: Option<&NSObject>) {
+            crate::at_callback_boundary("menu:openUdlCollection", (), || {
+                let Some(url) = NSURL::URLWithString(&NSString::from_str(UDL_COLLECTION_URL)) else {
+                    return;
+                };
+                NSWorkspace::sharedWorkspace().openURL(&url);
+            });
+        }
+
         /// Window-menu buffer switch. Carries `Tab.id`, like every other
         /// tab-addressing control in this backend.
         #[unsafe(method(codeppSelectTabMenu:))]
@@ -637,6 +664,28 @@ fn validate(item: &NSMenuItem) -> bool {
         item.setState(isize::from(crate::docmap::is_visible()));
     }
     true
+}
+
+/// Reveal the `userDefineLangs` folder in Finder.
+///
+/// `create_dir_all` first — matching `ui_gtk` and Win32 — so a click
+/// that races a between-boots deletion still targets a valid path
+/// rather than silently doing nothing.
+fn open_udl_folder() {
+    let Some(dir) = codepp_platform::user_define_langs_dir() else {
+        tracing::warn!("no config dir; cannot open the User Defined Language folder");
+        return;
+    };
+    if let Err(e) = std::fs::create_dir_all(&dir) {
+        tracing::warn!(?e, "could not create the User Defined Language folder");
+        return;
+    }
+    let Some(path) = dir.to_str() else {
+        tracing::warn!(?dir, "UDL folder path is not valid UTF-8");
+        return;
+    };
+    let url = NSURL::fileURLWithPath(&NSString::from_str(path));
+    NSWorkspace::sharedWorkspace().openURL(&url);
 }
 
 /// Open one of the fixed help URLs in the default browser.
@@ -1143,7 +1192,100 @@ fn build_language_menu(actions: &Actions, mtm: MainThreadMarker) -> Retained<NSM
         }
         i = j;
     }
+
+    menu.addItem(&NSMenuItem::separatorItem(mtm));
+    menu.addItem(&build_udl_submenu(actions, mtm));
+    // Everything past here is regenerated on open — see
+    // [`rebuild_udl_rows`]. Captured rather than hardcoded because the
+    // prefix is ~90 items whose count depends on how `LANG_TABLE`'s
+    // labels happen to group into letters; a constant would drift the
+    // first time a language is added, and drift here means the rebuild
+    // eats built-in rows.
+    LANGUAGE_MENU_FIXED_ITEMS.with(|c| c.set(menu.numberOfItems()));
+
     item
+}
+
+/// The N++ community UDL collection. Compile-time constant — no user- or
+/// UDL-supplied string ever reaches `NSWorkspace`, the same property
+/// [`open_help_url`] holds.
+const UDL_COLLECTION_URL: &str = "https://github.com/notepad-plus-plus/userDefinedLanguages";
+
+thread_local! {
+    /// Number of items [`build_language_menu`] leaves behind, i.e. the
+    /// index at which [`rebuild_udl_rows`] starts replacing. Zero until
+    /// the menu is built, which makes the rebuild a no-op rather than a
+    /// truncation of a menu it does not understand.
+    static LANGUAGE_MENU_FIXED_ITEMS: std::cell::Cell<isize> = const { std::cell::Cell::new(0) };
+}
+
+/// The "User-Defined language" submenu at the bottom of the Language
+/// menu, matching `ui_gtk`'s and Notepad++'s.
+///
+/// "Define your language…" is greyed: the UDL editor modal (Phase 4.6
+/// m3) exists only on Win32. It carries no action rather than an
+/// explicit `setEnabled(false)`, which is what AppKit's automatic menu
+/// enabling greys for free — see [`add_disabled`].
+fn build_udl_submenu(actions: &Actions, mtm: MainThreadMarker) -> Retained<NSMenuItem> {
+    let (item, sub) = submenu("User-Defined language", mtm);
+    add_disabled(&sub, mtm, "Define your language…");
+    add(
+        &sub,
+        mtm,
+        "Open User Defined Language folder…",
+        sel!(codeppOpenUdlFolder:),
+        "",
+        Some(actions),
+    );
+    add(
+        &sub,
+        mtm,
+        "Notepad++ User Defined Languages Collection",
+        sel!(codeppOpenUdlCollection:),
+        "",
+        Some(actions),
+    );
+    item
+}
+
+/// Replace the Language menu's loaded-UDL rows.
+///
+/// They live **flat at the top level**, below the "User-Defined
+/// language" submenu after a separator, which is where Notepad++ puts
+/// them — so applying a UDL is one hover-and-click rather than two.
+///
+/// Rebuilt on open rather than at build time for a structural reason:
+/// `build_language_menu` runs *before* `Shell::new`, so no registry
+/// exists yet when the menu is constructed. Same shape as
+/// [`rebuild_window_menu`], including its refusal to rebuild when the
+/// state borrow is declined.
+fn rebuild_udl_rows(menu: &NSMenu, actions: &Actions) {
+    let Some(mtm) = MainThreadMarker::new() else {
+        return;
+    };
+    let fixed = LANGUAGE_MENU_FIXED_ITEMS.with(std::cell::Cell::get);
+    if fixed == 0 {
+        // The menu was never built by us. Touching it would truncate
+        // something we do not understand.
+        return;
+    }
+    let Some(rows) = crate::udl::language_rows() else {
+        // Re-entrant borrow, not "no UDLs installed" — leave the rows
+        // that are already there. See `udl::language_rows`.
+        return;
+    };
+    while menu.numberOfItems() > fixed {
+        menu.removeItemAtIndex(menu.numberOfItems() - 1);
+    }
+    if rows.is_empty() {
+        // No separator either: a lone trailing separator under the
+        // submenu reads as a menu with something missing.
+        return;
+    }
+    menu.addItem(&NSMenuItem::separatorItem(mtm));
+    for (lang_id, name) in rows {
+        add_language(menu, &name, lang_id, actions, mtm);
+    }
 }
 
 /// Uppercased first character of a language label, for letter grouping.
@@ -1300,10 +1442,19 @@ fn mark_language_letter_groups(menu: &NSMenu) {
         let Some(sub) = item.submenu() else {
             continue;
         };
-        let contains = sub
-            .itemArray()
-            .iter()
-            .any(|child| child.tag() == active as isize);
+        // Matched on the *action* as well as the tag, not the tag alone.
+        // A tag defaults to 0, which is `L_TEXT`'s own id, so a submenu
+        // whose children are not language rows — the "User-Defined
+        // language" submenu, whose three items carry no tag — would be
+        // marked for every buffer whose language is Normal Text, i.e.
+        // every untitled one. Measured on the real app before this
+        // clause existed: `active_lang=Some(0)` and the UDL submenu came
+        // up ticked. Checking the selector states the actual intent
+        // ("the group holding the active language row") and stays
+        // correct if another non-language submenu is ever added here.
+        let contains = sub.itemArray().iter().any(|child| {
+            child.tag() == active as isize && child.action() == Some(sel!(codeppSetLanguage:))
+        });
         item.setState(isize::from(contains));
     }
 }
