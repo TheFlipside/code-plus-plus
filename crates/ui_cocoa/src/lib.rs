@@ -51,6 +51,7 @@ mod preferences;
 mod search;
 mod state;
 mod status;
+mod style_config;
 mod tabs;
 mod toolbar;
 mod udl;
@@ -1453,8 +1454,18 @@ fn editor_scroll_view(sci_view: &NSView) -> Option<Retained<objc2_app_kit::NSScr
 /// Baseline editor styling, applied once before any buffer exists.
 fn apply_startup_styles() {
     with_state(|st| {
-        let (_, ui) = st.split();
-        platform::apply_predefined_styles(&ui.editor);
+        let styles = st.shell.styles.clone();
+        let (_, mut ui) = st.split();
+        // Through `apply_default_style`, not `apply_predefined_styles`
+        // directly, so the *saved* default style and window transparency
+        // are restored — `apply_default_style` calls the predefined
+        // styles itself, after its own `SCI_STYLECLEARALL`, which is why
+        // calling only the latter here left them applied but the user's
+        // scheme discarded. `ui_gtk` has always done it this way. Until
+        // m4g there was no way to save a scheme on this backend, so the
+        // omission had nothing to lose; with the Style Configurator it
+        // would have meant every setting silently reverting on relaunch.
+        codepp_shell::UiPlatform::apply_default_style(&mut ui, &styles);
     });
 }
 
@@ -4081,6 +4092,99 @@ let msg = \"found scintilla_cocoa_new() calls\";
             remove < read,
             "`rebuild_recent_region` reads the state before clearing the old rows, so \
              a declined read leaves rows whose index tag can open the wrong file"
+        );
+    }
+
+    /// The Style Configurator must apply the default style **before**
+    /// re-applying the language.
+    ///
+    /// `apply_default_style` ends in `SCI_STYLECLEARALL`, which
+    /// propagates the default over every other style index — wiping the
+    /// lexer's per-style colours. `apply_lang` re-layers them. Reversed,
+    /// the buffer comes back from the dialog rendered in one flat colour
+    /// until something else happens to re-lex it, which is a plausible
+    /// thing to get wrong when reordering and invisible in review.
+    #[test]
+    fn the_style_dialog_re_applies_the_language_after_the_default() {
+        let src = include_str!("style_config.rs");
+        let src = match src.find("#[cfg(test)]") {
+            Some(i) => &src[..i],
+            None => src,
+        };
+        assert!(src.len() > 2_000, "source scan read too little to be real");
+        let body = fn_body(src, "show");
+        let default = body
+            .find("apply_default_style(")
+            .expect("the Style Configurator no longer applies the default style");
+        let lang = body
+            .find("apply_lang(")
+            .expect("the Style Configurator no longer re-applies the language");
+        assert!(
+            default < lang,
+            "`apply_lang` runs before `apply_default_style`, so SCI_STYLECLEARALL wipes \
+             the lexer colours it just restored and the buffer renders unstyled"
+        );
+    }
+
+    /// The font popup's label is sanitized and its value is read back by
+    /// index, never from the title.
+    ///
+    /// A font face arrives from `styles.xml`, an ordinary file a user can
+    /// be handed, so it is display text like any filename — this project
+    /// has shipped three separate cases of hostile text reaching chrome
+    /// unsanitized. But the face is *also* the functional value written
+    /// back, so sanitizing in place would round-trip a hostile name as
+    /// U+FFFD and quietly rewrite the user's stored font the first time
+    /// they touched any other control. Hence the side table, the same
+    /// value-vs-label split the workspace tree and the results dock use.
+    #[test]
+    fn the_font_popup_splits_its_label_from_its_value() {
+        let src = include_str!("style_config.rs");
+        let src = match src.find("#[cfg(test)]") {
+            Some(i) => &src[..i],
+            None => src,
+        };
+        assert!(src.len() > 2_000, "source scan read too little to be real");
+        assert!(
+            fn_body(src, "build_dialog").contains("sanitize_str_for_display("),
+            "the font popup's titles are no longer sanitized, so a face name carrying \
+             bidi controls renders reordered in the list"
+        );
+        let read = fn_body(src, "read_styles");
+        assert!(
+            read.contains("indexOfSelectedItem()") && !read.contains("titleOfSelectedItem()"),
+            "the font face is read back from the popup's title again. The titles are \
+             sanitized, so that rewrites the user's stored font to its U+FFFD form."
+        );
+    }
+
+    /// A colour must be converted to sRGB before its components are read.
+    ///
+    /// `NSColorWell` hands back whatever space the picker produced —
+    /// catalog and pattern colours among them — and `redComponent`
+    /// raises an Objective-C exception for those. An ObjC exception
+    /// crossing the FFI boundary is undefined behaviour, not a Rust
+    /// panic `at_callback_boundary` could catch, so this is the
+    /// difference between a fallback colour and an unexplained crash on
+    /// a machine whose user picked from the Pencils palette.
+    #[test]
+    fn a_picked_colour_is_converted_before_its_components_are_read() {
+        let src = include_str!("style_config.rs");
+        let src = match src.find("#[cfg(test)]") {
+            Some(i) => &src[..i],
+            None => src,
+        };
+        let body = fn_body(src, "well_to_hex");
+        let convert = body
+            .find("colorUsingColorSpace(")
+            .expect("`well_to_hex` no longer converts the picked colour's space");
+        let read = body
+            .find("redComponent()")
+            .expect("`well_to_hex` no longer reads the colour's components");
+        assert!(
+            convert < read,
+            "`well_to_hex` reads colour components before converting to sRGB; a catalog \
+             or pattern colour then raises an ObjC exception across the FFI boundary"
         );
     }
 

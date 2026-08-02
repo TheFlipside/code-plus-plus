@@ -544,6 +544,11 @@ define_class!(
             crate::at_callback_boundary("menu:showPreferences", (), crate::preferences::show);
         }
 
+        #[unsafe(method(codeppShowStyleConfig:))]
+        fn show_style_config(&self, _sender: Option<&NSObject>) {
+            crate::at_callback_boundary("menu:showStyleConfig", (), crate::style_config::show);
+        }
+
         /// Exists only so AppKit groups the Preferences dialog's three
         /// display-mode radio buttons — the shared superview is not
         /// enough on its own, measured; see the call site in
@@ -847,6 +852,17 @@ fn build_app_menu(actions: &Actions, mtm: MainThreadMarker) -> Retained<NSMenuIt
         "Settings…",
         sel!(codeppShowPreferences:),
         ",",
+        Some(actions),
+    );
+    // Notepad++ puts this under Settings, which on this platform is the
+    // application menu — so it sits beside Settings… rather than under a
+    // Settings menu of its own. Same m1 convention decision.
+    add(
+        &app_menu,
+        mtm,
+        "Style Configurator…",
+        sel!(codeppShowStyleConfig:),
+        "",
         Some(actions),
     );
     app_menu.addItem(&NSMenuItem::separatorItem(mtm));
