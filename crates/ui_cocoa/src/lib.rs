@@ -4150,6 +4150,58 @@ let msg = \"found scintilla_cocoa_new() calls\";
         );
     }
 
+    /// The print path must not use objc2's *checked* `CGContext`
+    /// accessor.
+    ///
+    /// During a print preview AppKit makes a private
+    /// `NSPrintPreviewGraphicsContext` current, which implements
+    /// `CGContext` by forwarding — so `respondsToSelector:` answers YES
+    /// and the send works, while `class_getInstanceMethod` finds
+    /// nothing. objc2's generated accessor consults the latter under
+    /// `debug_assertions` and panics before sending; the panic is caught
+    /// at the callback boundary, so every preview page draws nothing
+    /// while the page *count* stays right.
+    ///
+    /// That is the shape that hid it: release builds skip the
+    /// verification and print correctly, so a PDF check and a
+    /// release-build check both pass. It was found by a user running
+    /// `cargo run`, which is the documented development workflow.
+    #[test]
+    fn the_print_path_sends_cg_context_unchecked() {
+        let src = include_str!("print.rs");
+        let src = match src.find("#[cfg(test)]") {
+            Some(i) => &src[..i],
+            None => src,
+        };
+        assert!(src.len() > 2_000, "source scan read too little to be real");
+        // Comments stripped: this file's own docs discuss `.CGContext()`
+        // and the accessor's old shape, and a scan that matched those
+        // would flag itself — the same trap an m3c guard fell into by
+        // matching an identifier inside a comment rather than the call.
+        let code = code_only(src);
+        assert!(
+            !code.contains(".CGContext()"),
+            "the print path uses objc2's checked `CGContext` accessor again. It panics \
+             under debug_assertions against the preview's forwarding context, and the \
+             caught panic renders every preview page blank."
+        );
+        for f in ["draw_page", "measure_page"] {
+            assert!(
+                fn_body(src, f).contains("current_cg_context("),
+                "`{f}` no longer goes through `current_cg_context`"
+            );
+        }
+        // The pointer is borrowed from the context, so the context has to
+        // be a binding that outlives the drawing call. Handing it a
+        // temporary compiles and dangles.
+        assert!(
+            !code.contains("current_cg_context(&NSGraphicsContext::"),
+            "`current_cg_context` is being passed a temporary `NSGraphicsContext`. The \
+             pointer it returns is borrowed from that context, which is dropped at the \
+             end of the statement — leaving a dangling context for the draw."
+        );
+    }
+
     /// Scintilla's format cache must be released after a print run.
     ///
     /// `SCI_FORMATRANGEFULL(0, NULL)` frees what the measuring and

@@ -56,7 +56,7 @@ use objc2_app_kit::{
     NSGraphicsContext, NSPrintInfo, NSPrintOperation, NSStringDrawing, NSView,
 };
 use objc2_foundation::{
-    MainThreadMarker, NSDictionary, NSPoint, NSRange, NSRect, NSSize, NSString,
+    MainThreadMarker, NSDictionary, NSObjectProtocol, NSPoint, NSRange, NSRect, NSSize, NSString,
 };
 
 use codepp_editor::EditorHandle;
@@ -364,9 +364,7 @@ fn measure_page(
     }?;
     let gc = NSGraphicsContext::graphicsContextWithBitmapImageRep(&rep)?;
     let _ = mtm;
-    let context = Retained::as_ptr(&gc.CGContext())
-        .cast::<c_void>()
-        .cast_mut();
+    let context = current_cg_context(&gc)?;
     Some(format_range(
         editor,
         context,
@@ -525,6 +523,63 @@ impl PrintView {
     }
 }
 
+/// The `CGContextRef` behind an `NSGraphicsContext`, or `None` if this
+/// context has none to give.
+///
+/// **Sent unchecked, deliberately.** During a print *preview* AppKit
+/// makes a private `NSPrintPreviewGraphicsContext` current, and that
+/// class implements `CGContext` by *forwarding* rather than by declaring
+/// it — so `respondsToSelector:` answers YES and the send works, while
+/// `class_getInstanceMethod` finds nothing. objc2's generated accessor
+/// consults the latter under `debug_assertions` and panics
+/// ("invalid message send … method not found") before the message is
+/// ever sent.
+///
+/// That panic is caught by [`crate::at_callback_boundary`], so the page
+/// draws *nothing* and the preview comes up blank — every page, while
+/// pagination still reports the right count, because pagination measures
+/// against a bitmap context that has a real `CGContext`. Release builds
+/// skip the verification and print correctly, which is why this survived
+/// a PDF-based check and a release-build check and was found by a user
+/// running `cargo run` — the documented development workflow.
+///
+/// `respondsToSelector:` is still consulted, so a context that genuinely
+/// cannot supply one is declined rather than sent to blindly.
+///
+/// # The returned pointer is borrowed, not owned
+///
+/// `CGContext` is a Get-Rule property: the pointer belongs to
+/// `context`, and it is valid only while `context` is. **The caller must
+/// keep the `NSGraphicsContext` alive until after the pointer's last
+/// use** — which for both callers here means the binding must outlive
+/// the `SCI_FORMATRANGEFULL` call, not merely the call to this function.
+///
+/// Passing a temporary — `current_cg_context(&NSGraphicsContext::currentContext()?)`
+/// — would compile and produce a dangling pointer, so a source guard
+/// bans that shape. Worth noting that the checked accessor this replaced
+/// gave no protection here either: `Retained::as_ptr(&x.CGContext())`
+/// drops its temporary `Retained` at the end of that statement, so the
+/// extra retain was gone before the pointer was ever used. The lifetime
+/// has always rested on the owning `NSGraphicsContext`; this only says
+/// so out loud.
+fn current_cg_context(context: &NSGraphicsContext) -> Option<*mut c_void> {
+    let obj: &objc2::runtime::NSObject = context;
+    let sel = objc2::runtime::Sel::register(c"CGContext");
+    if !obj.respondsToSelector(sel) {
+        return None;
+    }
+    // SAFETY: `CGContext` takes no arguments and returns a `CGContextRef`
+    // — a pointer — which is what this signature declares. The selector
+    // is checked immediately above, so the receiver does implement it,
+    // by forwarding or otherwise.
+    let send: unsafe extern "C" fn(
+        *const objc2::runtime::AnyObject,
+        objc2::runtime::Sel,
+    ) -> *mut c_void = unsafe { std::mem::transmute(objc2::ffi::objc_msgSend as *const ()) };
+    let ptr = unsafe { send(std::ptr::from_ref(obj).cast(), sel) };
+    (!ptr.is_null()).then_some(ptr)
+}
+
 /// Render one page: the header band, then Scintilla's range.
 fn draw_page(rect: NSRect) {
     let Some(mtm) = MainThreadMarker::new() else {
@@ -533,9 +588,9 @@ fn draw_page(rect: NSRect) {
     let Some(context) = NSGraphicsContext::currentContext() else {
         return;
     };
-    let cg = Retained::as_ptr(&context.CGContext())
-        .cast::<c_void>()
-        .cast_mut();
+    let Some(cg) = current_cg_context(&context) else {
+        return;
+    };
 
     JOB.with(|j| {
         let borrow = j.borrow();
