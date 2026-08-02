@@ -47,6 +47,7 @@ mod dropview;
 mod fif;
 mod menu;
 mod platform;
+mod preferences;
 mod search;
 mod state;
 mod status;
@@ -63,6 +64,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use codepp_core::perf::Perf;
+use codepp_core::preferences::RecentFilesHistoryConfig;
 use codepp_core::session::WindowGeometry;
 use codepp_editor::EditorHandle;
 use codepp_scintilla_sys::scintilla_cocoa_new;
@@ -2272,6 +2274,88 @@ fn open_path(path: PathBuf) {
     }
 }
 
+/// Open the recent-files entry at `index`, removing it from the list —
+/// it is open now, and re-enters when it is next closed.
+///
+/// `index` is captured when the File menu is rebuilt on open, and an
+/// index rather than an id is safe here in a way it would not be for a
+/// tab (see §7.4's arm/commit race, which is why *those* key on
+/// `Tab.id`). Two things make it so, and the second is the one that
+/// could stop holding: menu tracking is a synchronous main-thread
+/// session, and nothing in the workspace mutates `Shell.recent_files`
+/// off that thread — no worker, timer or plugin path reaches it, only
+/// a tab close and these four commands. `take_recent_file_at`
+/// bounds-checks regardless, so a stale index is a no-op rather than a
+/// wrong file; and `rebuild_recent_region` clears its rows rather than
+/// leaving stale ones when it cannot read the list at all.
+pub(crate) fn open_recent_at(index: usize) {
+    let path = with_state(|st| st.shell.take_recent_file_at(index)).flatten();
+    if let Some(path) = path {
+        open_path(path);
+    }
+}
+
+/// ⇧⌘T / Restore Recent Closed File: reopen the most recently closed.
+pub(crate) fn restore_recent_closed() {
+    let path = with_state(|st| st.shell.pop_last_recent_file()).flatten();
+    if let Some(path) = path {
+        open_path(path);
+    }
+}
+
+/// Open every recent file, most-recent first, emptying the list.
+pub(crate) fn open_all_recent() {
+    let paths = with_state(|st| st.shell.take_all_recent_files()).unwrap_or_default();
+    for path in paths {
+        open_path(path);
+    }
+}
+
+/// Drop every tracked recent path.
+pub(crate) fn empty_recent_files() {
+    with_state(|st| st.shell.clear_recent_files());
+}
+
+/// Whether anything is in the recent-files list, for the enabled state
+/// of the three items that act on it.
+///
+/// A declined borrow answers `false` — i.e. greys the item — because the
+/// alternative is offering a command that will find nothing to do.
+pub(crate) fn has_recent_files() -> bool {
+    with_state(|st| !st.shell.visible_recent_files().is_empty()).unwrap_or(false)
+}
+
+/// The recent-files rows for the File menu: one already-numbered,
+/// already-sanitized label per entry (`"1: notes.txt"`), plus the config
+/// that shapes the region. The index is the row's position, recovered by
+/// the caller with `enumerate` and carried in each item's tag. `None` when the state borrow is declined — which the caller
+/// must not confuse with "no recent files", for the same reason
+/// [`open_buffer_rows`] draws that distinction.
+pub(crate) fn recent_file_rows() -> Option<(Vec<String>, RecentFilesHistoryConfig)> {
+    with_state(|st| {
+        let cfg = st.shell.preferences.recent_files_history.clone();
+        let rows = st
+            .shell
+            .visible_recent_files()
+            .iter()
+            .enumerate()
+            // A path is attacker-influenced display text, so it goes
+            // through the same sanitizer filenames take everywhere else
+            // in this backend. The *functional* value is the index,
+            // which is carried in the item's tag and never parsed back
+            // out of this string.
+            .map(|(i, p)| {
+                format!(
+                    "{}: {}",
+                    i + 1,
+                    codepp_shell::sanitize_str_for_display(&cfg.display_path(p))
+                )
+            })
+            .collect();
+        (rows, cfg)
+    })
+}
+
 /// Restore the previous session's buffers, then any path from the
 /// command line.
 fn restore_session(initial_path: Option<PathBuf>) {
@@ -3934,6 +4018,83 @@ let msg = \"found scintilla_cocoa_new() calls\";
             "`on_style_needed` paints inside the `with_state` closure. Each \
              SCI_SETSTYLING re-enters the notification dispatch, where the held \
              borrow makes every refresh a silent no-op."
+        );
+    }
+
+    /// ⇧⌘T must live on a **static** File-menu item.
+    ///
+    /// AppKit does not call `menuNeedsUpdate:` when it searches for a key
+    /// equivalent, so a shortcut on a delegate-built item is dead until
+    /// the user happens to open that menu once. Measured with a control:
+    /// populated, the same synthetic ⇧⌘T resolves and opens a file;
+    /// unpopulated it resolves to nothing on `NSMenu`'s own
+    /// `performKeyEquivalent:`, on `NSApp::sendEvent`, and when posted.
+    ///
+    /// A source scan because the failure is *absence* — the command
+    /// simply never runs — and observing it needs a real menu, a real
+    /// key event and a populated recent-files list.
+    #[test]
+    fn the_restore_shortcut_is_not_on_a_delegate_built_item() {
+        let src = include_str!("menu.rs");
+        let src = match src.find("#[cfg(test)]") {
+            Some(i) => &src[..i],
+            None => src,
+        };
+        assert!(src.len() > 5_000, "source scan read too little to be real");
+        assert!(
+            fn_body(src, "add_recent_files_tail").contains("codeppRestoreRecentClosed:"),
+            "Restore Recent Closed File left the File menu's static tail. Its ⇧⌘T \
+             then only works after the menu has been opened once."
+        );
+        assert!(
+            !fn_body(src, "rebuild_recent_region").contains("codeppRestoreRecentClosed:"),
+            "Restore Recent Closed File is built by the menu delegate again, so its \
+             ⇧⌘T is dead until the File menu is first opened."
+        );
+    }
+
+    /// The recent-files rows must be removed *before* the state is read.
+    ///
+    /// Their tag is a list **index**, and `open_recent_at` resolves it
+    /// against the live list at click time — so a row left in place when
+    /// the read is declined could open a file other than the one it
+    /// names. Ordering is the whole fix, and it is invisible at the call
+    /// site: both orders compile, and both look right until the list
+    /// changes under a declined rebuild. The Window and Language menus
+    /// deliberately do the opposite, because their tags (a `Tab.id`, a
+    /// language id) stay meaningful when stale.
+    #[test]
+    fn stale_recent_rows_are_cleared_before_the_state_is_read() {
+        let src = include_str!("menu.rs");
+        let src = match src.find("#[cfg(test)]") {
+            Some(i) => &src[..i],
+            None => src,
+        };
+        let body = fn_body(src, "rebuild_recent_region");
+        let remove = body
+            .find("menu.removeItemAtIndex(anchor)")
+            .expect("`rebuild_recent_region` no longer removes the previous rows");
+        let read = body
+            .find("crate::recent_file_rows()")
+            .expect("`rebuild_recent_region` no longer reads the recent-files list");
+        assert!(
+            remove < read,
+            "`rebuild_recent_region` reads the state before clearing the old rows, so \
+             a declined read leaves rows whose index tag can open the wrong file"
+        );
+    }
+
+    /// A recent-files label is a path, and a path is attacker-influenced
+    /// display text. Same value-vs-label split as the workspace tree and
+    /// the Find-in-Files dock: the row's *functional* value is its index,
+    /// carried in the tag, and is never parsed back out of the label.
+    #[test]
+    fn recent_file_labels_are_sanitized() {
+        let src = production_src();
+        assert!(
+            fn_body(src, "recent_file_rows").contains("sanitize_str_for_display("),
+            "recent-files menu labels are no longer sanitized, so a filename \
+             carrying bidi controls renders reordered in the File menu"
         );
     }
 }

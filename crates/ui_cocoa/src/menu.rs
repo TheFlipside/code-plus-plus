@@ -94,22 +94,25 @@ define_class!(
         /// Regenerate a menu whose contents depend on live model state,
         /// just before it is shown.
         ///
-        /// Two menus need it. The Window menu's buffer list changes with
-        /// every open, close and reorder; the Language menu's loaded-UDL
-        /// rows cannot be built at construction at all, because
-        /// [`build_language_menu`] runs before `Shell::new` and so before
-        /// any UDL registry exists. In both cases rebuilding on demand
-        /// beats pushing an update from every path that could invalidate
-        /// the list — the same reasoning that makes `TabStrip::sync`
-        /// total rather than incremental.
+        /// Three menus need it. The Window menu's buffer list changes
+        /// with every open, close and reorder, and the File menu's
+        /// recent-files rows with every open and close; the Language
+        /// menu's loaded-UDL rows cannot be built at construction at
+        /// all, because [`build_language_menu`] runs before `Shell::new`
+        /// and so before any UDL registry exists. In each case
+        /// rebuilding on demand beats pushing an update from every path
+        /// that could invalidate the list — the same reasoning that
+        /// makes `TabStrip::sync` total rather than incremental.
         ///
-        /// Each menu is identified by its **title** ([`is_window_menu`],
-        /// [`is_language_menu`]), so one delegate serves both and any
-        /// future menu with the same need.
+        /// Each menu is identified by its **title** ([`is_file_menu`],
+        /// [`is_window_menu`], [`is_language_menu`]), so one delegate
+        /// serves all three and any future menu with the same need.
         #[unsafe(method(menuNeedsUpdate:))]
         fn menu_needs_update(&self, menu: &NSMenu) {
             crate::at_callback_boundary("menu:needsUpdate", (), || {
-                if is_window_menu(menu) {
+                if is_file_menu(menu) {
+                    rebuild_recent_region(menu, self);
+                } else if is_window_menu(menu) {
                     rebuild_window_menu(menu, self);
                 } else if is_language_menu(menu) {
                     rebuild_udl_rows(menu, self);
@@ -536,6 +539,51 @@ define_class!(
             });
         }
 
+        #[unsafe(method(codeppShowPreferences:))]
+        fn show_preferences(&self, _sender: Option<&NSObject>) {
+            crate::at_callback_boundary("menu:showPreferences", (), crate::preferences::show);
+        }
+
+        /// Exists only so AppKit groups the Preferences dialog's three
+        /// display-mode radio buttons — the shared superview is not
+        /// enough on its own, measured; see the call site in
+        /// `preferences::build_dialog`. No target is set, so this is
+        /// never actually dispatched; the states are read back when the
+        /// dialog closes.
+        #[unsafe(method(codeppPrefsDisplayMode:))]
+        fn prefs_display_mode(&self, _sender: Option<&NSObject>) {}
+
+        /// Open a recent file. Carries its index in the list as the
+        /// tag; see [`crate::open_recent_at`] for why an index is safe
+        /// here where a tab would need an id.
+        #[unsafe(method(codeppOpenRecentAt:))]
+        fn open_recent_at(&self, sender: Option<&NSMenuItem>) {
+            crate::at_callback_boundary("menu:openRecentAt", (), || {
+                if let Some(index) = sender.and_then(|s| usize::try_from(s.tag()).ok()) {
+                    crate::open_recent_at(index);
+                }
+            });
+        }
+
+        #[unsafe(method(codeppRestoreRecentClosed:))]
+        fn restore_recent_closed(&self, _sender: Option<&NSObject>) {
+            crate::at_callback_boundary(
+                "menu:restoreRecentClosed",
+                (),
+                crate::restore_recent_closed,
+            );
+        }
+
+        #[unsafe(method(codeppOpenAllRecent:))]
+        fn open_all_recent(&self, _sender: Option<&NSObject>) {
+            crate::at_callback_boundary("menu:openAllRecent", (), crate::open_all_recent);
+        }
+
+        #[unsafe(method(codeppEmptyRecentFiles:))]
+        fn empty_recent_files(&self, _sender: Option<&NSObject>) {
+            crate::at_callback_boundary("menu:emptyRecentFiles", (), crate::empty_recent_files);
+        }
+
         /// Reveal the `userDefineLangs` folder in Finder, so a user can
         /// drop a `.udl.xml` in without leaving the app.
         #[unsafe(method(codeppOpenUdlFolder:))]
@@ -662,6 +710,17 @@ fn validate(item: &NSMenuItem) -> bool {
         // no `VIEW_TOGGLES` tag and is matched on its selector. The mark
         // still comes from live state, like every other one here.
         item.setState(isize::from(crate::docmap::is_visible()));
+    } else if action == sel!(codeppRestoreRecentClosed:)
+        || action == sel!(codeppOpenAllRecent:)
+        || action == sel!(codeppEmptyRecentFiles:)
+    {
+        // The only items here that resolve to *enabled* rather than to a
+        // mark: all three act on the recent-files list, so all three are
+        // dead while it is empty or the feature is off. `ui_gtk` sets
+        // `sensitive` when it builds the region; AppKit asks instead,
+        // which means the state cannot go stale between a rebuild and a
+        // click — and these three are static, so nothing rebuilds them.
+        return crate::has_recent_files();
     }
     true
 }
@@ -775,6 +834,19 @@ fn build_app_menu(actions: &Actions, mtm: MainThreadMarker) -> Retained<NSMenuIt
         "About Code++",
         sel!(codeppAbout:),
         "",
+        Some(actions),
+    );
+    app_menu.addItem(&NSMenuItem::separatorItem(mtm));
+    // ⌘, and the application menu, which is where macOS mandates
+    // Settings live — Notepad++ puts Preferences under a Settings menu,
+    // and this is one of the three places the platform overrides that
+    // (the m1 convention decision).
+    add(
+        &app_menu,
+        mtm,
+        "Settings…",
+        sel!(codeppShowPreferences:),
+        ",",
         Some(actions),
     );
     app_menu.addItem(&NSMenuItem::separatorItem(mtm));
@@ -896,8 +968,205 @@ fn build_file_menu(actions: &Actions, mtm: MainThreadMarker) -> Retained<NSMenuI
     // `SCI_FORMATRANGEFULL`, which is its own milestone — greyed here for
     // the same reason DESIGN.md §7.2 keeps it greyed on Win32.
     add_disabled(&file_menu, mtm, "Print…");
+
+    add_recent_files_tail(&file_menu, actions, mtm);
+    // SAFETY: `Actions` implements `NSMenuDelegate` and AppKit's
+    // delegate reference is weak, while the window state owns `actions`
+    // for the process lifetime.
+    file_menu.setDelegate(Some(ProtocolObject::from_ref(actions)));
     file_item.setSubmenu(Some(&file_menu));
     file_item
+}
+
+/// The static tail of the File menu: the anchor separator the dynamic
+/// recent-files rows are spliced above, and the three commands that act
+/// on the list.
+///
+/// The numbered list is dynamic and is spliced in just above this
+/// separator on every menu open; the three commands below it are
+/// **static**, and that split is forced rather than chosen.
+///
+/// `menuNeedsUpdate:` is not called when AppKit searches for a key
+/// equivalent — measured, with a control: with the region populated,
+/// ⇧⌘T resolves and opens a file; with it unpopulated the same
+/// synthetic event resolves to nothing, on `NSMenu`'s own
+/// `performKeyEquivalent:`, on `NSApp::sendEvent` and when posted to
+/// the queue. So a shortcut on a delegate-built item is dead until
+/// the user happens to open the menu once, which is exactly the kind
+/// of silently half-working state this backend keeps having to fix.
+/// `NSMenuDelegate`'s documentation says the menu *is* populated for
+/// that search; it is not.
+///
+/// The documented alternative —
+/// `menuHasKeyEquivalent:forEvent:target:action:` — is worse here: it
+/// *replaces* AppKit's own search for every menu sharing this
+/// delegate, so answering "no" on behalf of the Window menu would
+/// kill ⌘M as a side effect.
+///
+/// Consequence: with "In Submenu" on, Notepad++ nests these three
+/// inside the popup and Code++ leaves them flat below it. Recorded
+/// rather than hidden — it is three rows against a dead shortcut.
+fn add_recent_files_tail(file_menu: &NSMenu, actions: &Actions, mtm: MainThreadMarker) {
+    file_menu.addItem(&NSMenuItem::separatorItem(mtm));
+    FILE_MENU_RECENT_ANCHOR.with(|c| c.set(file_menu.numberOfItems() - 1));
+    add(
+        file_menu,
+        mtm,
+        "Restore Recent Closed File",
+        sel!(codeppRestoreRecentClosed:),
+        "T",
+        Some(actions),
+    );
+    add(
+        file_menu,
+        mtm,
+        "Open All Recent Files",
+        sel!(codeppOpenAllRecent:),
+        "",
+        Some(actions),
+    );
+    add(
+        file_menu,
+        mtm,
+        "Empty Recent Files List",
+        sel!(codeppEmptyRecentFiles:),
+        "",
+        Some(actions),
+    );
+}
+
+/// Title identifying the File menu to the shared menu delegate.
+const FILE_MENU_TITLE: &str = "File";
+
+/// True if `menu` is the one [`build_file_menu`] built.
+fn is_file_menu(menu: &NSMenu) -> bool {
+    menu.title().to_string() == FILE_MENU_TITLE
+}
+
+thread_local! {
+    /// Index of the separator the dynamic recent-files rows are spliced
+    /// in *above*. Zero until [`build_file_menu`] runs, which makes a
+    /// rebuild a no-op rather than a splice into a menu it does not
+    /// understand.
+    static FILE_MENU_RECENT_ANCHOR: std::cell::Cell<isize> = const { std::cell::Cell::new(0) };
+    /// How many rows the last rebuild inserted, so the next one removes
+    /// exactly those and leaves every static File-menu item alone. The
+    /// same bookkeeping Win32's `recent_count` does, and `ui_gtk`'s
+    /// `RECENT_REGION` widget list.
+    static FILE_MENU_RECENT_COUNT: std::cell::Cell<isize> = const { std::cell::Cell::new(0) };
+}
+
+/// Rebuild the File menu's dynamic recent-files rows.
+///
+/// Only the numbered list is dynamic — Restore / Open All / Empty are
+/// static, for the key-equivalent reason [`build_file_menu`] records.
+/// The rows are spliced in above the anchor separator, giving:
+///
+/// ```text
+/// Print…
+/// ──────────                     (only while the list is non-empty)
+/// 1: notes.txt                   the dynamic rows: either these, or
+/// 2: main.rs                     one "Recent Files" submenu holding them
+/// ──────────                     (the static anchor)
+/// Restore Recent Closed File  ⇧⌘T
+/// Open All Recent Files
+/// Empty Recent Files List
+/// ```
+///
+/// With the feature switched off the whole tail is hidden, so the menu
+/// ends at Print rather than at a dangling separator. Hidden rather than
+/// removed, so the static items and their indices stay put; the shell
+/// gates the commands independently anyway.
+fn rebuild_recent_region(menu: &NSMenu, actions: &Actions) {
+    let Some(mtm) = MainThreadMarker::new() else {
+        return;
+    };
+    let anchor = FILE_MENU_RECENT_ANCHOR.with(std::cell::Cell::get);
+    if anchor == 0 {
+        // The menu was never built by us. Splicing into it would
+        // corrupt something we do not understand.
+        //
+        // Zero doubles as the sentinel because a real anchor can never
+        // be 0: `add_recent_files_tail` runs last, after a dozen
+        // File-menu items. Asserted rather than assumed, since a future
+        // reordering could silently make the sentinel a valid index.
+        return;
+    }
+    debug_assert!(
+        anchor > 0,
+        "the recent-files anchor is also the unbuilt sentinel; \
+         `add_recent_files_tail` must not be the first thing in the File menu"
+    );
+    // Remove exactly what the previous rebuild inserted. Each removal
+    // shifts the rest down, so the same index serves every time.
+    //
+    // **Before** reading the state, deliberately. The read can be
+    // declined (a re-entrant borrow), and unlike the Window and Language
+    // menus — which leave their rows in place on a decline — these rows
+    // have to go: their tag is a *list index*, and `open_recent_at`
+    // resolves it against the live list at click time, so a row left
+    // behind could open a file other than the one it names. The Window
+    // menu's tag is a `Tab.id` and the Language menu's a language id;
+    // both stay meaningful, which is why only this one clears.
+    for _ in 0..FILE_MENU_RECENT_COUNT.with(std::cell::Cell::get) {
+        menu.removeItemAtIndex(anchor);
+    }
+    FILE_MENU_RECENT_COUNT.with(|c| c.set(0));
+
+    let Some((rows, cfg)) = crate::recent_file_rows() else {
+        // Declined borrow, not "no recent files" — the rows are gone
+        // rather than stale, and the next open rebuilds them.
+        return;
+    };
+
+    // The anchor separator and the three static commands below it.
+    let active = cfg.is_active();
+    for i in anchor..menu.numberOfItems() {
+        if let Some(item) = menu.itemAtIndex(i) {
+            item.setHidden(!active);
+        }
+    }
+    if !active || rows.is_empty() {
+        return;
+    }
+
+    // Built into a scratch menu first, so the flat and nested layouts
+    // share one construction.
+    let region = NSMenu::new(mtm);
+    for (index, label) in rows.into_iter().enumerate() {
+        let item = add(
+            &region,
+            mtm,
+            &label,
+            sel!(codeppOpenRecentAt:),
+            "",
+            Some(actions),
+        );
+        item.setTag(isize::try_from(index).unwrap_or(isize::MAX));
+    }
+
+    let mut inserted: Vec<Retained<NSMenuItem>> = vec![NSMenuItem::separatorItem(mtm)];
+    if cfg.in_submenu {
+        let parent = NSMenuItem::new(mtm);
+        parent.setTitle(&NSString::from_str("Recent Files"));
+        parent.setSubmenu(Some(&region));
+        inserted.push(parent);
+    } else {
+        // An `NSMenuItem` belongs to at most one menu, so each has to
+        // leave `region` before it can join the File menu.
+        while region.numberOfItems() > 0 {
+            let Some(item) = region.itemAtIndex(0) else {
+                break;
+            };
+            region.removeItemAtIndex(0);
+            inserted.push(item);
+        }
+    }
+
+    for (offset, item) in inserted.iter().enumerate() {
+        menu.insertItem_atIndex(item, anchor + isize::try_from(offset).unwrap_or(0));
+    }
+    FILE_MENU_RECENT_COUNT.with(|c| c.set(isize::try_from(inserted.len()).unwrap_or(0)));
 }
 
 /// The Edit menu.

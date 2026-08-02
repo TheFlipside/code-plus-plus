@@ -2194,8 +2194,20 @@ impl Shell {
     }
 
     /// Empty the recent-files list. Backs File → Empty Recent
-    /// Files List. No-op when the list is already empty.
+    /// Files List. No-op when the list is already empty, **or**
+    /// when the feature is disabled — the same gate its three
+    /// sibling mutators carry, and which
+    /// [`Self::pop_last_recent_file`] describes as shared by every
+    /// recent-files mutation entry point. It was the one that did
+    /// not have it. Unreachable through the UI today (all three
+    /// commands are greyed or hidden while the feature is off) and
+    /// it changes no behaviour, because `set_preferences` clears
+    /// the list through `recent_files.clear()` directly rather than
+    /// through here; it is here so the stated invariant is true.
     pub fn clear_recent_files(&mut self) {
+        if !self.preferences.recent_files_history.is_active() {
+            return;
+        }
         if self.recent_files.entries.is_empty() {
             return;
         }
