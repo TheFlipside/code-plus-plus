@@ -28,7 +28,7 @@
 //! 5000-line file with 8 active styles emits 8 CSS rules and one
 //! `<span>` per run, not one per character.
 
-#![cfg(any(target_os = "windows", target_os = "linux"))]
+#![cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
 // HTML emission builds output via repeated `out += &format!(...)`
 // — clippy prefers `write!(out, ...).unwrap()`, but for HTML the `+=`
 // form reads more naturally and the builder closures don't gain

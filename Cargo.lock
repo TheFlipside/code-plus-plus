@@ -279,6 +279,7 @@ dependencies = [
  "codepp-core",
  "codepp-editor",
  "codepp-platform",
+ "codepp-plugin-host",
  "codepp-scintilla-sys",
  "codepp-shell",
  "codepp-udl",

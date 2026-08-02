@@ -12,12 +12,16 @@ description = "Code++ preinstalled plugin: export the active buffer to HTML pres
 workspace = true
 
 [lib]
-# `cdylib` produces `cppexport.dll` on Windows; the host loads it via
-# `LoadLibraryW`. Same cross-platform story as the other m7 plugins.
+# `cdylib` produces `cppexport.dll` on Windows (`LoadLibraryW`) and
+# `.so`/`.dylib` on Linux/macOS (`dlopen`). Same story as the other
+# m7 plugins.
 crate-type = ["cdylib"]
 name = "cppexport"
 
-[target.'cfg(any(target_os = "windows", target_os = "linux"))'.dependencies]
+# Cross-platform: Windows (LoadLibraryW), Linux and macOS (dlopen).
+# The gate mirrors this plugin's `mod imp` gate — see
+# `codepp_platform::BUNDLED_PLUGINS`, which must agree with both.
+[target.'cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))'.dependencies]
 codepp-plugin-sdk = { workspace = true }
 
 [build-dependencies]

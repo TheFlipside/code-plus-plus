@@ -25,5 +25,5 @@
     clippy::cast_sign_loss
 )]
 
-#[cfg(any(target_os = "windows", target_os = "linux"))]
+#[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
 mod imp;

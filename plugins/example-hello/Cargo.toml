@@ -13,18 +13,17 @@ workspace = true
 
 [lib]
 # `cdylib` produces a regular Win32 DLL (`.dll`) on Windows that the
-# Code++ plugin host loads via `LoadLibraryW`. The output filename
-# uses `name`, not the package name, so the host sees `example_hello.dll`
-# rather than `codepp-example-hello.dll`. On non-Windows platforms the
-# crate compiles to an empty `cdylib` (the entry-point module is gated
-# behind `#[cfg(target_os = "windows")]`); Phase 5 ports the plugin
-# host to `dlopen`/`dlsym` and the same source compiles to `.so`/`.dylib`.
+# Code++ plugin host loads via `LoadLibraryW`, and a `.so`/`.dylib` on
+# Linux/macOS that it loads via `dlopen`. The output filename uses
+# `name`, not the package name, so the host sees `example_hello.dll`
+# rather than `codepp-example-hello.dll`.
 crate-type = ["cdylib"]
 name = "example_hello"
 
-# Cross-platform: the plugin builds on Windows (LoadLibraryW) and Linux
-# (dlopen). macOS stays stubbed until Scintilla has a Cocoa backend.
-[target.'cfg(any(target_os = "windows", target_os = "linux"))'.dependencies]
+# Cross-platform: Windows (LoadLibraryW), Linux and macOS (dlopen).
+# The gate mirrors this plugin's `mod imp` gate — see
+# `codepp_platform::BUNDLED_PLUGINS`, which must agree with both.
+[target.'cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))'.dependencies]
 codepp-plugin-sdk = { workspace = true }
 
 [build-dependencies]

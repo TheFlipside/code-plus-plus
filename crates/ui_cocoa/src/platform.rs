@@ -26,8 +26,11 @@ use codepp_scintilla_sys::{
     SCI_SETSELECTIONEND, SCI_SETSELECTIONSTART, SCI_SETTABWIDTH, SCI_SETTEXT, SCI_SETXOFFSET,
     SCI_STYLEGETBACK, SCI_STYLEGETFORE, SC_EOL_CR, SC_EOL_CRLF, SC_EOL_LF, STYLE_DEFAULT,
 };
-use codepp_shell::{SearchFlags, UiPlatform};
-use objc2_foundation::{NSPoint, NSRect, NSSize};
+use codepp_shell::{ClipboardData, SearchFlags, UiPlatform};
+use objc2_app_kit::{
+    NSPasteboard, NSPasteboardTypeHTML, NSPasteboardTypeRTF, NSPasteboardTypeString,
+};
+use objc2_foundation::{NSData, NSPoint, NSRect, NSSize};
 
 use crate::state::CocoaUi;
 
@@ -864,4 +867,48 @@ impl UiPlatform for CocoaUi {
         // off its save point without changing a byte of text.
         self.editor.send(SCI_ADDUNDOACTION, 0, 0);
     }
+
+    fn set_clipboard(&mut self, payloads: &[ClipboardData]) -> bool {
+        set_clipboard_payloads(payloads)
+    }
+}
+
+/// Place the abstract clipboard `payloads` on the general pasteboard.
+///
+/// Drives `CODEPPM_SETCLIPBOARD`, which `cppexport`'s "Copy … to
+/// Clipboard" items use. Self-contained (touches no `CocoaUi` state), so
+/// it can be unit-adjacent and called from anywhere on the main thread.
+///
+/// **One `clearContents` for the whole set, then one `setData:forType:`
+/// per format.** That is what makes a multi-format copy a single
+/// clipboard *offer* rather than three that overwrite each other —
+/// pasting into a rich-text target gets the RTF, into a browser the
+/// HTML, into a terminal the plain text, all from one copy.
+///
+/// The plain-text fallback is guaranteed one layer up, in
+/// `HostBridge::set_clipboard`, which synthesises a `Plain` payload when
+/// a plugin sends only a rich one. This function therefore just maps
+/// what it is handed, exactly like `ui_gtk::set_clipboard_payloads`.
+pub(crate) fn set_clipboard_payloads(payloads: &[ClipboardData]) -> bool {
+    if payloads.is_empty() {
+        return false;
+    }
+    let pasteboard = NSPasteboard::generalPasteboard();
+    pasteboard.clearContents();
+    let mut wrote_any = false;
+    for payload in payloads {
+        let (ty, bytes) = match payload {
+            ClipboardData::Plain(b) => (unsafe { NSPasteboardTypeString }, b),
+            ClipboardData::Html(b) => (unsafe { NSPasteboardTypeHTML }, b),
+            ClipboardData::Rtf(b) => (unsafe { NSPasteboardTypeRTF }, b),
+        };
+        let data = NSData::with_bytes(bytes);
+        // `setData:forType:` returns NO if the type was not declared by
+        // the preceding `clearContents`/`addTypes:` cycle — but on the
+        // general pasteboard a bare `setData:forType:` after
+        // `clearContents` declares as it goes, which is the documented
+        // modern usage.
+        wrote_any |= pasteboard.setData_forType(Some(&data), ty);
+    }
+    wrote_any
 }

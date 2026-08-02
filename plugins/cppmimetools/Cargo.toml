@@ -12,18 +12,16 @@ description = "Code++ preinstalled plugin: encode/decode selections (Base64, URL
 workspace = true
 
 [lib]
-# `cdylib` produces `cppmimetools.dll` on Windows; the host loads it via
-# `LoadLibraryW`. The same source compiles to `.so`/`.dylib` once Phase 5
-# ports the host to `dlopen`/`dlsym`. On non-Windows hosts today the
-# entry-point module is gated behind `#[cfg(target_os = "windows")]`,
-# so the build still emits an empty cdylib stub for the workspace's
-# cross-platform `cargo build` to pass.
+# `cdylib` produces `cppmimetools.dll` on Windows, where the host loads
+# it via `LoadLibraryW`, and `.so`/`.dylib` on Linux/macOS, where it
+# loads via `dlopen`. One source, three platforms.
 crate-type = ["cdylib"]
 name = "cppmimetools"
 
-# Cross-platform: the plugin builds on Windows (LoadLibraryW) and Linux
-# (dlopen). macOS stays stubbed until Scintilla has a Cocoa backend.
-[target.'cfg(any(target_os = "windows", target_os = "linux"))'.dependencies]
+# Cross-platform: Windows (LoadLibraryW), Linux and macOS (dlopen).
+# The gate mirrors this plugin's `mod imp` gate — see
+# `codepp_platform::BUNDLED_PLUGINS`, which must agree with both.
+[target.'cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))'.dependencies]
 codepp-plugin-sdk = { workspace = true }
 # Raw-DEFLATE inflate for SAML Decode (SAML Redirect Binding payloads
 # are URL-encoded + Base64-encoded + raw-DEFLATE compressed). Pure

@@ -12,16 +12,15 @@ description = "Code++ preinstalled plugin: ASCII↔HEX selection conversion. Cle
 workspace = true
 
 [lib]
-# `cdylib` produces `cppconverter.dll` on Windows; the host loads it
-# via `LoadLibraryW`. Same cross-platform story as cppmimetools — the
-# entry-point module is `#[cfg(target_os = "windows")]`-gated until
-# Phase 5 ports the host to `dlopen`/`dlsym`.
+# `cdylib` produces `cppconverter.dll` on Windows (`LoadLibraryW`) and
+# `.so`/`.dylib` on Linux/macOS (`dlopen`). Same story as cppmimetools.
 crate-type = ["cdylib"]
 name = "cppconverter"
 
-# Cross-platform: the plugin builds on Windows (LoadLibraryW) and Linux
-# (dlopen). macOS stays stubbed until Scintilla has a Cocoa backend.
-[target.'cfg(any(target_os = "windows", target_os = "linux"))'.dependencies]
+# Cross-platform: Windows (LoadLibraryW), Linux and macOS (dlopen).
+# The gate mirrors this plugin's `mod imp` gate — see
+# `codepp_platform::BUNDLED_PLUGINS`, which must agree with both.
+[target.'cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))'.dependencies]
 codepp-plugin-sdk = { workspace = true }
 
 [build-dependencies]

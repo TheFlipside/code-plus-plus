@@ -19,27 +19,24 @@ use std::path::Path;
 /// `[lib] name`. Each name is also the plugin's directory and stem in
 /// the plugins folder (the stem-equals-dirname rule discovery enforces).
 ///
-/// All four now stage on Linux as well as Windows: `cppexport`'s
-/// cross-platform port (it routes its Save-As and clipboard sinks
-/// through the host's `CODEPPM_EXPORTSAVEDIALOG` / `CODEPPM_SETCLIPBOARD`
-/// extension messages instead of calling the OS directly) makes it as
-/// portable as the other three.
+/// All four stage on all three platforms. Nothing in them is
+/// OS-specific: `codepp-plugin-sdk` supplies the whole FFI surface and
+/// routes every `SendMessageW` through the host callback off Windows,
+/// and `cppexport` — the only one that ever wanted an OS dialog or the
+/// clipboard — asks the host for both through the
+/// `CODEPPM_EXPORTSAVEDIALOG` / `CODEPPM_SETCLIPBOARD` extension
+/// messages rather than calling the platform itself.
 ///
-/// **The list must match each plugin's `mod imp` cfg gate** — every
-/// in-tree plugin gates its entry points on `any(windows, linux)`, so on
-/// macOS (and any other target) they compile to empty cdylibs with none
-/// of the six ABI exports. Staging one there would only make the host
-/// log a failed load, so that list is empty until Phase 5's Cocoa
-/// bring-up adds the macOS `mod imp` arm and populates it.
-#[cfg(target_os = "windows")]
+/// **The list must match each plugin's `mod imp` cfg gate.** A plugin
+/// whose gate excludes the current target compiles to an *empty*
+/// cdylib with none of the six ABI exports, so staging it there would
+/// only make the host log a failed load. The two are kept in sync by
+/// hand; `bundled_plugins_match_the_imp_gates` pins it.
+#[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
 pub const BUNDLED_PLUGINS: &[&str] =
     &["example_hello", "cppmimetools", "cppconverter", "cppexport"];
 
-#[cfg(target_os = "linux")]
-pub const BUNDLED_PLUGINS: &[&str] =
-    &["example_hello", "cppmimetools", "cppconverter", "cppexport"];
-
-#[cfg(not(any(target_os = "windows", target_os = "linux")))]
+#[cfg(not(any(target_os = "windows", target_os = "linux", target_os = "macos")))]
 pub const BUNDLED_PLUGINS: &[&str] = &[];
 
 /// cdylib output filename prefix: `lib` on Unix, empty on Windows.
@@ -140,7 +137,7 @@ fn should_stage(src: &Path, dest: &Path) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::should_stage;
+    use super::{should_stage, BUNDLED_PLUGINS};
     use std::fs;
     use std::path::PathBuf;
 
@@ -177,5 +174,54 @@ mod tests {
         // weaker, deterministic property: a dest written after the src is
         // not older, hence not staged.
         assert!(!should_stage(&src, &dest));
+    }
+
+    /// Every plugin in [`BUNDLED_PLUGINS`] must actually build its entry
+    /// points on this target.
+    ///
+    /// The two live in different crates with no dependency between them,
+    /// so nothing but this test connects them. Staging a plugin whose
+    /// `mod imp` gate excludes the current target copies an *empty*
+    /// cdylib into the user's plugins folder, where it fails to load and
+    /// shows up in the Plugin Manager as a broken plugin — a silent
+    /// regression the compiler cannot see.
+    ///
+    /// Reads each `imp.rs`'s inner gate attribute rather than trying to
+    /// evaluate a `cfg`, because the gate is source in another crate.
+    #[test]
+    fn bundled_plugins_match_the_imp_gates() {
+        // (`BUNDLED_PLUGINS` name, that plugin's `imp.rs` source.)
+        let gates: &[(&str, &str)] = &[
+            (
+                "example_hello",
+                include_str!("../../../plugins/example-hello/src/imp.rs"),
+            ),
+            (
+                "cppmimetools",
+                include_str!("../../../plugins/cppmimetools/src/imp.rs"),
+            ),
+            (
+                "cppconverter",
+                include_str!("../../../plugins/cppconverter/src/imp.rs"),
+            ),
+            (
+                "cppexport",
+                include_str!("../../../plugins/cppexport/src/imp.rs"),
+            ),
+        ];
+        let target = std::env::consts::OS;
+        for (name, src) in gates {
+            let gate = src
+                .lines()
+                .find(|l| l.starts_with("#![cfg("))
+                .unwrap_or_else(|| panic!("{name}: no inner cfg gate found in imp.rs"));
+            let builds_here = gate.contains(&format!("target_os = \"{target}\""));
+            let staged = BUNDLED_PLUGINS.contains(name);
+            assert_eq!(
+                staged, builds_here,
+                "{name}: BUNDLED_PLUGINS says staged={staged} on {target}, but its \
+                 imp.rs gate says builds_here={builds_here} ({gate})"
+            );
+        }
     }
 }

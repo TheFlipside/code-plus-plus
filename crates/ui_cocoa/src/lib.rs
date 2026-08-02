@@ -47,6 +47,7 @@ mod dropview;
 mod fif;
 mod menu;
 mod platform;
+mod plugin;
 mod preferences;
 mod print;
 mod search;
@@ -242,6 +243,17 @@ pub fn run(initial_path: Option<PathBuf>, perf: Perf) -> Result<(), CocoaUiError
 
     let actions = menu::Actions::new(mtm);
     let menu = menu::install(&app, &actions, mtm);
+
+    // Stage the bundled plugin `.dylib`s into the user's plugins dir so
+    // they are discoverable without a manual install step. Copies only
+    // on first run (or after a rebuild); otherwise four `stat` pairs,
+    // which is why it can sit on the startup path at all — see §8 for
+    // the measured cost. Runs before discovery, which reads that
+    // directory, and before any `dlopen`, which happens later still.
+    let staged = codepp_platform::stage_bundled_plugins();
+    if staged > 0 {
+        tracing::info!(count = staged, "staged bundled plugins");
+    }
 
     // --- Shell, and the §5.4 cross-thread wake ---------------------
     //
@@ -452,6 +464,13 @@ pub fn run(initial_path: Option<PathBuf>, perf: Perf) -> Result<(), CocoaUiError
     // And the workspace panel's width, root and open state. After the
     // map for the same reason: each one that opens relayouts the chrome.
     workspace::apply_saved();
+
+    // Enumerate installed plugins. Records paths only — nothing is
+    // `dlopen`ed here, which DESIGN.md §8 makes a hard constraint and
+    // the first Plugins-menu open is what actually maps them. The
+    // `stage_bundled_plugins` call earlier in this function has already
+    // copied the in-tree plugins into this directory.
+    plugin::discover();
 
     // The auto-save timer is retained by the run loop; `actions` must
     // outlive it, which the binding below guarantees.
@@ -1499,6 +1518,11 @@ pub(crate) fn drain_shell() {
     // replacements before the dock's own drain can see them.
     fif::drain_into_dock();
     refresh_tab_chrome();
+    // Deliver everything the drain queued (file opened/saved/closed,
+    // buffer activated, …) to the loaded plugins — **after** the borrow
+    // above has been dropped, so a plugin's `beNotified` can call back
+    // into `NPPM_*` and get a fresh borrow rather than a decline.
+    plugin::deliver_notifications();
 }
 
 /// Present one deferred dialog.
@@ -1536,14 +1560,78 @@ fn present_dialog(dialog: PendingDialog) {
         PendingDialog::Error { title, message } => {
             error_alert(&title, &message);
         }
-        // The plugin-driven Save-As export arrives with the plugin
-        // host. Named explicitly rather than matched by wildcard: a
-        // variant added later should be a compile error here, not a
-        // silent log line that nobody reads.
-        other @ PendingDialog::SaveExport { .. } => {
-            tracing::warn!(?other, "ui_cocoa m2 has no presenter for this dialog yet");
+        PendingDialog::SaveExport {
+            data,
+            suggested_name,
+            kind,
+        } => {
+            present_save_export(&data, &suggested_name, kind);
         }
     }
+}
+
+/// Deferred handler for a plugin's `CODEPPM_EXPORTSAVEDIALOG`.
+///
+/// Pops an `NSSavePanel` seeded from `suggested_name` and the kind's
+/// extension, writes `data` to the chosen path, and reports the outcome
+/// on the status bar. A cancelled panel is silent, matching the
+/// plugin's own N++-style silent cancel — and matching `ui_gtk`.
+///
+/// Reached from [`present_dialog`], i.e. with no `with_state` borrow
+/// held, which is what lets it spin the panel's nested run loop and
+/// then re-acquire state for the status update.
+fn present_save_export(data: &[u8], suggested_name: &str, kind: codepp_shell::ExportFileKind) {
+    let Some(mtm) = MainThreadMarker::new() else {
+        return;
+    };
+    let (_filter_desc, _glob, default_ext) = kind.dialog_filter();
+    let panel = NSSavePanel::savePanel(mtm);
+    let name = if suggested_name.is_empty() {
+        if default_ext.is_empty() {
+            "export".to_owned()
+        } else {
+            format!("export.{default_ext}")
+        }
+    } else {
+        suggested_name.to_owned()
+    };
+    // The suggested name comes from the plugin, so it is untrusted
+    // chrome text in a field the user reads before committing to a
+    // write. `sanitize_filename_for_display` is the same call every
+    // other filename sink on this backend makes — and unlike the Find
+    // panel's query field (see `search::open_panel`), substituting here
+    // is safe rather than destructive: this is a *suggestion* the user
+    // can overwrite, not a functional parameter, and the actual write
+    // target is whatever the panel returns.
+    panel.setNameFieldStringValue(&NSString::from_str(
+        &codepp_shell::sanitize_filename_for_display(&name),
+    ));
+    if panel.runModal() != 1 {
+        return; // cancelled — leave the previous status line intact
+    }
+    let Some(mut path) = panel.URL().as_deref().and_then(url_to_path) else {
+        return;
+    };
+    // Match Win32's `lpstrDefExt` and GTK: append the kind's extension
+    // when the user typed none, so "report" becomes "report.html".
+    if !default_ext.is_empty() && path.extension().is_none() {
+        path.set_extension(default_ext);
+    }
+    let msg = match std::fs::write(&path, data) {
+        Ok(()) => format!(
+            "Export: wrote {}",
+            codepp_shell::sanitize_path_for_display(&path)
+        ),
+        Err(e) => format!(
+            "Export failed: {}",
+            codepp_shell::sanitize_str_for_display(&e.to_string())
+        ),
+    };
+    with_state(|st| {
+        use codepp_shell::UiPlatform;
+        let (_shell, mut ui) = st.split();
+        ui.set_plugin_status(0, &msg);
+    });
 }
 
 /// Show a modal error alert.
@@ -4281,6 +4369,180 @@ let msg = \"found scintilla_cocoa_new() calls\";
             "`well_to_hex` reads colour components before converting to sRGB; a catalog \
              or pattern colour then raises an ObjC exception across the FFI boundary"
         );
+    }
+
+    /// `crates/ui_cocoa/src/plugin.rs`, cut at its own test module.
+    fn plugin_src() -> String {
+        let src = include_str!("plugin.rs");
+        let cut = src.find("#[cfg(test)]").unwrap_or(src.len());
+        code_only(&src[..cut])
+    }
+
+    /// Whether `needle` occurs in `body` at brace depth 1 — i.e. as a
+    /// statement of the function itself rather than inside a nested
+    /// closure or block.
+    ///
+    /// The point of measuring depth rather than searching for the text
+    /// is that both placements *compile* and both look right in a diff:
+    /// the difference between calling a plugin inside a `with_state`
+    /// closure and calling it after that closure returns is one level of
+    /// indentation, and it decides whether the plugin's own re-entrant
+    /// `NPPM_*` calls work or are silently declined.
+    fn occurs_at_depth_one(body: &str, needle: &str) -> bool {
+        let mut depth = 0usize;
+        let bytes = body.as_bytes();
+        for (i, c) in body.char_indices() {
+            match c {
+                '{' => depth += 1,
+                '}' => depth = depth.saturating_sub(1),
+                _ => {}
+            }
+            if depth == 1 && bytes[i..].starts_with(needle.as_bytes()) {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// A plugin's `SendMessageW` reaches Scintilla only for the one
+    /// handle the host actually owns.
+    ///
+    /// `scintilla_cocoa_send_message` casts its first argument to
+    /// `ScintillaView*` and messages it, so forwarding an unvalidated
+    /// pointer turns a plugin bug — or a hostile plugin — into a wild
+    /// `objc_msgSend`. Win32 gets the equivalent protection for free
+    /// (`SendMessage` to an unknown `HWND` returns 0 without
+    /// dereferencing) and `ui_gtk` carries the same identity check for
+    /// the same reason.
+    ///
+    /// A runtime test can show that *today's* code refuses a bogus
+    /// pointer — and one was driven against the real app, returning 0 —
+    /// but it cannot stop the check being removed later, because the
+    /// symptom of removing it is a crash in someone else's process with
+    /// someone else's plugin installed.
+    #[test]
+    fn an_unknown_handle_is_never_forwarded_to_scintilla() {
+        let src = plugin_src();
+        assert!(
+            src.len() > 4_000,
+            "scanned only {} bytes of plugin.rs; a clean result proves nothing",
+            src.len()
+        );
+        assert_eq!(
+            src.matches("scintilla_cocoa_send_message(").count(),
+            1,
+            "plugin.rs sends to Scintilla from more than one place; every send must \
+             sit behind the `is_valid_scintilla` identity check"
+        );
+        let body = fn_body(&src, "plugin_dispatch");
+        let check = body
+            .find("is_valid_scintilla(hwnd)")
+            .expect("`plugin_dispatch` no longer identity-checks the handle it was given");
+        let send = body
+            .find("scintilla_cocoa_send_message(")
+            .expect("`plugin_dispatch` no longer forwards to Scintilla at all");
+        assert!(
+            check < send,
+            "`plugin_dispatch` forwards to Scintilla before checking the handle"
+        );
+    }
+
+    /// A plugin is called with **no** `with_state` borrow held.
+    ///
+    /// `with_state` declines a re-entrant borrow rather than panicking,
+    /// so calling a plugin from inside one does not fail loudly: every
+    /// `NPPM_*` the plugin sends back simply returns 0, and the plugin
+    /// concludes the host does not support the message. The lookup
+    /// therefore takes a short borrow, drops it, and calls outside.
+    ///
+    /// Both placements compile and both read correctly in a diff, which
+    /// is why this is pinned by depth rather than by eye.
+    #[test]
+    fn a_plugin_command_runs_outside_the_state_borrow() {
+        let src = plugin_src();
+        let body = fn_body(&src, "on_plugin_command");
+        assert!(
+            body.contains("with_state("),
+            "`on_plugin_command` no longer looks the command up through the shell"
+        );
+        assert!(
+            occurs_at_depth_one(&body, "let _ = catch_unwind("),
+            "`on_plugin_command` calls the plugin from inside a nested closure — if that \
+             is the `with_state` closure, every re-entrant NPPM_* call the plugin makes \
+             is silently declined"
+        );
+    }
+
+    /// Queued `NPPN_*` notifications are delivered after the drain's
+    /// borrow has been dropped, for the same reason as above: a plugin's
+    /// `beNotified` routinely calls back into `NPPM_*`.
+    #[test]
+    fn notifications_are_delivered_outside_the_drain_borrow() {
+        let body = fn_body(production_src(), "drain_shell");
+        assert!(
+            occurs_at_depth_one(&body, "plugin::deliver_notifications();"),
+            "`drain_shell` no longer delivers plugin notifications at statement level; \
+             inside the `with_state` closure they would be declined"
+        );
+    }
+
+    /// Nothing is `dlopen`ed at startup.
+    ///
+    /// DESIGN.md §8 makes this a hard constraint — "zero plugins loaded
+    /// until first user interaction touches them" — and §6.4 puts the
+    /// load on the first Plugins-menu open. `run` therefore calls
+    /// `discover`, which records paths and maps nothing.
+    ///
+    /// **The guard is on the call site, not on `run`'s body**, and the
+    /// difference is not pedantry: the first version of this test
+    /// asserted that `run` does not mention `ensure_plugins_loaded`,
+    /// and a mutation that moved the load one helper function away
+    /// passed it cleanly. Pinning the number of call sites in the whole
+    /// crate — and which function owns the one that exists — closes
+    /// that, because any new path to the loader is a second call site
+    /// wherever it is hidden.
+    #[test]
+    fn startup_discovers_plugins_without_loading_them() {
+        assert!(
+            fn_body(production_src(), "run").contains("plugin::discover();"),
+            "startup no longer discovers plugins, so the Plugins menu has nothing to load"
+        );
+        let src = plugin_src();
+        assert_eq!(
+            src.matches("ensure_plugins_loaded(").count(),
+            1,
+            "plugin dylibs are mapped from more than one place; the only permitted \
+             trigger is the first Plugins-menu open (DESIGN.md §6.4, §8)"
+        );
+        assert!(
+            fn_body(&src, "ensure_loaded_and_rebuild").contains("ensure_plugins_loaded("),
+            "the one call to `ensure_plugins_loaded` has moved out of the menu's \
+             lazy-load handler, so plugins may now be mapped before the user asks"
+        );
+    }
+
+    /// Every plugin-supplied string that reaches chrome is sanitized.
+    ///
+    /// A plugin's `getName()`, its `FuncItem` labels and a loader error
+    /// naming a file are all attacker-influenceable text rendered in
+    /// menus and in a dialog — the same class as filenames, and the
+    /// class DESIGN.md §7.4 records three prior incidents of.
+    #[test]
+    fn plugin_supplied_chrome_text_is_sanitized() {
+        let src = plugin_src();
+        for (func, what) in [
+            ("funcitem_label", "a plugin's menu item labels"),
+            ("rebuild_menu", "a plugin's own name in the Plugins menu"),
+            (
+                "show_plugin_manager",
+                "the Plugin Manager's name and status columns",
+            ),
+        ] {
+            assert!(
+                fn_body(&src, func).contains("sanitize_str_for_display("),
+                "`{func}` no longer sanitizes {what}"
+            );
+        }
     }
 
     /// A recent-files label is a path, and a path is attacker-influenced
