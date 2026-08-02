@@ -133,9 +133,7 @@ impl Toolbar {
         bar.push(icon!("save-all"), "Save All", Some(sel!(codeppSaveAll:)));
         bar.push(icon!("close"), "Close", Some(sel!(codeppCloseCurrentTab:)));
         bar.push(icon!("close-all"), "Close All", Some(sel!(codeppCloseAll:)));
-        // Print needs an `NSPrintOperation` driving Scintilla's
-        // `SCI_FORMATRANGEFULL`; greyed here as it is in the File menu.
-        bar.push(icon!("print"), "Print", None);
+        bar.push(icon!("print"), "Print", Some(sel!(codeppPrint:)));
         bar.separator();
 
         // Group 2 — clipboard. Standard AppKit selectors with a nil

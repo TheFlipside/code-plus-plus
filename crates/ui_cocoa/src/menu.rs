@@ -544,6 +544,11 @@ define_class!(
             crate::at_callback_boundary("menu:showPreferences", (), crate::preferences::show);
         }
 
+        #[unsafe(method(codeppPrint:))]
+        fn print(&self, _sender: Option<&NSObject>) {
+            crate::at_callback_boundary("menu:print", (), crate::print::show);
+        }
+
         #[unsafe(method(codeppShowStyleConfig:))]
         fn show_style_config(&self, _sender: Option<&NSObject>) {
             crate::at_callback_boundary("menu:showStyleConfig", (), crate::style_config::show);
@@ -980,10 +985,14 @@ fn build_file_menu(actions: &Actions, mtm: MainThreadMarker) -> Retained<NSMenuI
         Some(actions),
     );
     file_menu.addItem(&NSMenuItem::separatorItem(mtm));
-    // Printing needs an `NSPrintOperation` driving Scintilla's
-    // `SCI_FORMATRANGEFULL`, which is its own milestone — greyed here for
-    // the same reason DESIGN.md §7.2 keeps it greyed on Win32.
-    add_disabled(&file_menu, mtm, "Print…");
+    add(
+        &file_menu,
+        mtm,
+        "Print…",
+        sel!(codeppPrint:),
+        "p",
+        Some(actions),
+    );
 
     add_recent_files_tail(&file_menu, actions, mtm);
     // SAFETY: `Actions` implements `NSMenuDelegate` and AppKit's

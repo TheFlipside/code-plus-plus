@@ -48,6 +48,7 @@ mod fif;
 mod menu;
 mod platform;
 mod preferences;
+mod print;
 mod search;
 mod state;
 mod status;
@@ -4123,6 +4124,48 @@ let msg = \"found scintilla_cocoa_new() calls\";
             default < lang,
             "`apply_lang` runs before `apply_default_style`, so SCI_STYLECLEARALL wipes \
              the lexer colours it just restored and the buffer renders unstyled"
+        );
+    }
+
+    /// The print view must be flipped.
+    ///
+    /// `Sci_Rectangle` has `top < bottom` with y increasing downward,
+    /// and Scintilla's Cocoa surface is written against `SCIContentView`,
+    /// which answers `isFlipped` YES and hands its context straight to
+    /// `ScintillaCocoa::Draw`. An unflipped print view renders every page
+    /// upside down — which no unit test can see, and which costs paper to
+    /// discover.
+    #[test]
+    fn the_print_view_is_flipped() {
+        let src = include_str!("print.rs");
+        let src = match src.find("#[cfg(test)]") {
+            Some(i) => &src[..i],
+            None => src,
+        };
+        assert!(src.len() > 2_000, "source scan read too little to be real");
+        assert!(
+            fn_body(src, "is_flipped").contains("Bool::YES"),
+            "the print view is no longer flipped, so Scintilla's y-down rectangles \
+             render the page upside down"
+        );
+    }
+
+    /// Scintilla's format cache must be released after a print run.
+    ///
+    /// `SCI_FORMATRANGEFULL(0, NULL)` frees what the measuring and
+    /// drawing passes built up; `ScintillaDoc.html` §Printing states it as
+    /// required after the last page. Leaking it is invisible until a long
+    /// session has printed a few times.
+    #[test]
+    fn the_print_run_releases_the_format_cache() {
+        let src = include_str!("print.rs");
+        let src = match src.find("#[cfg(test)]") {
+            Some(i) => &src[..i],
+            None => src,
+        };
+        assert!(
+            fn_body(src, "show").contains("release_format_cache("),
+            "a print run no longer releases Scintilla's format cache"
         );
     }
 
