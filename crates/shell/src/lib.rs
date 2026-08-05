@@ -12126,18 +12126,56 @@ mod tests {
         let mut ui = FakeUi::default();
         shell.new_untitled(&mut ui);
 
-        // Two tabs, so nothing is a lone scratch and neither open can
-        // take the reuse path — both push tabs of their own.
-        shell.open_file(missing.clone());
+        // The good file is opened first and drained to completion, so
+        // that the only load in flight below is the one that fails.
+        // **Both loads must not be in flight at once**: the drain below
+        // keys on "an error dialog appeared", which cannot distinguish a
+        // phantom left behind by the failure from a sibling whose own
+        // load has simply not resolved yet — both are pathless with no
+        // untitled identity.
+        //
+        // The loader is one worker thread over a FIFO channel, so a
+        // failure submitted first is also *produced* first; what is
+        // timing-dependent is whether the sibling's result has reached
+        // the channel by the time the `drain` that observes the failure
+        // runs, since `drain` applies everything queued at that instant.
+        // Opening both up front therefore passed wherever the good
+        // result happened to be queued in time, and failed on the
+        // Windows runner, where the error arrived alone.
+        //
+        // One `set_buffer_text` came from `new_untitled`; the load adds
+        // the second.
+        let landed = ui.set_text_calls.len() + 1;
         shell.open_file(good.clone());
+        drain_until(
+            &mut shell,
+            &mut ui,
+            |u, _| u.set_text_calls.len() >= landed,
+            Duration::from_secs(10),
+        );
+        assert!(
+            shell
+                .tabs
+                .iter()
+                .any(|t| t.path.as_deref() == Some(good.as_path())),
+            "precondition: the good open must have settled before the failing one starts"
+        );
+
+        // Now the failing open. It pushes a fresh tab of its own — the
+        // reuse path wants `path.is_none()`, and every tab now has
+        // either a path or an `untitled_seq`.
+        shell.open_file(missing.clone());
         let doomed_idx = shell
             .tabs
             .iter()
             .position(|t| t.pending_load.is_some() && t.scintilla_doc == 0)
             .expect("the failing open pushed a fresh, unbound tab");
 
-        // The user clicks back onto the still-loading tab. This is the
-        // step that materialises its document.
+        // The user is on the still-loading tab — the open above already
+        // left it active, so the assignment states that rather than
+        // changing it, and keeps the test honest if `open_file` ever
+        // stops activating what it pushes. `bind_active_view` is the
+        // step that materialises the document.
         shell.active_tab = Some(doomed_idx);
         shell.bind_active_view(&mut ui);
         assert_ne!(
