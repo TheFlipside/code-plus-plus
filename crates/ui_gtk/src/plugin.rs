@@ -345,12 +345,30 @@ fn show_plugin_manager() {
     }
 
     dialog.show_all();
-    dialog.run();
+    {
+        // `dialog.run()` spins a nested GTK main loop where the §5.4 worker
+        // wake is still dispatched — so without this a completed load could
+        // `drain` the shell (moving `active_tab`, rebinding the view, or
+        // stacking a dialog) underneath the modal. Same guard the
+        // close-confirm modal takes, and the twin of `ui_cocoa`'s. The
+        // manager's snapshot is index-keyed against a registry nothing
+        // worker-driven mutates, so the realistic worst case without this is
+        // a stale row rather than the wrong plugin toggled — but "a user
+        // can't reach it" stops holding the moment a plugin or timer can
+        // touch the shell, so it is closed rather than argued away. See
+        // [`crate::DrainFreeze`]. The freeze lifts on scope exit (a panic in
+        // a handler included), so the flush below always runs unfrozen.
+        let _freeze = crate::DrainFreeze::new();
+        dialog.run();
+    }
     // SAFETY: created here, never handed out — same idiom as the Rename /
     // Goto modal dialogs.
     unsafe {
         dialog.destroy();
     }
+    // Unfrozen now: flush anything a worker completed while the modal held
+    // the main loop, applied against the current state.
+    crate::drain_shell();
 }
 
 /// Append a resizable left-aligned text column bound to `model_col`.

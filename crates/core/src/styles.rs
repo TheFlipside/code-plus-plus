@@ -168,6 +168,17 @@ pub const STYLES_XML_MAX_BYTES: u64 = 4096;
 /// megabyte allocation from a hand-crafted `styles.xml`.
 pub const FONT_NAME_MAX_LEN: usize = 256;
 
+/// Minimum accepted window-opacity percent. Below this the editor reaches
+/// quickly into "you can't read it" territory (see
+/// [`Transparency::percent`]), and a hand-edited `styles.xml` can carry any
+/// value — so [`Styles::clamp`] floors it here rather than trusting the
+/// on-disk number. The Style Configurator's slider enforces the same floor,
+/// and Win32's `apply_window_transparency` clamps to the same range.
+pub const TRANSPARENCY_PERCENT_MIN: u8 = 20;
+
+/// Maximum window-opacity percent; 100 is fully opaque.
+pub const TRANSPARENCY_PERCENT_MAX: u8 = 100;
+
 /// Truncate `name` in place to at most [`FONT_NAME_MAX_LEN`]
 /// chars (not bytes). Unicode-safe: never splits a multi-byte
 /// codepoint. `String::truncate` operates at byte offsets and
@@ -186,19 +197,45 @@ fn truncate_font_name(name: &mut String) {
 
 impl Styles {
     /// Clamp fields that the load path bounds, so the *save* path can never
-    /// produce a `styles.xml` the load path would then refuse. Today that is
-    /// the default entry's [`StyleEntry::font_name`], truncated to
-    /// [`FONT_NAME_MAX_LEN`] chars: a pathological system font family name
-    /// (picked in the Style Configurator) could otherwise push the file past
-    /// [`STYLES_XML_MAX_BYTES`], which `load_from_xml` rejects — silently
-    /// reverting the user's saved styles to defaults on next launch.
+    /// produce a `styles.xml` the load path would then refuse, and so a
+    /// hand-edited file can't drive the UI outside a field's documented
+    /// range. Two fields today:
+    ///
+    ///   * The default entry's [`StyleEntry::font_name`], truncated to
+    ///     [`FONT_NAME_MAX_LEN`] chars: a pathological system font family
+    ///     name (picked in the Style Configurator) could otherwise push the
+    ///     file past [`STYLES_XML_MAX_BYTES`], which `load_from_xml` rejects
+    ///     — silently reverting the user's saved styles to defaults on next
+    ///     launch.
+    ///   * [`Transparency::percent`], floored to
+    ///     [`TRANSPARENCY_PERCENT_MIN`]: a hand-edited `percent="0"` would
+    ///     otherwise yield a fully transparent — still focusable, still
+    ///     clickable — main window, with no in-app way to see what to click.
+    ///     Floored here so every backend inherits the bound rather than each
+    ///     one remembering it (the two non-Windows backends previously
+    ///     clamped to `0..=100`, ignoring the floor; DESIGN.md §7.4).
     ///
     /// Called by [`Self::load_from_xml`] (so a hand-edited file is bounded on
     /// read) and by the shell's `set_styles` (so the Configurator's output is
-    /// bounded on write). Single-sources the rule for both backends.
+    /// bounded on write). Single-sources the rule for all three backends.
     pub fn clamp(&mut self) {
         if let Some(entry) = &mut self.default {
             truncate_font_name(&mut entry.font_name);
+        }
+        if let Some(t) = &mut self.transparency {
+            let floored = t
+                .percent
+                .clamp(TRANSPARENCY_PERCENT_MIN, TRANSPARENCY_PERCENT_MAX);
+            if floored != t.percent {
+                // The trace makes the snap observable so a log reader can
+                // tell the on-disk value didn't survive verbatim — matching
+                // Win32's `apply_window_transparency`.
+                tracing::warn!(
+                    percent = t.percent,
+                    "transparency percent outside 20..=100; clamping"
+                );
+                t.percent = floored;
+            }
         }
     }
 
@@ -405,6 +442,45 @@ mod tests {
         s.clamp();
         let chars = s.default.unwrap().font_name.chars().count();
         assert_eq!(chars, FONT_NAME_MAX_LEN);
+    }
+
+    #[test]
+    fn clamp_floors_a_sub_minimum_transparency_percent() {
+        // A hand-edited `percent="0"` would otherwise make the whole window
+        // invisible with no in-app way to recover it. `clamp` (run on both
+        // the load and write paths) floors it to the documented minimum.
+        let mut s = Styles {
+            default: None,
+            transparency: Some(Transparency {
+                enabled: true,
+                percent: 0,
+            }),
+        };
+        s.clamp();
+        assert_eq!(s.transparency.unwrap().percent, TRANSPARENCY_PERCENT_MIN);
+    }
+
+    #[test]
+    fn clamp_caps_an_over_maximum_transparency_percent_and_leaves_valid_ones() {
+        let mut over = Styles {
+            default: None,
+            transparency: Some(Transparency {
+                enabled: true,
+                percent: 200,
+            }),
+        };
+        over.clamp();
+        assert_eq!(over.transparency.unwrap().percent, TRANSPARENCY_PERCENT_MAX);
+
+        let mut ok = Styles {
+            default: None,
+            transparency: Some(Transparency {
+                enabled: true,
+                percent: 55,
+            }),
+        };
+        ok.clamp();
+        assert_eq!(ok.transparency.unwrap().percent, 55);
     }
 
     #[test]

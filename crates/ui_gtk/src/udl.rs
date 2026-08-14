@@ -85,6 +85,35 @@ pub(crate) fn resolve_lang_label(
     )
 }
 
+/// The loaded UDLs as `(lang id, sanitized name)`, for the Language menu's
+/// flat rows. Empty when no UDL is installed, which is the common case and
+/// is why the menu's separator is conditional.
+///
+/// Takes its own `with_state` borrow — unlike [`apply_lang`], this runs
+/// from the Language menu's `show` handler with no borrow held, so the raw
+/// pointer is unnecessary here. Returns `None` if that borrow is declined,
+/// which the caller must not confuse with "no UDLs installed": rebuilding
+/// the rows to an empty list on a re-entrant call would silently empty the
+/// menu. Mirror of `ui_cocoa::udl::language_rows`.
+pub(crate) fn language_rows() -> Option<Vec<(i32, String)>> {
+    with_state(|st| {
+        st.shell
+            .udl_registry
+            .entries()
+            .iter()
+            .map(|e| {
+                (
+                    e.lang_type_id,
+                    // A UDL-authored name is untrusted display text, same
+                    // policy as filenames — sanitize before it reaches the
+                    // menu chrome.
+                    codepp_shell::sanitize_filename_for_display(&e.definition.name),
+                )
+            })
+            .collect()
+    })
+}
+
 /// Handle an `SCN_STYLENEEDED` for the active buffer if it is a UDL.
 /// `target` is the notification's `position` — the byte offset up to which
 /// Scintilla wants styling. Called from the dedicated `sci-notify` handler

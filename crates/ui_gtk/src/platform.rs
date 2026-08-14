@@ -378,10 +378,17 @@ impl UiPlatform for GtkUi {
 
         // Win32 applies window transparency via WS_EX_LAYERED; the GTK
         // equivalent is the toplevel's opacity, which the compositor
-        // honours when one is running and ignores otherwise.
+        // honours when one is running and ignores otherwise. `Styles::clamp`
+        // already floors `percent` to the documented 20..=100 range on both
+        // the load and write paths; the clamp here is defence-in-depth
+        // against a `Styles` that never went through it, and states the
+        // field's invariant at the point of use.
         let transparency = styles.effective_transparency();
         self.window.set_opacity(if transparency.enabled {
-            f64::from(transparency.percent.clamp(0, 100)) / 100.0
+            f64::from(transparency.percent.clamp(
+                codepp_core::styles::TRANSPARENCY_PERCENT_MIN,
+                codepp_core::styles::TRANSPARENCY_PERCENT_MAX,
+            )) / 100.0
         } else {
             1.0
         });

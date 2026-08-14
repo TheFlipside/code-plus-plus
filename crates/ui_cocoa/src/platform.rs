@@ -472,10 +472,17 @@ impl UiPlatform for CocoaUi {
 
         // Win32 applies window transparency via `WS_EX_LAYERED` and GTK
         // via the toplevel's opacity; `NSWindow.alphaValue` is the direct
-        // Cocoa equivalent and needs no compositor cooperation.
+        // Cocoa equivalent and needs no compositor cooperation. `Styles::clamp`
+        // already floors `percent` to the documented 20..=100 range on both
+        // the load and write paths; the clamp here is defence-in-depth
+        // against a `Styles` that never went through it, and states the
+        // field's invariant at the point of use.
         let transparency = styles.effective_transparency();
         self.window.setAlphaValue(if transparency.enabled {
-            f64::from(transparency.percent.clamp(0, 100)) / 100.0
+            f64::from(transparency.percent.clamp(
+                codepp_core::styles::TRANSPARENCY_PERCENT_MIN,
+                codepp_core::styles::TRANSPARENCY_PERCENT_MAX,
+            )) / 100.0
         } else {
             1.0
         });

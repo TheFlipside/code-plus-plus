@@ -202,7 +202,8 @@ fn open_dialog(page: u32) {
     }
 
     // Prefill from the current selection, so Ctrl+F on a word searches
-    // for it. Empty selection leaves whatever was there before.
+    // for it. Empty selection leaves whatever was there before, and a
+    // display-hostile one seeds nothing (see [`seedable_query`]).
     let selection = with_state(|st| {
         let start = st
             .editor
@@ -211,12 +212,12 @@ fn open_dialog(page: u32) {
             .editor
             .send(codepp_scintilla_sys::SCI_GETSELECTIONEND, 0, 0);
         if end > start {
-            Some(read_selection(&st.editor))
+            read_selection(&st.editor)
         } else {
-            None
+            String::new()
         }
     })
-    .flatten();
+    .unwrap_or_default();
 
     // Seed the Find-in-Files directory with the active file's folder on
     // first open, matching Notepad++ — only when empty, so a user's own
@@ -240,10 +241,8 @@ fn open_dialog(page: u32) {
             return;
         };
         set_page(d, page);
-        if let Some(text) = &selection {
-            if !text.contains('\n') {
-                d.find_entry.set_text(text);
-            }
+        if let Some(seed) = seedable_query(&selection) {
+            d.find_entry.set_text(seed);
         }
         if let Some(dir) = &seed_dir {
             // Only auto-seed a display-clean path. The field is functional
@@ -278,6 +277,42 @@ fn set_page(d: &FindReplaceDialog, page: u32) {
         _ => "Find",
     };
     d.window.set_title(title);
+}
+
+/// Whether a selection may be auto-seeded into the query field, and the
+/// text to use if so.
+///
+/// Three refusals, and the third is a security decision rather than a
+/// usability one:
+///
+/// * Empty — nothing to seed.
+/// * Multi-line — a block the user is working with, not a search term; a
+///   one-line field would silently truncate it.
+/// * **Not display-clean** — buffer text is attacker-influenced (a file
+///   from disk or drag-and-drop, or a path a plugin opened), and a
+///   selection carrying bidi overrides or zero-width characters would
+///   render reordered or partly invisible in the field. DESIGN.md §7.4
+///   catalogues three prior incidents of exactly this — hostile text
+///   reaching chrome unsanitized.
+///
+/// The refusal is deliberately *not* a substitution, which is how every
+/// other display sink in this backend handles it. A tab title or a status
+/// line is a label, so replacing a hostile character with U+FFFD costs
+/// nothing — but this field's contents are the actual search parameter,
+/// and substituting there would quietly search for something the user
+/// never asked for and report "not found" for text plainly on screen.
+/// Leaving the field alone is the honest failure: the user can still type
+/// or paste the term deliberately. The same call this file already makes
+/// for its Find-in-Files directory field, and the twin of
+/// `ui_cocoa::search::seedable_query`.
+fn seedable_query(selection: &str) -> Option<&str> {
+    if selection.is_empty() || selection.contains('\n') {
+        return None;
+    }
+    if codepp_shell::sanitize_str_for_display(selection) != selection {
+        return None;
+    }
+    Some(selection)
 }
 
 /// Read the active editor's current selection as a `String`.
@@ -576,6 +611,26 @@ fn do_count() {
     });
 }
 
+/// Refresh the tab chrome and the dynamic status parts after a
+/// buffer-mutating command.
+///
+/// A replace mutates the buffer from inside a `with_state` closure, and
+/// GTK emits `sci-notify` (`SCN_MODIFIED` / `SCN_SAVEPOINTLEFT`)
+/// synchronously from inside that edit — so the notification re-enters
+/// while the borrow is held, `with_state` declines it, and the tab's dirty
+/// marker and the status bar's length stay stale until an unrelated event
+/// repaints them. `refresh_tab_chrome` re-polls the dirty bit and retitles;
+/// `refresh_dynamic_status` re-reads Ln/Col/length. Both run *after* the
+/// mutating borrow has returned, so neither is re-entrant. The twin of
+/// `ui_cocoa::search::refresh_chrome`; DESIGN.md §7.4.
+fn refresh_chrome() {
+    crate::refresh_tab_chrome();
+    with_state(|st| {
+        let (_, ui) = st.split();
+        ui.refresh_dynamic_status();
+    });
+}
+
 /// Replace the current selection if it matches, then advance.
 fn do_replace_one() {
     let params = with_state(|st| {
@@ -599,6 +654,7 @@ fn do_replace_one() {
         shell.replace_current(&mut ui, &query, &replacement, flags)
     })
     .unwrap_or(false);
+    refresh_chrome();
     with_state(|st| {
         if let Some(d) = &st.find_replace {
             d.status
@@ -630,6 +686,7 @@ fn do_replace_all() {
         shell.replace_all(&mut ui, &query, &replacement, flags)
     })
     .unwrap_or(0);
+    refresh_chrome();
     with_state(|st| {
         if let Some(d) = &st.find_replace {
             d.status.set_text(&format!("{n} replaced"));
@@ -771,5 +828,34 @@ fn browse_fif_directory() {
                 d.fif_directory.set_text(&dir.to_string_lossy());
             }
         });
+    }
+}
+
+#[cfg(test)]
+mod seed_tests {
+    use super::seedable_query;
+
+    #[test]
+    fn an_ordinary_single_line_selection_seeds() {
+        assert_eq!(seedable_query("needle"), Some("needle"));
+        assert_eq!(seedable_query("  spaced  "), Some("  spaced  "));
+    }
+
+    #[test]
+    fn nothing_and_multiline_do_not_seed() {
+        assert_eq!(seedable_query(""), None);
+        assert_eq!(seedable_query("two\nlines"), None);
+        assert_eq!(seedable_query("trailing\n"), None);
+    }
+
+    #[test]
+    fn display_hostile_text_does_not_seed() {
+        // A bidi override, a zero-width space, and a tab: substituting any
+        // of these into the query field would search for something other
+        // than what the user sees, so the field is left for the user to
+        // type into instead. DESIGN.md §7.4.
+        assert_eq!(seedable_query("invoice\u{202E}fdp.exe"), None);
+        assert_eq!(seedable_query("a\u{200B}b"), None);
+        assert_eq!(seedable_query("a\tb"), None);
     }
 }

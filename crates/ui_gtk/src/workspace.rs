@@ -81,8 +81,8 @@ const PANEL_TITLE: &str = "Folder as Workspace";
 /// Folders are expanded [`UNFOLD_BATCH`] per [`UNFOLD_TICK_MS`] timer
 /// tick; the tree is *not* re-expanded row-by-row during the walk —
 /// children are read into the model under collapsed rows, so no
-/// per-folder repaint happens, and a single `expand_all` reveals
-/// everything at the end. The header title doubles as an "Expanding
+/// per-folder repaint happens, and a single [`expand_populated`] pass
+/// reveals what was read at the end. The header title doubles as an "Expanding
 /// folders: N" counter meanwhile. 20 folders / 15 ms ≈ 1300 folders/s,
 /// the same envelope as the Win32 walk — and, like it, the GTK main loop
 /// keeps pumping between ticks so the UI stays responsive on a huge tree.
@@ -833,8 +833,8 @@ fn fold_all() {
 /// stays responsive (DESIGN.md §8 — the UI thread must not block) and the
 /// user sees progress. The header title becomes an "Expanding folders: N"
 /// counter, and — because the walk populates the model under *collapsed*
-/// rows and only calls `expand_all` once at the end — there is no
-/// per-folder repaint flicker, only a single paint when the tree is
+/// rows and only reveals ([`expand_populated`]) once at the end — there is
+/// no per-folder repaint flicker, only a single paint when the tree is
 /// finally revealed. A second click while a walk runs is a no-op.
 ///
 /// The walk is bounded on every axis so one click can't exhaust the UI:
@@ -879,7 +879,7 @@ fn unfold_should_stop(pending_empty: bool, folders: usize, rows: usize) -> bool 
 }
 
 /// What one Unfold All tick decided, so the `with_state` borrow can be
-/// dropped before touching the tree (`expand_all` fires `row-expanded`,
+/// dropped before touching the tree (`expand_row` fires `row-expanded`,
 /// which re-enters `with_state`).
 enum TickOutcome {
     /// More folders remain; the counter (updated in-place) keeps climbing.
@@ -914,7 +914,8 @@ fn tick_unfold(generation: u64) -> glib::ControlFlow {
             };
             // Reads this folder's directory on first touch (drops its
             // placeholder), a no-op if already populated. Does not expand
-            // the view row — that is deferred to the final `expand_all`.
+            // the view row — that is deferred to the final reveal
+            // ([`expand_populated`]).
             let inserted = ensure_populated(ws, &node);
             ws.unfold_rows += inserted;
             rows_this_tick += inserted;
@@ -972,15 +973,77 @@ fn tick_unfold(generation: u64) -> glib::ControlFlow {
         TickOutcome::More => glib::ControlFlow::Continue,
         TickOutcome::Stop => glib::ControlFlow::Break,
         TickOutcome::Done => {
-            // Reveal outside the borrow above: `expand_all` fires
-            // `row-expanded` synchronously, and `on_row_expanded`'s
-            // `with_state` would be a re-entrant skip. Every row is already
-            // populated, so that skip is harmless, but doing it cleanly
-            // keeps the one visible paint honest.
-            if let Some(tree) = with_state(|st| st.workspace.tree.clone()) {
-                tree.expand_all();
-            }
+            // Reveal only what the walk read. See [`expand_populated`] for
+            // why `tree.expand_all()` cannot be used here.
+            expand_populated();
             glib::ControlFlow::Break
+        }
+    }
+}
+
+/// Reveal exactly what the walk read: expand every folder whose directory
+/// has actually been populated, and no others.
+///
+/// **`GtkTreeView::expand_all` is the obvious call here and it defeats the
+/// whole point of the ceilings.** `expand_all` walks every row and fires
+/// `row-expanded` for each — which is the lazy-load hook
+/// ([`on_row_expanded`] → [`ensure_populated`]). A folder the ceiling left
+/// unread still carries its placeholder child (so its expander arrow
+/// shows), so `expand_all` would expand it, drop the placeholder, and
+/// `read_dir` it — recursively, synchronously, down every remaining
+/// branch, with no ceiling in sight. That is the exact pathological
+/// `node_modules` case [`UNFOLD_MAX_FOLDERS`] / [`UNFOLD_MAX_ROWS`] exist
+/// to bound, and worse than no ceiling because it would happen in one
+/// unbatched call instead of many yielded ticks. (Measured on the Cocoa
+/// port: with the folder ceiling lowered to 5, a recursive reveal
+/// populated all 341 directories against the correct 20.)
+///
+/// Expanding only already-populated folders reads nothing new — an
+/// [`ensure_populated`] on a populated row returns early — leaving the
+/// unread ones collapsed and still lazily expandable by click, which is
+/// what the ceilings' own documentation says should happen. Mirrors
+/// `ui_cocoa::workspace::expansion_order`.
+///
+/// Paths are collected under one borrow and expanded after it drops, so
+/// the `row-expanded` each `expand_row` fires re-enters [`on_row_expanded`]
+/// cleanly rather than as a re-entrant skip. Parents precede their children
+/// (pre-order), so a child's row is already visible when it expands.
+fn expand_populated() {
+    let Some((tree, paths)) = with_state(|st| {
+        let ws = &st.workspace;
+        let mut paths = Vec::new();
+        if let Some(root) = ws.store.iter_first() {
+            collect_populated_dirs(&ws.store, root, &mut paths);
+        }
+        (ws.tree.clone(), paths)
+    }) else {
+        return;
+    };
+    for path in &paths {
+        tree.expand_row(path, false);
+    }
+}
+
+/// Pre-order collect the [`gtk::TreePath`] of every populated directory row
+/// at or under `iter` and its siblings. Emit-then-descend guarantees a
+/// parent path precedes its children, which [`expand_populated`] relies on.
+/// Only descends into populated dirs, so it never touches an unread folder.
+fn collect_populated_dirs(
+    store: &gtk::TreeStore,
+    iter: gtk::TreeIter,
+    out: &mut Vec<gtk::TreePath>,
+) {
+    loop {
+        if row_bool(store, &iter, COL_IS_DIR) && row_bool(store, &iter, COL_POPULATED) {
+            if let Some(path) = store.path(&iter) {
+                out.push(path);
+            }
+            if let Some(child) = store.iter_children(Some(&iter)) {
+                collect_populated_dirs(store, child, out);
+            }
+        }
+        if !store.iter_next(&iter) {
+            break;
         }
     }
 }

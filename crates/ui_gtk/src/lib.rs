@@ -2257,6 +2257,29 @@ let msg = \"found scintilla_new() calls\";
             }
         }
     }
+
+    #[test]
+    fn unfold_all_never_calls_expand_all() {
+        let src = production_code();
+        assert!(
+            src.len() > 5_000,
+            "scanned only {} bytes; the walk is broken, so a clean result proves nothing",
+            src.len()
+        );
+        // `GtkTreeView::expand_all` walks every row and fires `row-expanded`,
+        // the lazy-load hook — so it re-reads every folder the Unfold All
+        // ceilings ([`UNFOLD_MAX_FOLDERS`] / [`UNFOLD_MAX_ROWS`]) deliberately
+        // left unread, recursively and unbatched, defeating the ceilings
+        // outright. The reveal must go through `expand_populated`, which only
+        // expands folders already read. Mirrors the Cocoa ban on
+        // `expandItem:expandChildren:`. DESIGN.md §7.4.
+        assert_eq!(
+            src.matches("expand_all(").count(),
+            0,
+            "found `expand_all(`: it re-enters the lazy loader for unread folders and \
+             defeats the Unfold All ceilings; use `expand_populated` instead"
+        );
+    }
 }
 
 /// Pure tests for the window-geometry persistence rule + the

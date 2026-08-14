@@ -2081,11 +2081,58 @@ fn build_language_menu(bar: &gtk::MenuBar, window: &gtk::Window) {
     menu.append(&gtk::SeparatorMenuItem::new());
     menu.append(&build_udl_submenu(window));
 
-    menu.connect_show(move |_| {
+    // Everything appended so far is the fixed prefix. Loaded UDLs are
+    // spliced in below it on every open (they live in a dynamic id space
+    // and are not in `LANG_TABLE`, so nothing detects them by extension —
+    // the only way to select one is to pick it here). Captured rather than
+    // hard-coded because the count depends on how `LANG_TABLE`'s labels
+    // happen to group into letters.
+    let fixed_count = menu.children().len();
+    menu.connect_show(move |menu| {
+        // Rebuild the UDL rows first so freshly-added rows get marked in the
+        // same pass — GTK marks from a captured item list, unlike Cocoa's
+        // `validateMenuItem:` which reads live state per item.
+        let mut all = items.clone();
+        all.extend(rebuild_udl_rows(menu, fixed_count));
         let active = with_state(|st| st.shell.active().map(|t| t.lang.as_npp_id())).flatten();
-        set_language_marks(&items, active);
+        set_language_marks(&all, active);
     });
     menu.show_all();
+}
+
+/// Replace the Language menu's loaded-UDL rows, returning them paired with
+/// their ids so the caller can mark the active one.
+///
+/// They live **flat at the top level**, below the "User-Defined language"
+/// submenu after a separator, which is where Notepad++ puts them — so
+/// applying a UDL is one hover-and-click rather than two. Rebuilt on every
+/// open because the registry is populated by `Shell::new`, which runs after
+/// the menu is built. The twin of `ui_cocoa::menu::rebuild_udl_rows`.
+fn rebuild_udl_rows(menu: &gtk::Menu, fixed_count: usize) -> Vec<(i32, gtk::CheckMenuItem)> {
+    let Some(rows) = crate::udl::language_rows() else {
+        // Re-entrant borrow, *not* "no UDLs installed": leave whatever rows
+        // are already there rather than emptying the menu. Their marks are
+        // not refreshed this cycle, which is harmless — `show` never fires
+        // under a `with_state` borrow, so this path is effectively dead.
+        return Vec::new();
+    };
+    // Drop the rows a previous open appended (a separator plus one row per
+    // UDL), then re-add from the current registry.
+    for child in menu.children().iter().skip(fixed_count) {
+        menu.remove(child);
+    }
+    if rows.is_empty() {
+        // No trailing separator either — a lone separator under the submenu
+        // reads as a menu with something missing.
+        return Vec::new();
+    }
+    let mut items = Vec::with_capacity(rows.len());
+    menu.append(&gtk::SeparatorMenuItem::new());
+    for (lang_id, name) in rows {
+        items.push(add_lang_item(menu, &name, lang_id));
+    }
+    menu.show_all();
+    items
 }
 
 /// Uppercased first character of a language label, for letter grouping.
@@ -2142,10 +2189,10 @@ fn set_language_marks(items: &[(i32, gtk::CheckMenuItem)], active: Option<i32>) 
 /// "Define your language…" is greyed — the UDL editor modal is Phase 4.6
 /// m3 and exists only on Win32 so far. The other two work: one opens the
 /// `userDefineLangs` folder in the file manager, the other the N++ UDL
-/// collection in the browser. Loaded UDLs are deliberately *not* listed
-/// flat here yet: GTK's `apply_lang` does not style UDL buffers (it logs
-/// and falls through — see `platform.rs`), so a menu entry would set a
-/// language that produces no highlighting. They land when UDL styling does.
+/// collection in the browser. The loaded UDLs themselves are listed *flat*
+/// below this submenu (after a separator) by [`rebuild_udl_rows`], which
+/// runs on every menu open; `apply_lang` styles a UDL buffer via the
+/// container lexer (see `udl.rs`), so those rows highlight correctly.
 fn build_udl_submenu(window: &gtk::Window) -> gtk::MenuItem {
     let parent = gtk::MenuItem::with_label("User-Defined language");
     let sub = gtk::Menu::new();

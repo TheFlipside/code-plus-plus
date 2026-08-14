@@ -44,6 +44,12 @@ struct Controls {
     fg_button: gtk::ColorButton,
     bg_button: gtk::ColorButton,
     font_combo: gtk::ComboBoxText,
+    /// The real face names the combo indexes into. The combo's *labels* are
+    /// sanitized for display, so a hostile name (a bidi override from a
+    /// hand-edited `styles.xml`) never matches itself — [`read_styles`]
+    /// recovers the face by the combo's active index, not its shown text.
+    /// Same value-vs-label split the workspace tree and FIF dock use.
+    font_faces: Vec<String>,
     size_spin: gtk::SpinButton,
     bold: gtk::CheckButton,
     italic: gtk::CheckButton,
@@ -164,7 +170,7 @@ fn build_content(
     grid.attach(&left_label("Background colour:"), 0, 1, 1, 1);
     grid.attach(&bg_button, 1, 1, 1, 1);
 
-    let font_combo = build_font_combo(window, &entry.font_name);
+    let (font_combo, font_faces) = build_font_combo(window, &entry.font_name);
     grid.attach(&left_label("Font:"), 0, 2, 1, 1);
     grid.attach(&font_combo, 1, 2, 1, 1);
 
@@ -206,6 +212,7 @@ fn build_content(
         fg_button,
         bg_button,
         font_combo,
+        font_faces,
         size_spin,
         bold,
         italic,
@@ -218,10 +225,16 @@ fn build_content(
 /// Read the controls into a fresh `Styles`. `prior` supplies the fallback
 /// font face if the combo has no active entry.
 fn read_styles(c: &Controls, prior: &StyleEntry) -> Styles {
+    // Read the face back from the side table by index — never from the
+    // combo's active *text*, which is the sanitized label rather than the
+    // real face name.
     let font_name = c
         .font_combo
-        .active_text()
-        .map_or_else(|| prior.font_name.clone(), |s| s.to_string());
+        .active()
+        .and_then(|i| usize::try_from(i).ok())
+        .and_then(|i| c.font_faces.get(i))
+        .cloned()
+        .unwrap_or_else(|| prior.font_name.clone());
     Styles {
         default: Some(StyleEntry {
             font_name,
@@ -268,37 +281,100 @@ fn rgba_to_hex(rgba: &gtk::gdk::RGBA) -> String {
     format_rgb_hex(to_u8(rgba.red()), to_u8(rgba.green()), to_u8(rgba.blue()))
 }
 
-/// Build the font-family combo: the system families, sorted, with `current`
-/// selected. `current` is inserted at the top when it isn't an installed
-/// family (e.g. the "Courier New" default on a Linux box without it), so the
-/// user's stored face is always preserved and shown even if unavailable.
-fn build_font_combo(window: &gtk::Window, current: &str) -> gtk::ComboBoxText {
-    let combo = gtk::ComboBoxText::new();
-    let mut families: Vec<String> = window
+/// Build the font-family combo and the side table of real face names it
+/// indexes into.
+///
+/// The combo's visible labels are **sanitized**: a face name arrives from
+/// `styles.xml` — an ordinary file a user can be handed — so it is untrusted
+/// display text like any filename, and one carrying bidi overrides or
+/// zero-width characters would render reordered or partly invisible. But the
+/// label cannot also be the value: [`read_styles`] must recover the *real*
+/// face, so it reads the combo's active index into the returned `Vec` rather
+/// than the shown text — a plain sanitize would rewrite the user's stored
+/// font to its U+FFFD form the first time they touched any other control.
+/// Same value-vs-label split the workspace tree and the Find-in-Files dock
+/// use, and the twin of `ui_cocoa::style_config`'s `font_faces` side table.
+///
+/// `current` is guaranteed present (prepended when not installed), so the
+/// user's stored face is always selectable even on a box without it.
+fn build_font_combo(window: &gtk::Window, current: &str) -> (gtk::ComboBoxText, Vec<String>) {
+    let installed: Vec<String> = window
         .pango_context()
         .list_families()
         .iter()
         .map(|f| f.name().to_string())
         .collect();
-    families.sort_unstable();
-    families.dedup();
-
-    // Either `current` is an installed family (found in the loop below) or it
-    // is not (prepended at index 0). The two branches are mutually exclusive,
-    // so the prepend offsets every family index by one and the loop's own
-    // match can't fire in that run.
-    let prepended = !current.is_empty() && !families.iter().any(|f| f == current);
-    let mut active = None;
-    if prepended {
-        combo.append_text(current);
-        active = Some(0);
-    }
-    for (i, name) in families.iter().enumerate() {
-        combo.append_text(name);
-        if name == current {
-            active = Some(u32::try_from(i).unwrap_or(0) + u32::from(prepended));
+    let faces = font_families(current, &installed);
+    let combo = gtk::ComboBoxText::new();
+    for (i, face) in faces.iter().enumerate() {
+        combo.append_text(&codepp_shell::sanitize_str_for_display(face));
+        if face == current {
+            combo.set_active(Some(u32::try_from(i).unwrap_or(0)));
         }
     }
-    combo.set_active(active.or(Some(0)));
-    combo
+    // `current` is in `faces` by construction, so this only fires when both
+    // `current` and the installed list were empty (a window always reports at
+    // least one Pango family, so this is effectively unreachable). Selecting
+    // row 0 of an empty combo is a harmless GTK no-op; `read_styles` then
+    // falls back to the prior face.
+    if combo.active().is_none() {
+        combo.set_active(Some(0));
+    }
+    (combo, faces)
+}
+
+/// The font-family list to show, with `current` guaranteed present.
+///
+/// Pure and tested: the interesting case is a stored face that is *not*
+/// installed (e.g. the "Courier New" default on a Linux box without it),
+/// which must be kept and shown rather than silently dropped — dropping it
+/// would rewrite the user's stored font the first time they touched any
+/// other control. Mirror of `ui_cocoa::style_config::font_families`.
+fn font_families(current: &str, installed: &[String]) -> Vec<String> {
+    let mut families: Vec<String> = installed.to_vec();
+    families.sort_unstable();
+    families.dedup();
+    if !current.is_empty() && !families.iter().any(|f| f == current) {
+        families.insert(0, current.to_string());
+    }
+    families
+}
+
+#[cfg(test)]
+mod tests {
+    use super::font_families;
+
+    #[test]
+    fn an_uninstalled_stored_font_is_kept_and_listed_first() {
+        let installed = vec!["Menlo".to_string(), "Helvetica".to_string()];
+        let out = font_families("Courier New", &installed);
+        assert_eq!(out, vec!["Courier New", "Helvetica", "Menlo"]);
+    }
+
+    #[test]
+    fn an_installed_stored_font_is_not_duplicated() {
+        let installed = vec!["Menlo".to_string(), "Helvetica".to_string()];
+        let out = font_families("Menlo", &installed);
+        assert_eq!(out, vec!["Helvetica", "Menlo"]);
+    }
+
+    #[test]
+    fn duplicate_families_collapse_and_an_empty_current_adds_nothing() {
+        let installed = vec![
+            "Menlo".to_string(),
+            "Menlo".to_string(),
+            "Arial".to_string(),
+        ];
+        assert_eq!(font_families("", &installed), vec!["Arial", "Menlo"]);
+    }
+
+    #[test]
+    fn a_hostile_stored_face_is_kept_as_the_read_back_value() {
+        // The face is prepended verbatim (it is the real value); only the
+        // combo *label* is sanitized, which `read_styles` never reads back.
+        let installed = vec!["Monospace".to_string()];
+        let hostile = "Ev\u{202E}lif.ttf";
+        let out = font_families(hostile, &installed);
+        assert_eq!(out, vec![hostile, "Monospace"]);
+    }
 }
