@@ -3125,14 +3125,16 @@ impl Shell {
             Ok(()) => {
                 // Successful write — point the tab at the new path
                 // and watch it.
+                // Re-derive lang from the new extension (built-in lexers +
+                // UDL associations) before the `&mut` borrow so a .txt → .rs
+                // Save As immediately gets Rust highlighting, and a
+                // .txt → .md gets the Markdown UDL, on the next paint.
+                let resolved_lang = Self::detect_lang(&new_path, &self.udl_registry);
                 if let Some(tab) = self.active_mut() {
                     tab.path = Some(new_path.clone());
                     tab.text = text;
                     tab.byte_len = bytes.len() as u64;
-                    // Re-derive lang from the new extension so a
-                    // .txt → .rs Save As immediately gets Rust
-                    // highlighting on the next paint.
-                    tab.lang = LangType::from_path(&new_path);
+                    tab.lang = resolved_lang;
                     // The buffer is no longer untitled — drop the
                     // sequence number so the tab strip switches
                     // from "new N" to the file's basename, and so
@@ -4026,6 +4028,10 @@ impl Shell {
                 let cursor = stored.map_or(0, |t| t.cursor);
                 let stored_lang_override = stored.and_then(|t| t.lang).map(LangType);
                 let stored_pinned = stored.is_some_and(|t| t.pinned);
+                // Resolve the lang before the `&mut tab` borrow below so the
+                // UDL-registry read (a separate field) can't conflict with it.
+                let resolved_lang = stored_lang_override
+                    .unwrap_or_else(|| Self::detect_lang(&loaded.path, &self.udl_registry));
 
                 // Write the tab fields first so any UI calls below
                 // observe a tab in its post-load state. The borrow
@@ -4060,11 +4066,10 @@ impl Shell {
                 tab.byte_len = loaded.byte_len;
                 tab.text.clone_from(&loaded.text);
                 // Lang resolution: persisted Language-menu override
-                // wins; extension-based auto-detection is the
-                // fallback. Plugins may still override later via
-                // `NPPM_SETBUFFERLANGTYPE`.
-                tab.lang =
-                    stored_lang_override.unwrap_or_else(|| LangType::from_path(&loaded.path));
+                // wins; extension-based auto-detection (built-in lexers
+                // plus UDL `ext=` associations) is the fallback. Plugins
+                // may still override later via `NPPM_SETBUFFERLANGTYPE`.
+                tab.lang = resolved_lang;
                 // Restore the persisted pin state. For a full session restore
                 // the tab vector is already assembled pinned-first, so setting
                 // the flag alone keeps the invariant; for a single mid-session
@@ -4579,6 +4584,62 @@ impl Shell {
         }
         tab.encoding = encoding;
         true
+    }
+
+    /// Resolve a buffer's language from its path, layering loaded UDLs on
+    /// top of the built-in Lexilla lexers.
+    ///
+    /// [`LangType::from_path`] lives in the headless `core` crate and so
+    /// only knows the built-in lexers — UDL ids live in a dynamic range
+    /// assigned at scan time and are absent from `LANG_TABLE`. A `.md`
+    /// file, which has no built-in Markdown lexer, would therefore open as
+    /// plain text despite the bundled Markdown UDL. This consults the UDL
+    /// registry's `ext=` associations to fill exactly that gap, so opening
+    /// `foo.md` auto-applies the preinstalled Markdown UDL the same way
+    /// Notepad++ does.
+    ///
+    /// **Precedence: a built-in lexer wins over a UDL.** A UDL only applies
+    /// where [`LangType::from_path`] finds nothing ([`L_TEXT`]), so a UDL
+    /// that happens to declare `ext="cpp"` cannot silently displace the C++
+    /// lexer. That is the conservative reading of the ambiguous case while
+    /// still covering the common one (Markdown, and any UDL for an
+    /// extension with no built-in association).
+    ///
+    /// Kept as an associated function taking the registry explicitly rather
+    /// than a `&self` method, so a future call site that holds a concurrent
+    /// `&mut self.tabs` borrow can still invoke it with `&self.udl_registry`
+    /// (the current sites all resolve before any conflicting borrow).
+    fn detect_lang(path: &Path, registry: &codepp_udl::UdlRegistry) -> LangType {
+        let builtin = LangType::from_path(path);
+        if builtin != L_TEXT {
+            return builtin;
+        }
+        path.extension()
+            .and_then(|e| e.to_str())
+            .and_then(|ext| registry.find_by_extension(ext))
+            .map_or(L_TEXT, |entry| LangType(entry.lang_type_id))
+    }
+
+    /// The `@lang` value to persist for a tab in `session.xml`, or `None`
+    /// when it matches the extension-derived default.
+    ///
+    /// Skipping the default keeps `session.xml` free of no-op attributes and
+    /// — crucially for UDL buffers — lets a tab auto-detected as a UDL (e.g.
+    /// a `.md` file → the Markdown UDL) re-resolve *by extension* on the next
+    /// load rather than by a persisted, scan-order-assigned UDL id that could
+    /// shift if the `userDefineLangs/` set changed. An *explicit* choice that
+    /// diverges from the default (the user set this `.md` file to Python, or
+    /// forced a built-in file to plain text) is still written, so it survives
+    /// the restart. This delegates to [`Self::detect_lang`] so the "default"
+    /// the save path compares against is the same language the open path
+    /// would derive.
+    fn lang_to_persist(
+        tab_lang: LangType,
+        path: Option<&Path>,
+        registry: &codepp_udl::UdlRegistry,
+    ) -> Option<i32> {
+        let extension_default = path.map_or(L_TEXT, |p| Self::detect_lang(p, registry));
+        (tab_lang != extension_default).then(|| tab_lang.as_npp_id())
     }
 
     /// Set the **active** tab's syntax-highlighting language — the
@@ -5296,27 +5357,13 @@ impl Shell {
                 // restores the same label rather than reverting to
                 // `new N`.
                 custom_name: tab.custom_name.clone(),
-                // Persist the per-buffer language. Skip the
-                // `L_TEXT` default for path-bound tabs whose
-                // extension would auto-detect to `L_TEXT` anyway
-                // — no information is lost, and older session.xml
-                // files don't get rewritten with a no-op
-                // attribute. Untitled buffers and any tab whose
-                // current lang differs from the extension-derived
-                // default get an explicit `@lang` written so the
-                // user's Language-menu choice survives the
-                // restart.
-                lang: {
-                    let extension_default = tab.path.as_deref().map_or(
-                        codepp_core::lang::L_TEXT,
-                        codepp_core::lang::LangType::from_path,
-                    );
-                    if tab.lang == extension_default {
-                        None
-                    } else {
-                        Some(tab.lang.as_npp_id())
-                    }
-                },
+                // Persist the per-buffer language only when it diverges from
+                // the extension-derived default (built-in lexers + UDL
+                // associations), so older session.xml files don't gain a
+                // no-op `@lang` and the user's explicit Language-menu choice
+                // still survives a restart. See [`Self::lang_to_persist`] for
+                // why a UDL-auto-detected tab is deliberately left unpersisted.
+                lang: Self::lang_to_persist(tab.lang, tab.path.as_deref(), &self.udl_registry),
                 // Persist the user's pin choice so pinned tabs come
                 // back pinned (and at the left edge) on next launch.
                 // Older session.xml files without the attribute
@@ -5697,9 +5744,10 @@ impl Shell {
         let new_idx = self.tabs.len();
         let byte_len = text.len() as u64;
         // Lang resolution mirrors `apply_load_result`: the
-        // persisted Language-menu choice wins; otherwise fall
-        // back to extension-based auto-detection.
-        let lang = stored_lang.map_or_else(|| LangType::from_path(&path), LangType);
+        // persisted Language-menu choice wins; otherwise fall back to
+        // extension-based auto-detection (built-in lexers + UDL associations).
+        let lang =
+            stored_lang.map_or_else(|| Self::detect_lang(&path, &self.udl_registry), LangType);
         self.tabs.push(Tab {
             id,
             path: Some(path.clone()),
@@ -8984,6 +9032,96 @@ mod tests {
         assert_eq!(shell.active().unwrap().lang, codepp_core::lang::L_CPP);
         // Re-selecting C++ is a no-op.
         assert!(!shell.set_active_lang(codepp_core::lang::L_CPP));
+    }
+
+    #[test]
+    fn detect_lang_prefers_builtin_and_falls_back_to_text_without_udls() {
+        use codepp_core::lang::{L_CPP, L_TEXT};
+        let empty = codepp_udl::UdlRegistry::new();
+        // A built-in lexer is used as-is.
+        assert_eq!(Shell::detect_lang(Path::new("a.cpp"), &empty), L_CPP);
+        // No built-in and no UDL to fill it → plain text.
+        assert_eq!(Shell::detect_lang(Path::new("a.md"), &empty), L_TEXT);
+        assert_eq!(
+            Shell::detect_lang(Path::new("a.unknownext"), &empty),
+            L_TEXT
+        );
+    }
+
+    #[test]
+    fn detect_lang_applies_a_udl_by_extension_but_never_over_a_builtin() {
+        use codepp_core::lang::L_CPP;
+        // Build a real registry from the embedded preinstalled Markdown UDL,
+        // which declares `ext="md markdown"`.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join(PREINSTALLED_MARKDOWN_FILENAME),
+            PREINSTALLED_MARKDOWN_UDL,
+        )
+        .unwrap();
+        let reg = codepp_udl::UdlRegistry::scan_dir(dir.path());
+        let md_id = reg
+            .find_by_extension("md")
+            .expect("markdown UDL must be present")
+            .lang_type_id;
+        assert!(codepp_udl::is_udl_lang_id(md_id));
+
+        // `.md` (no built-in Markdown lexer) now resolves to the UDL...
+        assert_eq!(
+            Shell::detect_lang(Path::new("readme.md"), &reg),
+            LangType(md_id)
+        );
+        // ...case-insensitively (the registry lower-cases the query)...
+        assert_eq!(
+            Shell::detect_lang(Path::new("README.MD"), &reg),
+            LangType(md_id)
+        );
+        // ...but a built-in lexer still wins over any UDL.
+        assert_eq!(Shell::detect_lang(Path::new("main.cpp"), &reg), L_CPP);
+    }
+
+    #[test]
+    fn lang_to_persist_skips_defaults_but_keeps_explicit_overrides() {
+        use codepp_core::lang::{L_CPP, L_PYTHON, L_TEXT};
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join(PREINSTALLED_MARKDOWN_FILENAME),
+            PREINSTALLED_MARKDOWN_UDL,
+        )
+        .unwrap();
+        let reg = codepp_udl::UdlRegistry::scan_dir(dir.path());
+        let md = LangType(reg.find_by_extension("md").unwrap().lang_type_id);
+
+        // A `.md` tab auto-detected as the Markdown UDL matches the default,
+        // so nothing is persisted — it re-resolves by extension next load,
+        // robust to the UDL id shifting.
+        assert_eq!(
+            Shell::lang_to_persist(md, Some(Path::new("a.md")), &reg),
+            None
+        );
+        // The user explicitly set that `.md` file to Python: an override that
+        // diverges from the default is persisted verbatim.
+        assert_eq!(
+            Shell::lang_to_persist(L_PYTHON, Some(Path::new("a.md")), &reg),
+            Some(L_PYTHON.as_npp_id())
+        );
+        // A built-in match is the default → not persisted...
+        assert_eq!(
+            Shell::lang_to_persist(L_CPP, Some(Path::new("a.cpp")), &reg),
+            None
+        );
+        // ...but forcing that file to plain text is an override → persisted.
+        assert_eq!(
+            Shell::lang_to_persist(L_TEXT, Some(Path::new("a.cpp")), &reg),
+            Some(L_TEXT.as_npp_id())
+        );
+        // An untitled buffer (no path) whose lang isn't the L_TEXT default
+        // persists it, since there is no extension to re-derive from.
+        assert_eq!(
+            Shell::lang_to_persist(L_CPP, None, &reg),
+            Some(L_CPP.as_npp_id())
+        );
+        assert_eq!(Shell::lang_to_persist(L_TEXT, None, &reg), None);
     }
 
     #[test]
