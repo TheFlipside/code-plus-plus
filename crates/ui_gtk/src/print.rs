@@ -400,7 +400,7 @@ fn draw_header_inner(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::{build_print_operation, paginate, sptr_t, EditorHandle, MAX_PAGES};
     use codepp_scintilla_sys::{scintilla_new, SCI_INSERTTEXT};
     use gtk::glib::translate::FromGlibPtrNone;
@@ -438,20 +438,18 @@ mod tests {
         assert_eq!(starts.len(), MAX_PAGES);
     }
 
-    /// End-to-end render check, `#[ignore]`d because it needs a display.
-    /// Builds the print operation over a real Scintilla widget holding
-    /// multi-page text and EXPORTs it to a PDF — no dialog, no printer, no
-    /// mapped window — then asserts a real, multi-byte PDF came out. This
-    /// exercises the actual `SCI_FORMATRANGEFULL` + cairo path this module
-    /// wires, the one part that a headless unit test could otherwise not
-    /// reach.
+    /// End-to-end render check, display-gated. Builds the print operation
+    /// over a real Scintilla widget holding multi-page text and EXPORTs it
+    /// to a PDF — no dialog, no printer, no mapped window — then asserts a
+    /// real, multi-byte PDF came out. This exercises the actual
+    /// `SCI_FORMATRANGEFULL` + cairo path this module wires, the one part
+    /// that a headless unit test could otherwise not reach.
     ///
-    /// Like the other GTK display-gated tests it must run single-threaded so
-    /// GDK is never touched from two threads at once:
-    /// `cargo test -p codepp-ui-gtk -- --ignored --test-threads=1`.
-    #[test]
-    #[ignore = "needs a display; run with -- --ignored --test-threads=1"]
-    fn build_print_operation_exports_a_pdf() {
+    /// Driven by `crate::display_tests`, not a `#[test]` of its own — see
+    /// that module for why every GTK scenario in this crate has to share
+    /// one test function, and for the measurement showing that
+    /// `--test-threads=1` is not enough on its own.
+    pub(crate) fn build_print_operation_exports_a_pdf() {
         gtk::init().expect("gtk::init failed — no display?");
         // SAFETY: GTK is initialised, `scintilla_new`'s only precondition.
         let ptr = unsafe { scintilla_new() };

@@ -872,23 +872,15 @@ pub(crate) fn set_clipboard_payloads(payloads: &[ClipboardData]) -> bool {
 /// one that has to hold for `rebind_active_view` to be correct.
 ///
 /// Requires a display, for the same reason `scintilla-sys`'s FFI smoke
-/// test does: `scintilla_new` builds a `GtkWidget`. `#[ignore]` rather
-/// than a runtime probe so a headless CI run reports it skipped instead
-/// of silently passing. Run with:
-///
-/// ```text
-/// cargo test -p codepp-ui-gtk -- --ignored
-/// xvfb-run cargo test -p codepp-ui-gtk -- --ignored
-/// ```
-///
-/// **One test function, deliberately.** GTK is single-threaded, and
-/// cargo runs test functions on separate threads by default — a second
-/// function touching GTK concurrently segfaults inside GDK. Splitting
-/// these would mean relying on every future runner remembering
-/// `--test-threads=1`, so the scenarios are sequenced inside one
-/// function instead.
+/// test does: `scintilla_new` builds a `GtkWidget`. Driven by
+/// `crate::display_tests`, not a `#[test]` of its own — that module owns
+/// the invocation and the reason every GTK scenario in this crate has to
+/// share one test function. Deliberately a pointer rather than a second
+/// copy of the rationale: the earlier version argued the case here *and*
+/// in `print.rs`, and both copies were wrong in the same way for the
+/// same reason nobody reconciled them.
 #[cfg(test)]
-mod doc_binding_tests {
+pub(crate) mod doc_binding_tests {
     use super::{GtkUi, UiPlatform};
     use crate::status::StatusBar;
     use crate::tabs::TabStrip;
@@ -926,9 +918,10 @@ mod doc_binding_tests {
         }
     }
 
-    #[test]
-    #[ignore = "creates a GTK widget; needs a display (see module docs)"]
-    fn view_binding_follows_the_requested_document() {
+    /// Driven by `crate::display_tests`, not a `#[test]` of its own —
+    /// see that module for why every GTK scenario in this crate has to
+    /// share one test function.
+    pub(crate) fn view_binding_follows_the_requested_document() {
         let mut ui = fixture();
 
         let doc_a = ui.activate_tab(0, 0);

@@ -194,12 +194,23 @@ cargo test -p codepp-scintilla-sys -p codepp-ui-gtk -- --ignored
 xvfb-run cargo test -p codepp-scintilla-sys -p codepp-ui-gtk -- --ignored
 ```
 
-`ui_gtk` carries display-gated tests for the same reason: they drive a
-real Scintilla widget to pin the doc-pointer discipline that lets one
-view serve many tabs. Note they are deliberately a single test function
-— GTK is single-threaded and cargo's parallel test threads segfault
-inside GDK, so splitting them would require every caller to remember
-`--test-threads=1`.
+`ui_gtk` carries display-gated scenarios for the same reason: they drive
+a real Scintilla widget to pin the doc-pointer discipline that lets one
+view serve many tabs, the print-export path, and the cross-thread
+`SCI_*` marshal. They all run from **one** `#[test]`,
+`display_tests::gtk_display_scenarios`, and a new scenario must be added
+to it rather than given a `#[test]` of its own.
+
+That is a hard requirement, not a tidiness preference. `gtk::init()`
+records the thread that first called it and *panics* on a call from any
+other, and libtest runs every `#[test]` on its own spawned worker —
+including at `--test-threads=1`, which serialises tests without pinning
+them to a thread. A second display-gated `#[test]` therefore fails
+outright with `Attempted to initialize GTK from two different threads`,
+deterministically rather than intermittently. This is not hypothetical:
+these scenarios were previously three separate tests carrying a
+`--test-threads=1` instruction, and two of the three failed on every run
+until Phase 5 consolidated them.
 
 ### 3.4 Self-hosted CI runner provisioning
 

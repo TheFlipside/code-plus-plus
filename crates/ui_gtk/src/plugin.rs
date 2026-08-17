@@ -13,7 +13,9 @@
 //!    identity** (`SCI` and `NPPM` message numbers overlap, so routing
 //!    by range is impossible) — the [`NPP_SENTINEL`] address goes to the
 //!    host dispatcher, everything else is a Scintilla `GtkWidget*` and
-//!    goes to `scintilla_send_message`.
+//!    goes to `scintilla_send_message`. It also restores the **thread
+//!    affinity** the missing OS pump would otherwise have provided — see
+//!    [`send_sci_on_main`].
 //! 2. **The Plugins menu** — lazy-load on first open, then a submenu per
 //!    plugin built from its `FuncItem`s.
 //! 3. **Notification delivery** — draining the shell's queued `NPPN_*`
@@ -31,6 +33,8 @@
 use std::ffi::c_void;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::atomic::{AtomicPtr, Ordering};
+use std::sync::OnceLock;
+use std::thread::ThreadId;
 
 use gtk::glib;
 use gtk::prelude::*;
@@ -73,6 +77,129 @@ fn is_valid_scintilla(hwnd: *mut c_void) -> bool {
     !valid.is_null() && std::ptr::eq(hwnd, valid)
 }
 
+/// The UI thread's id, recorded at startup by [`discover`].
+///
+/// [`plugin_dispatch`]'s `SCI_*` branch consults this to decide whether
+/// it may call Scintilla directly or must marshal — see
+/// [`send_sci_on_main`]. Deliberately *not* derived from `with_state`'s
+/// thread-local: that branch must not take the borrow (a plugin can send
+/// `SCI_*` from inside a `beNotified` that already holds it, where a
+/// declined read would read as "not our thread" and needlessly marshal
+/// a call that is already on the right thread and inside a live borrow).
+/// An unset cell means startup has not reached [`discover`] yet, in
+/// which case no plugin can have been handed a handle to send to.
+static MAIN_THREAD: OnceLock<ThreadId> = OnceLock::new();
+
+/// Whether the caller is on the thread that owns the GTK main loop.
+fn on_main_thread() -> bool {
+    MAIN_THREAD.get() == Some(&std::thread::current().id())
+}
+
+/// A raw pointer carried onto the main thread by [`send_sci_on_main`].
+///
+/// GTK's `MainContext::invoke` requires a `Send` closure and a raw
+/// pointer is not `Send`, so the crossing has to be made explicit.
+struct MainThreadPtr(*mut c_void);
+
+// SAFETY: the only pointer ever wrapped is one that has already passed
+// [`is_valid_scintilla`], i.e. the host's own `ScintillaObject*`. That
+// widget is created once at startup and never destroyed, removed from
+// its container or reassigned (the discipline `GtkUiState::sci_widget`
+// documents and a source-scan guard enforces), so the address stays live
+// for the whole process. It is *dereferenced only on the main thread*,
+// which is the entire point of the marshal — the value crosses threads,
+// the dereference does not.
+unsafe impl Send for MainThreadPtr {}
+
+/// Run one `SCI_*` message against Scintilla on the UI thread and block
+/// until it returns, for a plugin that called from its own thread.
+///
+/// # Why marshal rather than refuse
+///
+/// Off Windows the SDK forwards a plugin's `SendMessage` straight to
+/// this host callback on whatever thread called it, where Win32 would
+/// have had the OS marshal it onto the thread owning the window. Both
+/// available answers were considered and this one is deliberate:
+///
+///   * **Refusing** (returning 0, as the unknown-handle branch does) is
+///     three lines and trivially safe, but it is the worse failure. A
+///     query — `SCI_GETLENGTH`, `SCI_GETCURRENTPOS` — comes back 0,
+///     which is a *plausible* answer rather than an obviously wrong one,
+///     and a mutation becomes a silent no-op. The plugin appears to work
+///     while its edits vanish.
+///   * **Marshaling** reproduces what the plugin was written against,
+///     including its blocking semantics: a cross-thread `SendMessage`
+///     also blocks until the target thread next pumps its queue, and
+///     also deadlocks if that thread is meanwhile waiting on the sender.
+///     So this adds no hazard Win32 does not already have — it inherits
+///     the same one, which is the point.
+///
+/// # No timeout, deliberately
+///
+/// A bounded wait would have to invent a return value on expiry, and the
+/// only one available is 0 — i.e. it would convert a visible stall into
+/// the silent wrong answer the paragraph above rejects. `SendMessage`
+/// has no timeout either (`SendMessageTimeout` is a different call that
+/// plugins do not use). The unbounded wait blocks the *plugin's* worker
+/// thread only; the UI thread is never a participant.
+///
+/// # What that costs at shutdown, and the one way it could become a hang
+///
+/// Once `gtk::main` returns, nothing iterates the default context again,
+/// so a worker parked here stays parked until the process exits. That is
+/// a leaked thread rather than a visible hang: `exit` does not wait on
+/// threads nobody joined, and the UI thread is already on its way out.
+///
+/// **It becomes a real hang the moment host code joins plugin worker
+/// threads, and nothing does today.** A hostile or merely broken plugin
+/// can park a thread here deliberately — it need only call `SCI_*` from
+/// a thread it never lets finish — so a future teardown path that waits
+/// for plugin threads to quiesce would wait forever. If such a path is
+/// ever added it must not block on plugin threads; the alternative is a
+/// bounded wait here, which means solving the invented-return-value
+/// problem above rather than ignoring it. Recorded per DESIGN.md §7.4's
+/// practice of writing accepted risk down rather than leaving it to be
+/// rediscovered.
+///
+/// The `recv` error arm is therefore defensive rather than a shutdown
+/// path: `MainContext::default()` is a process-global singleton that is
+/// never destroyed, so ordinary quit does not drop the sender. An
+/// earlier version of this comment claimed it did, and that the arm was
+/// the graceful teardown escape hatch — it is not, and the difference
+/// matters because it is the whole reason the paragraph above has to
+/// talk about leaked threads at all.
+fn send_sci_on_main(hwnd: *mut c_void, msg: u32, wparam: usize, lparam: isize) -> isize {
+    let ptr = MainThreadPtr(hwnd);
+    let (tx, rx) = std::sync::mpsc::sync_channel(1);
+    glib::MainContext::default().invoke(move || {
+        let ptr = ptr;
+        // A panic here would unwind through glib's C frames, which is UB
+        // — the same reason `plugin_dispatch` carries a boundary. That
+        // one runs on the *plugin's* thread and cannot cover this
+        // closure, so the hop needs its own.
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            // SAFETY: `ptr.0` passed `is_valid_scintilla` on the calling
+            // thread and addresses the host's own permanently-live
+            // `ScintillaObject*` (see `MainThreadPtr`). This closure runs
+            // on the UI thread, which is the affinity GTK requires and
+            // the reason the message was marshaled here at all.
+            unsafe { scintilla_send_message(ptr.0, msg, wparam, lparam) }
+        }))
+        .unwrap_or(0);
+        // The receiver is alive by construction — the calling thread is
+        // parked in `recv` — unless it panicked, in which case dropping
+        // the result is correct.
+        let _ = tx.send(result);
+    });
+    rx.recv().unwrap_or_else(|_| {
+        tracing::warn!(
+            msg,
+            "cross-thread SCI_* dropped: the main context went away before it ran"
+        );
+        0
+    })
+}
+
 /// The routing callback the SDK forwards a plugin's `SendMessage` to.
 ///
 /// `hwnd == npp_sentinel()` → an `NPPM_*` message for the host
@@ -81,6 +208,24 @@ fn is_valid_scintilla(hwnd: *mut c_void) -> bool {
 /// and a Rust panic unwinding across that frame is UB (dev builds
 /// default to unwind).
 extern "C" fn plugin_dispatch(hwnd: *mut c_void, msg: u32, wparam: usize, lparam: isize) -> isize {
+    // Nothing may reach here before `discover` armed the affinity check:
+    // an unset `MAIN_THREAD` makes `on_main_thread` answer `false` for
+    // *every* caller, so a message arriving on the UI thread would take
+    // the marshal branch and park the UI thread on its own main loop.
+    // It survives today only because `MainContext::invoke` dispatches
+    // inline when the calling thread can acquire the context — an
+    // implementation detail of GLib, not a guarantee this code should be
+    // resting on. Unreachable in production (`discover` sets it
+    // synchronously during startup, long before a plugin is loaded and
+    // handed a handle), so this states the ordering rather than handling
+    // it, in the same spirit as the crate's source-scan guards.
+    //
+    // Deliberately outside the `catch_unwind` below, which would
+    // otherwise swallow the unwind and hand the plugin a plain 0.
+    debug_assert!(
+        MAIN_THREAD.get().is_some(),
+        "plugin_dispatch reached before discover() armed MAIN_THREAD",
+    );
     catch_unwind(AssertUnwindSafe(|| {
         if std::ptr::eq(hwnd, npp_sentinel()) {
             dispatch_nppm(msg, wparam, lparam)
@@ -92,12 +237,20 @@ extern "C" fn plugin_dispatch(hwnd: *mut c_void, msg: u32, wparam: usize, lparam
             // and the plugin may issue it from inside an NPPM dispatch that
             // already holds the borrow); the identity check is an atomic
             // read for the same reason.
-            //
-            // SAFETY: `hwnd` is identity-checked to be the host's own live
-            // `ScintillaObject*`; `scintilla_send_message` is its
-            // documented entry point. The message-argument contract is the
-            // plugin's responsibility, exactly as on Win32.
-            unsafe { scintilla_send_message(hwnd, msg, wparam, lparam) }
+            if on_main_thread() {
+                // SAFETY: `hwnd` is identity-checked to be the host's own
+                // live `ScintillaObject*` and this is the thread that owns
+                // it; `scintilla_send_message` is its documented entry
+                // point. The message-argument contract is the plugin's
+                // responsibility, exactly as on Win32.
+                unsafe { scintilla_send_message(hwnd, msg, wparam, lparam) }
+            } else {
+                // A plugin calling from its own thread. GTK widget calls
+                // are main-thread-only, so hop and block. See
+                // [`send_sci_on_main`] for why this marshals rather than
+                // refusing, and DESIGN.md §7.4.
+                send_sci_on_main(hwnd, msg, wparam, lparam)
+            }
         } else {
             // Any other pointer: refuse rather than dereference an
             // unvalidated address, matching Win32 `SendMessage` to an
@@ -150,6 +303,15 @@ fn npp_data() -> NppData {
 /// paths only (deferred load — DESIGN.md §6.4); the first Plugins-menu
 /// open loads them. Called once at startup.
 pub(crate) fn discover() {
+    // Record the UI thread before anything can route a message here: a
+    // plugin only ever reaches `plugin_dispatch` through a handle handed
+    // out by `npp_data`, and the first of those is built below this line.
+    // Set unconditionally rather than alongside `VALID_SCI` so the
+    // affinity check is armed even on a startup where the state read
+    // fails — an unset cell would make `on_main_thread` answer `false`
+    // here and marshal a call that is already on the main thread, which
+    // deadlocks against the very main loop it is waiting for.
+    let _ = MAIN_THREAD.set(std::thread::current().id());
     // Cache the host's Scintilla widget pointer for `plugin_dispatch`'s
     // identity check (see [`VALID_SCI`]). Runs once at startup, when the
     // single view already exists.
@@ -454,5 +616,115 @@ pub(crate) fn deliver_notifications() {
     let notes = with_state(|st| st.shell.take_notifications()).unwrap_or_default();
     for note in notes {
         with_state(|st| st.shell.notify_plugins(note, npp_sentinel()));
+    }
+}
+
+/// The cross-thread `SCI_*` marshal (DESIGN.md §7.4).
+///
+/// Display-gated for the same reason every other GTK test here is:
+/// `scintilla_new` builds a real `GtkWidget`. Driven by
+/// `crate::display_tests`, which owns the invocation and explains why
+/// these cannot be `#[test]`s of their own.
+#[cfg(test)]
+pub(crate) mod cross_thread_tests {
+    use super::{on_main_thread, plugin_dispatch, MAIN_THREAD, VALID_SCI};
+    use codepp_scintilla_sys::{
+        scintilla_new, scintilla_send_message, SCI_GETLENGTH, SCI_INSERTTEXT,
+    };
+    use std::ffi::{c_void, CString};
+    use std::sync::atomic::Ordering;
+    use std::time::Duration;
+
+    /// A widget pointer carried into the spawned "plugin worker" thread,
+    /// standing in for the handle a real plugin caches from `NppData`.
+    struct WorkerPtr(*mut c_void);
+    // SAFETY: the test's own leaked, permanently-live Scintilla widget.
+    // The worker only hands it to `plugin_dispatch`, which is the code
+    // under test and is precisely what must not dereference it off the
+    // main thread.
+    unsafe impl Send for WorkerPtr {}
+
+    pub(crate) fn a_plugins_worker_thread_reaches_scintilla_through_the_main_loop() {
+        gtk::init().expect("gtk::init failed — no display?");
+        // SAFETY: GTK is initialised, `scintilla_new`'s only precondition.
+        let sci = unsafe { scintilla_new() };
+        assert!(!sci.is_null(), "scintilla_new returned null");
+
+        // Stand in for `discover`, which arms both of these at startup.
+        VALID_SCI.store(sci, Ordering::Release);
+        let _ = MAIN_THREAD.set(std::thread::current().id());
+        assert!(on_main_thread(), "the test body is the UI thread");
+
+        // Seed five bytes so a correct round trip has a distinctive
+        // answer — `0` is what every failure mode returns.
+        let text = CString::new("hello").expect("no interior NUL");
+        // SAFETY: UI thread, live widget, valid NUL-terminated text.
+        unsafe { scintilla_send_message(sci, SCI_INSERTTEXT, 0, text.as_ptr() as isize) };
+
+        // Control: on the UI thread the fast path answers with no
+        // main-loop iteration at all. It also proves the affinity check
+        // is armed, so the cross-thread assertion below cannot pass
+        // vacuously by having classified *everything* as remote.
+        //
+        // An earlier version of this comment claimed the fast path was
+        // required for correctness — that a marshal from the UI thread
+        // would queue and then block on the loop that would have run it.
+        // **Measured, and false:** calling `send_sci_on_main` directly
+        // from here returns Scintilla's real answer immediately.
+        // `g_main_context_invoke_full` acquires the context if it can
+        // and dispatches inline when it succeeds, which on an idle main
+        // thread it does. The branch therefore earns its place by
+        // avoiding a channel allocation on the common path and by saying
+        // plainly which thread a call is on — not by averting a hang.
+        assert_eq!(
+            plugin_dispatch(sci, SCI_GETLENGTH, 0, 0),
+            5,
+            "same-thread SCI_* must answer directly"
+        );
+
+        // The real case. A plugin calling from its own thread must be
+        // queued rather than dereferencing the widget where it stands...
+        let handle = WorkerPtr(sci);
+        let worker = std::thread::spawn(move || {
+            let handle = handle;
+            plugin_dispatch(handle.0, SCI_GETLENGTH, 0, 0)
+        });
+        // The sleep is a heuristic bound, not a correctness requirement,
+        // and it is one-sided: a regressed direct call finishes in
+        // microseconds, so a starved runner can only make this wait
+        // longer than necessary — never turn a real failure into a pass.
+        std::thread::sleep(Duration::from_millis(200));
+        assert!(
+            !worker.is_finished(),
+            "a cross-thread SCI_* answered without the main loop running — \
+             it was executed on the calling thread, which is the bug"
+        );
+
+        // ...and answered once the main loop gets to it.
+        let mut spins = 0;
+        while !worker.is_finished() {
+            gtk::main_iteration_do(false);
+            spins += 1;
+            assert!(spins < 10_000, "marshaled SCI_* never completed");
+        }
+        assert_eq!(
+            worker.join().expect("worker panicked"),
+            5,
+            "the marshaled call must return Scintilla's real answer"
+        );
+
+        // An unrecognised handle is still refused rather than marshaled,
+        // from a worker just as from the UI thread — the identity check
+        // runs before the affinity check.
+        let bogus = WorkerPtr(std::ptr::dangling_mut::<u8>().cast::<c_void>());
+        let refused = std::thread::spawn(move || {
+            let bogus = bogus;
+            plugin_dispatch(bogus.0, SCI_GETLENGTH, 0, 0)
+        });
+        assert_eq!(
+            refused.join().expect("worker panicked"),
+            0,
+            "an unknown handle must be refused without dereferencing it"
+        );
     }
 }

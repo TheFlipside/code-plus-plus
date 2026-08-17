@@ -26,8 +26,8 @@ use gtk::{gio, prelude::*};
 
 use crate::state::with_state;
 use crate::{
-    close_active_tab, drain_shell, rebind_active_view, refresh_tab_chrome, save_session_now,
-    sync_tab_strip,
+    close_active_tab, drain_shell, editor_is_pristine, rebind_active_view, refresh_tab_chrome,
+    save_session_now, sync_tab_strip,
 };
 
 /// Menu item labels paired with the accelerator each one advertises.
@@ -2383,8 +2383,9 @@ pub(crate) fn on_open() {
     open_paths(choose_open_paths());
 }
 
-/// Open every path in `paths`, in order — the shared open loop behind both
-/// File → Open and drag-and-drop.
+/// Open every path in `paths`, in order — the shared open loop behind
+/// every *user-initiated* open on this backend: File → Open,
+/// drag-and-drop, the recent-files region, and the workspace tree.
 ///
 /// The shell dedupes already-open paths and pushes fresh tabs for the
 /// rest; processing them in order leaves the view on the last file, just
@@ -2394,9 +2395,34 @@ pub(crate) fn on_open() {
 /// still-empty buffer for a frame before the real content lands. An empty
 /// `paths` (a cancelled dialog, or a drop that carried no local files) is
 /// a no-op.
+///
+/// # Why this one opts into replacing the scratch buffer
+///
+/// Notepad++ discards the `new 1` it seeds at startup the moment you open
+/// a real file into an otherwise-empty workspace — one tab, not two — and
+/// [`crate::editor_is_pristine`] supplies the half of that decision the
+/// headless shell cannot make. **Only user-initiated opens opt in**, and
+/// the distinction is not cosmetic: the gate decides whether a buffer is
+/// discarded, so widening it to the wrong caller loses work.
+///
+/// The two callers that deliberately keep the plain
+/// [`codepp_shell::Shell::open_file`] are named here so a future reader
+/// does not "fix" the inconsistency: session restore (`crate::run`'s
+/// `restore_session`) is *replaying a saved workspace* rather than acting
+/// on a click, and the Find-in-Files result jump (`crate::fif`) is
+/// navigation within a search the user already ran. Neither should
+/// consume a buffer.
+///
+/// Only the first iteration can match in any case — after one open the
+/// workspace is no longer a lone untitled tab — but the measurement is
+/// per-iteration rather than hoisted, because the gate is `Shell`'s to
+/// evaluate and hoisting would re-derive its model half here.
 pub(crate) fn open_paths(paths: Vec<PathBuf>) {
     for path in paths {
-        match with_state(|st| st.shell.open_file(path)) {
+        match with_state(|st| {
+            let pristine = editor_is_pristine(&st.editor);
+            st.shell.open_file_replacing_scratch(path, pristine)
+        }) {
             // Already open: `Shell` moved `active_tab` with no load to
             // wake, so move the view to match. See `rebind_active_view`.
             Some(OpenFileOutcome::SwitchedToExisting(_)) => rebind_active_view(),

@@ -1479,6 +1479,16 @@ fn restore_session(initial_path: Option<PathBuf>) {
         });
     }
 
+    // `codepp file.txt`. Plain `open_file`, not the scratch-replacing
+    // variant `menu::open_paths` uses — and that is not the inconsistency
+    // it looks like. **There is no scratch buffer here yet:** the `new 1`
+    // is seeded by the `!has_tabs` branch *below* this one, so an empty
+    // session at this point means zero tabs, not one untitled tab. The
+    // replacing variant would find nothing to replace and behave
+    // identically, and against a *restored* session the lone-tab gate
+    // declines anyway. Kept explicit so a future reader does not "fix"
+    // it, and so the invariant it rests on — this open runs before the
+    // seed — is written down next to the ordering it depends on.
     if let Some(path) = initial_path {
         if let Some(codepp_shell::OpenFileOutcome::SwitchedToExisting(_)) =
             with_state(|st| st.shell.open_file(path))
@@ -1552,6 +1562,32 @@ fn reseed_active_caret() {
                 .send(codepp_scintilla_sys::SCI_GOTOPOS, cursor as usize, 0);
         });
     }
+}
+
+/// The editor half of `Shell::open_file_replacing_scratch`'s decision:
+/// is the bound Scintilla document *pristine* — empty **and** free of
+/// undo history?
+///
+/// `Shell` owns every model-side term of that decision (a lone untitled
+/// tab, not dirty, not renamed, not a crash-recovery restore). This is
+/// the one fact it cannot see for itself, and emptiness alone does not
+/// answer it: type one character into the startup buffer and undo it,
+/// and Scintilla reports `SCI_GETLENGTH == 0` **and** `SCI_CANUNDO == 0`
+/// while `SCI_CANREDO == 1` (measured on this backend, not assumed).
+///
+/// **The redo term is therefore load-bearing rather than defensive.**
+/// Written against length and undo alone, this would answer "untouched"
+/// for a buffer the user had been working in, and the next File → Open
+/// would discard it with no prompt and no undo path. `Tab.text` is not a
+/// substitute either — it is refreshed only on load and on save, so for
+/// a typed-into buffer it still holds the empty string the tab was
+/// created with.
+///
+/// The twin of `ui_cocoa`'s `editor_is_pristine`; DESIGN.md §7.4.
+pub(crate) fn editor_is_pristine(editor: &codepp_editor::EditorHandle) -> bool {
+    editor.send(codepp_scintilla_sys::SCI_GETLENGTH, 0, 0) == 0
+        && editor.send(codepp_scintilla_sys::SCI_CANUNDO, 0, 0) == 0
+        && editor.send(codepp_scintilla_sys::SCI_CANREDO, 0, 0) == 0
 }
 
 /// Bind the view to `Shell`'s active tab and retitle the window.
@@ -2469,5 +2505,54 @@ mod window_geometry_tests {
         use super::centered_in;
         // A window bigger than the monitor must not land above/left of it.
         assert_eq!(centered_in((0, 0, 800, 600), 1024, 768), (0, 0));
+    }
+}
+
+/// The one entry point for every GTK display-gated scenario in this crate.
+///
+/// ```text
+/// cargo test -p codepp-ui-gtk -- --ignored
+/// xvfb-run cargo test -p codepp-ui-gtk -- --ignored
+/// ```
+///
+/// # Why one test function, and why `--test-threads=1` is not enough
+///
+/// `gtk::init()` records the thread that called it and **panics** on a
+/// call from any other thread; every scenario below also drives GDK,
+/// which is single-threaded. libtest runs each `#[test]` on its own
+/// spawned worker — and, measured rather than assumed, it does so *even
+/// at `--test-threads=1`*, which serialises the tests without pinning
+/// them to one thread. So a second display-gated `#[test]` anywhere in
+/// this crate does not race: it fails outright, with
+/// `Attempted to initialize GTK from two different threads`.
+///
+/// That is not hypothetical. These scenarios were previously three
+/// separate `#[test]`s carrying a `--test-threads=1` instruction, and on
+/// a clean tree the second and third of them failed on every run — so
+/// the print-export path had no live coverage at all while appearing to
+/// have a test. Sequencing them inside one function is what the doc
+/// comments had always claimed was happening.
+///
+/// The alternative is `harness = false` integration tests, which is what
+/// `ui_cocoa`'s `cocoa_smoke` does for the stricter *main*-thread
+/// requirement AppKit imposes. GTK only needs *one* thread, not the
+/// first one, so a plain test function suffices — and these scenarios
+/// reach private items in their own modules, which an integration test
+/// could not.
+///
+/// **Adding a scenario:** write it as a `pub(crate) fn` in its own
+/// module's `#[cfg(test)]` block and call it from here. Do not give it
+/// its own `#[test]`.
+#[cfg(test)]
+mod display_tests {
+    #[test]
+    #[ignore = "drives real GTK/Scintilla widgets; needs a display (see module docs)"]
+    fn gtk_display_scenarios() {
+        // Each scenario calls `gtk::init()` itself, which is idempotent
+        // on the initialising thread — so they stay individually
+        // readable rather than depending on a setup step here.
+        crate::platform::doc_binding_tests::view_binding_follows_the_requested_document();
+        crate::print::tests::build_print_operation_exports_a_pdf();
+        crate::plugin::cross_thread_tests::a_plugins_worker_thread_reaches_scintilla_through_the_main_loop();
     }
 }
