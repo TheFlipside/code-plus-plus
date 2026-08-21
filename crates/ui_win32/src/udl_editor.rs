@@ -114,14 +114,11 @@
 use std::cell::Cell;
 use std::ffi::c_void;
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
 
 use codepp_udl::{UdlDefinition, UdlKeywordLists, UdlSettings, UdlStyle};
 use windows::core::{w, PCWSTR, PWSTR};
-use windows::Win32::Foundation::{COLORREF, HINSTANCE, HWND, LPARAM, LRESULT, RECT, WPARAM};
-use windows::Win32::Graphics::Gdi::{
-    FillRect, GetStockObject, SetBkColor, DEFAULT_GUI_FONT, HDC, HFONT,
-};
+use windows::Win32::Foundation::{COLORREF, HINSTANCE, HWND, LPARAM, RECT, WPARAM};
+use windows::Win32::Graphics::Gdi::{GetStockObject, DEFAULT_GUI_FONT, HFONT};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Controls::Dialogs::{ChooseColorW, CC_FULLOPEN, CC_RGBINIT, CHOOSECOLORW};
 use windows::Win32::UI::Controls::{
@@ -129,29 +126,25 @@ use windows::Win32::UI::Controls::{
     TCM_INSERTITEMW, TCN_SELCHANGE, TCS_TABS, WC_COMBOBOX, WC_TABCONTROL,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, DestroyWindow, GetClientRect, GetSystemMetrics,
-    GetWindowLongPtrW, IsWindow, LoadCursorW, MessageBoxW, PostMessageW, RegisterClassExW,
-    SendMessageW, SetForegroundWindow, SetWindowLongPtrW, SetWindowPos, ShowWindow, BM_GETCHECK,
-    BM_SETCHECK, BS_AUTOCHECKBOX, BS_AUTORADIOBUTTON, BS_DEFPUSHBUTTON, BS_GROUPBOX, BS_PUSHBUTTON,
-    CBN_SELCHANGE, CBS_DROPDOWNLIST, CB_ADDSTRING, CB_GETCURSEL, CB_SETCURSEL, CREATESTRUCTW,
-    CS_HREDRAW, CS_VREDRAW, EN_CHANGE, ES_AUTOHSCROLL, GWLP_USERDATA, HCURSOR, HICON, HMENU,
-    IDC_ARROW, IDYES, MB_ICONERROR, MB_ICONWARNING, MB_OK, MB_YESNOCANCEL, SM_CXSCREEN,
-    SM_CYSCREEN, SWP_NOSIZE, SWP_NOZORDER, SW_HIDE, SW_SHOW, WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP,
-    WM_CLOSE, WM_COMMAND, WM_CREATE, WM_CTLCOLORBTN, WM_CTLCOLORSTATIC, WM_DESTROY, WM_ERASEBKGND,
-    WM_GETTEXT, WM_GETTEXTLENGTH, WM_NCCREATE, WM_NCDESTROY, WM_NOTIFY, WM_SETTEXT, WNDCLASSEXW,
-    WS_BORDER, WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN, WS_CLIPSIBLINGS, WS_EX_CLIENTEDGE, WS_GROUP,
-    WS_OVERLAPPED, WS_SYSMENU, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
+    CreateWindowExW, DestroyWindow, GetClientRect, GetSystemMetrics, GetWindowLongPtrW, IsWindow,
+    MessageBoxW, PostMessageW, SendMessageW, SetForegroundWindow, SetWindowLongPtrW, SetWindowPos,
+    ShowWindow, BM_GETCHECK, BM_SETCHECK, BS_AUTOCHECKBOX, BS_AUTORADIOBUTTON, BS_DEFPUSHBUTTON,
+    BS_GROUPBOX, BS_PUSHBUTTON, CBN_SELCHANGE, CBS_DROPDOWNLIST, CB_ADDSTRING, CB_GETCURSEL,
+    CB_SETCURSEL, EN_CHANGE, ES_AUTOHSCROLL, GWLP_USERDATA, HMENU, HWND_TOP, IDYES, MB_ICONERROR,
+    MB_ICONWARNING, MB_OK, MB_YESNOCANCEL, SM_CXSCREEN, SM_CYSCREEN, SWP_NOACTIVATE, SWP_NOSIZE,
+    SWP_NOZORDER, SW_HIDE, SW_SHOW, WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP, WM_CLOSE, WM_COMMAND,
+    WM_DESTROY, WM_GETTEXT, WM_GETTEXTLENGTH, WM_INITDIALOG, WM_NCDESTROY, WM_NOTIFY, WM_SETTEXT,
+    WS_BORDER, WS_CHILD, WS_CLIPCHILDREN, WS_CLIPSIBLINGS, WS_EX_CLIENTEDGE, WS_EX_CONTROLPARENT,
+    WS_GROUP, WS_POPUP, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
 };
 
-use crate::{apply_dialog_font, dialog_bg_brush, disable_visual_style, wide_terminated};
+use crate::{apply_dialog_font, dlgtemplate, wide_terminated};
 
 /// `SS_LEFT` — left-align static text. Windows-rs doesn't
 /// re-export this constant (see the parallel definition around
 /// lib.rs:848). Fixing the omission upstream is a separate
 /// concern; the value itself is stable.
 const SS_LEFT: u32 = 0x0000;
-
-const UDL_EDITOR_CLASS: PCWSTR = w!("CodePlusPlusUdlEditorDialog");
 
 /// Cross-thread notification the editor sends to the main window
 /// after a successful save. Handled by the main window proc to
@@ -526,31 +519,6 @@ struct KeywordsTabControls {
     current_class: usize,
 }
 
-/// Register the UDL editor's private window class. Called from
-/// [`show_udl_editor`]; the `OnceLock` ensures we register only
-/// once even across repeated open/close cycles.
-fn register_class(hinst: HINSTANCE) {
-    static REGISTERED: OnceLock<()> = OnceLock::new();
-    REGISTERED.get_or_init(|| unsafe {
-        let cursor = LoadCursorW(None, IDC_ARROW).unwrap_or(HCURSOR::default());
-        let wc = WNDCLASSEXW {
-            cbSize: std::mem::size_of::<WNDCLASSEXW>() as u32,
-            style: CS_HREDRAW | CS_VREDRAW,
-            lpfnWndProc: Some(udl_editor_wnd_proc),
-            hInstance: hinst,
-            hCursor: cursor,
-            hbrBackground: dialog_bg_brush(),
-            hIcon: HICON::default(),
-            lpszClassName: UDL_EDITOR_CLASS,
-            ..Default::default()
-        };
-        let atom = RegisterClassExW(&raw const wc);
-        if atom == 0 {
-            tracing::error!("failed to register UDL editor window class");
-        }
-    });
-}
-
 /// Open the UDL editor dialog.
 ///
 /// If `existing` is `Some(hwnd)` and the HWND is still live, the
@@ -579,10 +547,9 @@ pub(crate) fn show_udl_editor(
     }
 
     let hinst: HINSTANCE = unsafe { GetModuleHandleW(None) }.ok()?.into();
-    register_class(hinst);
 
-    // Prepare the initial state before creating the window so the
-    // `WM_NCCREATE` handler can stash it via `lpCreateParams`.
+    // Prepare the initial state before creating the dialog so the
+    // `WM_INITDIALOG` handler can stash it from `lparam`.
     let (definition, source_path) = match mode {
         UdlEditorMode::New => (default_new_udl(), None),
         UdlEditorMode::Edit(payload) => {
@@ -654,36 +621,41 @@ pub(crate) fn show_udl_editor(
     });
     let state_ptr = Box::into_raw(boxed);
 
-    let title = wide_terminated("User Defined Language");
-    let (x, y) = center_on_screen(DIALOG_W, DIALOG_H);
+    // Style note: `WS_POPUP` is deliberately masked off the shared
+    // dialog style. Every other dialog in this backend is a popup,
+    // but this one was authored as `WS_OVERLAPPED` (an owned
+    // top-level window), and the migration is not the place to
+    // change which of the two it is.
+    let style = (dlgtemplate::dialog_style() & !WS_POPUP.0) | WS_CLIPCHILDREN.0 | WS_CLIPSIBLINGS.0;
+    let template = dlgtemplate::DialogTemplate::new(
+        "User Defined Language",
+        style,
+        WS_EX_CONTROLPARENT.0,
+        400,
+        300,
+    )
+    .finish();
+
     let dlg = unsafe {
-        CreateWindowExW(
-            WINDOW_EX_STYLE(0),
-            UDL_EDITOR_CLASS,
-            PCWSTR(title.as_ptr()),
-            WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_CLIPCHILDREN | WS_CLIPSIBLINGS,
-            x,
-            y,
-            DIALOG_W,
-            DIALOG_H,
-            Some(main_hwnd),
-            None,
-            Some(hinst),
-            Some(state_ptr as *mut c_void),
+        dlgtemplate::create_modeless(
+            hinst.into(),
+            &template,
+            main_hwnd,
+            Some(udl_editor_dlg_proc),
+            state_ptr as isize,
         )
     };
-    let Ok(dlg) = dlg else {
+    let Some(dlg) = dlg else {
         // Creation failed. We intentionally do NOT reclaim
-        // `state_ptr` here — the pointer was handed to Windows as
-        // `lpCreateParams`, and `WM_NCCREATE` may have already
-        // stashed it into `GWLP_USERDATA`. On a partial-init
-        // failure where `WM_CREATE` returns `-1` (or Windows
-        // aborts creation mid-way after `WM_NCCREATE` succeeds —
-        // documented on MSDN, but rare in practice), Windows
-        // synthesises a `WM_NCDESTROY` before `CreateWindowExW`
-        // returns, and our `WM_NCDESTROY` arm already reclaims
-        // the box. A second `Box::from_raw` here would double-
-        // free — a heap-corruption primitive we can't accept.
+        // `state_ptr` here — the pointer was handed to the dialog
+        // manager as the `WM_INITDIALOG` param, and that handler
+        // may have already stashed it into `GWLP_USERDATA`. If the
+        // dialog was created and then torn down (the proc destroys
+        // it when `build_controls` cannot finish), Windows
+        // synthesises a `WM_NCDESTROY` before the create call
+        // returns, and our `WM_NCDESTROY` arm already reclaims the
+        // box. A second `Box::from_raw` here would double-free — a
+        // heap-corruption primitive we cannot accept.
         //
         // The trade-off is a one-`UdlEditorState`-Box leak on
         // the exceedingly rare creation-failure path. This
@@ -691,7 +663,7 @@ pub(crate) fn show_udl_editor(
         // ui_win32 uses (find_replace, goto, about, style_config,
         // color_picker) — see the m3b security-audit finding
         // referenced in DESIGN.md §7.4.
-        tracing::error!("CreateWindowExW failed for UDL editor");
+        tracing::error!("CreateDialogIndirectParamW failed for UDL editor");
         return None;
     };
 
@@ -788,60 +760,60 @@ fn default_style_slots() -> Vec<UdlStyle> {
 // Window proc
 // -------------------------------------------------------------
 
-extern "system" fn udl_editor_wnd_proc(
+/// Dialog procedure. `BOOL` semantics: nonzero means handled, zero
+/// hands the message to `DefDlgProc`.
+extern "system" fn udl_editor_dlg_proc(
     hwnd: HWND,
     msg: u32,
     wparam: WPARAM,
     lparam: LPARAM,
-) -> LRESULT {
+) -> isize {
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
         match msg {
-            WM_NCCREATE => {
-                let cs = lparam.0 as *const CREATESTRUCTW;
-                if !cs.is_null() {
-                    let state_ptr = (*cs).lpCreateParams as isize;
-                    SetWindowLongPtrW(hwnd, GWLP_USERDATA, state_ptr);
+            WM_INITDIALOG => {
+                SetWindowLongPtrW(hwnd, GWLP_USERDATA, lparam.0);
+                let state_ptr = lparam.0 as *mut UdlEditorState;
+                if state_ptr.is_null() {
+                    let _ = DestroyWindow(hwnd);
+                    return 1;
                 }
-                DefWindowProcW(hwnd, msg, wparam, lparam)
+                // Size and centre on the *primary monitor*, which is
+                // what this dialog has always done — unlike its
+                // siblings, which centre on the owner.
+                let (x, y) = center_on_screen(DIALOG_W, DIALOG_H);
+                let _ = SetWindowPos(
+                    hwnd,
+                    Some(HWND_TOP),
+                    x,
+                    y,
+                    DIALOG_W,
+                    DIALOG_H,
+                    SWP_NOZORDER | SWP_NOACTIVATE,
+                );
+                let state = &mut *state_ptr;
+                state.dialog = hwnd;
+                build_controls(state);
+                populate_folder_tab(state);
+                populate_keywords_tab(state);
+                populate_comment_number_tab(state);
+                populate_operators_delimiters_tab(state);
+                populate_styles_tab(state);
+                state.controls_ready = true;
+                // TRUE: let the dialog manager assign initial focus
+                // to the first tabstop.
+                1
             }
-            WM_CREATE => {
-                let state_ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut UdlEditorState;
-                if !state_ptr.is_null() {
-                    let state = &mut *state_ptr;
-                    state.dialog = hwnd;
-                    build_controls(state);
-                    populate_folder_tab(state);
-                    populate_keywords_tab(state);
-                    populate_comment_number_tab(state);
-                    populate_operators_delimiters_tab(state);
-                    populate_styles_tab(state);
-                    state.controls_ready = true;
-                }
-                LRESULT(0)
-            }
-            WM_ERASEBKGND => {
-                // Paint the client area ourselves so Win11
-                // UxTheme doesn't override to the system dialog
-                // colour. Matches the pattern in
-                // `find_replace_wnd_proc` (lib.rs:19850).
-                let hdc = HDC(wparam.0 as *mut c_void);
-                let mut rc = RECT::default();
-                let _ = GetClientRect(hwnd, &raw mut rc);
-                let _ = FillRect(hdc, &raw const rc, dialog_bg_brush());
-                LRESULT(1)
-            }
-            WM_CTLCOLORSTATIC | WM_CTLCOLORBTN => {
-                let hdc = HDC(wparam.0 as *mut c_void);
-                let _ = SetBkColor(hdc, COLORREF(DIALOG_BG_LOCAL));
-                LRESULT(dialog_bg_brush().0 as isize)
-            }
+            // No `WM_ERASEBKGND` / `WM_CTLCOLOR*` arms: `DefDlgProc`
+            // paints the client area and answers the control-colour
+            // messages with the system dialog brush, which is what
+            // the hardcoded shade was approximating.
             WM_NOTIFY => {
                 // Re-entrancy guard: if a nested modal pump is
                 // running (Save-As / dirty-prompt), bail so we
                 // don't materialise a second `&mut *state_ptr`
                 // overlapping the outer borrow.
                 if MODAL_PUMP_ACTIVE.get() {
-                    return DefWindowProcW(hwnd, msg, wparam, lparam);
+                    return 0;
                 }
                 let nmhdr = lparam.0 as *const NMHDR;
                 if !nmhdr.is_null() {
@@ -860,27 +832,32 @@ extern "system" fn udl_editor_wnd_proc(
                         }
                     }
                 }
-                LRESULT(0)
+                1
             }
             WM_COMMAND => {
                 // Same guard rationale as `WM_NOTIFY`.
                 if MODAL_PUMP_ACTIVE.get() {
-                    return DefWindowProcW(hwnd, msg, wparam, lparam);
+                    return 0;
                 }
                 let state_ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut UdlEditorState;
                 if state_ptr.is_null() {
-                    return DefWindowProcW(hwnd, msg, wparam, lparam);
+                    return 0;
                 }
                 let state = &mut *state_ptr;
                 if !state.controls_ready {
-                    return DefWindowProcW(hwnd, msg, wparam, lparam);
+                    return 0;
                 }
                 handle_command(state, wparam, lparam);
-                LRESULT(0)
+                1
             }
+            // `WM_CLOSE` is still handled explicitly rather than
+            // left to `DefDlgProc`'s IDCANCEL synthesis: closing has
+            // to run the dirty-prompt first and can *decline* to
+            // close, which the IDCANCEL route gives no way to
+            // express.
             WM_CLOSE => {
                 if MODAL_PUMP_ACTIVE.get() {
-                    return DefWindowProcW(hwnd, msg, wparam, lparam);
+                    return 0;
                 }
                 let state_ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut UdlEditorState;
                 let main_hwnd_for_focus = if state_ptr.is_null() {
@@ -888,7 +865,7 @@ extern "system" fn udl_editor_wnd_proc(
                 } else {
                     let state = &mut *state_ptr;
                     if !confirm_discard_if_dirty(state) {
-                        return LRESULT(0);
+                        return 1;
                     }
                     state.main_hwnd
                 };
@@ -906,7 +883,7 @@ extern "system" fn udl_editor_wnd_proc(
                     let _ = SetForegroundWindow(main_hwnd_for_focus);
                 }
                 let _ = DestroyWindow(hwnd);
-                LRESULT(0)
+                1
             }
             WM_DESTROY => {
                 // Notify the main window so it can clear its
@@ -921,34 +898,25 @@ extern "system" fn udl_editor_wnd_proc(
                         LPARAM(hwnd.0 as isize),
                     );
                 }
-                LRESULT(0)
+                1
             }
             WM_NCDESTROY => {
                 let state_ptr = SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0) as *mut UdlEditorState;
                 if !state_ptr.is_null() {
                     drop(Box::from_raw(state_ptr));
                 }
-                DefWindowProcW(hwnd, msg, wparam, lparam)
+                0
             }
-            _ => DefWindowProcW(hwnd, msg, wparam, lparam),
+            _ => 0,
         }
     }));
-    if let Ok(lr) = result {
-        lr
-    } else {
-        // Panic across FFI is UB. Log, absorb, return zero so
-        // Windows continues processing.
-        tracing::error!("panic caught in udl_editor_wnd_proc");
-        LRESULT(0)
-    }
+    result.unwrap_or_else(|_| {
+        // Panic across FFI is UB. Log, absorb, and report
+        // "not handled" so the dialog manager continues.
+        tracing::error!("panic caught in udl_editor_dlg_proc");
+        0
+    })
 }
-
-/// Local copy of the DIALOG_BG constant. Used by
-/// `WM_CTLCOLORSTATIC`/`WM_CTLCOLORBTN` because the
-/// `SetBkColor` expects a `COLORREF` matching what the brush
-/// paints so text backgrounds don't show a 1-pixel colour
-/// mismatch.
-const DIALOG_BG_LOCAL: u32 = crate::DIALOG_BG;
 
 /// Sent by [`udl_editor_wnd_proc`]'s `WM_DESTROY` handler to the
 /// main window on dialog close, so the main window can clear the
@@ -1883,7 +1851,6 @@ fn check_box(
     .unwrap_or(HWND::default());
     unsafe {
         apply_dialog_font(hwnd, font);
-        disable_visual_style(hwnd);
     }
     hwnd
 }
@@ -1924,7 +1891,6 @@ fn radio_button(
     .unwrap_or(HWND::default());
     unsafe {
         apply_dialog_font(hwnd, font);
-        disable_visual_style(hwnd);
     }
     hwnd
 }
@@ -1959,7 +1925,6 @@ fn group_box(
     .unwrap_or(HWND::default());
     unsafe {
         apply_dialog_font(hwnd, font);
-        disable_visual_style(hwnd);
     }
     hwnd
 }

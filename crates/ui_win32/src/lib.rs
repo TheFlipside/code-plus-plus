@@ -92,6 +92,7 @@
     clippy::trivially_copy_pass_by_ref
 )]
 
+mod dlgtemplate;
 mod preferences;
 mod print;
 mod print_preview;
@@ -169,13 +170,13 @@ use windows::Win32::Foundation::{
 use windows::Win32::Graphics::Gdi::{
     AlphaBlend, BeginPaint, BitBlt, ClientToScreen, CreateCompatibleBitmap, CreateCompatibleDC,
     CreateFontIndirectW, CreatePen, CreateSolidBrush, DeleteDC, DeleteObject, DrawTextW, EndPaint,
-    EnumFontFamiliesExW, FillRect, GetDC, GetMonitorInfoW, GetStockObject, GetSysColorBrush,
-    InvalidateRect, LineTo, MonitorFromWindow, MoveToEx, Polygon, ReleaseDC, ScreenToClient,
-    SelectObject, SetBkColor, SetBkMode, SetTextColor, UpdateWindow, AC_SRC_ALPHA, AC_SRC_OVER,
-    BLENDFUNCTION, COLOR_WINDOW, DEFAULT_CHARSET, DEFAULT_GUI_FONT, DT_END_ELLIPSIS, DT_NOPREFIX,
-    DT_SINGLELINE, DT_VCENTER, FW_BOLD, HBITMAP, HBRUSH, HDC, HFONT, HGDIOBJ, LOGFONTW,
-    MONITORINFO, MONITOR_DEFAULTTONEAREST, NULL_BRUSH, PAINTSTRUCT, PS_SOLID, SRCCOPY, TEXTMETRICW,
-    TRANSPARENT,
+    EnumFontFamiliesExW, FillRect, GetDC, GetMonitorInfoW, GetStockObject, GetSysColor,
+    GetSysColorBrush, InvalidateRect, LineTo, MonitorFromWindow, MoveToEx, Polygon, ReleaseDC,
+    ScreenToClient, SelectObject, SetBkColor, SetBkMode, SetTextColor, UpdateWindow, AC_SRC_ALPHA,
+    AC_SRC_OVER, BLENDFUNCTION, COLOR_3DFACE, COLOR_WINDOW, DEFAULT_CHARSET, DEFAULT_GUI_FONT,
+    DT_END_ELLIPSIS, DT_NOPREFIX, DT_SINGLELINE, DT_VCENTER, FW_BOLD, HBITMAP, HBRUSH, HDC, HFONT,
+    HGDIOBJ, LOGFONTW, MONITORINFO, MONITOR_DEFAULTTONEAREST, NULL_BRUSH, PAINTSTRUCT, PS_SOLID,
+    SRCCOPY, TEXTMETRICW, TRANSPARENT,
 };
 use windows::Win32::Storage::FileSystem::{
     GetFileVersionInfoSizeW, GetFileVersionInfoW, VerQueryValueW, VS_FIXEDFILEINFO,
@@ -188,23 +189,22 @@ use windows::Win32::UI::Controls::Dialogs::{
     OPENFILENAMEW,
 };
 use windows::Win32::UI::Controls::{
-    InitCommonControlsEx, SetWindowTheme, BST_CHECKED, BST_UNCHECKED, CDDS_PREPAINT,
-    CDRF_DODEFAULT, CDRF_NOTIFYITEMDRAW, DRAWITEMSTRUCT, HTREEITEM, ICC_BAR_CLASSES,
-    ICC_LISTVIEW_CLASSES, ICC_PROGRESS_CLASS, ICC_TAB_CLASSES, ICC_TREEVIEW_CLASSES,
-    INITCOMMONCONTROLSEX, LVCFMT_LEFT, LVCF_FMT, LVCF_TEXT, LVCF_WIDTH, LVCOLUMNW, LVIF_STATE,
-    LVIF_TEXT, LVIS_STATEIMAGEMASK, LVITEMW, LVM_DELETEALLITEMS, LVM_GETITEMCOUNT,
-    LVM_INSERTCOLUMNW, LVM_INSERTITEMW, LVM_SETEXTENDEDLISTVIEWSTYLE, LVM_SETITEMSTATE,
-    LVM_SETITEMTEXTW, LVN_ITEMCHANGED, LVS_EX_CHECKBOXES, LVS_EX_DOUBLEBUFFER,
-    LVS_EX_FULLROWSELECT, LVS_REPORT, LVS_SHOWSELALWAYS, LVS_SINGLESEL, NMCUSTOMDRAW, NMHDR,
-    NMITEMACTIVATE, NMLISTVIEW, NMTREEVIEWW, NM_CUSTOMDRAW, NM_DBLCLK, NM_RCLICK, ODT_TAB,
-    TCHITTESTINFO, TCIF_TEXT, TCITEMW, TCM_DELETEALLITEMS, TCM_GETCURSEL, TCM_GETITEMRECT,
-    TCM_HITTEST, TCM_INSERTITEMW, TCM_SETCURSEL, TCM_SETITEMW, TCM_SETPADDING, TCN_SELCHANGE,
-    TCS_OWNERDRAWFIXED, TVE_COLLAPSE, TVE_EXPAND, TVGN_CARET, TVGN_CHILD, TVGN_NEXT, TVGN_PARENT,
-    TVGN_ROOT, TVHITTESTINFO, TVHITTESTINFO_FLAGS, TVHT_ONITEM, TVHT_ONITEMRIGHT, TVIF_CHILDREN,
-    TVIF_IMAGE, TVIF_PARAM, TVIF_SELECTEDIMAGE, TVIF_TEXT, TVINSERTSTRUCTW, TVITEMW, TVI_LAST,
-    TVI_ROOT, TVM_DELETEITEM, TVM_ENSUREVISIBLE, TVM_EXPAND, TVM_GETITEMW, TVM_GETNEXTITEM,
-    TVM_HITTEST, TVM_INSERTITEMW, TVM_SELECTITEM, TVM_SETIMAGELIST, TVM_SETITEMW,
-    TVN_ITEMEXPANDINGW, TVSIL_NORMAL, TVS_HASBUTTONS, TVS_HASLINES, TVS_LINESATROOT,
+    InitCommonControlsEx, BST_CHECKED, BST_UNCHECKED, CDDS_PREPAINT, CDRF_DODEFAULT,
+    CDRF_NOTIFYITEMDRAW, DRAWITEMSTRUCT, HTREEITEM, ICC_BAR_CLASSES, ICC_LISTVIEW_CLASSES,
+    ICC_PROGRESS_CLASS, ICC_TAB_CLASSES, ICC_TREEVIEW_CLASSES, INITCOMMONCONTROLSEX, LVCFMT_LEFT,
+    LVCF_FMT, LVCF_TEXT, LVCF_WIDTH, LVCOLUMNW, LVIF_STATE, LVIF_TEXT, LVIS_STATEIMAGEMASK,
+    LVITEMW, LVM_DELETEALLITEMS, LVM_GETITEMCOUNT, LVM_INSERTCOLUMNW, LVM_INSERTITEMW,
+    LVM_SETEXTENDEDLISTVIEWSTYLE, LVM_SETITEMSTATE, LVM_SETITEMTEXTW, LVN_ITEMCHANGED,
+    LVS_EX_CHECKBOXES, LVS_EX_DOUBLEBUFFER, LVS_EX_FULLROWSELECT, LVS_REPORT, LVS_SHOWSELALWAYS,
+    LVS_SINGLESEL, NMCUSTOMDRAW, NMHDR, NMITEMACTIVATE, NMLISTVIEW, NMTREEVIEWW, NM_CUSTOMDRAW,
+    NM_DBLCLK, NM_RCLICK, ODT_TAB, TCHITTESTINFO, TCIF_TEXT, TCITEMW, TCM_DELETEALLITEMS,
+    TCM_GETCURSEL, TCM_GETITEMRECT, TCM_HITTEST, TCM_INSERTITEMW, TCM_SETCURSEL, TCM_SETITEMW,
+    TCM_SETPADDING, TCN_SELCHANGE, TCS_OWNERDRAWFIXED, TVE_COLLAPSE, TVE_EXPAND, TVGN_CARET,
+    TVGN_CHILD, TVGN_NEXT, TVGN_PARENT, TVGN_ROOT, TVHITTESTINFO, TVHITTESTINFO_FLAGS, TVHT_ONITEM,
+    TVHT_ONITEMRIGHT, TVIF_CHILDREN, TVIF_IMAGE, TVIF_PARAM, TVIF_SELECTEDIMAGE, TVIF_TEXT,
+    TVINSERTSTRUCTW, TVITEMW, TVI_LAST, TVI_ROOT, TVM_DELETEITEM, TVM_ENSUREVISIBLE, TVM_EXPAND,
+    TVM_GETITEMW, TVM_GETNEXTITEM, TVM_HITTEST, TVM_INSERTITEMW, TVM_SELECTITEM, TVM_SETIMAGELIST,
+    TVM_SETITEMW, TVN_ITEMEXPANDINGW, TVSIL_NORMAL, TVS_HASBUTTONS, TVS_HASLINES, TVS_LINESATROOT,
     TVS_SHOWSELALWAYS, WC_COMBOBOX, WC_LISTVIEWW, WC_TABCONTROL, WC_TREEVIEWW, WM_MOUSELEAVE,
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{
@@ -222,8 +222,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
     AdjustWindowRectEx, AppendMenuW, CheckMenuItem, CheckMenuRadioItem, CopyAcceleratorTableW,
     CreateAcceleratorTableW, CreateMenu, CreatePopupMenu, CreateWindowExW, DefWindowProcW,
     DeleteMenu, DestroyAcceleratorTable, DestroyIcon, DestroyMenu, DestroyWindow, DispatchMessageW,
-    DrawIconEx, DrawMenuBar, EnableMenuItem, GetClientRect, GetCursorPos, GetDlgItem, GetMenu,
-    GetMenuItemCount, GetMenuItemID, GetMenuItemInfoW, GetMessageW, GetParent, GetSubMenu,
+    DrawIconEx, DrawMenuBar, EnableMenuItem, EndDialog, GetClientRect, GetCursorPos, GetDlgItem,
+    GetMenu, GetMenuItemCount, GetMenuItemID, GetMenuItemInfoW, GetMessageW, GetParent, GetSubMenu,
     GetWindowLongPtrW, GetWindowRect, GetWindowTextLengthW, GetWindowTextW, InsertMenuW,
     IsDialogMessageW, IsWindow, IsWindowVisible, KillTimer, LoadCursorW, LoadIconW, LoadImageW,
     MessageBoxW, MoveWindow, PostMessageW, PostQuitMessage, RegisterClassExW, RemoveMenu,
@@ -232,24 +232,24 @@ use windows::Win32::UI::WindowsAndMessaging::{
     TranslateAcceleratorW, TranslateMessage, ACCEL, ACCEL_VIRT_FLAGS, BM_GETCHECK, BM_SETCHECK,
     BN_CLICKED, BS_AUTOCHECKBOX, BS_AUTORADIOBUTTON, BS_DEFPUSHBUTTON, BS_OWNERDRAW, BS_PUSHBUTTON,
     CBS_AUTOHSCROLL, CBS_DROPDOWN, CB_ADDSTRING, CB_RESETCONTENT, CB_SETEDITSEL, CREATESTRUCTW,
-    CS_HREDRAW, CS_VREDRAW, CW_USEDEFAULT, DC_HASDEFID, DI_NORMAL, DM_GETDEFID, ES_AUTOHSCROLL,
-    ES_NUMBER, ES_READONLY, FALT, FCONTROL, FSHIFT, FVIRTKEY, GWLP_USERDATA, GWL_EXSTYLE, HACCEL,
-    HICON, HMENU, IDCANCEL, IDC_ARROW, IDC_HAND, IDC_SIZENS, IDC_SIZEWE, IDNO, IDOK, IDYES,
-    IMAGE_ICON, LR_DEFAULTCOLOR, LWA_ALPHA, MB_ICONQUESTION, MB_ICONWARNING, MB_OK, MB_OKCANCEL,
-    MB_YESNO, MB_YESNOCANCEL, MENUITEMINFOW, MENU_ITEM_FLAGS, MFS_CHECKED, MFS_UNCHECKED,
-    MFT_RADIOCHECK, MFT_RIGHTJUSTIFY, MFT_SEPARATOR, MF_BYCOMMAND, MF_BYPOSITION, MF_CHECKED,
-    MF_ENABLED, MF_GRAYED, MF_POPUP, MF_SEPARATOR, MF_STRING, MF_UNCHECKED, MIIM_FTYPE, MIIM_STATE,
-    MSG, PRF_CLIENT, PRF_ERASEBKGND, SHOW_WINDOW_CMD, SWP_FRAMECHANGED, SWP_NOMOVE, SWP_NOSIZE,
-    SWP_NOZORDER, SW_HIDE, SW_SHOW, SW_SHOWMAXIMIZED, SW_SHOWNORMAL, TPM_BOTTOMALIGN,
-    TPM_LEFTALIGN, TPM_RETURNCMD, TPM_RIGHTBUTTON, WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP,
-    WM_CAPTURECHANGED, WM_CHAR, WM_CLOSE, WM_COMMAND, WM_CTLCOLORBTN, WM_CTLCOLOREDIT,
+    CS_HREDRAW, CS_VREDRAW, CW_USEDEFAULT, DC_HASDEFID, DI_NORMAL, DM_GETDEFID, DWLP_MSGRESULT,
+    ES_AUTOHSCROLL, ES_NUMBER, ES_READONLY, FALT, FCONTROL, FSHIFT, FVIRTKEY, GWLP_USERDATA,
+    GWL_EXSTYLE, HACCEL, HICON, HMENU, IDCANCEL, IDC_ARROW, IDC_HAND, IDC_SIZENS, IDC_SIZEWE, IDNO,
+    IDOK, IDYES, IMAGE_ICON, LR_DEFAULTCOLOR, LWA_ALPHA, MB_ICONQUESTION, MB_ICONWARNING, MB_OK,
+    MB_OKCANCEL, MB_YESNO, MB_YESNOCANCEL, MENUITEMINFOW, MENU_ITEM_FLAGS, MFS_CHECKED,
+    MFS_UNCHECKED, MFT_RADIOCHECK, MFT_RIGHTJUSTIFY, MFT_SEPARATOR, MF_BYCOMMAND, MF_BYPOSITION,
+    MF_CHECKED, MF_ENABLED, MF_GRAYED, MF_POPUP, MF_SEPARATOR, MF_STRING, MF_UNCHECKED, MIIM_FTYPE,
+    MIIM_STATE, MSG, PRF_CLIENT, PRF_ERASEBKGND, SHOW_WINDOW_CMD, SWP_FRAMECHANGED, SWP_NOMOVE,
+    SWP_NOSIZE, SWP_NOZORDER, SW_HIDE, SW_SHOW, SW_SHOWMAXIMIZED, SW_SHOWNORMAL, TPM_BOTTOMALIGN,
+    TPM_LEFTALIGN, TPM_RETURNCMD, TPM_RIGHTBUTTON, WINDOW_EX_STYLE, WINDOW_LONG_PTR_INDEX,
+    WINDOW_STYLE, WM_APP, WM_CAPTURECHANGED, WM_CHAR, WM_CLOSE, WM_COMMAND, WM_CTLCOLOREDIT,
     WM_CTLCOLORLISTBOX, WM_CTLCOLORSTATIC, WM_DESTROY, WM_DRAWITEM, WM_DROPFILES, WM_ERASEBKGND,
-    WM_HSCROLL, WM_INITMENUPOPUP, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL,
-    WM_NCCREATE, WM_NCDESTROY, WM_NOTIFY, WM_PAINT, WM_PRINTCLIENT, WM_QUIT, WM_RBUTTONDOWN,
-    WM_RBUTTONUP, WM_SETCURSOR, WM_SETFOCUS, WM_SETFONT, WM_SETREDRAW, WM_SETTINGCHANGE, WM_SIZE,
-    WM_TIMER, WNDCLASSEXW, WS_BORDER, WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN, WS_EX_CLIENTEDGE,
-    WS_EX_CONTROLPARENT, WS_EX_DLGMODALFRAME, WS_EX_LAYERED, WS_EX_TOOLWINDOW, WS_GROUP,
-    WS_HSCROLL, WS_OVERLAPPEDWINDOW, WS_POPUP, WS_SYSMENU, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
+    WM_HSCROLL, WM_INITDIALOG, WM_INITMENUPOPUP, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE,
+    WM_MOUSEWHEEL, WM_NCCREATE, WM_NCDESTROY, WM_NOTIFY, WM_PAINT, WM_PRINTCLIENT, WM_QUIT,
+    WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SETCURSOR, WM_SETFOCUS, WM_SETFONT, WM_SETREDRAW,
+    WM_SETTINGCHANGE, WM_SIZE, WM_TIMER, WNDCLASSEXW, WS_BORDER, WS_CHILD, WS_CLIPCHILDREN,
+    WS_EX_CLIENTEDGE, WS_EX_CONTROLPARENT, WS_EX_LAYERED, WS_EX_TOOLWINDOW, WS_GROUP, WS_HSCROLL,
+    WS_OVERLAPPEDWINDOW, WS_POPUP, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
 };
 
 // --- Built-in menu command ids ----------------------------------------
@@ -648,9 +648,6 @@ const FIF_DOCK_CLASS: PCWSTR = w!("CodePlusPlusFifDock");
 /// and friends already prove the lazy-register-via-OnceLock pattern.
 const DOCK_FRAME_CLASS: PCWSTR = w!("CodePlusPlusDockFrame");
 const FIF_SPLITTER_CLASS: PCWSTR = w!("CodePlusPlusFifSplitter");
-/// Modeless top-level window class for the FIF progress dialog
-/// shown while a search is running (m4 step 4b).
-const FIF_PROGRESS_CLASS: PCWSTR = w!("CodePlusPlusFifProgress");
 /// Window class for the "Folder as Workspace" left-side panel.
 /// A plain `WS_CHILD` container; its own `wnd_proc` paints the
 /// header + action bar and forwards commands. Registered lazily
@@ -834,14 +831,6 @@ const IDC_WORKSPACE_LOCATE: u16 = 503;
 /// [`IDC_WORKSPACE_CLOSE`] on the right-side panel.
 const IDC_DOCMAP_CLOSE: u16 = 520;
 
-/// Window class for the "Go to..." modal popup. Registered once on
-/// first `show_goto_dialog`. The dialog is a plain top-level
-/// `WS_POPUP`/`WS_CAPTION`/`WS_SYSMENU` window with our own `wnd_proc`;
-/// `IsDialogMessageW` in the modal pump still handles Tab navigation
-/// and the IDOK/IDCANCEL keyboard contract because the window has
-/// `WS_EX_CONTROLPARENT` and the controls have `WS_TABSTOP`.
-const GOTO_CLASS: PCWSTR = w!("CodePlusPlusGotoDialog");
-
 /// "Go to..." dialog control ids. IDOK / IDCANCEL are the standard
 /// Win32 button ids and are reused for the dialog's OK and Cancel
 /// buttons. The radio pair toggles between Line and Offset mode;
@@ -852,20 +841,9 @@ const IDC_GOTO_HERE: u16 = 102;
 const IDC_GOTO_TARGET: u16 = 103;
 const IDC_GOTO_MAX: u16 = 104;
 
-/// Rename dialog window class. Registered once on the first
-/// `show_rename_dialog`; modal text-input dialog used by File →
-/// Rename... to relabel an untitled buffer.
-const RENAME_CLASS: PCWSTR = w!("CodePlusPlusRenameDialog");
-
 /// Rename dialog control id for the EDIT field carrying the new
 /// name. IDOK / IDCANCEL are reused for the standard buttons.
 const IDC_RENAME_EDIT: u16 = 110;
-
-/// Find/Replace dialog window class. Registered once on the first
-/// `show_find_replace_dialog`. Modeless: the dialog persists across
-/// open/close cycles via `ShowWindow(SW_HIDE)` so the typed query and
-/// flag state survive between Find sessions.
-const FIND_REPLACE_CLASS: PCWSTR = w!("CodePlusPlusFindReplaceDialog");
 
 /// Find/Replace dialog control ids.
 const IDC_FR_TAB: u16 = 200;
@@ -898,12 +876,6 @@ const IDC_FR_FIF_SUBFOLDERS: u16 = 220;
 const IDC_FR_FIF_HIDDEN_FOLDERS: u16 = 221;
 const IDC_FR_FIF_FIND_ALL: u16 = 222;
 const IDC_FR_FIF_REPLACE_IN_FILES: u16 = 223;
-
-/// About dialog window class.
-const ABOUT_CLASS: PCWSTR = w!("CodePlusPlusAboutDialog");
-
-/// Style Configurator dialog window class.
-const STYLE_CONFIG_CLASS: PCWSTR = w!("CodePlusPlusStyleConfigDialog");
 
 /// Colour-picker preset popup window class — the small
 /// floating frame that opens when the user clicks one of the
@@ -8809,18 +8781,15 @@ fn open_recent_path_via_shell(hwnd: HWND, path: PathBuf) {
 /// `show_about_dialog`'s stack frame for the dialog's lifetime; the
 /// raw pointer is stashed in the dialog HWND's `GWLP_USERDATA`.
 ///
-/// The bold title `HFONT` is owned by a separate `GdiObjectGuard`
-/// because it's only ever read by Win32's message dispatch (via
-/// `WM_SETFONT` plumbed through `apply_dialog_font`) and never by
-/// our `wnd_proc`, so threading it through state would be noise.
-///
-/// The chameleon `HICON` *is* tracked here and freed by the
-/// `Drop` impl below — that makes the icon's lifetime
-/// indistinguishable from the state's, eliminating the
-/// declaration-order fragility a separate guard would carry (a
-/// reorder that puts the guard above the box would silently let
-/// `WM_DRAWITEM` read a freed icon between the guard's drop and
-/// the box's drop).
+/// Both GDI handles it owns — the chameleon `HICON` and the bold
+/// title `HFONT` — are freed by the `Drop` impl below, which makes
+/// their lifetimes indistinguishable from the state's. That
+/// eliminates the declaration-order fragility separate RAII guards
+/// carried (a reorder putting a guard above the box would silently
+/// let `WM_DRAWITEM` read a freed icon), and it is *required* since
+/// the `#32770` migration: the controls are created inside
+/// `WM_INITDIALOG`, so anything they reference has to be reachable
+/// from the dialog proc rather than from the caller's frame.
 struct AboutDialogState {
     /// HWND of the URL link STATIC. The `wnd_proc` compares `wparam`
     /// against this on `WM_SETCURSOR` to switch to `IDC_HAND`, and
@@ -8838,8 +8807,24 @@ struct AboutDialogState {
     owner_hwnd: HWND,
     /// Home URL, owned as a UTF-16 string so `ShellExecuteW` can
     /// take a `PCWSTR` directly. The `HSTRING` keeps the buffer
-    /// alive across the call.
+    /// alive across the call, and `build_about_controls` uses it as
+    /// the link STATIC's text.
     home_url: HSTRING,
+    /// Pre-formatted "Code++ vX.Y.Z (64-bit)" title line, and the
+    /// MIT licence body. Both are owned here because the controls
+    /// are created inside `WM_INITDIALOG`, which can only reach the
+    /// caller's data through this struct.
+    title_text: HSTRING,
+    license_text: HSTRING,
+    /// Bold title `HFONT`, freed by the `Drop` impl below.
+    ///
+    /// Before the `#32770` migration this was a separate
+    /// `GdiObjectGuard` in `show_about_dialog`'s frame, which was
+    /// sound only because the controls were created in that same
+    /// frame. They are now created from the dialog proc, so owning
+    /// the handle here keeps its lifetime tied to the one thing the
+    /// proc can actually see.
+    title_font: HFONT,
     /// Chameleon `HICON` for the owner-draw STATIC. Loaded once
     /// by `show_about_dialog`; the `wnd_proc` reads it on every
     /// `WM_DRAWITEM` for the icon control. Drawn via `DrawIconEx`
@@ -8852,11 +8837,11 @@ struct AboutDialogState {
     app_icon: HICON,
     /// HWND of the "MIT License" caption STATIC that sits over
     /// the etched frame's top edge. `WM_CTLCOLORSTATIC` compares
-    /// `lparam` against this handle to return `dialog_bg_brush`
-    /// (opaque background) for this label only, so the label
+    /// `lparam` against this handle to return an opaque
+    /// `dialog_face_brush` for this label only, so the label
     /// paints a solid rectangle over the frame line and visually
-    /// breaks it. Every other STATIC still returns `NULL_BRUSH`
-    /// (transparent).
+    /// breaks it. Every other STATIC falls through to
+    /// `DefDlgProc`.
     lic_title_hwnd: HWND,
 }
 
@@ -8866,48 +8851,55 @@ impl Drop for AboutDialogState {
             if !self.app_icon.is_invalid() {
                 let _ = DestroyIcon(self.app_icon);
             }
+            if !self.title_font.is_invalid() {
+                let _ = DeleteObject(self.title_font.into());
+            }
         }
     }
 }
 
-extern "system" fn about_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
-    // Same panic-catch wrapper as the other dialog wnd_procs —
-    // unwinding across `extern "system"` is UB. On panic fall back
-    // to DefWindowProcW which is the natural no-op for unhandled
-    // messages.
+/// Dialog procedure for the About box.
+///
+/// `BOOL` semantics: nonzero means handled, zero hands the message to
+/// `DefDlgProc`. As with the other migrated dialogs, the `WM_CLOSE`
+/// arm and all the owner-re-enable bookkeeping are gone — `EndDialog`
+/// does that — and so is the `WM_ERASEBKGND` override, because the
+/// dialog now paints itself in the system dialog colour.
+extern "system" fn about_dlg_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> isize {
+    // Same panic-catch wrapper as the other dialog procs — unwinding
+    // across `extern "system"` is UB. On panic report "not handled",
+    // which is the natural no-op.
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
         match msg {
-            WM_NCCREATE => {
-                let cs = lparam.0 as *const CREATESTRUCTW;
-                if !cs.is_null() {
-                    let state_ptr = (*cs).lpCreateParams as isize;
-                    SetWindowLongPtrW(hwnd, GWLP_USERDATA, state_ptr);
+            WM_INITDIALOG => {
+                SetWindowLongPtrW(hwnd, GWLP_USERDATA, lparam.0);
+                let state_ptr = lparam.0 as *mut AboutDialogState;
+                if state_ptr.is_null() {
+                    let _ = EndDialog(hwnd, IDCANCEL.0 as isize);
+                    return 1;
                 }
-                DefWindowProcW(hwnd, msg, wparam, lparam)
+                let state = &mut *state_ptr;
+                if let Some(ok_btn) = build_about_controls(hwnd, state) {
+                    let _ = SetFocus(Some(ok_btn));
+                    // FALSE: focus was assigned above.
+                    0
+                } else {
+                    let _ = EndDialog(hwnd, IDCANCEL.0 as isize);
+                    1
+                }
             }
             WM_COMMAND => {
                 let cmd = (wparam.0 & 0xFFFF) as i32;
                 let notif = ((wparam.0 >> 16) & 0xFFFF) as u32;
                 if cmd == IDOK.0 || cmd == IDCANCEL.0 {
-                    // Re-enable the owner BEFORE destroying the
-                    // dialog. If we destroy first, Windows looks
-                    // for the next-eligible activation target —
-                    // the disabled owner is skipped and focus
-                    // falls through to whatever else is in
-                    // z-order, including other apps. Re-enabling
-                    // first means the owner is the natural
-                    // activation target when the dialog
-                    // disappears. The `OwnerEnableGuard` below
-                    // still runs on scope exit; calling
-                    // `EnableWindow(true)` on an already-enabled
-                    // window is a documented no-op.
-                    let state_ptr =
-                        GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *const AboutDialogState;
-                    if !state_ptr.is_null() {
-                        let _ = EnableWindow((*state_ptr).owner_hwnd, true);
-                    }
-                    let _ = DestroyWindow(hwnd);
-                    LRESULT(0)
+                    // OK, Escape, and the title-bar X all land here.
+                    // The owner-activation dance the pre-migration
+                    // proc performed at three call sites — re-enable
+                    // the owner *before* destroying, or activation
+                    // falls through z-order to another app — is
+                    // `EndDialog`'s job now.
+                    let _ = EndDialog(hwnd, cmd as isize);
+                    1
                 } else if cmd == i32::from(IDC_ABOUT_HOME_LINK) && notif == STN_CLICKED {
                     // URL static was clicked — open the home page
                     // in the user's default browser.
@@ -8923,9 +8915,9 @@ extern "system" fn about_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                             SW_SHOWNORMAL,
                         );
                     }
-                    LRESULT(0)
+                    1
                 } else {
-                    DefWindowProcW(hwnd, msg, wparam, lparam)
+                    0
                 }
             }
             WM_DRAWITEM => {
@@ -8934,7 +8926,7 @@ extern "system" fn about_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                 // built-in paint because the SS_ICON path on
                 // Win11 strips 32bpp alpha and surfaces
                 // transparent pixels as black against the dialog
-                // background. Painting the dialog brush first,
+                // background. Painting the dialog face first,
                 // then `DrawIconEx(DI_NORMAL)`, gives the system
                 // a clean backdrop and lets it composite the
                 // icon's alpha channel correctly.
@@ -8946,13 +8938,18 @@ extern "system" fn about_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                         // id, even if `state_ptr` is unexpectedly
                         // null or the icon failed to load. Windows
                         // does not retry `WM_DRAWITEM` for an
-                        // owner-draw STATIC, and falling through
-                        // to `DefWindowProcW` would leave the
-                        // control area unpainted.
+                        // owner-draw STATIC, and reporting
+                        // "unhandled" would leave the control area
+                        // unpainted.
                         let state_ptr =
                             GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *const AboutDialogState;
                         if !state_ptr.is_null() {
-                            FillRect(dis.hDC, &raw const dis.rcItem, dialog_bg_brush());
+                            // `dialog_face_brush`, not
+                            // `dialog_bg_brush`: this rectangle sits
+                            // inside a `#32770` client area, so it
+                            // has to match what `DefDlgProc` painted
+                            // around it.
+                            FillRect(dis.hDC, &raw const dis.rcItem, dialog_face_brush());
                             let icon = (*state_ptr).app_icon;
                             if !icon.is_invalid() {
                                 let w = dis.rcItem.right - dis.rcItem.left;
@@ -8970,24 +8967,22 @@ extern "system" fn about_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                                 );
                             }
                         }
-                        return LRESULT(1);
+                        return 1;
                     }
                 }
-                DefWindowProcW(hwnd, msg, wparam, lparam)
+                0
             }
             WM_NCDESTROY => {
                 // Defensive: zero `GWLP_USERDATA` so any stray
-                // message that races between `DestroyWindow`
-                // returning and the modal pump's `IsWindow`
-                // break can't deref the dangling state pointer.
-                // The `Box<AboutDialogState>` itself is owned by
-                // the stack frame in `show_about_dialog` and
-                // drops on function return, which always happens
-                // *after* `DestroyWindow` synchronously delivers
-                // `WM_NCDESTROY` — so the pointer is still valid
-                // at the moment we zero it.
+                // message delivered after `EndDialog` has unwound
+                // the modal loop cannot deref the dangling state
+                // pointer. The `Box<AboutDialogState>` is owned by
+                // the stack frame in `show_about_dialog` and drops
+                // on function return, which always happens *after*
+                // the dialog is destroyed — so the pointer is still
+                // valid at the moment we zero it.
                 SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
-                DefWindowProcW(hwnd, msg, wparam, lparam)
+                0
             }
             WM_SETCURSOR => {
                 // wparam carries the HWND of the child currently
@@ -9001,86 +8996,55 @@ extern "system" fn about_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                         if let Ok(cursor) = LoadCursorW(None, IDC_HAND) {
                             let _ = SetCursor(Some(cursor));
                         }
-                        return LRESULT(1);
+                        // A dialog proc cannot return a value
+                        // directly for messages whose result is not
+                        // a brush: `DefDlgProc` uses the BOOL return
+                        // only to decide whether it should handle the
+                        // message. The real `LRESULT` goes through
+                        // `DWLP_MSGRESULT`, and `WM_SETCURSOR` needs
+                        // TRUE there to suppress the default cursor.
+                        SetWindowLongPtrW(hwnd, WINDOW_LONG_PTR_INDEX(DWLP_MSGRESULT as i32), 1);
+                        return 1;
                     }
                 }
-                DefWindowProcW(hwnd, msg, wparam, lparam)
-            }
-            WM_CLOSE => {
-                // Same activation-handoff fix as IDOK/IDCANCEL:
-                // the title-bar X reaches us as `WM_CLOSE`, and
-                // destroying the dialog while the owner is still
-                // disabled would leak focus to whatever sits next
-                // in z-order (often another app). Re-enable the
-                // owner first so activation returns to the editor.
-                let state_ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *const AboutDialogState;
-                if !state_ptr.is_null() {
-                    let _ = EnableWindow((*state_ptr).owner_hwnd, true);
-                }
-                let _ = DestroyWindow(hwnd);
-                LRESULT(0)
-            }
-            // Same Win11-themed-paint workaround as the Goto and
-            // Find/Replace dialogs: the system theme service
-            // overrides our class hbrBackground for `WS_POPUP` +
-            // `WS_CAPTION` windows. Painting the client rect
-            // ourselves and returning 1 keeps the dialog body in
-            // our chosen colour.
-            WM_ERASEBKGND => {
-                let hdc = HDC(wparam.0 as *mut c_void);
-                let mut rect = RECT::default();
-                let _ = GetClientRect(hwnd, &raw mut rect);
-                FillRect(hdc, &raw const rect, dialog_bg_brush());
-                LRESULT(1)
+                0
             }
             WM_CTLCOLORSTATIC => {
                 // Most STATICs (title line, home-URL row, license
-                // body, etched frame) paint on a transparent
-                // background so the dialog fill shows through.
-                // Exception: the "MIT License" caption sitting on
-                // top of the etched frame's top edge — that one
-                // needs an opaque `dialog_bg_brush` return so its
-                // rect covers the frame line at the caption's
-                // position and visually breaks it. Same rect
-                // (from the STATIC's own client area) is used as
-                // both the text background and the returned
-                // brush, keeping the caption's paint fully in
-                // its own bounds. Colour the URL STATIC
-                // hyperlink-blue (RGB 0,0,238 → COLORREF
-                // 0x00EE0000); others keep the system text
-                // colour.
+                // body, etched frame) fall through to `DefDlgProc`,
+                // which supplies the themed dialog brush.
+                //
+                // Two exceptions. The "MIT License" caption sits on
+                // top of the etched frame's top edge and must paint
+                // an *opaque* rect so it covers the frame line at
+                // the caption's position and visually breaks it —
+                // `DefDlgProc`'s brush would do that too, but the
+                // background colour has to be set explicitly
+                // alongside it because the shared arm below turns
+                // the background mode transparent for the link.
+                // And the URL STATIC is coloured hyperlink-blue
+                // (RGB 0,0,238 -> COLORREF 0x00EE0000).
                 let hdc = HDC(wparam.0 as *mut c_void);
                 let target = HWND(lparam.0 as *mut c_void);
                 let state_ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *const AboutDialogState;
-                if !state_ptr.is_null() && target == (*state_ptr).lic_title_hwnd {
-                    let _ = SetBkColor(hdc, COLORREF(DIALOG_BG));
-                    return LRESULT(dialog_bg_brush().0 as isize);
+                if state_ptr.is_null() {
+                    return 0;
                 }
-                let _ = SetBkMode(hdc, TRANSPARENT);
-                if !state_ptr.is_null() && target == (*state_ptr).link_hwnd {
+                if target == (*state_ptr).lic_title_hwnd {
+                    let _ = SetBkColor(hdc, COLORREF(GetSysColor(COLOR_3DFACE)));
+                    return dialog_face_brush().0 as isize;
+                }
+                if target == (*state_ptr).link_hwnd {
+                    let _ = SetBkMode(hdc, TRANSPARENT);
                     let _ = SetTextColor(hdc, COLORREF(0x00EE_0000));
+                    return dialog_face_brush().0 as isize;
                 }
-                LRESULT(GetStockObject(NULL_BRUSH).0 as isize)
+                0
             }
-            WM_CTLCOLORBTN => {
-                // No `BS_GROUPBOX` in this dialog anymore (frame
-                // is `SS_ETCHEDFRAME` on a STATIC), so the only
-                // buttons routing through here are the themed OK
-                // push button — which paints itself and ignores
-                // the brush return. Match the transparent-BkMode
-                // + `NULL_BRUSH` pattern the other dialogs use
-                // for pushbuttons.
-                let hdc = HDC(wparam.0 as *mut c_void);
-                let _ = SetBkMode(hdc, TRANSPARENT);
-                LRESULT(GetStockObject(NULL_BRUSH).0 as isize)
-            }
-            _ => DefWindowProcW(hwnd, msg, wparam, lparam),
+            _ => 0,
         }
     }));
-    match result {
-        Ok(lr) => lr,
-        Err(_) => unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) },
-    }
+    result.unwrap_or(0)
 }
 
 /// Body of the MIT license box. Sourced from `LICENSE` at the repo
@@ -9661,93 +9625,37 @@ unsafe fn handle_style_config_menu(main_hwnd: HWND) {
     }
 }
 
-/// Open the Style Configurator dialog modally over `owner`.
-/// Returns `Some(styles)` if the user clicked Save & Close,
-/// `None` on Cancel / X / Esc.
-fn show_style_config_dialog(
-    owner: HWND,
-    initial: codepp_core::styles::Styles,
-) -> Option<codepp_core::styles::Styles> {
-    use std::sync::OnceLock;
-    static REGISTERED: OnceLock<()> = OnceLock::new();
+/// Client-area size of the Style Configurator, in pixels.
+const STYLE_CONFIG_CLIENT_W: i32 = 680;
+const STYLE_CONFIG_CLIENT_H: i32 = 380;
 
+/// Create the Style Configurator's child controls and seed them from
+/// the working style on `state`.
+///
+/// Runs inside `WM_INITDIALOG`. Returns the Save button's HWND so the
+/// caller can give it initial focus, or `None` if any child could not
+/// be created.
+unsafe fn build_style_config_controls(
+    dlg: HWND,
+    state: &mut StyleConfigDialogState,
+) -> Option<HWND> {
     unsafe {
         let instance = GetModuleHandleW(None).ok()?;
-        REGISTERED.get_or_init(|| {
-            let class = WNDCLASSEXW {
-                cbSize: std::mem::size_of::<WNDCLASSEXW>() as u32,
-                style: CS_HREDRAW | CS_VREDRAW,
-                lpfnWndProc: Some(style_config_wnd_proc),
-                hInstance: instance.into(),
-                hCursor: LoadCursorW(None, IDC_ARROW).unwrap_or_default(),
-                hbrBackground: dialog_bg_brush(),
-                lpszClassName: STYLE_CONFIG_CLASS,
-                ..Default::default()
-            };
-            let _ = RegisterClassExW(&raw const class);
-        });
 
-        let initial_default = initial.effective_default();
-        let initial_transparency = initial.effective_transparency();
-        let mut state = Box::new(StyleConfigDialogState {
-            owner_hwnd: owner,
-            result: None,
-            working: initial_default.clone(),
-            working_transparency: initial_transparency.clone(),
-            fg_button: HWND::default(),
-            bg_button: HWND::default(),
-            font_combo: HWND::default(),
-            size_combo: HWND::default(),
-            bold_check: HWND::default(),
-            italic_check: HWND::default(),
-            underline_check: HWND::default(),
-            transparency_check: HWND::default(),
-            transparency_slider: HWND::default(),
-        });
-        let state_ptr: *mut StyleConfigDialogState = &raw mut *state;
-
-        // Layout. CLIENT-space; we AdjustWindowRectEx once to
-        // get the outer window size for `CreateWindowExW`.
-        const CLIENT_W: i32 = 680;
-        const CLIENT_H: i32 = 380;
-
-        let mut window_rect = RECT {
-            left: 0,
-            top: 0,
-            right: CLIENT_W,
-            bottom: CLIENT_H,
-        };
-        let _ = AdjustWindowRectEx(
-            &raw mut window_rect,
-            WS_POPUP | WS_CAPTION | WS_SYSMENU,
-            false,
-            WS_EX_DLGMODALFRAME | WS_EX_CONTROLPARENT,
+        dlgtemplate::size_client_and_center(
+            dlg,
+            state.owner_hwnd,
+            STYLE_CONFIG_CLIENT_W,
+            STYLE_CONFIG_CLIENT_H,
         );
-        let dlg_w = window_rect.right - window_rect.left;
-        let dlg_h = window_rect.bottom - window_rect.top;
-        let mut owner_rect = RECT::default();
-        let _ = GetWindowRect(owner, &raw mut owner_rect);
-        let owner_w = owner_rect.right - owner_rect.left;
-        let owner_h = owner_rect.bottom - owner_rect.top;
-        let dlg_x = owner_rect.left + (owner_w - dlg_w) / 2;
-        let dlg_y = owner_rect.top + (owner_h - dlg_h) / 2;
 
-        let dlg = CreateWindowExW(
-            WS_EX_DLGMODALFRAME | WS_EX_CONTROLPARENT,
-            STYLE_CONFIG_CLASS,
-            w!("Style Configurator"),
-            WS_POPUP | WS_CAPTION | WS_SYSMENU,
-            dlg_x,
-            dlg_y,
-            dlg_w,
-            dlg_h,
-            Some(owner),
-            None,
-            Some(instance.into()),
-            Some(state_ptr.cast::<c_void>()),
-        )
-        .ok()?;
-        let _dlg_guard = DlgDestroyGuard(dlg);
+        // The control-seeding code below reads the incoming style
+        // through these two names, which is what they were called
+        // when this ran in `show_style_config_dialog`. They are
+        // cloned out of `state` rather than borrowed because the
+        // same block also assigns the control HWNDs back onto it.
+        let initial_default = state.working.clone();
+        let initial_transparency = state.working_transparency.clone();
 
         let font = HFONT(GetStockObject(DEFAULT_GUI_FONT).0);
 
@@ -10322,24 +10230,16 @@ fn show_style_config_dialog(
         ] {
             apply_dialog_font(child, font);
         }
-        // Strip visual style off the four checkboxes so they
-        // paint on the classic BUTTON path that honours the
-        // dialog's WM_CTLCOLORBTN return (`dialog_bg_brush`),
-        // giving them the same chrome colour as the surrounding
-        // dialog instead of the themed COLOR_BTNFACE (~#F0F0F0)
-        // patch. The two frames are now SS_ETCHEDFRAME STATICs
-        // (not BS_GROUPBOX buttons), so they never had the
-        // theme-paint problem to begin with. Push buttons
-        // (Save, Cancel) deliberately keep their visual style
-        // for the Win11 rounded look.
-        for child in [
-            bold_check,
-            italic_check,
-            underline_check,
-            transparency_check,
-        ] {
-            disable_visual_style(child);
-        }
+        // NOTE: the four checkboxes deliberately keep their visual
+        // style. Before the `#32770` migration they were stripped
+        // with `disable_visual_style` so their themed background
+        // (drawn at `COLOR_3DFACE`) would not sit as a darker patch
+        // on a dialog whose class brush was a hardcoded `#F9F9F9`.
+        // `DefDlgProc` paints the dialog at the same system colour
+        // the themed controls use, so they blend as-is and keep the
+        // Win11 look. The two frames are `SS_ETCHEDFRAME` STATICs
+        // (not `BS_GROUPBOX` buttons), so they never had the
+        // theme-paint problem to begin with.
 
         // Stash control HWNDs onto the state so the wnd_proc
         // can read/update them.
@@ -10352,35 +10252,52 @@ fn show_style_config_dialog(
         state.underline_check = underline_check;
         state.transparency_check = transparency_check;
         state.transparency_slider = transparency_slider;
+        Some(save_btn)
+    }
+}
 
-        // Disable the owner so the dialog is genuinely modal,
-        // then guard the re-enable so a Win32 destruction path
-        // never leaves the parent inert.
-        let _ = EnableWindow(owner, false);
-        let _owner_guard = OwnerEnableGuard(owner);
-        let _ = ShowWindow(dlg, SW_SHOW);
-        let _ = SetFocus(Some(save_btn));
+/// Show the modal Style Configurator and return the edited styles, or
+/// `None` if the user cancelled.
+fn show_style_config_dialog(
+    owner: HWND,
+    initial: codepp_core::styles::Styles,
+) -> Option<codepp_core::styles::Styles> {
+    unsafe {
+        let instance = GetModuleHandleW(None).ok()?;
 
-        let mut msg = MSG::default();
-        loop {
-            if !IsWindow(Some(dlg)).as_bool() {
-                break;
-            }
-            let ret = GetMessageW(&raw mut msg, None, 0, 0);
-            match ret.0 {
-                0 => {
-                    let _ = PostMessageW(None, WM_QUIT, msg.wParam, msg.lParam);
-                    break;
-                }
-                -1 => break,
-                _ => {
-                    if !IsDialogMessageW(dlg, &raw const msg).as_bool() {
-                        let _ = TranslateMessage(&raw const msg);
-                        DispatchMessageW(&raw const msg);
-                    }
-                }
-            }
-        }
+        let mut state = Box::new(StyleConfigDialogState {
+            owner_hwnd: owner,
+            result: None,
+            working: initial.effective_default(),
+            working_transparency: initial.effective_transparency(),
+            fg_button: HWND::default(),
+            bg_button: HWND::default(),
+            font_combo: HWND::default(),
+            size_combo: HWND::default(),
+            bold_check: HWND::default(),
+            italic_check: HWND::default(),
+            underline_check: HWND::default(),
+            transparency_check: HWND::default(),
+            transparency_slider: HWND::default(),
+        });
+        let state_ptr: *mut StyleConfigDialogState = &raw mut *state;
+
+        let template = dlgtemplate::DialogTemplate::new(
+            "Style Configurator",
+            dlgtemplate::dialog_style(),
+            WS_EX_CONTROLPARENT.0,
+            340,
+            180,
+        )
+        .finish();
+
+        let _ = dlgtemplate::run_modal(
+            instance,
+            &template,
+            owner,
+            Some(style_config_dlg_proc),
+            state_ptr as isize,
+        );
 
         state.result.take()
     }
@@ -10486,41 +10403,52 @@ unsafe fn paint_color_square(state: &StyleConfigDialogState, dis: *const DRAWITE
     }
 }
 
-/// Window procedure for the Style Configurator dialog. Handles
-/// the typical create / draw / command / destroy lifecycle plus
-/// `WM_HSCROLL` for the transparency slider.
-unsafe extern "system" fn style_config_wnd_proc(
+/// Dialog procedure for the Style Configurator. Handles the
+/// create / draw / command lifecycle plus `WM_HSCROLL` for the
+/// transparency slider.
+///
+/// `BOOL` semantics: nonzero means handled, zero hands the message to
+/// `DefDlgProc`.
+unsafe extern "system" fn style_config_dlg_proc(
     hwnd: HWND,
     msg: u32,
     wparam: WPARAM,
     lparam: LPARAM,
-) -> LRESULT {
-    // FFI panic safety: same `catch_unwind` wrap every other
-    // wnd_proc in this file uses. A panic inside the inner
-    // dispatch would otherwise unwind across the
-    // `extern "system"` boundary (documented UB).
-    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
-        style_config_wnd_proc_inner(hwnd, msg, wparam, lparam)
-    })) {
-        Ok(lr) => lr,
-        Err(_) => unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) },
-    }
+) -> isize {
+    // FFI panic safety: same `catch_unwind` wrap every other dialog
+    // proc in this file uses. A panic inside the inner dispatch
+    // would otherwise unwind across the `extern "system"` boundary
+    // (documented UB).
+    // `unwrap_or_default` is 0 for `isize`, which is the
+    // "not handled" answer a dialog proc gives.
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
+        style_config_dlg_proc_inner(hwnd, msg, wparam, lparam)
+    }))
+    .unwrap_or_default()
 }
 
-unsafe extern "system" fn style_config_wnd_proc_inner(
+unsafe fn style_config_dlg_proc_inner(
     hwnd: HWND,
     msg: u32,
     wparam: WPARAM,
     lparam: LPARAM,
-) -> LRESULT {
+) -> isize {
     match msg {
-        WM_NCCREATE => unsafe {
-            let cs = lparam.0 as *const CREATESTRUCTW;
-            if !cs.is_null() {
-                let state_ptr = (*cs).lpCreateParams as isize;
-                SetWindowLongPtrW(hwnd, GWLP_USERDATA, state_ptr);
+        WM_INITDIALOG => unsafe {
+            SetWindowLongPtrW(hwnd, GWLP_USERDATA, lparam.0);
+            let state_ptr = lparam.0 as *mut StyleConfigDialogState;
+            if state_ptr.is_null() {
+                let _ = EndDialog(hwnd, IDCANCEL.0 as isize);
+                return 1;
             }
-            DefWindowProcW(hwnd, msg, wparam, lparam)
+            if let Some(save_btn) = build_style_config_controls(hwnd, &mut *state_ptr) {
+                let _ = SetFocus(Some(save_btn));
+                // FALSE: focus was assigned above.
+                0
+            } else {
+                let _ = EndDialog(hwnd, IDCANCEL.0 as isize);
+                1
+            }
         },
         WM_DRAWITEM => unsafe {
             let dis = lparam.0 as *const DRAWITEMSTRUCT;
@@ -10528,71 +10456,34 @@ unsafe extern "system" fn style_config_wnd_proc_inner(
             if !dis.is_null() && !state_ptr.is_null() {
                 paint_color_square(&*state_ptr, dis);
             }
-            LRESULT(1)
+            1
         },
-        // Same Win11 themed-paint override as goto_wnd_proc:
-        // paint the client rect with `dialog_bg_brush` so the
-        // dialog body renders our chosen chrome colour instead
-        // of whatever UxTheme paints over the class brush.
-        // Without this handler + the CTL COLOR handlers below,
-        // `disable_visual_style` on the group boxes / checkboxes
-        // wouldn't take effect — DefWindowProc would fill their
-        // client rects with the classic COLOR_BTNFACE
-        // (~#F0F0F0) default, producing the darker patches
-        // around each control the user reported.
-        WM_ERASEBKGND => unsafe {
-            let hdc = HDC(wparam.0 as *mut c_void);
-            let mut rect = RECT::default();
-            let _ = GetClientRect(hwnd, &raw mut rect);
-            FillRect(hdc, &raw const rect, dialog_bg_brush());
-            LRESULT(1)
-        },
-        // Return `dialog_bg_brush` (a REAL solid brush, not
-        // NULL_BRUSH) so:
+        // The two `SS_ETCHEDFRAME` caption STATICs ("Colour Style",
+        // "Font Style") need an *opaque* fill so their client rect
+        // breaks the frame's top border line at the caption position
+        // — the About-dialog pattern. `DefDlgProc` returns exactly
+        // that brush, so the arm only has to force the background
+        // colour to match it and hand the same brush back.
         //
-        //   * The SS_ETCHEDFRAME caption STATICs
-        //     ("Colour Style", "Font Style") get their client
-        //     rect filled with chrome colour, breaking the
-        //     frame's top border line at the caption position
-        //     — the About-dialog pattern.
-        //   * The transparency slider (msctls_trackbar32) has
-        //     a valid erase brush for its background. A
-        //     NULL_BRUSH return leaves the slider unable to
-        //     clear pixels between drag frames, producing the
-        //     visible pixel garble the user reported.
-        //   * Any STATIC that later gets updated via
-        //     SetWindowTextW (dynamic hint text, etc.) has a
-        //     real brush to erase the previous text with,
-        //     avoiding stacked glyph ghosts.
-        //
-        // SetBkMode(TRANSPARENT) keeps text overlays clean on
-        // top of the brush-filled background.
+        // Returning a real brush rather than `NULL_BRUSH` also
+        // matters for the transparency slider
+        // (`msctls_trackbar32`): a `NULL_BRUSH` leaves it unable to
+        // clear pixels between drag frames, which is the visible
+        // pixel garble a user reported before this arm existed.
         WM_CTLCOLORSTATIC => unsafe {
             let hdc = HDC(wparam.0 as *mut c_void);
-            let _ = SetBkMode(hdc, TRANSPARENT);
-            LRESULT(dialog_bg_brush().0 as isize)
+            let _ = SetBkColor(hdc, COLORREF(GetSysColor(COLOR_3DFACE)));
+            dialog_face_brush().0 as isize
         },
-        // Classic-painted BUTTON controls (group boxes,
-        // checkboxes — see `disable_visual_style` calls in
-        // `show_style_config_dialog`) get `dialog_bg_brush` so
-        // their client rects fill with the chrome colour BEFORE
-        // the button paints its text on top. Same treatment the
-        // Preferences / Find-Replace / Goto dialogs use — the
-        // solid-brush return prevents glyph stacking on toggle
-        // that a `NULL_BRUSH` return would cause.
-        WM_CTLCOLORBTN => unsafe {
-            let hdc = HDC(wparam.0 as *mut c_void);
-            let _ = SetBkMode(hdc, TRANSPARENT);
-            let _ = SetBkColor(hdc, COLORREF(DIALOG_BG));
-            LRESULT(dialog_bg_brush().0 as isize)
-        },
-        // Comboboxes and listbox keep their standard white
-        // interior — that's the modern Win11 themed-control
-        // look users expect for editable fields.
+        // Comboboxes and the listbox keep their standard white
+        // interior — that's the modern Win11 themed-control look
+        // users expect for editable fields. `DefDlgProc` would
+        // supply the same window brush for `WM_CTLCOLOREDIT`, but
+        // not for `WM_CTLCOLORLISTBOX`, so both stay explicit.
         WM_CTLCOLOREDIT | WM_CTLCOLORLISTBOX => unsafe {
             let hdc = HDC(wparam.0 as *mut c_void);
             let _ = SetBkMode(hdc, TRANSPARENT);
-            LRESULT(GetSysColorBrush(COLOR_WINDOW).0 as isize)
+            GetSysColorBrush(COLOR_WINDOW).0 as isize
         },
         WM_HSCROLL => unsafe {
             let state_ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut StyleConfigDialogState;
@@ -10604,19 +10495,19 @@ unsafe extern "system" fn style_config_wnd_proc_inner(
                     (*state_ptr).working_transparency.percent = clamped;
                 }
             }
-            LRESULT(0)
+            1
         },
         WM_COMMAND => unsafe {
             let cid = (wparam.0 & 0xFFFF) as u16;
             let notif = ((wparam.0 >> 16) & 0xFFFF) as u16;
             let state_ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut StyleConfigDialogState;
             if state_ptr.is_null() {
-                return LRESULT(0);
+                return 0;
             }
             let state = &mut *state_ptr;
             match cid {
                 IDC_STYLE_FG_BUTTON | IDC_STYLE_BG_BUTTON if notif == BN_CLICKED as u16 => {
-                    // Resolve current colour for ChooseColor seeding.
+                    // Resolve current colour for the picker's seeding.
                     let initial = if cid == IDC_STYLE_FG_BUTTON {
                         codepp_core::styles::parse_rgb_hex(&state.working.fg).unwrap_or((0, 0, 0))
                     } else {
@@ -10672,59 +10563,42 @@ unsafe extern "system" fn style_config_wnd_proc_inner(
                         state.working.font_size = n;
                     }
                 }
-                // The explicit `EnableWindow(owner, true)` calls in
-                // these handlers are intentional alongside the
-                // outer `OwnerEnableGuard`. The guard fires when
-                // the function returns (after the modal pump
-                // exits) — but Win32 dispatches the next
-                // foreground-window decision the moment
-                // `DestroyWindow` runs, which is *before* the
-                // outer function unwinds. Without the explicit
-                // pre-destroy enable, the next window in z-order
-                // briefly receives focus before the guard's
-                // re-enable fixes it on return. The double
-                // `EnableWindow(true)` is idempotent (Win32
-                // documents it as a no-op when the state is
-                // already enabled) so the redundancy is cheap.
                 IDC_STYLE_SAVE_CLOSE => {
                     state.result = Some(codepp_core::styles::Styles {
                         default: Some(state.working.clone()),
                         transparency: Some(state.working_transparency.clone()),
                     });
-                    let _ = EnableWindow(state.owner_hwnd, true);
-                    let _ = DestroyWindow(hwnd);
+                    let _ = EndDialog(hwnd, IDOK.0 as isize);
                 }
-                // OR-in `IDCANCEL_U16` so the Esc key closes the
-                // dialog too — `IsDialogMessageW` in the modal
-                // pump above translates Esc into a
-                // `WM_COMMAND(IDCANCEL)`, and without this arm the
-                // synthesised id (2) doesn't match our custom
-                // Cancel-button id (811) and the keystroke gets
-                // dropped by the `_ => {}` fall-through. Same
-                // pattern the Find/Replace dialog uses
-                // (`IDC_FR_CLOSE | IDCANCEL_U16`).
+                // OR-in `IDCANCEL_U16` so Escape and the title-bar
+                // X close the dialog too — `DefDlgProc` synthesises
+                // a `WM_COMMAND(IDCANCEL)` for both, and without
+                // this arm the synthesised id (2) would not match
+                // our custom Cancel-button id (811) and the
+                // keystroke would be dropped by the `_ => {}`
+                // fall-through. Same pattern the Find/Replace
+                // dialog uses (`IDC_FR_CLOSE | IDCANCEL_U16`).
+                //
+                // The explicit `EnableWindow(owner, true)` these two
+                // arms used to carry before the `#32770` migration
+                // is gone: it existed because `DestroyWindow` let
+                // Win32 pick the next foreground window *before* the
+                // outer `OwnerEnableGuard` ran on function return.
+                // `EndDialog` re-enables and re-activates the owner
+                // itself, in the right order.
                 IDC_STYLE_CANCEL | IDCANCEL_U16 => {
                     state.result = None;
-                    let _ = EnableWindow(state.owner_hwnd, true);
-                    let _ = DestroyWindow(hwnd);
+                    let _ = EndDialog(hwnd, IDCANCEL.0 as isize);
                 }
-                _ => {}
+                _ => return 0,
             }
-            LRESULT(0)
-        },
-        WM_CLOSE => unsafe {
-            let state_ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut StyleConfigDialogState;
-            if !state_ptr.is_null() {
-                let _ = EnableWindow((*state_ptr).owner_hwnd, true);
-            }
-            let _ = DestroyWindow(hwnd);
-            LRESULT(0)
+            1
         },
         WM_NCDESTROY => unsafe {
             SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
-            DefWindowProcW(hwnd, msg, wparam, lparam)
+            0
         },
-        _ => unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) },
+        _ => 0,
     }
 }
 
@@ -11949,36 +11823,25 @@ fn sanitize_menu_label(s: &str) -> String {
 /// Show the "About Code++" dialog modally. `main_hwnd` is the
 /// owner; the dialog disables the owner for the duration of the
 /// modal pump and restores it via the existing `OwnerEnableGuard`.
-fn show_about_dialog(main_hwnd: HWND) {
-    use std::sync::OnceLock;
-    static REGISTERED: OnceLock<()> = OnceLock::new();
+/// Client-area size of the About box, in pixels.
+///
+/// Tight enough to feel at home next to N++'s About box, wide enough
+/// that the license body wraps to ~5 lines.
+const ABOUT_CLIENT_W: i32 = 480;
+const ABOUT_CLIENT_H: i32 = 460;
 
+/// Create the About box's child controls.
+///
+/// Runs inside `WM_INITDIALOG`. Returns the OK button's HWND so the
+/// caller can give it initial focus, or `None` if any child could not
+/// be created.
+unsafe fn build_about_controls(dlg: HWND, state: &mut AboutDialogState) -> Option<HWND> {
     unsafe {
-        let instance = match GetModuleHandleW(None) {
-            Ok(h) => h,
-            Err(_) => return,
-        };
+        let instance = GetModuleHandleW(None).ok()?;
 
-        REGISTERED.get_or_init(|| {
-            let class = WNDCLASSEXW {
-                cbSize: std::mem::size_of::<WNDCLASSEXW>() as u32,
-                style: CS_HREDRAW | CS_VREDRAW,
-                lpfnWndProc: Some(about_wnd_proc),
-                hInstance: instance.into(),
-                hCursor: LoadCursorW(None, IDC_ARROW).unwrap_or_default(),
-                hbrBackground: dialog_bg_brush(),
-                lpszClassName: ABOUT_CLASS,
-                ..Default::default()
-            };
-            let _ = RegisterClassExW(&raw const class);
-        });
+        dlgtemplate::size_client_and_center(dlg, state.owner_hwnd, ABOUT_CLIENT_W, ABOUT_CLIENT_H);
 
         // --- Layout (CLIENT coordinates) --------------------------
-        //
-        // Tight enough to feel at home next to N++'s About box,
-        // wide enough that the license body wraps to ~5 lines.
-        const CLIENT_W: i32 = 480;
-        const CLIENT_H: i32 = 460;
         const PAD: i32 = 18;
 
         // Top row: app icon (owner-drawn for alpha-correct paint)
@@ -11987,7 +11850,7 @@ fn show_about_dialog(main_hwnd: HWND) {
         const TOP_ICON_X: i32 = PAD;
         const TOP_ICON_Y: i32 = PAD;
         const TITLE_X: i32 = TOP_ICON_X + TOP_ICON_SIZE + 16;
-        const TITLE_W: i32 = CLIENT_W - TITLE_X - PAD;
+        const TITLE_W: i32 = ABOUT_CLIENT_W - TITLE_X - PAD;
         const TITLE_H: i32 = 28;
         // Centre the title vertically against the icon block.
         const TITLE_Y: i32 = TOP_ICON_Y + (TOP_ICON_SIZE - TITLE_H) / 2;
@@ -11999,7 +11862,7 @@ fn show_about_dialog(main_hwnd: HWND) {
         const HOME_LABEL_Y: i32 = HOME_ROW_Y + 4;
         const HOME_LABEL_W: i32 = 48;
         const HOME_LINK_X: i32 = HOME_LABEL_X + HOME_LABEL_W;
-        const HOME_LINK_W: i32 = CLIENT_W - HOME_LINK_X - PAD;
+        const HOME_LINK_W: i32 = ABOUT_CLIENT_W - HOME_LINK_X - PAD;
         const HOME_ROW_H: i32 = 22;
 
         // License frame + caption + body. Etched-frame STATIC
@@ -12013,7 +11876,7 @@ fn show_about_dialog(main_hwnd: HWND) {
         // on Win11).
         const LIC_BOX_Y: i32 = HOME_ROW_Y + HOME_ROW_H + 14;
         const LIC_BOX_X: i32 = PAD;
-        const LIC_BOX_W: i32 = CLIENT_W - 2 * PAD;
+        const LIC_BOX_W: i32 = ABOUT_CLIENT_W - 2 * PAD;
         const LIC_BOX_H: i32 = 240;
         const LIC_TEXT_X: i32 = LIC_BOX_X + 12;
         const LIC_TEXT_Y: i32 = LIC_BOX_Y + 22;
@@ -12023,39 +11886,220 @@ fn show_about_dialog(main_hwnd: HWND) {
         // OK button at the bottom, centered.
         const OK_W: i32 = 96;
         const OK_H: i32 = 28;
-        const OK_X: i32 = (CLIENT_W - OK_W) / 2;
+        const OK_X: i32 = (ABOUT_CLIENT_W - OK_W) / 2;
         const OK_Y: i32 = LIC_BOX_Y + LIC_BOX_H + 12;
 
-        // Sanity-check the layout against CLIENT_H at compile time —
-        // a future tweak that pushes the OK button off the bottom
-        // edge fails to build instead of silently clipping the
-        // button.
+        // Sanity-check the layout against ABOUT_CLIENT_H at compile
+        // time — a future tweak that pushes the OK button off the
+        // bottom edge fails to build instead of silently clipping
+        // the button.
         const _: () = {
             let bottom = OK_Y + OK_H + PAD;
-            assert!(bottom <= CLIENT_H, "About-dialog layout overflows CLIENT_H");
+            assert!(
+                bottom <= ABOUT_CLIENT_H,
+                "About-dialog layout overflows ABOUT_CLIENT_H",
+            );
         };
 
-        let mut window_rect = RECT {
-            left: 0,
-            top: 0,
-            right: CLIENT_W,
-            bottom: CLIENT_H,
-        };
-        let _ = AdjustWindowRectEx(
-            &raw mut window_rect,
-            WS_POPUP | WS_CAPTION | WS_SYSMENU,
-            false,
-            WS_EX_DLGMODALFRAME | WS_EX_CONTROLPARENT,
-        );
-        let dlg_w = window_rect.right - window_rect.left;
-        let dlg_h = window_rect.bottom - window_rect.top;
+        let default_font = HFONT(GetStockObject(DEFAULT_GUI_FONT).0);
 
-        let mut owner_rect = RECT::default();
-        let _ = GetWindowRect(main_hwnd, &raw mut owner_rect);
-        let owner_w = owner_rect.right - owner_rect.left;
-        let owner_h = owner_rect.bottom - owner_rect.top;
-        let dlg_x = owner_rect.left + (owner_w - dlg_w) / 2;
-        let dlg_y = owner_rect.top + (owner_h - dlg_h) / 2;
+        // Top app-icon STATIC: `SS_OWNERDRAW` so the dialog proc's
+        // `WM_DRAWITEM` handler paints the icon via `DrawIconEx`
+        // with `DI_NORMAL`. The default `SS_ICON` paint path on
+        // Win11 strips 32bpp alpha and surfaces transparent
+        // pixels as black, which is what made the chameleon look
+        // like it had a black backdrop in the first cut. The
+        // owner-draw path composites alpha correctly against the
+        // dialog background.
+        // The HWND is never read again — paint and click come
+        // through the parent via `WM_DRAWITEM` / `WM_COMMAND` —
+        // but the binding is required because the early-return
+        // path wants a typed `Option`. Underscore-prefixed so
+        // clippy doesn't flag it.
+        let _icon_top = CreateWindowExW(
+            WINDOW_EX_STYLE::default(),
+            w!("STATIC"),
+            PCWSTR::null(),
+            WS_CHILD | WS_VISIBLE | style_bits(SS_OWNERDRAW as i32),
+            TOP_ICON_X,
+            TOP_ICON_Y,
+            TOP_ICON_SIZE,
+            TOP_ICON_SIZE,
+            Some(dlg),
+            Some(HMENU(IDC_ABOUT_ICON as usize as *mut c_void)),
+            Some(instance.into()),
+            None,
+        )
+        .ok()?;
+
+        let title_static = CreateWindowExW(
+            WINDOW_EX_STYLE::default(),
+            w!("STATIC"),
+            &state.title_text,
+            WS_CHILD | WS_VISIBLE | style_bits(SS_LEFT as i32),
+            TITLE_X,
+            TITLE_Y,
+            TITLE_W,
+            TITLE_H,
+            Some(dlg),
+            Some(HMENU(IDC_ABOUT_TITLE as usize as *mut c_void)),
+            Some(instance.into()),
+            None,
+        )
+        .ok()?;
+
+        let home_label = CreateWindowExW(
+            WINDOW_EX_STYLE::default(),
+            w!("STATIC"),
+            w!("Home:"),
+            WS_CHILD | WS_VISIBLE | style_bits(SS_LEFT as i32),
+            HOME_LABEL_X,
+            HOME_LABEL_Y,
+            HOME_LABEL_W,
+            HOME_ROW_H - 4,
+            Some(dlg),
+            Some(HMENU(IDC_ABOUT_HOME_LABEL as usize as *mut c_void)),
+            Some(instance.into()),
+            None,
+        )
+        .ok()?;
+
+        // The clickable URL link. SS_NOTIFY makes the static fire
+        // STN_CLICKED through WM_COMMAND; the dialog proc forwards
+        // it to ShellExecuteW. WM_CTLCOLORSTATIC paints the text in
+        // hyperlink blue.
+        let link = CreateWindowExW(
+            WINDOW_EX_STYLE::default(),
+            w!("STATIC"),
+            &state.home_url,
+            WS_CHILD | WS_VISIBLE | style_bits((SS_LEFT | SS_NOTIFY) as i32),
+            HOME_LINK_X,
+            HOME_LABEL_Y,
+            HOME_LINK_W,
+            HOME_ROW_H - 4,
+            Some(dlg),
+            Some(HMENU(IDC_ABOUT_HOME_LINK as usize as *mut c_void)),
+            Some(instance.into()),
+            None,
+        )
+        .ok()?;
+
+        // License box: an etched frame with a separate caption
+        // STATIC positioned over the frame's top edge. Split
+        // rather than using `BS_GROUPBOX` because the group-box
+        // paint routine on Win11 lets the top border line run
+        // through the title text regardless of theme state or
+        // `WM_CTLCOLORBTN` return — verified across the merged
+        // (`NULL_BRUSH`), classic (solid-brush + `SetBkColor`),
+        // and font-order-swapped variants. The split gives us a
+        // frame that draws no title area to interfere with, plus
+        // a plain STATIC whose `WM_CTLCOLORSTATIC` returns an
+        // opaque brush so its painted rect covers the frame's top
+        // edge at the caption's position — same visual as a
+        // themed group-box title on other platforms, without any
+        // of the group-box paint quirks.
+        //
+        // Caption geometry: the label's vertical centre lands
+        // on the frame's top edge (`LIC_BOX_Y`) so the opaque
+        // rect breaks the line cleanly. Width is generous
+        // enough (`LIC_CAPTION_W`) to seat the label with
+        // horizontal padding either side; `SS_CENTER` keeps the
+        // text balanced inside that rect.
+        const LIC_CAPTION_TEXT_H: i32 = 18;
+        const LIC_CAPTION_W: i32 = 96;
+        const LIC_CAPTION_X: i32 = LIC_BOX_X + 12;
+        const LIC_CAPTION_Y: i32 = LIC_BOX_Y - LIC_CAPTION_TEXT_H / 2;
+        let lic_box = CreateWindowExW(
+            WINDOW_EX_STYLE::default(),
+            w!("STATIC"),
+            PCWSTR::null(),
+            WS_CHILD | WS_VISIBLE | style_bits(SS_ETCHEDFRAME as i32),
+            LIC_BOX_X,
+            LIC_BOX_Y,
+            LIC_BOX_W,
+            LIC_BOX_H,
+            Some(dlg),
+            Some(HMENU(IDC_ABOUT_LICENSE_GROUP as usize as *mut c_void)),
+            Some(instance.into()),
+            None,
+        )
+        .ok()?;
+        let lic_title = CreateWindowExW(
+            WINDOW_EX_STYLE::default(),
+            w!("STATIC"),
+            w!(" MIT License "),
+            WS_CHILD | WS_VISIBLE | style_bits((SS_CENTER | SS_CENTERIMAGE) as i32),
+            LIC_CAPTION_X,
+            LIC_CAPTION_Y,
+            LIC_CAPTION_W,
+            LIC_CAPTION_TEXT_H,
+            Some(dlg),
+            Some(HMENU(IDC_ABOUT_LICENSE_TITLE as usize as *mut c_void)),
+            Some(instance.into()),
+            None,
+        )
+        .ok()?;
+        let lic_text = CreateWindowExW(
+            WINDOW_EX_STYLE::default(),
+            w!("STATIC"),
+            &state.license_text,
+            WS_CHILD | WS_VISIBLE | style_bits(SS_LEFT as i32),
+            LIC_TEXT_X,
+            LIC_TEXT_Y,
+            LIC_TEXT_W,
+            LIC_TEXT_H,
+            Some(dlg),
+            Some(HMENU(IDC_ABOUT_LICENSE_TEXT as usize as *mut c_void)),
+            Some(instance.into()),
+            None,
+        )
+        .ok()?;
+
+        let ok_btn = CreateWindowExW(
+            WINDOW_EX_STYLE::default(),
+            w!("BUTTON"),
+            w!("OK"),
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | style_bits(BS_DEFPUSHBUTTON),
+            OK_X,
+            OK_Y,
+            OK_W,
+            OK_H,
+            Some(dlg),
+            Some(HMENU(IDOK.0 as u16 as usize as *mut c_void)),
+            Some(instance.into()),
+            None,
+        )
+        .ok()?;
+
+        // Publish both HWNDs to the dialog proc before returning so
+        // the very first `WM_SETCURSOR` / `WM_CTLCOLORSTATIC`
+        // message can resolve them.
+        state.link_hwnd = link;
+        state.lic_title_hwnd = lic_title;
+
+        // Apply fonts: bold title font for the title only, default
+        // GUI font for everything else. The owner-draw icon
+        // STATIC carries no text so it needs no font; the system
+        // STATIC class default is used for it implicitly. No
+        // `disable_visual_style` call is needed on the etched
+        // frame — `SetWindowTheme(hwnd, "", "")` targets the
+        // "Button" UxTheme class, and `STATIC` is a separate
+        // class ("Static") that renders the etched frame
+        // correctly under both themed and classic paints.
+        apply_dialog_font(title_static, state.title_font);
+        for child in [home_label, link, lic_box, lic_title, lic_text, ok_btn] {
+            apply_dialog_font(child, default_font);
+        }
+        Some(ok_btn)
+    }
+}
+
+fn show_about_dialog(main_hwnd: HWND) {
+    unsafe {
+        let instance = match GetModuleHandleW(None) {
+            Ok(h) => h,
+            Err(_) => return,
+        };
 
         // Bold title font: ~12pt at 96 DPI. `lfHeight` follows the
         // Win32 convention where a negative value is interpreted as
@@ -12080,25 +12124,14 @@ fn show_about_dialog(main_hwnd: HWND) {
         let n = utf16.len().min(title_lf.lfFaceName.len() - 1);
         title_lf.lfFaceName[..n].copy_from_slice(&utf16[..n]);
         let title_font = CreateFontIndirectW(&raw const title_lf);
-        // RAII free for the title font — covers every exit path
-        // including the child-creation `Err(_) => return` arms below.
-        let _title_font_guard = GdiObjectGuard(title_font);
-        let default_font = HFONT(GetStockObject(DEFAULT_GUI_FONT).0);
-
-        // Pre-format the title string so the heap-allocated
-        // `HSTRING` outlives `CreateWindowExW`.
-        let title_text = format!("Code++ v{}    ({})", env!("CARGO_PKG_VERSION"), ABOUT_ARCH);
-        let title_text_w = HSTRING::from(title_text);
-        let home_url = HSTRING::from("https://code-plus-plus.org/");
-        let license_w = HSTRING::from(ABOUT_LICENSE_BODY);
 
         // Load the chameleon icon once for the owner-draw STATIC.
         // 80px request maps to the 64 or 128 px BMP entry inside
         // `code++.ico`; either is 32bpp so `DrawIconEx(DI_NORMAL)`
         // will alpha-composite cleanly. Ownership of the HICON is
         // transferred into `AboutDialogState` immediately below;
-        // its `Drop` impl calls `DestroyIcon` on every exit path,
-        // including the child-`CreateWindowExW` failure returns.
+        // its `Drop` impl calls `DestroyIcon`.
+        const TOP_ICON_SIZE: i32 = 80;
         let app_icon = LoadImageW(
             Some(instance.into()),
             APP_ICON_RESOURCE,
@@ -12110,279 +12143,49 @@ fn show_about_dialog(main_hwnd: HWND) {
         .map(|h| HICON(h.0))
         .unwrap_or_default();
 
-        // Heap-allocate the dialog state. The wnd_proc reads it via
-        // GWLP_USERDATA; the Box stays in this stack frame so the
-        // raw pointer remains valid for the dialog's lifetime.
+        // Heap-allocate the dialog state. The dialog proc reads it
+        // via GWLP_USERDATA; the Box stays in this stack frame so
+        // the raw pointer remains valid for the dialog's lifetime.
+        //
+        // Both GDI handles (`app_icon`, `title_font`) are owned here
+        // rather than by separate RAII guards, so their lifetime is
+        // indistinguishable from the state's. That matters more
+        // since the migration than it did before: the controls are
+        // built inside `WM_INITDIALOG`, so a guard living in this
+        // frame and a handle read from the dialog proc would be two
+        // lifetimes to keep in step instead of one.
         let mut state = Box::new(AboutDialogState {
             link_hwnd: HWND::default(),
             owner_hwnd: main_hwnd,
-            home_url: home_url.clone(),
+            home_url: HSTRING::from("https://code-plus-plus.org/"),
+            title_text: HSTRING::from(format!(
+                "Code++ v{}    ({})",
+                env!("CARGO_PKG_VERSION"),
+                ABOUT_ARCH,
+            )),
+            license_text: HSTRING::from(ABOUT_LICENSE_BODY),
+            title_font,
             app_icon,
             lic_title_hwnd: HWND::default(),
         });
         let state_ptr: *mut AboutDialogState = &raw mut *state;
 
-        let dlg = match CreateWindowExW(
-            WS_EX_DLGMODALFRAME | WS_EX_CONTROLPARENT,
-            ABOUT_CLASS,
-            w!("About Code++"),
-            WS_POPUP | WS_CAPTION | WS_SYSMENU,
-            dlg_x,
-            dlg_y,
-            dlg_w,
-            dlg_h,
-            Some(main_hwnd),
-            None,
-            Some(instance.into()),
-            Some(state_ptr.cast::<c_void>()),
-        ) {
-            Ok(h) => h,
-            Err(_) => return,
-        };
-        let _dlg_guard = DlgDestroyGuard(dlg);
+        let template = dlgtemplate::DialogTemplate::new(
+            "About Code++",
+            dlgtemplate::dialog_style(),
+            WS_EX_CONTROLPARENT.0,
+            240,
+            220,
+        )
+        .finish();
 
-        // Top app-icon STATIC: `SS_OWNERDRAW` so the parent's
-        // `WM_DRAWITEM` handler paints the icon via `DrawIconEx`
-        // with `DI_NORMAL`. The default `SS_ICON` paint path on
-        // Win11 strips 32bpp alpha and surfaces transparent
-        // pixels as black, which is what made the chameleon look
-        // like it had a black backdrop in the first cut. The
-        // owner-draw path composites alpha correctly against the
-        // dialog background brush.
-        // The HWND is never read again — paint and click come
-        // through the parent via `WM_DRAWITEM` / `WM_COMMAND` —
-        // but the binding is required because the early-return
-        // path wants a typed `Result`. Underscore-prefixed so
-        // clippy doesn't flag it.
-        let _icon_top = match CreateWindowExW(
-            WINDOW_EX_STYLE::default(),
-            w!("STATIC"),
-            PCWSTR::null(),
-            WS_CHILD | WS_VISIBLE | style_bits(SS_OWNERDRAW as i32),
-            TOP_ICON_X,
-            TOP_ICON_Y,
-            TOP_ICON_SIZE,
-            TOP_ICON_SIZE,
-            Some(dlg),
-            Some(HMENU(IDC_ABOUT_ICON as usize as *mut c_void)),
-            Some(instance.into()),
-            None,
-        ) {
-            Ok(h) => h,
-            Err(_) => return,
-        };
-
-        let title_static = match CreateWindowExW(
-            WINDOW_EX_STYLE::default(),
-            w!("STATIC"),
-            &title_text_w,
-            WS_CHILD | WS_VISIBLE | style_bits(SS_LEFT as i32),
-            TITLE_X,
-            TITLE_Y,
-            TITLE_W,
-            TITLE_H,
-            Some(dlg),
-            Some(HMENU(IDC_ABOUT_TITLE as usize as *mut c_void)),
-            Some(instance.into()),
-            None,
-        ) {
-            Ok(h) => h,
-            Err(_) => return,
-        };
-
-        let home_label = match CreateWindowExW(
-            WINDOW_EX_STYLE::default(),
-            w!("STATIC"),
-            w!("Home:"),
-            WS_CHILD | WS_VISIBLE | style_bits(SS_LEFT as i32),
-            HOME_LABEL_X,
-            HOME_LABEL_Y,
-            HOME_LABEL_W,
-            HOME_ROW_H - 4,
-            Some(dlg),
-            Some(HMENU(IDC_ABOUT_HOME_LABEL as usize as *mut c_void)),
-            Some(instance.into()),
-            None,
-        ) {
-            Ok(h) => h,
-            Err(_) => return,
-        };
-
-        // The clickable URL link. SS_NOTIFY makes the static fire
-        // STN_CLICKED through WM_COMMAND; the wnd_proc forwards it
-        // to ShellExecuteW. WM_CTLCOLORSTATIC paints the text in
-        // hyperlink blue.
-        let link = match CreateWindowExW(
-            WINDOW_EX_STYLE::default(),
-            w!("STATIC"),
-            &home_url,
-            WS_CHILD | WS_VISIBLE | style_bits((SS_LEFT | SS_NOTIFY) as i32),
-            HOME_LINK_X,
-            HOME_LABEL_Y,
-            HOME_LINK_W,
-            HOME_ROW_H - 4,
-            Some(dlg),
-            Some(HMENU(IDC_ABOUT_HOME_LINK as usize as *mut c_void)),
-            Some(instance.into()),
-            None,
-        ) {
-            Ok(h) => h,
-            Err(_) => return,
-        };
-
-        // License box: an etched frame with a separate caption
-        // STATIC positioned over the frame's top edge. Split
-        // rather than using `BS_GROUPBOX` because the group-box
-        // paint routine on Win11 lets the top border line run
-        // through the title text regardless of theme state or
-        // `WM_CTLCOLORBTN` return — verified across the merged
-        // (`NULL_BRUSH`), classic (`dialog_bg_brush` +
-        // `SetBkColor`), and font-order-swapped variants. The
-        // split gives us a frame that draws no title area to
-        // interfere with, plus a plain STATIC whose
-        // `WM_CTLCOLORSTATIC` returns `dialog_bg_brush` so its
-        // painted rect opaquely covers the frame's top edge at
-        // the caption's position — same visual as a themed
-        // group-box title on other platforms, without any of
-        // the group-box paint quirks.
-        //
-        // Caption geometry: the label's vertical centre lands
-        // on the frame's top edge (`LIC_BOX_Y`) so the opaque
-        // rect breaks the line cleanly. Width is generous
-        // enough (`LIC_CAPTION_W`) to seat the label with
-        // horizontal padding either side; `SS_CENTER` keeps the
-        // text balanced inside that rect.
-        const LIC_CAPTION_TEXT_H: i32 = 18;
-        const LIC_CAPTION_W: i32 = 96;
-        const LIC_CAPTION_X: i32 = LIC_BOX_X + 12;
-        const LIC_CAPTION_Y: i32 = LIC_BOX_Y - LIC_CAPTION_TEXT_H / 2;
-        let lic_box = match CreateWindowExW(
-            WINDOW_EX_STYLE::default(),
-            w!("STATIC"),
-            PCWSTR::null(),
-            WS_CHILD | WS_VISIBLE | style_bits(SS_ETCHEDFRAME as i32),
-            LIC_BOX_X,
-            LIC_BOX_Y,
-            LIC_BOX_W,
-            LIC_BOX_H,
-            Some(dlg),
-            Some(HMENU(IDC_ABOUT_LICENSE_GROUP as usize as *mut c_void)),
-            Some(instance.into()),
-            None,
-        ) {
-            Ok(h) => h,
-            Err(_) => return,
-        };
-        let lic_title = match CreateWindowExW(
-            WINDOW_EX_STYLE::default(),
-            w!("STATIC"),
-            w!(" MIT License "),
-            WS_CHILD | WS_VISIBLE | style_bits((SS_CENTER | SS_CENTERIMAGE) as i32),
-            LIC_CAPTION_X,
-            LIC_CAPTION_Y,
-            LIC_CAPTION_W,
-            LIC_CAPTION_TEXT_H,
-            Some(dlg),
-            Some(HMENU(IDC_ABOUT_LICENSE_TITLE as usize as *mut c_void)),
-            Some(instance.into()),
-            None,
-        ) {
-            Ok(h) => h,
-            Err(_) => return,
-        };
-        let lic_text = match CreateWindowExW(
-            WINDOW_EX_STYLE::default(),
-            w!("STATIC"),
-            &license_w,
-            WS_CHILD | WS_VISIBLE | style_bits(SS_LEFT as i32),
-            LIC_TEXT_X,
-            LIC_TEXT_Y,
-            LIC_TEXT_W,
-            LIC_TEXT_H,
-            Some(dlg),
-            Some(HMENU(IDC_ABOUT_LICENSE_TEXT as usize as *mut c_void)),
-            Some(instance.into()),
-            None,
-        ) {
-            Ok(h) => h,
-            Err(_) => return,
-        };
-
-        let ok_btn = match CreateWindowExW(
-            WINDOW_EX_STYLE::default(),
-            w!("BUTTON"),
-            w!("OK"),
-            WS_CHILD | WS_VISIBLE | WS_TABSTOP | style_bits(BS_DEFPUSHBUTTON),
-            OK_X,
-            OK_Y,
-            OK_W,
-            OK_H,
-            Some(dlg),
-            Some(HMENU(IDOK.0 as u16 as usize as *mut c_void)),
-            Some(instance.into()),
-            None,
-        ) {
-            Ok(h) => h,
-            Err(_) => return,
-        };
-
-        // Publish both HWNDs to the wnd_proc before the modal
-        // pump kicks off so the very first `WM_SETCURSOR` /
-        // `WM_CTLCOLORSTATIC` message can resolve them.
-        state.link_hwnd = link;
-        state.lic_title_hwnd = lic_title;
-
-        // Apply fonts: bold title font for the title only, default
-        // GUI font for everything else. The owner-draw icon
-        // STATIC carries no text so it needs no font; the system
-        // STATIC class default is used for it implicitly. No
-        // `disable_visual_style` call is needed on the etched
-        // frame — `SetWindowTheme(hwnd, "", "")` targets the
-        // "Button" UxTheme class, and `STATIC` is a separate
-        // class ("Static") that renders the etched frame
-        // correctly under both themed and classic paints. The
-        // group-box version of this dialog previously called
-        // `disable_visual_style` to work around a BS_GROUPBOX
-        // title-clear quirk, but the redesign no longer depends
-        // on that path at all.
-        apply_dialog_font(title_static, title_font);
-        for child in [home_label, link, lic_box, lic_title, lic_text, ok_btn] {
-            apply_dialog_font(child, default_font);
-        }
-
-        // Disable the owner before SHOW so input cannot reach the
-        // main window during the brief moment between window
-        // creation and modal pump start; the RAII guard restores
-        // the owner on every exit path.
-        let _ = EnableWindow(main_hwnd, false);
-        let _owner_guard = OwnerEnableGuard(main_hwnd);
-        let _ = ShowWindow(dlg, SW_SHOW);
-        let _ = SetFocus(Some(ok_btn));
-
-        let mut msg_buf = MSG::default();
-        loop {
-            if !IsWindow(Some(dlg)).as_bool() {
-                break;
-            }
-            let ret = GetMessageW(&raw mut msg_buf, None, 0, 0);
-            match ret.0 {
-                0 => {
-                    let _ = PostMessageW(None, WM_QUIT, msg_buf.wParam, msg_buf.lParam);
-                    break;
-                }
-                -1 => break,
-                _ => {
-                    if !IsDialogMessageW(dlg, &raw const msg_buf).as_bool() {
-                        let _ = TranslateMessage(&raw const msg_buf);
-                        DispatchMessageW(&raw const msg_buf);
-                    }
-                }
-            }
-        }
-
-        // Title-font cleanup, owner re-enable, and dialog HWND
-        // destroy are all handled by RAII guards (`GdiObjectGuard`,
-        // `OwnerEnableGuard`, `DlgDestroyGuard`) on scope exit.
+        let _ = dlgtemplate::run_modal(
+            instance,
+            &template,
+            main_hwnd,
+            Some(about_dlg_proc),
+            state_ptr as isize,
+        );
     }
 }
 
@@ -12403,8 +12206,6 @@ fn show_about_dialog(main_hwnd: HWND) {
 // hint static under the listview, and a Close button bottom-right.
 // Future tabs (Updates, Available, Incompatible) slot in alongside
 // "Installed" without changing this scaffolding.
-
-const PLUGIN_ADMIN_CLASS: PCWSTR = w!("CodePlusPlusPluginAdminDialog");
 
 const IDC_PLUGIN_ADMIN_TAB: u16 = 700;
 const IDC_PLUGIN_ADMIN_LIST: u16 = 701;
@@ -12453,44 +12254,53 @@ struct PluginAdminDialogState {
     /// vec — `entries[row].index` is what gets passed back to
     /// `Shell::set_plugin_disabled` on toggle.
     entries: Vec<PluginAdminEntry>,
-    /// Owner HWND. The IDOK / `WM_CLOSE` handler re-enables the
-    /// owner *before* `DestroyWindow` so window activation
-    /// transfers naturally back to the editor (same fix as the
-    /// About / Goto dialogs).
+    /// Owner HWND. Used to centre the dialog during
+    /// `WM_INITDIALOG`, and to reach the main window's `Shell` when
+    /// a checkbox toggles. The owner-disable/re-enable bookkeeping
+    /// this field used to carry is `EndDialog`'s job since the
+    /// `#32770` migration.
     owner_hwnd: HWND,
     /// Listview HWND, captured after creation so the `WM_NOTIFY`
     /// arm can match `nmhdr.hwndFrom` against it.
     list_hwnd: HWND,
 }
 
-extern "system" fn plugin_admin_wnd_proc(
+extern "system" fn plugin_admin_dlg_proc(
     hwnd: HWND,
     msg: u32,
     wparam: WPARAM,
     lparam: LPARAM,
-) -> LRESULT {
+) -> isize {
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
         match msg {
-            WM_NCCREATE => {
-                let cs = lparam.0 as *const CREATESTRUCTW;
-                if !cs.is_null() {
-                    let state_ptr = (*cs).lpCreateParams as isize;
-                    SetWindowLongPtrW(hwnd, GWLP_USERDATA, state_ptr);
+            WM_INITDIALOG => {
+                SetWindowLongPtrW(hwnd, GWLP_USERDATA, lparam.0);
+                let state_ptr = lparam.0 as *mut PluginAdminDialogState;
+                if state_ptr.is_null() {
+                    let _ = EndDialog(hwnd, IDCANCEL.0 as isize);
+                    return 1;
                 }
-                DefWindowProcW(hwnd, msg, wparam, lparam)
+                let state = &mut *state_ptr;
+                if let Some(close_btn) = build_plugin_admin_controls(hwnd, state) {
+                    let _ = SetFocus(Some(close_btn));
+                    // FALSE: focus was assigned above.
+                    0
+                } else {
+                    let _ = EndDialog(hwnd, IDCANCEL.0 as isize);
+                    1
+                }
             }
             WM_COMMAND => {
                 let cmd = (wparam.0 & 0xFFFF) as i32;
                 if cmd == IDOK.0 || cmd == IDCANCEL.0 || cmd == i32::from(IDC_PLUGIN_ADMIN_CLOSE) {
-                    let state_ptr =
-                        GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *const PluginAdminDialogState;
-                    if !state_ptr.is_null() {
-                        let _ = EnableWindow((*state_ptr).owner_hwnd, true);
-                    }
-                    let _ = DestroyWindow(hwnd);
-                    LRESULT(0)
+                    // Close button, Enter, Escape and the title-bar
+                    // X all arrive here. Toggles were already
+                    // written through as they happened, so there is
+                    // nothing to commit on the way out.
+                    let _ = EndDialog(hwnd, IDCANCEL.0 as isize);
+                    1
                 } else {
-                    DefWindowProcW(hwnd, msg, wparam, lparam)
+                    0
                 }
             }
             WM_NOTIFY => {
@@ -12563,45 +12373,24 @@ extern "system" fn plugin_admin_wnd_proc(
                         }
                     }
                 }
-                LRESULT(0)
-            }
-            WM_CLOSE => {
-                let state_ptr =
-                    GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *const PluginAdminDialogState;
-                if !state_ptr.is_null() {
-                    let _ = EnableWindow((*state_ptr).owner_hwnd, true);
-                }
-                let _ = DestroyWindow(hwnd);
-                LRESULT(0)
+                1
             }
             WM_NCDESTROY => {
                 // Defensive: zero `GWLP_USERDATA` so any stray
-                // message between `DestroyWindow` returning and
-                // the modal pump's `IsWindow` break can't deref
-                // a dangling pointer (matches the About dialog's
-                // pattern).
+                // message delivered after `EndDialog` has unwound
+                // the modal loop can't deref a dangling pointer
+                // (matches the About dialog's pattern).
                 SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
-                DefWindowProcW(hwnd, msg, wparam, lparam)
+                0
             }
-            WM_ERASEBKGND => {
-                let hdc = HDC(wparam.0 as *mut c_void);
-                let mut rect = RECT::default();
-                let _ = GetClientRect(hwnd, &raw mut rect);
-                FillRect(hdc, &raw const rect, dialog_bg_brush());
-                LRESULT(1)
-            }
-            WM_CTLCOLORSTATIC | WM_CTLCOLORBTN => {
-                let hdc = HDC(wparam.0 as *mut c_void);
-                let _ = SetBkMode(hdc, TRANSPARENT);
-                LRESULT(GetStockObject(NULL_BRUSH).0 as isize)
-            }
-            _ => DefWindowProcW(hwnd, msg, wparam, lparam),
+            // No `WM_ERASEBKGND` / `WM_CTLCOLOR*` arms: `DefDlgProc`
+            // paints the client area and answers the control-colour
+            // messages with the system dialog brush, which is what
+            // the hardcoded shade was approximating.
+            _ => 0,
         }
     }));
-    match result {
-        Ok(lr) => lr,
-        Err(_) => unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) },
-    }
+    result.unwrap_or(0)
 }
 
 /// Read the PE `VS_FIXEDFILEINFO` resource at `path` and format the
@@ -12687,129 +12476,61 @@ fn read_pe_file_version(path: &Path) -> Option<String> {
     }
 }
 
-/// Show the modal Plugin Manager dialog. Same scaffolding as the
-/// other modal dialogs in this file — `OwnerEnableGuard` +
-/// `DlgDestroyGuard`, panic-catch `wnd_proc`, nested `GetMessageW`
-/// pump with `IsDialogMessageW`. `main_hwnd` is the owner;
-/// `Shell::installed_plugins` is consulted at open time for the
-/// row data, and `Shell::set_plugin_disabled` is called as the
-/// user toggles checkboxes.
-fn show_plugin_admin_dialog(main_hwnd: HWND) {
-    use std::sync::OnceLock;
-    static REGISTERED: OnceLock<()> = OnceLock::new();
+/// Client-area size of the Plugin Manager dialog, in pixels.
+const PLUGIN_ADMIN_CLIENT_W: i32 = 600;
+const PLUGIN_ADMIN_CLIENT_H: i32 = 420;
 
+/// Create the Plugin Manager's child controls and populate the
+/// listview.
+///
+/// Runs inside `WM_INITDIALOG`. Returns the Close button's HWND so
+/// the caller can give it initial focus, or `None` if any child could
+/// not be created.
+unsafe fn build_plugin_admin_controls(
+    dlg: HWND,
+    state: &mut PluginAdminDialogState,
+) -> Option<HWND> {
     unsafe {
-        let instance = match GetModuleHandleW(None) {
-            Ok(h) => h,
-            Err(_) => return,
-        };
+        let instance = GetModuleHandleW(None).ok()?;
 
-        REGISTERED.get_or_init(|| {
-            let class = WNDCLASSEXW {
-                cbSize: std::mem::size_of::<WNDCLASSEXW>() as u32,
-                style: CS_HREDRAW | CS_VREDRAW,
-                lpfnWndProc: Some(plugin_admin_wnd_proc),
-                hInstance: instance.into(),
-                hCursor: LoadCursorW(None, IDC_ARROW).unwrap_or_default(),
-                hbrBackground: dialog_bg_brush(),
-                lpszClassName: PLUGIN_ADMIN_CLASS,
-                ..Default::default()
-            };
-            let _ = RegisterClassExW(&raw const class);
-        });
-
-        // Snapshot the registry under a brief borrow on the main
-        // window's state — the `Vec` we get back is owned, so no
-        // borrow lasts past this block.
-        let entries: Vec<PluginAdminEntry> = if let Some(state) = state_from_hwnd(main_hwnd) {
-            state.shell.installed_plugins()
-        } else {
-            return;
-        };
+        dlgtemplate::size_client_and_center(
+            dlg,
+            state.owner_hwnd,
+            PLUGIN_ADMIN_CLIENT_W,
+            PLUGIN_ADMIN_CLIENT_H,
+        );
 
         // --- Layout (CLIENT coordinates) --------------------------
-        const CLIENT_W: i32 = 600;
-        const CLIENT_H: i32 = 420;
         const PAD: i32 = 14;
         const TAB_Y: i32 = PAD;
         const TAB_H: i32 = 26;
         const LIST_Y: i32 = TAB_Y + TAB_H + 8;
-        const LIST_H: i32 = CLIENT_H - LIST_Y - 88;
+        const LIST_H: i32 = PLUGIN_ADMIN_CLIENT_H - LIST_Y - 88;
         const HINT_Y: i32 = LIST_Y + LIST_H + 8;
         const HINT_H: i32 = 32;
         const BTN_W: i32 = 96;
         const BTN_H: i32 = 28;
-        const BTN_X: i32 = CLIENT_W - PAD - BTN_W;
-        const BTN_Y: i32 = CLIENT_H - PAD - BTN_H;
-
-        let mut window_rect = RECT {
-            left: 0,
-            top: 0,
-            right: CLIENT_W,
-            bottom: CLIENT_H,
-        };
-        let _ = AdjustWindowRectEx(
-            &raw mut window_rect,
-            WS_POPUP | WS_CAPTION | WS_SYSMENU,
-            false,
-            WS_EX_DLGMODALFRAME | WS_EX_CONTROLPARENT,
-        );
-        let dlg_w = window_rect.right - window_rect.left;
-        let dlg_h = window_rect.bottom - window_rect.top;
-
-        let mut owner_rect = RECT::default();
-        let _ = GetWindowRect(main_hwnd, &raw mut owner_rect);
-        let owner_w = owner_rect.right - owner_rect.left;
-        let owner_h = owner_rect.bottom - owner_rect.top;
-        let dlg_x = owner_rect.left + (owner_w - dlg_w) / 2;
-        let dlg_y = owner_rect.top + (owner_h - dlg_h) / 2;
-
-        let mut state = Box::new(PluginAdminDialogState {
-            entries,
-            owner_hwnd: main_hwnd,
-            list_hwnd: HWND::default(),
-        });
-        let state_ptr: *mut PluginAdminDialogState = &raw mut *state;
-
-        let dlg = match CreateWindowExW(
-            WS_EX_DLGMODALFRAME | WS_EX_CONTROLPARENT,
-            PLUGIN_ADMIN_CLASS,
-            w!("Plugin Manager"),
-            WS_POPUP | WS_CAPTION | WS_SYSMENU,
-            dlg_x,
-            dlg_y,
-            dlg_w,
-            dlg_h,
-            Some(main_hwnd),
-            None,
-            Some(instance.into()),
-            Some(state_ptr.cast::<c_void>()),
-        ) {
-            Ok(h) => h,
-            Err(_) => return,
-        };
-        let _dlg_guard = DlgDestroyGuard(dlg);
+        const BTN_X: i32 = PLUGIN_ADMIN_CLIENT_W - PAD - BTN_W;
+        const BTN_Y: i32 = PLUGIN_ADMIN_CLIENT_H - PAD - BTN_H;
 
         // Tab control with a single "Installed" tab. Future tabs
         // (Updates, Available, Incompatible) slot in via additional
         // `TCM_INSERTITEMW` calls; the body shape doesn't change.
-        let tab_ctrl = match CreateWindowExW(
+        let tab_ctrl = CreateWindowExW(
             WINDOW_EX_STYLE::default(),
             WC_TABCONTROL,
             PCWSTR::null(),
             WS_CHILD | WS_VISIBLE | WS_TABSTOP,
             PAD,
             TAB_Y,
-            CLIENT_W - 2 * PAD,
+            PLUGIN_ADMIN_CLIENT_W - 2 * PAD,
             TAB_H,
             Some(dlg),
             Some(HMENU(IDC_PLUGIN_ADMIN_TAB as usize as *mut c_void)),
             Some(instance.into()),
             None,
-        ) {
-            Ok(h) => h,
-            Err(_) => return,
-        };
+        )
+        .ok()?;
         // Add the "Installed" tab.
         let mut installed_label: Vec<u16> = "Installed"
             .encode_utf16()
@@ -12831,7 +12552,7 @@ fn show_plugin_admin_dialog(main_hwnd: HWND) {
         // checkbox before column 0, `LVS_EX_FULLROWSELECT` makes
         // the whole row clickable, `LVS_EX_DOUBLEBUFFER` removes
         // flicker on scroll.
-        let list_hwnd = match CreateWindowExW(
+        let list_hwnd = CreateWindowExW(
             WINDOW_EX_STYLE::default(),
             WC_LISTVIEWW,
             PCWSTR::null(),
@@ -12841,16 +12562,14 @@ fn show_plugin_admin_dialog(main_hwnd: HWND) {
                 | style_bits((LVS_REPORT | LVS_SHOWSELALWAYS | LVS_SINGLESEL) as i32),
             PAD,
             LIST_Y,
-            CLIENT_W - 2 * PAD,
+            PLUGIN_ADMIN_CLIENT_W - 2 * PAD,
             LIST_H,
             Some(dlg),
             Some(HMENU(IDC_PLUGIN_ADMIN_LIST as usize as *mut c_void)),
             Some(instance.into()),
             None,
-        ) {
-            Ok(h) => h,
-            Err(_) => return,
-        };
+        )
+        .ok()?;
         SendMessageW(
             list_hwnd,
             LVM_SETEXTENDEDLISTVIEWSTYLE,
@@ -12859,6 +12578,18 @@ fn show_plugin_admin_dialog(main_hwnd: HWND) {
                 (LVS_EX_CHECKBOXES | LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER) as isize,
             )),
         );
+
+        // Publish the listview HWND before any row is inserted: the
+        // `LVM_SETITEMSTATE` calls below make the listview send
+        // `LVN_ITEMCHANGED` back to this dialog synchronously, and
+        // that arm matches `nmhdr.hwndFrom` against this field. It
+        // used to be assigned after population, which was safe only
+        // because the notifications reached a window procedure that
+        // had not been given the state yet. Assigning first means
+        // the arm sees them and filters them on `old_check == 0`,
+        // which is the check that was always documented as the
+        // thing suppressing populate-time sets.
+        state.list_hwnd = list_hwnd;
 
         // Two columns: "Plugin" (with implicit checkbox before it
         // via `LVS_EX_CHECKBOXES`) and "Version".
@@ -12949,24 +12680,22 @@ fn show_plugin_admin_dialog(main_hwnd: HWND) {
         }
 
         // Hint static + Close button.
-        let hint = match CreateWindowExW(
+        let hint = CreateWindowExW(
             WINDOW_EX_STYLE::default(),
             w!("STATIC"),
             w!("Tick to enable, untick to disable. Changes take effect on the next launch."),
             WS_CHILD | WS_VISIBLE,
             PAD,
             HINT_Y,
-            CLIENT_W - 2 * PAD - BTN_W - 8,
+            PLUGIN_ADMIN_CLIENT_W - 2 * PAD - BTN_W - 8,
             HINT_H,
             Some(dlg),
             Some(HMENU(IDC_PLUGIN_ADMIN_HINT as usize as *mut c_void)),
             Some(instance.into()),
             None,
-        ) {
-            Ok(h) => h,
-            Err(_) => return,
-        };
-        let close_btn = match CreateWindowExW(
+        )
+        .ok()?;
+        let close_btn = CreateWindowExW(
             WINDOW_EX_STYLE::default(),
             w!("BUTTON"),
             w!("Close"),
@@ -12979,47 +12708,62 @@ fn show_plugin_admin_dialog(main_hwnd: HWND) {
             Some(HMENU(IDC_PLUGIN_ADMIN_CLOSE as usize as *mut c_void)),
             Some(instance.into()),
             None,
-        ) {
-            Ok(h) => h,
-            Err(_) => return,
-        };
+        )
+        .ok()?;
 
         // Apply the default GUI font to all text-bearing children.
         let font = HFONT(GetStockObject(DEFAULT_GUI_FONT).0);
         for child in [tab_ctrl, list_hwnd, hint, close_btn] {
             apply_dialog_font(child, font);
         }
+        Some(close_btn)
+    }
+}
 
-        // Stash the listview HWND so the WM_NOTIFY arm can match
-        // against it.
-        state.list_hwnd = list_hwnd;
+/// Show the modal Plugin Manager dialog.
+///
+/// `main_hwnd` is the owner; `Shell::installed_plugins` is consulted
+/// at open time for the row data, and `Shell::set_plugin_disabled` is
+/// called as the user toggles checkboxes.
+fn show_plugin_admin_dialog(main_hwnd: HWND) {
+    unsafe {
+        let instance = match GetModuleHandleW(None) {
+            Ok(h) => h,
+            Err(_) => return,
+        };
 
-        // Modal pump.
-        let _ = EnableWindow(main_hwnd, false);
-        let _owner_guard = OwnerEnableGuard(main_hwnd);
-        let _ = ShowWindow(dlg, SW_SHOW);
-        let _ = SetFocus(Some(close_btn));
+        // Snapshot the registry under a brief borrow on the main
+        // window's state — the `Vec` we get back is owned, so no
+        // borrow lasts past this block.
+        let entries: Vec<PluginAdminEntry> = if let Some(state) = state_from_hwnd(main_hwnd) {
+            state.shell.installed_plugins()
+        } else {
+            return;
+        };
 
-        let mut msg_buf = MSG::default();
-        loop {
-            if !IsWindow(Some(dlg)).as_bool() {
-                break;
-            }
-            let ret = GetMessageW(&raw mut msg_buf, None, 0, 0);
-            match ret.0 {
-                0 => {
-                    let _ = PostMessageW(None, WM_QUIT, msg_buf.wParam, msg_buf.lParam);
-                    break;
-                }
-                -1 => break,
-                _ => {
-                    if !IsDialogMessageW(dlg, &raw const msg_buf).as_bool() {
-                        let _ = TranslateMessage(&raw const msg_buf);
-                        DispatchMessageW(&raw const msg_buf);
-                    }
-                }
-            }
-        }
+        let mut state = Box::new(PluginAdminDialogState {
+            entries,
+            owner_hwnd: main_hwnd,
+            list_hwnd: HWND::default(),
+        });
+        let state_ptr: *mut PluginAdminDialogState = &raw mut *state;
+
+        let template = dlgtemplate::DialogTemplate::new(
+            "Plugin Manager",
+            dlgtemplate::dialog_style(),
+            WS_EX_CONTROLPARENT.0,
+            300,
+            200,
+        )
+        .finish();
+
+        let _ = dlgtemplate::run_modal(
+            instance,
+            &template,
+            main_hwnd,
+            Some(plugin_admin_dlg_proc),
+            state_ptr as isize,
+        );
     }
 }
 
@@ -13086,16 +12830,22 @@ struct GotoDialogState {
     current_offset: u32,
     /// 0-based document length in bytes.
     max_offset: u32,
-    /// Control HWNDs, set by `show_goto_dialog` after the children
-    /// are created; the `wnd_proc` reads them on radio click and
+    /// The window the dialog is centred on. Recorded here rather
+    /// than read back with `GetParent` because `build_goto_controls`
+    /// needs it during `WM_INITDIALOG`, and carrying it explicitly
+    /// keeps the centring independent of how the dialog manager
+    /// happens to relate a dialog to its owner.
+    owner_hwnd: HWND,
+    /// Control HWNDs, set by `build_goto_controls` after the children
+    /// are created; the dialog proc reads them on radio click and
     /// IDOK to update the readonly boxes and parse the user's
     /// input.
     here_hwnd: HWND,
     target_hwnd: HWND,
     max_hwnd: HWND,
-    /// Set to `true` once `show_goto_dialog` has populated the
-    /// three control HWNDs above. The `wnd_proc` gates on this so a
-    /// `WM_COMMAND` delivered between `WM_NCCREATE` and the end of
+    /// Set to `true` once `build_goto_controls` has populated the
+    /// three control HWNDs above. The dialog proc gates on this so a
+    /// `WM_COMMAND` delivered between `WM_INITDIALOG` and the end of
     /// child setup (e.g. via `SendMessage` from another thread, or
     /// a plugin synthesizing input) doesn't dereference null HWNDs.
     controls_ready: bool,
@@ -13119,32 +12869,66 @@ impl GotoDialogState {
     }
 }
 
-extern "system" fn goto_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
-    // The whole body runs under `catch_unwind` so a panic from
-    // String::from_utf16_lossy / SetFocus / SendMessageW /
-    // SetWindowTextW cannot unwind across this `extern "system"`
-    // frame (UB at the FFI boundary). On a panic we fall back to
-    // DefWindowProcW which is what every other branch already does
-    // for unhandled msgs.
+/// Dialog procedure for the "Go to..." modal.
+///
+/// Returns `BOOL` semantics, not `LRESULT`: nonzero means "handled",
+/// zero hands the message to `DefDlgProc`. Every arm that used to end
+/// in `DefWindowProcW` therefore ends in `0` instead — and several
+/// arms are gone entirely because `DefDlgProc` already does the right
+/// thing (see the `WM_CTLCOLOR*` comments below).
+extern "system" fn goto_dlg_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> isize {
+    // Same `catch_unwind` rationale as before the `#32770`
+    // migration: a panic from String::from_utf16_lossy / SetFocus /
+    // SendMessageW / SetWindowTextW cannot be allowed to unwind
+    // across this `extern "system"` frame (UB at the FFI boundary).
+    // On a panic we report "not handled" and let `DefDlgProc` take
+    // the message, which is what every unhandled arm does anyway.
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
         match msg {
-            WM_NCCREATE => {
-                let cs = lparam.0 as *const CREATESTRUCTW;
-                if !cs.is_null() {
-                    let state_ptr = (*cs).lpCreateParams as isize;
-                    SetWindowLongPtrW(hwnd, GWLP_USERDATA, state_ptr);
+            // `WM_INITDIALOG` replaces `WM_NCCREATE`: the dialog
+            // manager delivers our `DialogBoxIndirectParamW` param
+            // directly as `lparam` rather than wrapped in a
+            // `CREATESTRUCTW`, and it arrives *after* the window
+            // exists, which is what lets the child controls be
+            // created here rather than by the caller.
+            WM_INITDIALOG => {
+                SetWindowLongPtrW(hwnd, GWLP_USERDATA, lparam.0);
+                let state_ptr = lparam.0 as *mut GotoDialogState;
+                if state_ptr.is_null() {
+                    let _ = EndDialog(hwnd, IDCANCEL.0 as isize);
+                    return 1;
                 }
-                DefWindowProcW(hwnd, msg, wparam, lparam)
+                let state = &mut *state_ptr;
+                if build_goto_controls(hwnd, state).is_none() {
+                    // A child failed to create: bail out rather than
+                    // present a half-built dialog. `state.result`
+                    // stays `None`, so the caller reads this as a
+                    // cancel.
+                    let _ = EndDialog(hwnd, IDCANCEL.0 as isize);
+                    return 1;
+                }
+                populate_axis_boxes(state);
+                let _ = SetFocus(Some(state.target_hwnd));
+                SendMessageW(
+                    state.target_hwnd,
+                    EM_SETSEL,
+                    Some(WPARAM(0)),
+                    Some(LPARAM(-1)),
+                );
+                // FALSE: we assigned focus ourselves above, so the
+                // dialog manager must not override it with the first
+                // tabstop.
+                0
             }
             WM_COMMAND => {
                 let cmd = (wparam.0 & 0xFFFF) as i32;
                 let notif = ((wparam.0 >> 16) & 0xFFFF) as u32;
                 let state_ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut GotoDialogState;
-                // controls_ready guard: a stray WM_COMMAND between
-                // WM_NCCREATE and child-setup completion would
-                // otherwise dereference null HWNDs (set/focus on
-                // null is silent but SetFocus(null) clears
-                // foreground focus, an observable misbehaviour).
+                // controls_ready guard: a stray WM_COMMAND before
+                // child setup completes would otherwise dereference
+                // null HWNDs (set/focus on null is silent but
+                // SetFocus(null) clears foreground focus, an
+                // observable misbehaviour).
                 let state = if !state_ptr.is_null() && (*state_ptr).controls_ready {
                     Some(&mut *state_ptr)
                 } else {
@@ -13161,7 +12945,7 @@ extern "system" fn goto_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                                 GotoMode::Offset => GotoTarget::Offset(n),
                             };
                             state.result = Some(target);
-                            let _ = DestroyWindow(hwnd);
+                            let _ = EndDialog(hwnd, IDOK.0 as isize);
                         } else {
                             // Empty / unparseable input: leave the
                             // dialog open with the target field
@@ -13176,10 +12960,15 @@ extern "system" fn goto_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                             );
                         }
                     }
-                    LRESULT(0)
+                    1
                 } else if cmd == IDCANCEL.0 {
-                    let _ = DestroyWindow(hwnd);
-                    LRESULT(0)
+                    // Reached from the Cancel button, from Escape,
+                    // and from the caption's X — `DefDlgProc` turns
+                    // the last two into this same command, so the
+                    // separate `WM_CLOSE` arm the custom class
+                    // needed is gone.
+                    let _ = EndDialog(hwnd, IDCANCEL.0 as isize);
+                    1
                 } else if (cmd == i32::from(IDC_GOTO_RADIO_LINE)
                     || cmd == i32::from(IDC_GOTO_RADIO_OFFSET))
                     && notif == BN_CLICKED
@@ -13202,90 +12991,41 @@ extern "system" fn goto_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                             );
                         }
                     }
-                    LRESULT(0)
+                    1
                 } else {
-                    DefWindowProcW(hwnd, msg, wparam, lparam)
+                    0
                 }
             }
-            WM_CLOSE => {
-                let _ = DestroyWindow(hwnd);
-                LRESULT(0)
-            }
-            // Win11 themed paint silently overrides our class
-            // hbrBackground for WS_POPUP | WS_CAPTION dialogs —
-            // the default WM_ERASEBKGND fills with a themed
-            // shade rather than honouring the brush. Painting
-            // the client rect ourselves with `dialog_bg_brush`
-            // and returning 1 (handled) defeats that override
-            // so the dialog renders our chosen colour.
-            WM_ERASEBKGND => {
-                let hdc = HDC(wparam.0 as *mut c_void);
-                let mut rect = RECT::default();
-                let _ = GetClientRect(hwnd, &raw mut rect);
-                FillRect(hdc, &raw const rect, dialog_bg_brush());
-                LRESULT(1)
-            }
-            // Plain STATIC labels return NULL_BRUSH so the
-            // dialog's hbrBackground shows through them. The
-            // read-only "You are here" EDIT is the exception —
-            // read-only EDITs route WM_CTLCOLORSTATIC (not
-            // WM_CTLCOLOREDIT), and Win11 hover-repaints them
-            // through this path: a NULL_BRUSH return leaves the
-            // control's client area unfilled and the next paint
-            // reads whatever's in the DC, producing an all-black
-            // repaint on mouse hover. Return the standard edit
-            // brush for that HWND specifically so its interior
-            // stays white.
+            // The read-only "You are here" EDIT is the one control
+            // whose background this dialog overrides. Read-only
+            // EDITs route `WM_CTLCOLORSTATIC` rather than
+            // `WM_CTLCOLOREDIT`, and `DefDlgProc` answers that with
+            // the dialog-face brush — correct for labels, but this
+            // one is drawn as a boxed value with `WS_EX_CLIENTEDGE`
+            // and reads as a field, so it keeps the window colour.
+            //
+            // Every other static falls through to `DefDlgProc`,
+            // which is the point of the migration: it returns the
+            // themed dialog brush, so labels and the themed radios
+            // blend with the dialog on whatever theme is active
+            // instead of against a hardcoded constant.
             WM_CTLCOLORSTATIC => {
-                let hdc = HDC(wparam.0 as *mut c_void);
-                let _ = SetBkMode(hdc, TRANSPARENT);
                 let from = HWND(lparam.0 as *mut c_void);
                 let state_ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *const GotoDialogState;
                 if !state_ptr.is_null()
                     && (*state_ptr).controls_ready
                     && (*state_ptr).here_hwnd == from
                 {
-                    return LRESULT(GetSysColorBrush(COLOR_WINDOW).0 as isize);
+                    let hdc = HDC(wparam.0 as *mut c_void);
+                    let _ = SetBkMode(hdc, TRANSPARENT);
+                    return GetSysColorBrush(COLOR_WINDOW).0 as isize;
                 }
-                // Plain STATIC default returns dialog_bg_brush
-                // (a REAL brush, not NULL_BRUSH) so labels
-                // like "You can't go further than: N" — updated
-                // via SetWindowTextW on every Line↔Offset
-                // switch — erase their old digits before
-                // drawing the new ones. NULL_BRUSH here left
-                // successive numbers stacked as unreadable
-                // ghosts.
-                LRESULT(dialog_bg_brush().0 as isize)
+                0
             }
-            // Classic-painted BS_AUTORADIOBUTTON controls (see
-            // the `disable_visual_style` calls in
-            // `show_goto_dialog`) rely on this brush return to
-            // clear their client rect BEFORE the button draws
-            // its glyph + text. A NULL_BRUSH return leaves the
-            // previous frame's text in place, so successive
-            // radio toggles stack unreadable text ghosts inside
-            // the label. Returning `dialog_bg_brush` fills each
-            // button's rect with the chrome colour first so the
-            // redraw is clean AND the fill blends with the
-            // surrounding dialog.
-            WM_CTLCOLORBTN => {
-                let hdc = HDC(wparam.0 as *mut c_void);
-                let _ = SetBkMode(hdc, TRANSPARENT);
-                let _ = SetBkColor(hdc, COLORREF(DIALOG_BG));
-                LRESULT(dialog_bg_brush().0 as isize)
-            }
-            WM_CTLCOLOREDIT => {
-                let hdc = HDC(wparam.0 as *mut c_void);
-                let _ = SetBkMode(hdc, TRANSPARENT);
-                LRESULT(GetSysColorBrush(COLOR_WINDOW).0 as isize)
-            }
-            _ => DefWindowProcW(hwnd, msg, wparam, lparam),
+            _ => 0,
         }
     }));
-    match result {
-        Ok(lr) => lr,
-        Err(_) => unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) },
-    }
+    result.unwrap_or(0)
 }
 
 /// Populate the three labeled boxes for the current `state.mode`.
@@ -13322,21 +13062,6 @@ unsafe fn read_target_value(edit: HWND, max: u32) -> Option<u32> {
     Some(n.min(max))
 }
 
-/// Disable visual styles on `hwnd` so it falls back to classic
-/// (Win95-era) painting. Used for `BS_AUTOCHECKBOX`,
-/// `BS_AUTORADIOBUTTON`, and `BS_GROUPBOX` whose themed paint
-/// produces a slightly-darker rectangle around the control that
-/// doesn't match the dialog's `hbrBackground`. Classic-painted
-/// buttons honour `WM_CTLCOLORBTN`'s `NULL_BRUSH` return and let
-/// the dialog's actual background show through, giving a clean
-/// flush look. Visual style on push buttons (Find Next, Close,
-/// etc.) is left intact so they keep their rounded Win11 look.
-pub(crate) unsafe fn disable_visual_style(hwnd: HWND) {
-    unsafe {
-        let _ = SetWindowTheme(hwnd, w!(""), w!(""));
-    }
-}
-
 /// Apply the system default GUI font to a freshly-created child
 /// control. Without this Win32 falls back to the bitmap "System"
 /// font from the Win95 era, which looks broken on every modern DPI.
@@ -13351,81 +13076,44 @@ pub(crate) unsafe fn apply_dialog_font(child: HWND, font: HFONT) {
     }
 }
 
-/// Show the modal "Go to..." dialog and return the user's choice,
-/// or `None` on Cancel. `current_line` / `max_line` are 1-based;
-/// `current_offset` / `max_offset` are 0-based byte counts.
+/// Client-area size of the "Go to..." dialog, in pixels.
 ///
-/// Must be called from the UI thread that owns `owner`.
-fn show_goto_dialog(
-    owner: HWND,
-    current_line: u32,
-    max_line: u32,
-    current_offset: u32,
-    max_offset: u32,
-) -> Option<GotoTarget> {
-    use std::sync::OnceLock;
-    static REGISTERED: OnceLock<()> = OnceLock::new();
+/// Tightened against Notepad++'s reference proportions: narrow enough
+/// that the buttons sit close to the boxes, short enough that there is
+/// only ~14 px of breathing room below the bottom button.
+///
+/// The dialog template declares a placeholder extent in dialog units;
+/// `size_client_and_center` resizes to exactly this during
+/// `WM_INITDIALOG`, which is what lets the pixel layout constants
+/// below survive the move to `#32770` unchanged.
+const GOTO_CLIENT_W: i32 = 430;
+const GOTO_CLIENT_H: i32 = 156;
 
+/// Create the "Go to..." dialog's child controls and record the three
+/// the dialog proc needs to read back.
+///
+/// Runs inside `WM_INITDIALOG`, so `dlg` is a live `#32770` window
+/// that has not yet been shown — every layout and text change made
+/// here lands before the first paint.
+///
+/// Returns `None` if any child could not be created; the caller ends
+/// the dialog rather than presenting a partial one.
+unsafe fn build_goto_controls(dlg: HWND, state: &mut GotoDialogState) -> Option<()> {
     unsafe {
         let instance = GetModuleHandleW(None).ok()?;
 
-        REGISTERED.get_or_init(|| {
-            let class = WNDCLASSEXW {
-                cbSize: std::mem::size_of::<WNDCLASSEXW>() as u32,
-                style: CS_HREDRAW | CS_VREDRAW,
-                lpfnWndProc: Some(goto_wnd_proc),
-                hInstance: instance.into(),
-                hCursor: LoadCursorW(None, IDC_ARROW).unwrap_or_default(),
-                // Custom-RGB brush so the dialog background
-                // matches the tone Win11 themed checkboxes /
-                // radios / push buttons paint as their
-                // background. COLOR_3DFACE reads as a touch
-                // darker than that on Win11 themed mode and
-                // produces a visible mismatch.
-                hbrBackground: dialog_bg_brush(),
-                lpszClassName: GOTO_CLASS,
-                ..Default::default()
-            };
-            let _ = RegisterClassExW(&raw const class);
-        });
+        // Size and centre first: the layout constants below are
+        // client-relative, so the client rect has to be final before
+        // any child is positioned.
+        dlgtemplate::size_client_and_center(dlg, state.owner_hwnd, GOTO_CLIENT_W, GOTO_CLIENT_H);
 
-        // Heap-allocate the state so the wnd_proc can mutate it
-        // and we can read `result` after DestroyWindow. The raw
-        // pointer below remains valid for the lifetime of `state`
-        // because the local binding is never moved (`state` is
-        // the sole owner; the `Box` stays in this stack frame
-        // until the function returns).
-        let mut state = Box::new(GotoDialogState {
-            result: None,
-            mode: GotoMode::Line,
-            current_line,
-            max_line,
-            current_offset,
-            max_offset,
-            here_hwnd: HWND::default(),
-            target_hwnd: HWND::default(),
-            max_hwnd: HWND::default(),
-            controls_ready: false,
-        });
-        let state_ptr: *mut GotoDialogState = &raw mut *state;
-
-        // Layout is computed in CLIENT coordinates and the actual
-        // window size is derived via AdjustWindowRectEx so the
-        // border/title bar don't eat into the right padding the way
-        // they would if we passed CLIENT_W as the window size.
-        // Tightened against Notepad++'s reference proportions:
-        // narrower dialog so the buttons sit close to the boxes,
-        // shorter so there's only ~14 px of breathing room below
-        // the bottom button.
-        const CLIENT_W: i32 = 430;
-        const CLIENT_H: i32 = 156;
         const X_PAD: i32 = 14;
         const LABEL_X: i32 = X_PAD;
         const LABEL_W: i32 = 155;
         const BOX_X: i32 = 175;
         const BOX_W: i32 = 80;
         const BTN_W: i32 = 130;
-        const BTN_X: i32 = CLIENT_W - X_PAD - BTN_W;
+        const BTN_X: i32 = GOTO_CLIENT_W - X_PAD - BTN_W;
         const BOX_H: i32 = 22;
         const LABEL_H: i32 = 20;
         const BTN_H: i32 = 26;
@@ -13434,48 +13122,11 @@ fn show_goto_dialog(
         const ROW2_Y: i32 = 74;
         const ROW3_Y: i32 = 104;
 
-        let mut window_rect = RECT {
-            left: 0,
-            top: 0,
-            right: CLIENT_W,
-            bottom: CLIENT_H,
-        };
-        let _ = AdjustWindowRectEx(
-            &raw mut window_rect,
-            WS_POPUP | WS_CAPTION | WS_SYSMENU,
-            false,
-            WS_EX_DLGMODALFRAME | WS_EX_CONTROLPARENT,
-        );
-        let dlg_w = window_rect.right - window_rect.left;
-        let dlg_h = window_rect.bottom - window_rect.top;
-
-        let mut owner_rect = RECT::default();
-        let _ = GetWindowRect(owner, &raw mut owner_rect);
-        let owner_w = owner_rect.right - owner_rect.left;
-        let owner_h = owner_rect.bottom - owner_rect.top;
-        let dlg_x = owner_rect.left + (owner_w - dlg_w) / 2;
-        let dlg_y = owner_rect.top + (owner_h - dlg_h) / 2;
-
-        let dlg = CreateWindowExW(
-            WS_EX_DLGMODALFRAME | WS_EX_CONTROLPARENT,
-            GOTO_CLASS,
-            w!("Go To..."),
-            WS_POPUP | WS_CAPTION | WS_SYSMENU,
-            dlg_x,
-            dlg_y,
-            dlg_w,
-            dlg_h,
-            Some(owner),
-            None,
-            Some(instance.into()),
-            Some(state_ptr.cast::<c_void>()),
-        )
-        .ok()?;
-        let _dlg_guard = DlgDestroyGuard(dlg);
-
         // Radio pair. WS_GROUP on the first scopes the auto-radio
         // group; the second is in the same group so picking one
-        // unchecks the other automatically.
+        // unchecks the other automatically. On `#32770` the group
+        // also gets arrow-key navigation from the dialog manager,
+        // which the custom class never had.
         let radio_line = CreateWindowExW(
             WINDOW_EX_STYLE::default(),
             w!("BUTTON"),
@@ -13527,10 +13178,9 @@ fn show_goto_dialog(
         // sunken `WS_EX_CLIENTEDGE` border so the box is visibly
         // framed. Without the extended style the EDIT paints
         // borderless on Windows 11 and merges into the dialog
-        // background. The greyish-fill problem stays handled by
-        // WM_CTLCOLORSTATIC returning the dialog's COLOR_WINDOW
-        // brush — readonly EDITs send WM_CTLCOLORSTATIC, not
-        // WM_CTLCOLOREDIT.
+        // background. Its interior is kept at the window colour by
+        // the `WM_CTLCOLORSTATIC` arm in `goto_dlg_proc` — readonly
+        // EDITs send WM_CTLCOLORSTATIC, not WM_CTLCOLOREDIT.
         let here = CreateWindowExW(
             WS_EX_CLIENTEDGE,
             w!("EDIT"),
@@ -13649,7 +13299,7 @@ fn show_goto_dialog(
         state.here_hwnd = here;
         state.target_hwnd = target;
         state.max_hwnd = max_box;
-        // The wnd_proc gates WM_COMMAND on this flag — flip it
+        // The dialog proc gates WM_COMMAND on this flag — flip it
         // only after the three HWNDs above are populated so a
         // stray pre-show message can't dereference null handles.
         state.controls_ready = true;
@@ -13669,60 +13319,85 @@ fn show_goto_dialog(
         ] {
             apply_dialog_font(child, font);
         }
-        // Strip visual style off the two radios so they paint on
-        // the classic BUTTON path — that path honours
-        // `WM_CTLCOLORBTN`'s `dialog_bg_brush` return and blends
-        // with the dialog chrome, instead of the themed paint's
-        // default COLOR_BTNFACE (~#F0F0F0) rectangle that shows
-        // up as a slightly-darker patch around each radio label.
-        // Same pattern the Preferences / Style Configurator /
-        // Find-Replace dialogs use for their checkboxes and
-        // radios.
-        disable_visual_style(radio_line);
-        disable_visual_style(radio_offset);
+        // NOTE: the radios deliberately keep their visual style.
+        // Before the `#32770` migration they were stripped with
+        // `disable_visual_style` so their themed background (drawn at
+        // `COLOR_3DFACE`) would not sit as a darker patch on a dialog
+        // whose class brush was a hardcoded `#F9F9F9`. `DefDlgProc`
+        // paints the dialog at the same system colour the themed
+        // controls use, so they blend as-is and keep the Win11 look.
 
-        // Initial mode = Line; check the corresponding radio and
-        // populate the three boxes BEFORE the dialog is shown so
-        // the first frame paints the correct values.
+        // Initial mode = Line; check the corresponding radio. The
+        // boxes are populated by the caller once this returns.
         SendMessageW(
             radio_line,
             BM_SETCHECK,
             Some(WPARAM(BST_CHECKED.0 as usize)),
             Some(LPARAM(0)),
         );
-        populate_axis_boxes(&state);
+        Some(())
+    }
+}
 
-        // Disable owner FIRST, then reveal the dialog and move
-        // focus. Doing it in this order means the moment the
-        // owner could see "I just lost focus" is also the moment
-        // it's disabled, eliminating the brief window where input
-        // could still reach the main window.
-        let _ = EnableWindow(owner, false);
-        let _owner_guard = OwnerEnableGuard(owner);
-        let _ = ShowWindow(dlg, SW_SHOW);
-        let _ = SetFocus(Some(target));
-        SendMessageW(target, EM_SETSEL, Some(WPARAM(0)), Some(LPARAM(-1)));
+/// Show the modal "Go to..." dialog and return the user's choice,
+/// or `None` on Cancel. `current_line` / `max_line` are 1-based;
+/// `current_offset` / `max_offset` are 0-based byte counts.
+///
+/// Must be called from the UI thread that owns `owner`.
+fn show_goto_dialog(
+    owner: HWND,
+    current_line: u32,
+    max_line: u32,
+    current_offset: u32,
+    max_offset: u32,
+) -> Option<GotoTarget> {
+    unsafe {
+        let instance = GetModuleHandleW(None).ok()?;
 
-        let mut msg = MSG::default();
-        loop {
-            if !IsWindow(Some(dlg)).as_bool() {
-                break;
-            }
-            let ret = GetMessageW(&raw mut msg, None, 0, 0);
-            match ret.0 {
-                0 => {
-                    let _ = PostMessageW(None, WM_QUIT, msg.wParam, msg.lParam);
-                    break;
-                }
-                -1 => break,
-                _ => {
-                    if !IsDialogMessageW(dlg, &raw const msg).as_bool() {
-                        let _ = TranslateMessage(&raw const msg);
-                        DispatchMessageW(&raw const msg);
-                    }
-                }
-            }
-        }
+        // Heap-allocate the state so the dialog proc can mutate it
+        // and we can read `result` after the modal returns. The raw
+        // pointer below remains valid for the lifetime of `state`
+        // because the local binding is never moved (`state` is
+        // the sole owner; the `Box` stays in this stack frame
+        // until the function returns).
+        let mut state = Box::new(GotoDialogState {
+            result: None,
+            mode: GotoMode::Line,
+            current_line,
+            max_line,
+            current_offset,
+            max_offset,
+            owner_hwnd: owner,
+            here_hwnd: HWND::default(),
+            target_hwnd: HWND::default(),
+            max_hwnd: HWND::default(),
+            controls_ready: false,
+        });
+        let state_ptr: *mut GotoDialogState = &raw mut *state;
+
+        // The template's extent is a placeholder — `WM_INITDIALOG`
+        // resizes to `GOTO_CLIENT_W` x `GOTO_CLIENT_H` client pixels
+        // before the dialog is shown.
+        let template = dlgtemplate::DialogTemplate::new(
+            "Go To...",
+            dlgtemplate::dialog_style(),
+            WS_EX_CONTROLPARENT.0,
+            200,
+            80,
+        )
+        .finish();
+
+        // `DialogBoxIndirectParamW` disables the owner, runs the
+        // nested pump and re-activates the owner on the way out —
+        // all of which this function used to do by hand with two
+        // RAII guards and a `GetMessageW` loop.
+        let _ = dlgtemplate::run_modal(
+            instance,
+            &template,
+            owner,
+            Some(goto_dlg_proc),
+            state_ptr as isize,
+        );
 
         state.result.take()
     }
@@ -13735,57 +13410,71 @@ fn show_goto_dialog(
 // route to the Save-As flow instead — see the WM_COMMAND handler
 // for `ID_FILE_RENAME` in `main_wnd_proc`.
 
-/// State carried through the rename dialog's `wnd_proc` — the
-/// returned `result` is read after the message pump unwinds and
-/// is `Some` only on a confirmed OK with non-empty text.
+/// State carried through the rename dialog's proc — the returned
+/// `result` is read after `DialogBoxIndirectParamW` returns and is
+/// `Some` only on a confirmed OK with non-empty text.
 struct RenameDialogState {
     result: Option<String>,
+    /// Name the edit is seeded with. Carried on the state because
+    /// the controls are now built inside `WM_INITDIALOG`, which can
+    /// only reach the caller's data through this struct.
+    prefill: String,
     edit_hwnd: HWND,
     ok_hwnd: HWND,
-    /// Disabled-while-modal owner. Stored on the state so the
-    /// `wnd_proc` can `EnableWindow(owner, true)` *before* every
-    /// `DestroyWindow` — destroying the dialog while the owner is
-    /// still disabled lets activation leak to the next window in
-    /// z-order (often another app), so this re-enable is what
-    /// keeps focus inside our process. Same pattern the About
-    /// dialog uses (`AboutDialogState.owner_hwnd`).
+    /// The window the dialog is centred on, read by
+    /// `build_rename_controls` during `WM_INITDIALOG`.
+    ///
+    /// Before the `#32770` migration this field also carried the
+    /// owner-disable bookkeeping: the window procedure had to
+    /// `EnableWindow(owner, true)` *before* each `DestroyWindow`, or
+    /// activation leaked to the next window in z-order — often
+    /// another application. `EndDialog` does that itself, so the
+    /// field is down to one job.
     owner_hwnd: HWND,
     controls_ready: bool,
 }
 
-/// Re-enable the modal dialog's owner and tear down the dialog
-/// window. Centralised so every `DestroyWindow` call site (IDOK
-/// commit, IDCANCEL, `WM_CLOSE`) does both halves in the same order
-/// — re-enable first, then destroy — without each branch
-/// duplicating the comment + the `EnableWindow` call.
-unsafe fn close_rename_dialog(hwnd: HWND, owner_hwnd: HWND) {
-    unsafe {
-        let _ = EnableWindow(owner_hwnd, true);
-        let _ = DestroyWindow(hwnd);
-    }
-}
-
-extern "system" fn rename_wnd_proc(
-    hwnd: HWND,
-    msg: u32,
-    wparam: WPARAM,
-    lparam: LPARAM,
-) -> LRESULT {
-    // Same `catch_unwind` pattern as `goto_wnd_proc`: a panic
+/// Dialog procedure for the modal Rename dialog.
+///
+/// `BOOL` semantics, like every other dialog proc here: nonzero means
+/// handled, zero hands the message to `DefDlgProc`.
+///
+/// Note what is *absent* compared with the pre-`#32770` window
+/// procedure: there is no `WM_CLOSE` arm and no `close_rename_dialog`
+/// helper. `DefDlgProc` turns the title-bar X and Alt-F4 into
+/// `IDCANCEL`, and `EndDialog` re-enables and re-activates the owner
+/// — which is the entire job the helper existed to do in a fixed
+/// order at three call sites.
+extern "system" fn rename_dlg_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> isize {
+    // Same `catch_unwind` rationale as `goto_dlg_proc`: a panic
     // crossing the `extern "system"` frame is UB, and
-    // `String::from_utf16_lossy` / `SetWindowTextW` / `SetFocus`
-    // can all panic on OOM. On panic we fall through to
-    // `DefWindowProcW`, which keeps the dialog responsive enough
-    // for the user to Cancel out.
+    // `String::from_utf16_lossy` / `SetWindowTextW` / `SetFocus` can
+    // all panic on OOM. On panic we report "not handled" and let
+    // `DefDlgProc` take the message, which keeps the dialog
+    // responsive enough for the user to Cancel out.
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
         match msg {
-            WM_NCCREATE => {
-                let cs = lparam.0 as *const CREATESTRUCTW;
-                if !cs.is_null() {
-                    let state_ptr = (*cs).lpCreateParams as isize;
-                    SetWindowLongPtrW(hwnd, GWLP_USERDATA, state_ptr);
+            WM_INITDIALOG => {
+                SetWindowLongPtrW(hwnd, GWLP_USERDATA, lparam.0);
+                let state_ptr = lparam.0 as *mut RenameDialogState;
+                if state_ptr.is_null() {
+                    let _ = EndDialog(hwnd, IDCANCEL.0 as isize);
+                    return 1;
                 }
-                DefWindowProcW(hwnd, msg, wparam, lparam)
+                let state = &mut *state_ptr;
+                if build_rename_controls(hwnd, state).is_none() {
+                    let _ = EndDialog(hwnd, IDCANCEL.0 as isize);
+                    return 1;
+                }
+                let _ = SetFocus(Some(state.edit_hwnd));
+                SendMessageW(
+                    state.edit_hwnd,
+                    EM_SETSEL,
+                    Some(WPARAM(0)),
+                    Some(LPARAM(-1)),
+                );
+                // FALSE: focus was assigned above.
+                0
             }
             WM_COMMAND => {
                 let cmd = (wparam.0 & 0xFFFF) as i32;
@@ -13800,33 +13489,26 @@ extern "system" fn rename_wnd_proc(
                     if let Some(state) = state {
                         if let Some(text) = read_rename_value(state.edit_hwnd) {
                             state.result = Some(text);
-                            close_rename_dialog(hwnd, state.owner_hwnd);
+                            let _ = EndDialog(hwnd, IDOK.0 as isize);
                         } else {
                             // Empty — re-focus the edit so a retry
                             // is one keystroke away. Should be
                             // unreachable because the OK button is
                             // disabled when the edit is empty, but
-                            // defensive in case `IsDialogMessageW`
+                            // defensive in case the dialog manager
                             // funnels an Enter through some other
                             // path.
                             let _ = SetFocus(Some(state.edit_hwnd));
                         }
                     }
-                    LRESULT(0)
+                    1
                 } else if cmd == IDCANCEL.0 {
-                    if let Some(state) = state {
-                        close_rename_dialog(hwnd, state.owner_hwnd);
-                    } else {
-                        // No state — defensive fallback: best
-                        // effort by reading owner via GetWindow.
-                        let owner = windows::Win32::UI::WindowsAndMessaging::GetWindow(
-                            hwnd,
-                            windows::Win32::UI::WindowsAndMessaging::GW_OWNER,
-                        )
-                        .unwrap_or_default();
-                        close_rename_dialog(hwnd, owner);
-                    }
-                    LRESULT(0)
+                    // Cancel button, Escape, and the title-bar X all
+                    // arrive here. `state.result` stays `None`, and
+                    // no owner bookkeeping is needed — `EndDialog`
+                    // does it.
+                    let _ = EndDialog(hwnd, IDCANCEL.0 as isize);
+                    1
                 } else if cmd == i32::from(IDC_RENAME_EDIT)
                     && notif == windows::Win32::UI::WindowsAndMessaging::EN_CHANGE
                 {
@@ -13839,57 +13521,22 @@ extern "system" fn rename_wnd_proc(
                         let has_text = read_rename_value(state.edit_hwnd).is_some();
                         let _ = EnableWindow(state.ok_hwnd, has_text);
                     }
-                    LRESULT(0)
+                    1
                 } else {
-                    DefWindowProcW(hwnd, msg, wparam, lparam)
+                    0
                 }
             }
-            WM_CLOSE => {
-                // Title-bar X / Alt-F4. Re-enable the owner before
-                // destroying so activation returns to it instead
-                // of leaking out of the app — same fix as the
-                // IDOK / IDCANCEL paths above.
-                let state_ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut RenameDialogState;
-                let owner = if !state_ptr.is_null() && (*state_ptr).controls_ready {
-                    (*state_ptr).owner_hwnd
-                } else {
-                    windows::Win32::UI::WindowsAndMessaging::GetWindow(
-                        hwnd,
-                        windows::Win32::UI::WindowsAndMessaging::GW_OWNER,
-                    )
-                    .unwrap_or_default()
-                };
-                close_rename_dialog(hwnd, owner);
-                LRESULT(0)
-            }
-            // Same Win11 themed-paint workaround as `goto_wnd_proc`:
-            // override `WM_ERASEBKGND` so the dialog body is our
-            // `dialog_bg_brush` shade rather than whatever
-            // UxTheme paints over the class brush.
-            WM_ERASEBKGND => {
-                let hdc = HDC(wparam.0 as *mut c_void);
-                let mut rect = RECT::default();
-                let _ = GetClientRect(hwnd, &raw mut rect);
-                FillRect(hdc, &raw const rect, dialog_bg_brush());
-                LRESULT(1)
-            }
-            WM_CTLCOLORSTATIC | WM_CTLCOLORBTN => {
-                let hdc = HDC(wparam.0 as *mut c_void);
-                let _ = SetBkMode(hdc, TRANSPARENT);
-                LRESULT(GetStockObject(NULL_BRUSH).0 as isize)
-            }
-            WM_CTLCOLOREDIT => {
-                let hdc = HDC(wparam.0 as *mut c_void);
-                let _ = SetBkMode(hdc, TRANSPARENT);
-                LRESULT(GetSysColorBrush(COLOR_WINDOW).0 as isize)
-            }
-            _ => DefWindowProcW(hwnd, msg, wparam, lparam),
+            // Nothing here overrides a control colour any more. The
+            // pre-migration proc returned `NULL_BRUSH` for statics
+            // and buttons so the class brush would show through, and
+            // `COLOR_WINDOW` for the edit; `DefDlgProc` supplies the
+            // themed dialog brush for the first two and the window
+            // brush for the third, which is the same result without
+            // a hardcoded shade.
+            _ => 0,
         }
     }));
-    match result {
-        Ok(lr) => lr,
-        Err(_) => unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) },
-    }
+    result.unwrap_or(0)
 }
 
 /// Read the rename edit's text, trim whitespace, and return
@@ -13913,98 +13560,42 @@ unsafe fn read_rename_value(edit: HWND) -> Option<String> {
     }
 }
 
-/// Show the modal Rename dialog with `current_name` pre-filled and
-/// selected. Returns the user's new name on OK, or `None` on
-/// Cancel / window-close. Must be called from the UI thread that
-/// owns `owner`.
-fn show_rename_dialog(owner: HWND, current_name: &str) -> Option<String> {
-    use std::sync::OnceLock;
-    static REGISTERED: OnceLock<()> = OnceLock::new();
+/// Client-area size of the Rename dialog, in pixels.
+///
+/// Tighter than the Goto dialog because this one has only four
+/// controls (label, edit, two buttons).
+const RENAME_CLIENT_W: i32 = 380;
+const RENAME_CLIENT_H: i32 = 120;
 
+/// Create the Rename dialog's child controls, pre-fill the edit, and
+/// record the two HWNDs the dialog proc reads back.
+///
+/// Runs inside `WM_INITDIALOG`. Returns `None` if any child could not
+/// be created; the caller ends the dialog rather than presenting a
+/// partial one.
+unsafe fn build_rename_controls(dlg: HWND, state: &mut RenameDialogState) -> Option<()> {
     unsafe {
         let instance = GetModuleHandleW(None).ok()?;
 
-        REGISTERED.get_or_init(|| {
-            let class = WNDCLASSEXW {
-                cbSize: std::mem::size_of::<WNDCLASSEXW>() as u32,
-                style: CS_HREDRAW | CS_VREDRAW,
-                lpfnWndProc: Some(rename_wnd_proc),
-                hInstance: instance.into(),
-                hCursor: LoadCursorW(None, IDC_ARROW).unwrap_or_default(),
-                hbrBackground: dialog_bg_brush(),
-                lpszClassName: RENAME_CLASS,
-                ..Default::default()
-            };
-            let _ = RegisterClassExW(&raw const class);
-        });
+        dlgtemplate::size_client_and_center(
+            dlg,
+            state.owner_hwnd,
+            RENAME_CLIENT_W,
+            RENAME_CLIENT_H,
+        );
 
-        let mut state = Box::new(RenameDialogState {
-            result: None,
-            edit_hwnd: HWND::default(),
-            ok_hwnd: HWND::default(),
-            owner_hwnd: owner,
-            controls_ready: false,
-        });
-        let state_ptr: *mut RenameDialogState = &raw mut *state;
-
-        // Layout: tighter than the Goto dialog because the rename
-        // dialog has only three controls (label, edit, two
-        // buttons). Same coordinate convention — CLIENT
-        // dimensions, then `AdjustWindowRectEx` to the window
-        // size so the chrome doesn't eat into the right padding.
-        const CLIENT_W: i32 = 380;
-        const CLIENT_H: i32 = 120;
         const X_PAD: i32 = 14;
         const LABEL_Y: i32 = 12;
         const EDIT_Y: i32 = 36;
         const BTN_Y: i32 = 78;
-        const LABEL_W: i32 = CLIENT_W - 2 * X_PAD;
+        const LABEL_W: i32 = RENAME_CLIENT_W - 2 * X_PAD;
         const LABEL_H: i32 = 18;
-        const EDIT_W: i32 = CLIENT_W - 2 * X_PAD;
+        const EDIT_W: i32 = RENAME_CLIENT_W - 2 * X_PAD;
         const EDIT_H: i32 = 24;
         const BTN_W: i32 = 90;
         const BTN_H: i32 = 26;
-        const OK_X: i32 = CLIENT_W - X_PAD - BTN_W * 2 - 8;
-        const CANCEL_X: i32 = CLIENT_W - X_PAD - BTN_W;
-
-        let mut window_rect = RECT {
-            left: 0,
-            top: 0,
-            right: CLIENT_W,
-            bottom: CLIENT_H,
-        };
-        let _ = AdjustWindowRectEx(
-            &raw mut window_rect,
-            WS_POPUP | WS_CAPTION | WS_SYSMENU,
-            false,
-            WS_EX_DLGMODALFRAME | WS_EX_CONTROLPARENT,
-        );
-        let dlg_w = window_rect.right - window_rect.left;
-        let dlg_h = window_rect.bottom - window_rect.top;
-
-        let mut owner_rect = RECT::default();
-        let _ = GetWindowRect(owner, &raw mut owner_rect);
-        let owner_w = owner_rect.right - owner_rect.left;
-        let owner_h = owner_rect.bottom - owner_rect.top;
-        let dlg_x = owner_rect.left + (owner_w - dlg_w) / 2;
-        let dlg_y = owner_rect.top + (owner_h - dlg_h) / 2;
-
-        let dlg = CreateWindowExW(
-            WS_EX_DLGMODALFRAME | WS_EX_CONTROLPARENT,
-            RENAME_CLASS,
-            w!("Rename"),
-            WS_POPUP | WS_CAPTION | WS_SYSMENU,
-            dlg_x,
-            dlg_y,
-            dlg_w,
-            dlg_h,
-            Some(owner),
-            None,
-            Some(instance.into()),
-            Some(state_ptr.cast::<c_void>()),
-        )
-        .ok()?;
-        let _dlg_guard = DlgDestroyGuard(dlg);
+        const OK_X: i32 = RENAME_CLIENT_W - X_PAD - BTN_W * 2 - 8;
+        const CANCEL_X: i32 = RENAME_CLIENT_W - X_PAD - BTN_W;
 
         let label = CreateWindowExW(
             WINDOW_EX_STYLE::default(),
@@ -14096,37 +13687,49 @@ fn show_rename_dialog(owner: HWND, current_name: &str) -> Option<String> {
         // OK starts disabled iff the prefill is empty (defensive
         // — `tab_display_name` always returns a non-empty string,
         // but a future change there shouldn't quietly regress
-        // this UX).
-        let prefill = HSTRING::from(current_name);
+        // this UX). The selection itself is applied by the caller,
+        // after focus has been assigned.
+        let prefill = HSTRING::from(state.prefill.as_str());
         let _ = SetWindowTextW(edit, &prefill);
-        let _ = EnableWindow(ok_btn, !current_name.trim().is_empty());
+        let _ = EnableWindow(ok_btn, !state.prefill.trim().is_empty());
+        Some(())
+    }
+}
 
-        let _ = EnableWindow(owner, false);
-        let _owner_guard = OwnerEnableGuard(owner);
-        let _ = ShowWindow(dlg, SW_SHOW);
-        let _ = SetFocus(Some(edit));
-        SendMessageW(edit, EM_SETSEL, Some(WPARAM(0)), Some(LPARAM(-1)));
+/// Show the modal Rename dialog with `current_name` pre-filled and
+/// selected. Returns the user's new name on OK, or `None` on
+/// Cancel / window-close. Must be called from the UI thread that
+/// owns `owner`.
+fn show_rename_dialog(owner: HWND, current_name: &str) -> Option<String> {
+    unsafe {
+        let instance = GetModuleHandleW(None).ok()?;
 
-        let mut msg = MSG::default();
-        loop {
-            if !IsWindow(Some(dlg)).as_bool() {
-                break;
-            }
-            let ret = GetMessageW(&raw mut msg, None, 0, 0);
-            match ret.0 {
-                0 => {
-                    let _ = PostMessageW(None, WM_QUIT, msg.wParam, msg.lParam);
-                    break;
-                }
-                -1 => break,
-                _ => {
-                    if !IsDialogMessageW(dlg, &raw const msg).as_bool() {
-                        let _ = TranslateMessage(&raw const msg);
-                        DispatchMessageW(&raw const msg);
-                    }
-                }
-            }
-        }
+        let mut state = Box::new(RenameDialogState {
+            result: None,
+            prefill: current_name.to_owned(),
+            edit_hwnd: HWND::default(),
+            ok_hwnd: HWND::default(),
+            owner_hwnd: owner,
+            controls_ready: false,
+        });
+        let state_ptr: *mut RenameDialogState = &raw mut *state;
+
+        let template = dlgtemplate::DialogTemplate::new(
+            "Rename",
+            dlgtemplate::dialog_style(),
+            WS_EX_CONTROLPARENT.0,
+            180,
+            60,
+        )
+        .finish();
+
+        let _ = dlgtemplate::run_modal(
+            instance,
+            &template,
+            owner,
+            Some(rename_dlg_proc),
+            state_ptr as isize,
+        );
 
         state.result.take()
     }
@@ -14150,16 +13753,24 @@ const fn makelong(lo: i32, hi: i32) -> u32 {
     ((lo as u32) & 0xFFFF) | (((hi as u32) & 0xFFFF) << 16)
 }
 
-/// COLORREF used by the in-dialog elements that DO route
-/// through our paint code (the `BS_GROUPBOX` title clear via
-/// `WM_CTLCOLORBTN`, anything else that needs a fill). On
-/// Win11 the actual rendered dialog client area is painted
-/// by the theme service via DWM/UxTheme — outside the
-/// `WM_ERASEBKGND` message path entirely — so our class
-/// `hbrBackground` is silently overridden. Setting this
-/// constant to the same shade Win11 paints (`#F9F9F9`)
-/// makes the rectangles we DO control blend with the
-/// system-painted dialog instead of standing out.
+/// COLORREF for Code++'s own chrome — the toolbar's
+/// `NM_CUSTOMDRAW` erase and the docked FIF / workspace /
+/// document-map panels and their splitters.
+///
+/// **Not a dialog colour.** This constant used to be every
+/// dialog's class `hbrBackground`, on the stated grounds that
+/// Win11 paints a `WS_POPUP | WS_CAPTION` client area through
+/// DWM/UxTheme outside the `WM_ERASEBKGND` path and silently
+/// overrides the class brush, and that `#F9F9F9` was the shade
+/// it painted. **Both claims were measured and are false**: the
+/// class brush is honoured exactly, and the system dialog face
+/// is `COLOR_3DFACE` (`#F0F0F0` in the default light theme).
+/// The 9-unit gap between the two is what made themed
+/// checkboxes and radios sit as a visibly darker rectangle,
+/// which is what the old `disable_visual_style` helper existed to work
+/// around. Dialogs are `#32770` now and take their background
+/// from [`dialog_face_brush`]; see `crates/ui_win32/src/dlgtemplate.rs`
+/// and DESIGN.md §7.4.
 pub(crate) const DIALOG_BG: u32 = 0x00F9_F9F9;
 /// COLORREF for the bottom status strip — a step darker than
 /// the dialog background so it still reads as a distinct band.
@@ -14173,12 +13784,40 @@ const STATUS_BG: u32 = 0x00E8_E8E8;
 /// directly.
 const EDITOR_BORDER: u32 = 0x00A0_A0A0;
 
-/// Cached brush for the dialog background (Goto + Find/Replace
-/// hbrBackground, plus `WM_CTLCOLORBTN`'s clear brush). Created
-/// lazily once on first use; the leaked HBRUSH lives for the
+/// The brush a `#32770` dialog paints its own client area with.
+///
+/// This is what `DefDlgProc` answers `WM_CTLCOLORDLG` with, so a
+/// migrated dialog that needs to fill a rectangle *itself* — an
+/// owner-draw control's backdrop, say — must use this rather than
+/// [`dialog_bg_brush`], or the fill will not match the dialog around
+/// it.
+///
+/// Use this inside anything built on [`crate::dlgtemplate`]; use
+/// [`dialog_bg_brush`] for the main window's own docked chrome
+/// (toolbar, status strip, FIF dock, workspace and document-map
+/// panels), which deliberately paints Code++'s own shade.
+///
+/// The handle comes from `GetSysColorBrush`, which returns a
+/// system-owned cached brush — it must not be deleted, and it tracks
+/// the active theme, which is the whole reason this exists.
+pub(crate) fn dialog_face_brush() -> HBRUSH {
+    unsafe { GetSysColorBrush(COLOR_3DFACE) }
+}
+
+/// Cached brush for Code++'s own chrome shade.
+///
+/// **Not the dialog background.** Before the `#32770` migration this
+/// was every dialog's class `hbrBackground`, and [`DIALOG_BG`]'s
+/// value was chosen to approximate what Win11 paints. It is now used
+/// only by main-window chrome — the toolbar's `NM_CUSTOMDRAW` erase,
+/// the docked FIF / workspace / document-map panels and their
+/// splitters — which want a single consistent Code++ tone rather than
+/// the system dialog face. Dialogs use [`dialog_face_brush`].
+///
+/// Created lazily once on first use; the leaked HBRUSH lives for the
 /// app's lifetime, which is fine — the alternative is owning
 /// the brush in `WindowState` and threading it through every
-/// dialog `wnd_proc`.
+/// panel `wnd_proc`.
 pub(crate) fn dialog_bg_brush() -> HBRUSH {
     use std::sync::OnceLock;
     static BRUSH: OnceLock<isize> = OnceLock::new();
@@ -14273,11 +13912,18 @@ fn status_bg_brush() -> HBRUSH {
     HBRUSH(raw as *mut c_void)
 }
 
-/// RAII guard that re-enables `owner` on drop. `show_goto_dialog`
-/// disables the owner before the modal pump and relies on the guard
-/// to re-enable it on every exit path — including a panic between
-/// disable and the pump's natural exit. Without the guard a panic
-/// there would soft-lock the main window forever.
+/// RAII guard that re-enables `owner` on drop.
+///
+/// A window that runs its own modal loop disables the owner first and
+/// relies on this to re-enable it on every exit path — including a
+/// panic between the disable and the loop's natural exit, which would
+/// otherwise soft-lock the main window forever.
+///
+/// Only `print_preview` needs this now. Every dialog that moved to
+/// `#32770` gets the same guarantee from `DialogBoxIndirectParamW`,
+/// which owns the disable / pump / re-enable cycle itself; the print
+/// preview stayed on its own window class because a dialog cannot
+/// hold keyboard focus (see `print_preview`'s module docs).
 pub(crate) struct OwnerEnableGuard(pub(crate) HWND);
 impl Drop for OwnerEnableGuard {
     fn drop(&mut self) {
@@ -14287,39 +13933,24 @@ impl Drop for OwnerEnableGuard {
     }
 }
 
-/// RAII guard that destroys a dialog HWND on drop if it's still
-/// alive. Pairs with `OwnerEnableGuard` to make every exit path —
-/// `?` propagation, panic, `WM_QUIT` mid-pump, or `GetMessageW` error —
-/// correctly tear down both the dialog window and the disabled-owner
-/// state. The `IsWindow` check covers the happy path where the user
-/// already clicked OK/Cancel: the dialog is already destroyed and
-/// `DestroyWindow` on a dead HWND is a silent error we don't care
+/// RAII guard that destroys a window HWND on drop if it is still
+/// alive, so that `?` propagation or a panic during construction
+/// cannot leave a half-built popup on screen. The `IsWindow` check
+/// covers the happy path where the window was already torn down:
+/// `DestroyWindow` on a dead HWND is a silent error we do not care
 /// about, but skipping it keeps the trace log clean.
+///
+/// Only the colour-picker popup and the print preview use this now.
+/// Every dialog used to, paired with an [`OwnerEnableGuard`];
+/// `DialogBoxIndirectParamW` owns the whole create / disable-owner /
+/// pump / destroy / re-enable cycle since the `#32770` migration, so
+/// neither guard has a dialog left to protect.
 pub(crate) struct DlgDestroyGuard(pub(crate) HWND);
 impl Drop for DlgDestroyGuard {
     fn drop(&mut self) {
         unsafe {
             if IsWindow(Some(self.0)).as_bool() {
                 let _ = DestroyWindow(self.0);
-            }
-        }
-    }
-}
-
-/// RAII guard that calls `DeleteObject` on a wrapped GDI handle on
-/// drop. Used by the About dialog to free its bold title font on
-/// every exit path — including the child-`CreateWindowExW` failure
-/// returns between the dialog HWND being created and the post-pump
-/// cleanup, which a manual `DeleteObject` at one site would miss.
-/// The handle is `Copy`, so wrapping in the guard does not preclude
-/// passing the same `HFONT` to `apply_dialog_font` for the title
-/// STATIC.
-struct GdiObjectGuard(HFONT);
-impl Drop for GdiObjectGuard {
-    fn drop(&mut self) {
-        unsafe {
-            if !self.0.is_invalid() {
-                let _ = DeleteObject(self.0.into());
             }
         }
     }
@@ -14428,28 +14059,45 @@ struct FindReplaceState {
     controls_ready: bool,
 }
 
-extern "system" fn find_replace_wnd_proc(
+/// Dialog procedure for the modeless Find/Replace dialog.
+///
+/// `BOOL` semantics: nonzero means handled, zero hands the message to
+/// `DefDlgProc`.
+extern "system" fn find_replace_dlg_proc(
     hwnd: HWND,
     msg: u32,
     wparam: WPARAM,
     lparam: LPARAM,
-) -> LRESULT {
+) -> isize {
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
         match msg {
-            WM_NCCREATE => {
-                let cs = lparam.0 as *const CREATESTRUCTW;
-                if !cs.is_null() {
-                    let state_ptr = (*cs).lpCreateParams as isize;
-                    SetWindowLongPtrW(hwnd, GWLP_USERDATA, state_ptr);
+            WM_INITDIALOG => {
+                SetWindowLongPtrW(hwnd, GWLP_USERDATA, lparam.0);
+                let state_ptr = lparam.0 as *mut FindReplaceState;
+                if state_ptr.is_null() {
+                    let _ = DestroyWindow(hwnd);
+                    return 1;
                 }
-                DefWindowProcW(hwnd, msg, wparam, lparam)
+                if build_find_replace_controls(hwnd, &mut *state_ptr).is_none() {
+                    // A child failed to create — tear the dialog down
+                    // rather than present a half-built one. The state
+                    // Box is reclaimed by the `WM_NCDESTROY` this
+                    // triggers, which is why `show_find_replace_dialog`
+                    // must not reclaim it as well; see the ownership
+                    // note at the `create_modeless` call site.
+                    let _ = DestroyWindow(hwnd);
+                    return 1;
+                }
+                // FALSE: `show_find_replace_dialog` assigns focus to
+                // the Find-what edit once the dialog is shown.
+                0
             }
             WM_COMMAND => {
                 let cmd = (wparam.0 & 0xFFFF) as u16;
                 let notif = ((wparam.0 >> 16) & 0xFFFF) as u32;
                 let state_ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut FindReplaceState;
                 if state_ptr.is_null() || !(*state_ptr).controls_ready {
-                    return DefWindowProcW(hwnd, msg, wparam, lparam);
+                    return 0;
                 }
                 let state = &mut *state_ptr;
                 match cmd {
@@ -14457,43 +14105,43 @@ extern "system" fn find_replace_wnd_proc(
                         if notif == BN_CLICKED {
                             handle_find_next(state);
                         }
-                        LRESULT(0)
+                        1
                     }
                     IDC_FR_COUNT => {
                         if notif == BN_CLICKED {
                             handle_count(state);
                         }
-                        LRESULT(0)
+                        1
                     }
                     IDC_FR_REPLACE_BTN => {
                         if notif == BN_CLICKED {
                             handle_replace(state);
                         }
-                        LRESULT(0)
+                        1
                     }
                     IDC_FR_REPLACE_ALL => {
                         if notif == BN_CLICKED {
                             handle_replace_all(state);
                         }
-                        LRESULT(0)
+                        1
                     }
                     IDC_FR_FIF_FIND_ALL => {
                         if notif == BN_CLICKED {
                             handle_fif_find_all(hwnd, state);
                         }
-                        LRESULT(0)
+                        1
                     }
                     IDC_FR_FIF_BROWSE => {
                         if notif == BN_CLICKED {
                             handle_fif_browse(state);
                         }
-                        LRESULT(0)
+                        1
                     }
                     IDC_FR_FIF_REPLACE_IN_FILES => {
                         if notif == BN_CLICKED {
                             handle_fif_replace_in_files(hwnd, state);
                         }
-                        LRESULT(0)
+                        1
                     }
                     // "In selection" toggle: snapshot the editor's
                     // selection bounds when the user checks the
@@ -14505,7 +14153,7 @@ extern "system" fn find_replace_wnd_proc(
                         if notif == BN_CLICKED {
                             handle_in_selection_toggle(state);
                         }
-                        LRESULT(0)
+                        1
                     }
                     // The Close button AND Esc both land here:
                     // Esc → IsDialogMessageW translates it to a
@@ -14516,7 +14164,7 @@ extern "system" fn find_replace_wnd_proc(
                         if let Some(window_state) = state_from_hwnd(state.main_hwnd) {
                             let _ = SetFocus(Some(window_state.scintilla_hwnd));
                         }
-                        LRESULT(0)
+                        1
                     }
                     IDC_FR_MODE_REGEX | IDC_FR_MODE_NORMAL | IDC_FR_MODE_EXTENDED => {
                         if notif == BN_CLICKED {
@@ -14526,19 +14174,19 @@ extern "system" fn find_replace_wnd_proc(
                             let regex_on = button_checked(state.mode_regex_radio);
                             let _ = EnableWindow(state.dot_newline_cb, regex_on);
                         }
-                        LRESULT(0)
+                        1
                     }
-                    _ => DefWindowProcW(hwnd, msg, wparam, lparam),
+                    _ => 0,
                 }
             }
             WM_NOTIFY => {
                 let nmhdr = lparam.0 as *const NMHDR;
                 if nmhdr.is_null() {
-                    return DefWindowProcW(hwnd, msg, wparam, lparam);
+                    return 0;
                 }
                 let state_ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut FindReplaceState;
                 if state_ptr.is_null() || !(*state_ptr).controls_ready {
-                    return DefWindowProcW(hwnd, msg, wparam, lparam);
+                    return 0;
                 }
                 let state = &mut *state_ptr;
                 if (*nmhdr).hwndFrom == state.tab_ctrl && (*nmhdr).code == TCN_SELCHANGE {
@@ -14553,18 +14201,24 @@ extern "system" fn find_replace_wnd_proc(
                         apply_tab_visibility(state);
                     }
                 }
-                LRESULT(0)
+                1
             }
-            // IsDialogMessageW asks the dialog "which button is the
-            // default?" via DM_GETDEFID when it sees a VK_RETURN.
-            // The standard #32770 dialog class answers this; our
-            // custom class has to do it explicitly. The default
-            // depends on the active tab — Enter on the FIF tab
-            // should kick off Find All, not Find Next (which
-            // doesn't have a target buffer). Returning the
-            // matching id with the DC_HASDEFID magic in the high
-            // word gives us "Enter triggers the right button"
-            // without a special-case VK_RETURN handler.
+            // `IsDialogMessageW` asks the dialog "which button is
+            // the default?" via `DM_GETDEFID` when it sees a
+            // VK_RETURN.
+            //
+            // `DefDlgProc` answers this on its own now, but its
+            // answer is whatever was last set with `DM_SETDEFID`,
+            // which is a single fixed id — and this dialog's default
+            // depends on the active tab: Enter on the Find-in-Files
+            // tab should kick off Find All, not Find Next (which has
+            // no target buffer). So the arm stays, and answering it
+            // here overrides `DefDlgProc` because the dialog
+            // procedure is consulted first.
+            //
+            // A dialog proc returns its real `LRESULT` through
+            // `DWLP_MSGRESULT` rather than from the function, whose
+            // return value is only the handled/not-handled flag.
             DM_GETDEFID => {
                 let state_ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *const FindReplaceState;
                 let id = if !state_ptr.is_null()
@@ -14576,56 +14230,35 @@ extern "system" fn find_replace_wnd_proc(
                     IDC_FR_FIND_NEXT
                 };
                 let val = (DC_HASDEFID << 16) | u32::from(id);
-                LRESULT(val as isize)
+                SetWindowLongPtrW(
+                    hwnd,
+                    WINDOW_LONG_PTR_INDEX(DWLP_MSGRESULT as i32),
+                    val as isize,
+                );
+                1
             }
-            // Themed STATIC and EDIT controls paint their own
-            // background. Without these handlers the dialog shows
-            // a slightly-darker grey rectangle behind every label,
-            // checkbox, group box, and edit field. Returning the
-            // dialog's COLOR_WINDOW brush + transparent text bk
-            // mode makes the chrome render against the dialog's
-            // own background colour. The status_label gets blue
-            // text on top so Replace All's count message stands
-            // out against the otherwise black-on-white chrome.
-            // Win11 themed paint silently overrides our class
-            // hbrBackground for WS_POPUP | WS_CAPTION dialogs —
-            // painting the client rect ourselves with
-            // `dialog_bg_brush` defeats that so the dialog
-            // renders our chosen colour, and the STATIC /
-            // group-box paths below can rely on the
-            // hbrBackground actually being what we set.
-            WM_ERASEBKGND => {
-                let hdc = HDC(wparam.0 as *mut c_void);
-                let mut rect = RECT::default();
-                let _ = GetClientRect(hwnd, &raw mut rect);
-                FillRect(hdc, &raw const rect, dialog_bg_brush());
-                LRESULT(1)
-            }
-            // STATIC controls return NULL_BRUSH so the dialog's
-            // painted hbrBackground shows through them. Two
-            // exceptions:
+            // Most STATICs fall through to `DefDlgProc`, which
+            // supplies the themed dialog brush. Two exceptions:
             //
-            //   * `status_label` gets an explicit status-bg
-            //     fill so it reads as a slightly-darker strip
-            //     with red/blue text for error/info.
-            //   * `mode_group_title` (the "Search Mode" caption
-            //     that straddles the `SS_ETCHEDFRAME` frame's
-            //     top edge) gets an opaque `dialog_bg_brush`
-            //     return + explicit `SetBkColor` so its painted
-            //     rect covers the frame line at the caption
-            //     position — same About-dialog pattern.
-            //     `NULL_BRUSH` on this one would leave the
-            //     etched line running through the caption's
-            //     glyphs.
+            //   * `status_label` gets an explicit status-bg fill so
+            //     it reads as a slightly-darker strip with red/blue
+            //     text for error/info.
+            //   * `mode_group_title` (the "Search Mode" caption that
+            //     straddles the `SS_ETCHEDFRAME` frame's top edge)
+            //     needs an *opaque* fill so its painted rect covers
+            //     the frame line at the caption position — the same
+            //     About-dialog pattern. Falling through would give
+            //     the right brush but not set the background colour
+            //     to match it.
             WM_CTLCOLORSTATIC => {
                 let hdc = HDC(wparam.0 as *mut c_void);
-                let _ = SetBkMode(hdc, TRANSPARENT);
                 let from = HWND(lparam.0 as *mut c_void);
                 let state_ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *const FindReplaceState;
-                if !state_ptr.is_null()
-                    && (*state_ptr).controls_ready
-                    && (*state_ptr).status_label == from
-                {
+                if state_ptr.is_null() || !(*state_ptr).controls_ready {
+                    return 0;
+                }
+                if (*state_ptr).status_label == from {
+                    let _ = SetBkMode(hdc, TRANSPARENT);
                     // COLORREF is BGR-packed. RGB(0, 0, 255) =
                     // 0x00FF0000 (blue, info); RGB(220, 0, 0) =
                     // 0x000000DC (red, error).
@@ -14635,27 +14268,13 @@ extern "system" fn find_replace_wnd_proc(
                         COLORREF(0x00FF_0000)
                     };
                     let _ = SetTextColor(hdc, color);
-                    LRESULT(status_bg_brush().0 as isize)
-                } else if !state_ptr.is_null()
-                    && (*state_ptr).controls_ready
-                    && (*state_ptr).mode_group_title == from
-                {
-                    let _ = SetBkColor(hdc, COLORREF(DIALOG_BG));
-                    LRESULT(dialog_bg_brush().0 as isize)
-                } else {
-                    LRESULT(GetStockObject(NULL_BRUSH).0 as isize)
+                    return status_bg_brush().0 as isize;
                 }
-            }
-            // Only the theme-disabled BS_GROUPBOX (the "Search
-            // Mode" frame) routes through this — themed
-            // checkboxes / radios paint themselves and ignore
-            // the brush. Returning the dialog brush lets
-            // classic groupbox paint clear the title rect so
-            // the border line breaks at the title text.
-            WM_CTLCOLORBTN => {
-                let hdc = HDC(wparam.0 as *mut c_void);
-                let _ = SetBkColor(hdc, COLORREF(DIALOG_BG));
-                LRESULT(dialog_bg_brush().0 as isize)
+                if (*state_ptr).mode_group_title == from {
+                    let _ = SetBkColor(hdc, COLORREF(GetSysColor(COLOR_3DFACE)));
+                    return dialog_face_brush().0 as isize;
+                }
+                0
             }
             // Editable EDITs and combobox dropdown lists keep
             // the standard white interior — that's the modern
@@ -14663,7 +14282,7 @@ extern "system" fn find_replace_wnd_proc(
             WM_CTLCOLOREDIT | WM_CTLCOLORLISTBOX => {
                 let hdc = HDC(wparam.0 as *mut c_void);
                 let _ = SetBkMode(hdc, TRANSPARENT);
-                LRESULT(GetSysColorBrush(COLOR_WINDOW).0 as isize)
+                GetSysColorBrush(COLOR_WINDOW).0 as isize
             }
             WM_CLOSE => {
                 // The 'X' on the title bar hides the dialog —
@@ -14676,7 +14295,7 @@ extern "system" fn find_replace_wnd_proc(
                         let _ = SetFocus(Some(window_state.scintilla_hwnd));
                     }
                 }
-                LRESULT(0)
+                1
             }
             WM_NCDESTROY => {
                 // Reclaim the heap-allocated state. Only fires on
@@ -14689,15 +14308,12 @@ extern "system" fn find_replace_wnd_proc(
                     SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
                     drop(Box::from_raw(state_ptr));
                 }
-                DefWindowProcW(hwnd, msg, wparam, lparam)
+                0
             }
-            _ => DefWindowProcW(hwnd, msg, wparam, lparam),
+            _ => 0,
         }
     }));
-    match result {
-        Ok(lr) => lr,
-        Err(_) => unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) },
-    }
+    result.unwrap_or(0)
 }
 
 /// Select every character in a combobox's edit field. Comboboxes
@@ -15788,123 +15404,14 @@ unsafe fn apply_tab_visibility(state: &FindReplaceState) {
     }
 }
 
-/// Lazily create the Find/Replace dialog (the first call creates
-/// it; subsequent calls re-show the existing one) and select the
-/// requested tab. Returns the dialog HWND so the caller can stash
-/// it on `WindowState` for `IsDialogMessageW` integration.
-fn show_find_replace_dialog(
-    main_hwnd: HWND,
-    existing: Option<HWND>,
-    initial_tab: FindReplaceTab,
-) -> Option<HWND> {
-    use std::sync::OnceLock;
-    static REGISTERED: OnceLock<()> = OnceLock::new();
-
+/// Create the Find/Replace dialog's child controls and seed them.
+///
+/// Runs inside `WM_INITDIALOG`. Returns the "Find what" edit's HWND
+/// so the caller can give it initial focus, or `None` if any child
+/// could not be created.
+unsafe fn build_find_replace_controls(dlg: HWND, state: &mut FindReplaceState) -> Option<HWND> {
     unsafe {
-        // Reuse path: the dialog already exists. Just bring it to
-        // the foreground, select the right tab, and focus the
-        // Find what edit so the user can type immediately.
-        if let Some(dlg) = existing {
-            if IsWindow(Some(dlg)).as_bool() {
-                let state_ptr = GetWindowLongPtrW(dlg, GWLP_USERDATA) as *mut FindReplaceState;
-                if !state_ptr.is_null() && (*state_ptr).controls_ready {
-                    let state = &mut *state_ptr;
-                    state.tab = initial_tab;
-                    let idx = match initial_tab {
-                        FindReplaceTab::Find => 0,
-                        FindReplaceTab::Replace => 1,
-                        FindReplaceTab::FindInFiles => 2,
-                    };
-                    SendMessageW(
-                        state.tab_ctrl,
-                        TCM_SETCURSEL,
-                        Some(WPARAM(idx as usize)),
-                        None,
-                    );
-                    apply_tab_visibility(state);
-                    // Wipe any stale Replace All count from the
-                    // previous session, prefill the find box from
-                    // the current selection, and clear the
-                    // In-selection snapshot — its bounds may
-                    // refer to text the user has since edited
-                    // away.
-                    clear_status(state);
-                    SendMessageW(
-                        state.in_selection_cb,
-                        BM_SETCHECK,
-                        Some(WPARAM(BST_UNCHECKED.0 as usize)),
-                        None,
-                    );
-                    state.in_selection_range = None;
-                    refresh_history_dropdowns(state);
-                    prefill_from_selection(state);
-                    let _ = ShowWindow(dlg, SW_SHOW);
-                    let _ = SetFocus(Some(state.find_edit));
-                    combobox_select_all(state.find_edit);
-                    return Some(dlg);
-                }
-            }
-        }
-
-        // First-time creation.
         let instance = GetModuleHandleW(None).ok()?;
-        REGISTERED.get_or_init(|| {
-            let class = WNDCLASSEXW {
-                cbSize: std::mem::size_of::<WNDCLASSEXW>() as u32,
-                style: CS_HREDRAW | CS_VREDRAW,
-                lpfnWndProc: Some(find_replace_wnd_proc),
-                hInstance: instance.into(),
-                hCursor: LoadCursorW(None, IDC_ARROW).unwrap_or_default(),
-                // See the matching note on the Goto class —
-                // custom RGB brush keyed to the Win11 themed
-                // checkbox tone so the chrome matches.
-                hbrBackground: dialog_bg_brush(),
-                lpszClassName: FIND_REPLACE_CLASS,
-                ..Default::default()
-            };
-            let _ = RegisterClassExW(&raw const class);
-        });
-
-        let mut state = Box::new(FindReplaceState {
-            main_hwnd,
-            tab: initial_tab,
-            tab_ctrl: HWND::default(),
-            find_label: HWND::default(),
-            find_edit: HWND::default(),
-            replace_label: HWND::default(),
-            replace_edit: HWND::default(),
-            backward_cb: HWND::default(),
-            whole_word_cb: HWND::default(),
-            match_case_cb: HWND::default(),
-            wrap_around_cb: HWND::default(),
-            mode_group: HWND::default(),
-            mode_group_title: HWND::default(),
-            mode_normal_radio: HWND::default(),
-            mode_extended_radio: HWND::default(),
-            mode_regex_radio: HWND::default(),
-            dot_newline_cb: HWND::default(),
-            find_next_btn: HWND::default(),
-            count_btn: HWND::default(),
-            replace_btn: HWND::default(),
-            replace_all_btn: HWND::default(),
-            close_btn: HWND::default(),
-            in_selection_cb: HWND::default(),
-            fif_filters_label: HWND::default(),
-            fif_filters_edit: HWND::default(),
-            fif_directory_label: HWND::default(),
-            fif_directory_edit: HWND::default(),
-            fif_browse_btn: HWND::default(),
-            fif_subfolders_cb: HWND::default(),
-            fif_hidden_folders_cb: HWND::default(),
-            fif_find_all_btn: HWND::default(),
-            fif_replace_in_files_btn: HWND::default(),
-            status_label: HWND::default(),
-            status_is_error: false,
-            in_selection_range: None,
-            controls_ready: false,
-        });
-        let state_ptr: *mut FindReplaceState = &raw mut *state;
-
         // Layout (client coords). Tab control across the top, then
         // a left column with edit fields + checkboxes + Search Mode
         // group, and a right column with the action buttons.
@@ -15966,48 +15473,10 @@ fn show_find_replace_dialog(
         const STATUS_TO_CLOSE_GAP: i32 = 8;
         const CLOSE_Y: i32 = STATUS_Y - STATUS_TO_CLOSE_GAP - BTN_H;
 
-        let mut window_rect = RECT {
-            left: 0,
-            top: 0,
-            right: CLIENT_W,
-            bottom: CLIENT_H,
-        };
-        let _ = AdjustWindowRectEx(
-            &raw mut window_rect,
-            WS_POPUP | WS_CAPTION | WS_SYSMENU,
-            false,
-            WS_EX_DLGMODALFRAME | WS_EX_CONTROLPARENT,
-        );
-        let dlg_w = window_rect.right - window_rect.left;
-        let dlg_h = window_rect.bottom - window_rect.top;
-
-        let mut owner_rect = RECT::default();
-        let _ = GetWindowRect(main_hwnd, &raw mut owner_rect);
-        let owner_w = owner_rect.right - owner_rect.left;
-        let owner_h = owner_rect.bottom - owner_rect.top;
-        let dlg_x = owner_rect.left + (owner_w - dlg_w) / 2;
-        let dlg_y = owner_rect.top + (owner_h - dlg_h) / 2;
-
-        let dlg = CreateWindowExW(
-            WS_EX_DLGMODALFRAME | WS_EX_CONTROLPARENT,
-            FIND_REPLACE_CLASS,
-            w!("Find"),
-            WS_POPUP | WS_CAPTION | WS_SYSMENU,
-            dlg_x,
-            dlg_y,
-            dlg_w,
-            dlg_h,
-            Some(main_hwnd),
-            None,
-            Some(instance.into()),
-            Some(state_ptr.cast::<c_void>()),
-        )
-        .ok()?;
-        // If any child creation below `?`-fails, the dialog HWND
-        // is destroyed by this guard so we don't leak a live but
-        // half-built popup. We `mem::forget` the guard at the end
-        // of the function once the dialog is fully assembled.
-        let dlg_guard = DlgDestroyGuard(dlg);
+        // The template declares a placeholder extent; resize to the
+        // exact client pixel size the layout constants above assume,
+        // before the dialog is shown.
+        dlgtemplate::size_client_and_center(dlg, state.main_hwnd, CLIENT_W, CLIENT_H);
 
         // Tab control (Find | Replace).
         let tab_ctrl = CreateWindowExW(
@@ -16625,43 +16094,15 @@ fn show_find_replace_dialog(
         ] {
             apply_dialog_font(child, font);
         }
-        // Strip visual style off every checkbox and every radio
-        // so they paint on the classic BUTTON path that honours
-        // our `WM_CTLCOLORBTN` return (`dialog_bg_brush`, see
-        // line ~23369) — themed paint's default COLOR_BTNFACE
-        // (~#F0F0F0) rectangle shows up as a slightly-darker
-        // patch under each label that doesn't match the
-        // `#F9F9F9` dialog chrome. `mode_group` is not in this
-        // list — it's now an `SS_ETCHEDFRAME` STATIC (not a
-        // BS_GROUPBOX), so it never had the theme-paint problem
-        // to begin with.
-        //
-        // A prior iteration of this comment warned that
-        // classic-painted checkboxes could leave stacked glyph
-        // fragments on rapid toggle. That was observed with an
-        // earlier `NULL_BRUSH` return from `WM_CTLCOLORBTN` —
-        // the current `dialog_bg_brush` return fills each
-        // button's client rect with a solid colour before the
-        // text redraws, which clears the previous frame's
-        // glyphs cleanly. If glyph stacking is observed on any
-        // of these controls, add a per-control subclass that
-        // forces an `InvalidateRect(hwnd, None, true)` on
-        // `BM_SETCHECK` instead of reverting the theme change.
-        for child in [
-            backward_cb,
-            whole_word_cb,
-            match_case_cb,
-            wrap_around_cb,
-            in_selection_cb,
-            mode_normal_radio,
-            mode_extended_radio,
-            mode_regex_radio,
-            dot_newline_cb,
-            fif_subfolders_cb,
-            fif_hidden_folders_cb,
-        ] {
-            disable_visual_style(child);
-        }
+        // NOTE: the checkboxes and radios above deliberately keep
+        // their visual style. Before the `#32770` migration they
+        // were stripped with `disable_visual_style` so they would
+        // paint on the classic BUTTON path: themed paint draws its
+        // background at `COLOR_3DFACE` (~#F0F0F0), which sat as a
+        // slightly-darker patch under each label on a dialog whose
+        // class brush was a hardcoded `#F9F9F9`. `DefDlgProc` paints
+        // the dialog at the same system colour the theme uses, so
+        // they blend as-is and keep the Win11 look.
 
         state.tab_ctrl = tab_ctrl;
         state.find_label = find_label;
@@ -16707,26 +16148,164 @@ fn show_find_replace_dialog(
 
         state.controls_ready = true;
 
-        let idx = match initial_tab {
+        // `state.tab` carries the tab the caller asked for — it is
+        // seeded when the state is constructed, which is how the
+        // requested tab reaches `WM_INITDIALOG` now that the
+        // controls are built here rather than by the caller.
+        let idx = match state.tab {
             FindReplaceTab::Find => 0,
             FindReplaceTab::Replace => 1,
             FindReplaceTab::FindInFiles => 2,
         };
         SendMessageW(tab_ctrl, TCM_SETCURSEL, Some(WPARAM(idx as usize)), None);
-        apply_tab_visibility(&state);
-        refresh_history_dropdowns(&state);
-        prefill_from_selection(&state);
+        apply_tab_visibility(state);
+        refresh_history_dropdowns(state);
+        prefill_from_selection(state);
+        Some(state.find_edit)
+    }
+}
 
-        // Drop ownership: the wnd_proc owns the Box from here on
-        // and reclaims it on WM_NCDESTROY. The pointer in
-        // GWLP_USERDATA was set during WM_NCCREATE. Disarm the
-        // dlg_guard for the same reason — the dialog is fully
-        // built and we want it to outlive this function.
-        std::mem::forget(state);
-        std::mem::forget(dlg_guard);
+/// Lazily create the Find/Replace dialog (the first call creates
+/// it; subsequent calls re-show the existing one) and select the
+/// requested tab. Returns the dialog HWND so the caller can stash
+/// it on `WindowState` for `IsDialogMessageW` integration.
+fn show_find_replace_dialog(
+    main_hwnd: HWND,
+    existing: Option<HWND>,
+    initial_tab: FindReplaceTab,
+) -> Option<HWND> {
+    unsafe {
+        // Reuse path: the dialog already exists. Just bring it to
+        // the foreground, select the right tab, and focus the
+        // Find what edit so the user can type immediately.
+        if let Some(dlg) = existing {
+            if IsWindow(Some(dlg)).as_bool() {
+                let state_ptr = GetWindowLongPtrW(dlg, GWLP_USERDATA) as *mut FindReplaceState;
+                if !state_ptr.is_null() && (*state_ptr).controls_ready {
+                    let state = &mut *state_ptr;
+                    state.tab = initial_tab;
+                    let idx = match initial_tab {
+                        FindReplaceTab::Find => 0,
+                        FindReplaceTab::Replace => 1,
+                        FindReplaceTab::FindInFiles => 2,
+                    };
+                    SendMessageW(
+                        state.tab_ctrl,
+                        TCM_SETCURSEL,
+                        Some(WPARAM(idx as usize)),
+                        None,
+                    );
+                    apply_tab_visibility(state);
+                    // Wipe any stale Replace All count from the
+                    // previous session, prefill the find box from
+                    // the current selection, and clear the
+                    // In-selection snapshot — its bounds may
+                    // refer to text the user has since edited
+                    // away.
+                    clear_status(state);
+                    SendMessageW(
+                        state.in_selection_cb,
+                        BM_SETCHECK,
+                        Some(WPARAM(BST_UNCHECKED.0 as usize)),
+                        None,
+                    );
+                    state.in_selection_range = None;
+                    refresh_history_dropdowns(state);
+                    prefill_from_selection(state);
+                    let _ = ShowWindow(dlg, SW_SHOW);
+                    let _ = SetFocus(Some(state.find_edit));
+                    combobox_select_all(state.find_edit);
+                    return Some(dlg);
+                }
+            }
+        }
 
+        // First-time creation.
+        let instance = GetModuleHandleW(None).ok()?;
+
+        let state = Box::new(FindReplaceState {
+            main_hwnd,
+            tab: initial_tab,
+            tab_ctrl: HWND::default(),
+            find_label: HWND::default(),
+            find_edit: HWND::default(),
+            replace_label: HWND::default(),
+            replace_edit: HWND::default(),
+            backward_cb: HWND::default(),
+            whole_word_cb: HWND::default(),
+            match_case_cb: HWND::default(),
+            wrap_around_cb: HWND::default(),
+            mode_group: HWND::default(),
+            mode_group_title: HWND::default(),
+            mode_normal_radio: HWND::default(),
+            mode_extended_radio: HWND::default(),
+            mode_regex_radio: HWND::default(),
+            dot_newline_cb: HWND::default(),
+            find_next_btn: HWND::default(),
+            count_btn: HWND::default(),
+            replace_btn: HWND::default(),
+            replace_all_btn: HWND::default(),
+            close_btn: HWND::default(),
+            in_selection_cb: HWND::default(),
+            fif_filters_label: HWND::default(),
+            fif_filters_edit: HWND::default(),
+            fif_directory_label: HWND::default(),
+            fif_directory_edit: HWND::default(),
+            fif_browse_btn: HWND::default(),
+            fif_subfolders_cb: HWND::default(),
+            fif_hidden_folders_cb: HWND::default(),
+            fif_find_all_btn: HWND::default(),
+            fif_replace_in_files_btn: HWND::default(),
+            status_label: HWND::default(),
+            status_is_error: false,
+            in_selection_range: None,
+            controls_ready: false,
+        });
+        // Hand the state to the dialog manager as the
+        // `WM_INITDIALOG` param. Ownership transfers to the dialog:
+        // `WM_NCDESTROY` reclaims the Box. On a creation failure
+        // nothing ever reaches the proc, so this function reclaims
+        // it instead.
+        let state_ptr = Box::into_raw(state);
+
+        let template = dlgtemplate::DialogTemplate::new(
+            "Find",
+            dlgtemplate::dialog_style(),
+            WS_EX_CONTROLPARENT.0,
+            270,
+            220,
+        )
+        .finish();
+
+        let Some(dlg) = dlgtemplate::create_modeless(
+            instance,
+            &template,
+            main_hwnd,
+            Some(find_replace_dlg_proc),
+            state_ptr as isize,
+        ) else {
+            // Deliberately NOT `drop(Box::from_raw(state_ptr))`.
+            // `WM_INITDIALOG` parks the pointer in `GWLP_USERDATA`
+            // before it can fail, and its failure path destroys the
+            // dialog — so by the time a creation failure is visible
+            // here, `WM_NCDESTROY` has usually already reclaimed the
+            // Box, and reclaiming it again is a double free. The
+            // residual is a one-`FindReplaceState` leak on the far
+            // rarer path where creation fails *before*
+            // `WM_INITDIALOG` runs at all. That is the same trade
+            // `udl_editor::show_udl_editor` documents, and it is the
+            // right way round: a leak on an already-failing path
+            // beats a heap-corruption primitive.
+            return None;
+        };
+
+        // `create_modeless` does not show the dialog — the template
+        // carries no `WS_VISIBLE` — so `WM_INITDIALOG` has already
+        // laid everything out by the time this runs.
         let _ = ShowWindow(dlg, SW_SHOW);
-        let _ = SetFocus(Some(find_edit));
+        if let Some(state) = state_ptr.cast_const().as_ref() {
+            let _ = SetFocus(Some(state.find_edit));
+        }
         Some(dlg)
     }
 }
@@ -19303,22 +18882,9 @@ unsafe fn register_fif_classes() {
             ..Default::default()
         };
         let _ = RegisterClassExW(&raw const splitter_class);
-
-        // FIF progress dialog: modeless top-level window shown
-        // while a search is running. Standard arrow cursor; system
-        // 3D face for the background; small cap-only window styled
-        // by `show_fif_progress`.
-        let progress_class = WNDCLASSEXW {
-            cbSize: std::mem::size_of::<WNDCLASSEXW>() as u32,
-            style: CS_HREDRAW | CS_VREDRAW,
-            lpfnWndProc: Some(fif_progress_wnd_proc),
-            hInstance: instance.into(),
-            hCursor: LoadCursorW(None, IDC_ARROW).unwrap_or_default(),
-            hbrBackground: dialog_bg_brush(),
-            lpszClassName: FIF_PROGRESS_CLASS,
-            ..Default::default()
-        };
-        let _ = RegisterClassExW(&raw const progress_class);
+        // The FIF progress dialog used to register a third class
+        // here. It is a `#32770` dialog now, so there is nothing to
+        // register — see `show_fif_progress`.
     });
 }
 
@@ -20786,90 +20352,71 @@ unsafe fn cancel_via_owner(progress: HWND) {
 /// clicks route to `Shell::cancel_fif` via the parent's
 /// `WindowState`, and the window is destroyed by the search-
 /// completion drain in `main_wnd_proc`.
-extern "system" fn fif_progress_wnd_proc(
+extern "system" fn fif_progress_dlg_proc(
     hwnd: HWND,
     msg: u32,
     wparam: WPARAM,
     lparam: LPARAM,
-) -> LRESULT {
+) -> isize {
     unsafe {
         match msg {
+            WM_INITDIALOG => {
+                // `lparam` carries the *owner* HWND, not a state
+                // pointer — this dialog owns nothing. Cancel routes
+                // to `Shell::cancel_fif` through the owner's
+                // `WindowState`.
+                SetWindowLongPtrW(hwnd, GWLP_USERDATA, lparam.0);
+                if build_fif_progress_controls(hwnd, HWND(lparam.0 as *mut c_void)).is_none() {
+                    let _ = DestroyWindow(hwnd);
+                }
+                1
+            }
             WM_COMMAND => {
                 let cmd = (wparam.0 & 0xFFFF) as u16;
                 if cmd == IDC_FIF_PROGRESS_CANCEL || cmd == IDCANCEL_U16 {
+                    // Cancel button, Escape, and the title-bar X all
+                    // land here — `DefDlgProc` turns the last two
+                    // into `IDCANCEL`, which is why the separate
+                    // `WM_CLOSE` arm the custom class needed is gone.
+                    //
+                    // Deliberately *not* `EndDialog`: this dialog is
+                    // modeless, and the terminal `FifEvent::Cancelled`
+                    // is what destroys it, through
+                    // `finalize_fif_job`. Tearing it down here would
+                    // leave a stale HWND in `WindowState` that
+                    // `finalize_fif_job` would later double-destroy.
                     cancel_via_owner(hwnd);
-                    // The terminal `FifEvent::Cancelled` will
-                    // destroy this window; no need to do it here.
-                    return LRESULT(0);
+                    return 1;
                 }
-                DefWindowProcW(hwnd, msg, wparam, lparam)
+                0
             }
-            WM_CLOSE => {
-                // System-menu close (the title-bar X). Route
-                // through Shell::cancel_fif so the terminal event
-                // arrives and `finalize_fif_job` clears
-                // `fif_progress_hwnd`. Skipping this would let
-                // `DefWindowProcW` destroy the window directly,
-                // leaving a stale HWND in `WindowState` that
-                // `finalize_fif_job` would later double-destroy.
-                cancel_via_owner(hwnd);
-                LRESULT(0)
-            }
-            WM_NCCREATE => {
-                let cs = lparam.0 as *const CREATESTRUCTW;
-                if !cs.is_null() {
-                    let owner_ptr = (*cs).lpCreateParams as isize;
-                    SetWindowLongPtrW(hwnd, GWLP_USERDATA, owner_ptr);
-                }
-                DefWindowProcW(hwnd, msg, wparam, lparam)
-            }
-            WM_ERASEBKGND => {
-                let hdc = HDC(wparam.0 as *mut c_void);
-                let mut rect = RECT::default();
-                let _ = GetClientRect(hwnd, &raw mut rect);
-                FillRect(hdc, &raw const rect, dialog_bg_brush());
-                LRESULT(1)
-            }
-            WM_CTLCOLORSTATIC => LRESULT(dialog_bg_brush().0 as isize),
-            _ => DefWindowProcW(hwnd, msg, wparam, lparam),
+            // No `WM_ERASEBKGND` / `WM_CTLCOLORSTATIC` arms:
+            // `DefDlgProc` paints the client area and answers the
+            // control-colour message with the system dialog brush.
+            _ => 0,
         }
     }
 }
 
-/// Construct and show the FIF progress dialog. `owner` is the main
-/// window — its `WindowState` is reachable via `GWLP_USERDATA`, and
-/// the Cancel button forwards through it to `Shell::cancel_fif`.
-unsafe fn show_fif_progress(owner: HWND, query: &str) -> Option<HWND> {
+/// Create the FIF progress dialog's child controls.
+///
+/// Runs inside `WM_INITDIALOG`. The query text is read back off the
+/// owner's `WindowState` rather than passed in, because the dialog
+/// manager's single `lparam` is already carrying the owner handle
+/// this dialog needs for its Cancel route.
+unsafe fn build_fif_progress_controls(dlg: HWND, owner: HWND) -> Option<()> {
     unsafe {
         let instance = GetModuleHandleW(None).ok()?;
-        const W: i32 = 460;
-        const H: i32 = 140;
-        let mut owner_rect = RECT::default();
-        let _ = GetWindowRect(owner, &raw mut owner_rect);
-        let owner_w = owner_rect.right - owner_rect.left;
-        let owner_h = owner_rect.bottom - owner_rect.top;
-        let x = owner_rect.left + (owner_w - W) / 2;
-        let y = owner_rect.top + (owner_h - H) / 2;
 
-        let mut title_buf: Vec<u16> = "Find in Files"
-            .encode_utf16()
-            .chain(std::iter::once(0))
-            .collect();
-        let dlg = CreateWindowExW(
-            WS_EX_DLGMODALFRAME,
-            FIF_PROGRESS_CLASS,
-            PCWSTR(title_buf.as_mut_ptr()),
-            WS_POPUP | WS_CAPTION | WS_SYSMENU,
-            x,
-            y,
-            W,
-            H,
-            Some(owner),
-            None,
-            Some(instance.into()),
-            Some(owner.0),
-        )
-        .ok()?;
+        // Outer-window dimensions, not client: the layout constants
+        // below subtract a hand-tuned non-client gap, so they are
+        // authored against the window rect. See
+        // `size_window_and_center`.
+        const W: i32 = FIF_PROGRESS_WINDOW_W;
+        const H: i32 = FIF_PROGRESS_WINDOW_H;
+        dlgtemplate::size_window_and_center(dlg, owner, W, H);
+
+        let query = fif_progress_query(owner);
 
         // First-row label: query text. Second-row label: current
         // file path. Third-row label: stats (X hits in Y files).
@@ -20953,9 +20500,70 @@ unsafe fn show_fif_progress(owner: HWND, query: &str) -> Option<HWND> {
             apply_dialog_font(child, font);
         }
 
+        let font = HFONT(GetStockObject(DEFAULT_GUI_FONT).0);
+        for child in [path_static, stats_static, cancel_btn] {
+            apply_dialog_font(child, font);
+        }
+        Some(())
+    }
+}
+
+/// Outer-window size of the FIF progress dialog, in pixels.
+const FIF_PROGRESS_WINDOW_W: i32 = 460;
+const FIF_PROGRESS_WINDOW_H: i32 = 140;
+
+/// Construct and show the FIF progress dialog. `owner` is the main
+/// window — its `WindowState` is reachable via `GWLP_USERDATA`, and
+/// the Cancel button forwards through it to `Shell::cancel_fif`.
+unsafe fn show_fif_progress(owner: HWND, query: &str) -> Option<HWND> {
+    unsafe {
+        let instance = GetModuleHandleW(None).ok()?;
+
+        // Stash the query where `WM_INITDIALOG` can reach it. The
+        // dialog manager gives the proc exactly one `lparam`, and
+        // this dialog needs it for the owner handle.
+        FIF_PROGRESS_QUERY.with(|q| query.clone_into(&mut q.borrow_mut()));
+
+        let template = dlgtemplate::DialogTemplate::new(
+            "Find in Files",
+            dlgtemplate::dialog_style(),
+            0,
+            230,
+            70,
+        )
+        .finish();
+
+        let dlg = dlgtemplate::create_modeless(
+            instance,
+            &template,
+            owner,
+            Some(fif_progress_dlg_proc),
+            owner.0 as isize,
+        )?;
         let _ = ShowWindow(dlg, SW_SHOW);
         Some(dlg)
     }
+}
+
+thread_local! {
+    /// Query string for the progress dialog currently being built.
+    ///
+    /// A `thread_local` rather than a field on some state struct
+    /// because this dialog carries no state object at all — its
+    /// `WM_INITDIALOG` param is the owner HWND. Only ever written
+    /// immediately before `create_modeless` and read once from
+    /// `WM_INITDIALOG`, both on the UI thread, and only one FIF
+    /// search can be in flight at a time.
+    static FIF_PROGRESS_QUERY: std::cell::RefCell<String> =
+        const { std::cell::RefCell::new(String::new()) };
+}
+
+/// Read back the query string stashed by `show_fif_progress`.
+///
+/// Takes `_owner` so the call site reads as "the query for this
+/// dialog" rather than as a bare global fetch.
+fn fif_progress_query(_owner: HWND) -> String {
+    FIF_PROGRESS_QUERY.with(|q| q.borrow().clone())
 }
 
 /// Update the "current path" label on the progress dialog.
