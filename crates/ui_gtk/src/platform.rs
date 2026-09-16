@@ -22,10 +22,11 @@ use codepp_scintilla_sys::{
     SCI_GETANCHOR, SCI_GETCOLUMN, SCI_GETCURRENTPOS, SCI_GETDOCPOINTER, SCI_GETFIRSTVISIBLELINE,
     SCI_GETLENGTH, SCI_GETLINECOUNT, SCI_GETMODIFY, SCI_GETOVERTYPE, SCI_GETSELECTIONEND,
     SCI_GETSELECTIONSTART, SCI_GETTEXT, SCI_GETXOFFSET, SCI_GETZOOM, SCI_GOTOPOS,
-    SCI_LINEFROMPOSITION, SCI_LINESCROLL, SCI_LINESONSCREEN, SCI_POSITIONAFTER, SCI_SETDOCPOINTER,
-    SCI_SETEMPTYSELECTION, SCI_SETEOLMODE, SCI_SETSAVEPOINT, SCI_SETSEL, SCI_SETSELECTIONEND,
-    SCI_SETSELECTIONSTART, SCI_SETTABWIDTH, SCI_SETTEXT, SCI_SETXOFFSET, SCI_STYLEGETBACK,
-    SCI_STYLEGETFORE, SC_DOCUMENTOPTION_DEFAULT, SC_EOL_CR, SC_EOL_CRLF, SC_EOL_LF, STYLE_DEFAULT,
+    SCI_LINEFROMPOSITION, SCI_LINESCROLL, SCI_LINESONSCREEN, SCI_POSITIONAFTER,
+    SCI_RELEASEDOCUMENT, SCI_SETDOCPOINTER, SCI_SETEMPTYSELECTION, SCI_SETEOLMODE,
+    SCI_SETSAVEPOINT, SCI_SETSEL, SCI_SETSELECTIONEND, SCI_SETSELECTIONSTART, SCI_SETTABWIDTH,
+    SCI_SETTEXT, SCI_SETXOFFSET, SCI_STYLEGETBACK, SCI_STYLEGETFORE, SC_DOCUMENTOPTION_DEFAULT,
+    SC_EOL_CR, SC_EOL_CRLF, SC_EOL_LF, STYLE_DEFAULT,
 };
 
 /// Visible width of a TAB, in spaces. Matches `ui_win32`'s tab-width
@@ -733,6 +734,19 @@ impl UiPlatform for GtkUi {
             },
             false,
         )
+    }
+
+    fn release_doc(&mut self, doc: isize) {
+        if doc == 0 {
+            // "Never materialized" sentinel — nothing to release.
+            return;
+        }
+        // Drops the tab-owned reference. A still-bound document only
+        // goes 2→1 here (the view holds its own reference; the free
+        // happens at the next `SCI_SETDOCPOINTER`); an unbound one is
+        // freed immediately. Same call `close_tab_by_id`'s `ClosedTab`
+        // path makes in `lib.rs` — see the trait docs.
+        self.editor.send(SCI_RELEASEDOCUMENT, 0, doc);
     }
 
     fn mark_active_buffer_dirty(&mut self) {

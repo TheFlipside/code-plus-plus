@@ -3569,6 +3569,19 @@ impl UiPlatform for Win32Ui {
         dirty
     }
 
+    fn release_doc(&mut self, doc: isize) {
+        if doc == 0 {
+            // "Never materialized" sentinel — nothing to release.
+            return;
+        }
+        // Drops the tab-owned reference. A still-bound document only
+        // goes 2→1 here (the view holds its own reference; the free
+        // happens at the next `SCI_SETDOCPOINTER`); an unbound one is
+        // freed immediately. Same call the `ClosedTab` path makes in
+        // `handle_close_active_tab` — see the trait docs.
+        self.editor.send(SCI_RELEASEDOCUMENT, 0, doc);
+    }
+
     #[cfg(target_os = "windows")]
     fn dispatch_npp_menu_command(&mut self, idm: i32) -> bool {
         // Resolve the built-in mapping first. Plugin-allocated cmd

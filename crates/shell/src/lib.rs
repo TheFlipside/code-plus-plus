@@ -593,6 +593,39 @@ pub trait UiPlatform {
     /// tell "nothing was applied" from "applied, replacing nothing".
     fn replace_doc_text(&mut self, doc: isize, text: &str) -> bool;
 
+    /// Drop the tab-owned reference on a Scintilla document
+    /// (`SCI_RELEASEDOCUMENT`). `doc == 0` is the "never materialized"
+    /// sentinel and must be ignored.
+    ///
+    /// This is the channel for discarding a document on paths that
+    /// remove a `Tab` **without** going through
+    /// [`Shell::close_active_tab`] — whose [`ClosedTab`] snapshot is how
+    /// the ordinary close path reaches the same call. Today that is the
+    /// failed-load arm: a tab whose load is still in flight acquires a
+    /// document as soon as it is activated (`bind_active_view` has no
+    /// pending-load gate), and removing it on failure without this call
+    /// leaks the document for the rest of the process — the DESIGN.md
+    /// §7.4 entry this method closes.
+    ///
+    /// Refcount shape, for implementers: a `Tab.scintilla_doc` carries
+    /// one owned reference (from `SCI_CREATEDOCUMENT`), and a *bound*
+    /// document additionally carries the view's own reference
+    /// (`SCI_SETDOCPOINTER` addrefs). Releasing a still-bound document
+    /// therefore only drops 2→1 — the free happens at the next rebind,
+    /// by which point the incoming document has already been allocated
+    /// (see `ui_cocoa`'s `LAST_SEEDED_DOC` docs for why that ordering
+    /// holds) — while releasing an unbound one frees it immediately.
+    /// A backend with further views bound to the same document (e.g. an
+    /// open Document Map) holds correspondingly more references, and
+    /// the same rule extends: the free happens when the last binding
+    /// moves off. Either way the caller must not use `doc` again.
+    ///
+    /// Deliberately **not** defaulted: a no-op default would leave a
+    /// backend silently leaking while looking implemented, which is the
+    /// failure shape §7.4 named when it deferred this method until all
+    /// three backends could land it together.
+    fn release_doc(&mut self, doc: isize);
+
     /// Dispatch a Notepad++-ABI `IDM_*` command id. Drives
     /// `NPPM_MENUCOMMAND`. The implementation maps the N++
     /// command id to whichever internal command routes to the
@@ -4588,16 +4621,19 @@ impl Shell {
         // and nothing else, which for the `new 1` scratch means it is
         // handed back exactly as it was — same id, same document, same
         // `untitled_seq` (the Ok arm is the only place that clears it).
-        // That also keeps its document tracked: `self.tabs.remove` drops
-        // the `Tab` and its `scintilla_doc` with it, and
-        // `close_active_tab`'s `ClosedTab` is the only channel by which a
-        // document pointer ever reaches a backend's
-        // `SCI_RELEASEDOCUMENT`, so removing a bound tab leaks it.
+        // Its document is neither dropped nor released here, because the
+        // kept tab still owns it.
         //
-        // A fresh tab that *was* prematurely bound still leaks its
-        // document on this path. That predates this method and is
-        // tracked in DESIGN.md §7.4; closing it needs a release channel
-        // the `UiPlatform` trait does not currently have.
+        // A fresh tab that *was* prematurely bound (the user clicked
+        // onto it mid-load, or `load_npp_session` restored it as the
+        // active tab) owns a document, and `self.tabs.remove` alone
+        // would drop that pointer with no `SCI_RELEASEDOCUMENT` — the
+        // leak DESIGN.md §7.4 tracked until `UiPlatform::release_doc`
+        // existed. The release below runs before the `remove`, possibly
+        // while the document is still bound, which is safe: the view
+        // holds its own reference, so a bound document only drops 2→1
+        // here and is freed by the rebind further down, after the
+        // incoming document has been allocated (see the trait docs).
         let borrowed_an_existing_tab = self.loads_onto_existing_tabs.remove(&err.id);
         let target = self
             .tabs
@@ -4606,6 +4642,10 @@ impl Shell {
         if let Some(idx) = target {
             let is_fresh = !borrowed_an_existing_tab && self.tabs[idx].path.is_none();
             if is_fresh {
+                let doomed_doc = self.tabs[idx].scintilla_doc;
+                if doomed_doc != 0 {
+                    ui.release_doc(doomed_doc);
+                }
                 self.tabs.remove(idx);
                 let was_active = self.active_tab == Some(idx);
                 self.active_tab = match self.active_tab {
@@ -8875,6 +8915,10 @@ mod tests {
         /// Every `replace_doc_text` call, for the Replace-in-Files
         /// open-buffer tests.
         replaced_docs: Vec<(isize, String)>,
+        /// Every `release_doc` call, in order — lets the failed-load
+        /// tests assert a removed tab's document reached the release
+        /// channel, and that a kept tab's never does.
+        released_docs: Vec<isize>,
         status_calls: Vec<(LangType, String, String, u64)>,
         plugin_status_calls: Vec<(usize, String)>,
         /// Every `set_clipboard` call's payload set, so a test can assert
@@ -9283,6 +9327,13 @@ mod tests {
             }
             self.replaced_docs.push((doc, text.to_string()));
             true
+        }
+        fn release_doc(&mut self, doc: isize) {
+            // Record only. The fixture deliberately does not model the
+            // free — whether a real release frees now or at the next
+            // rebind depends on the binding state, which is exactly the
+            // refcount subtlety the trait docs pin on the backends.
+            self.released_docs.push(doc);
         }
         #[cfg(target_os = "windows")]
         fn dispatch_npp_menu_command(&mut self, idm: i32) -> bool {
@@ -12699,11 +12750,15 @@ mod tests {
     fn a_failed_open_over_the_scratch_buffer_leaks_no_document() {
         // The reused `new 1` already has a Scintilla document, bound by
         // `new_untitled`. Removing its tab on a failed load would drop
-        // that pointer with no `SCI_RELEASEDOCUMENT` — `ClosedTab` is
-        // the only channel by which one ever reaches a backend — and the
-        // now-empty tab list would then have `new_untitled` allocate a
-        // *second* document plus a fresh buffer id, silently
-        // invalidating any id a plugin had cached.
+        // the tab's ownership of that document, and the now-empty tab
+        // list would then have `new_untitled` allocate a *second*
+        // document plus a fresh buffer id, silently invalidating any id
+        // a plugin had cached. The borrowed tab must be handed back
+        // exactly as it was — which also means the failed-load arm's
+        // `release_doc` must not fire for it, since the kept tab still
+        // owns its document (asserted at the bottom; this is the
+        // mutation direction that catches a release keyed on "owns a
+        // document" instead of on `is_fresh`).
         //
         // Pinned on `activate_tab_calls` because that is where the
         // second allocation shows up: exactly one `(_, 0, _)` request,
@@ -12751,6 +12806,10 @@ mod tests {
         assert_eq!(t.scintilla_doc, scratch_doc);
         assert_eq!(t.untitled_seq, scratch_seq, "still `new 1`");
         assert!(t.path.is_none() && t.pending_load.is_none());
+        assert!(
+            ui.released_docs.is_empty(),
+            "a kept tab's document must never reach `release_doc` — the tab still owns it"
+        );
     }
 
     #[test]
@@ -12834,6 +12893,7 @@ mod tests {
             "precondition: the premature rebind must have bound a document"
         );
         let doomed_id = shell.tabs[doomed_idx].id;
+        let doomed_doc = shell.tabs[doomed_idx].scintilla_doc;
 
         drain_until(
             &mut shell,
@@ -12856,6 +12916,15 @@ mod tests {
                 .iter()
                 .any(|t| t.path.is_none() && t.untitled_seq.is_none()),
             "a pathless tab with no untitled identity was left behind"
+        );
+        // The removed tab's document must reach `release_doc` — dropping
+        // the `Tab` alone leaks it, which is the §7.4 entry this pins.
+        // Exactly one release: the good open's tab is kept, and the
+        // scratch test covers the borrowed direction.
+        assert_eq!(
+            ui.released_docs,
+            vec![doomed_doc],
+            "the prematurely-bound tab's document was not released on its failed load"
         );
     }
 

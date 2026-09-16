@@ -22,9 +22,10 @@ use codepp_scintilla_sys::{
     SCI_GETFIRSTVISIBLELINE, SCI_GETLENGTH, SCI_GETLINECOUNT, SCI_GETMODIFY, SCI_GETOVERTYPE,
     SCI_GETSELECTIONEND, SCI_GETSELECTIONSTART, SCI_GETTEXT, SCI_GETXOFFSET, SCI_GETZOOM,
     SCI_GOTOPOS, SCI_LINEFROMPOSITION, SCI_LINESCROLL, SCI_LINESONSCREEN, SCI_POSITIONAFTER,
-    SCI_SETDOCPOINTER, SCI_SETEMPTYSELECTION, SCI_SETEOLMODE, SCI_SETSAVEPOINT, SCI_SETSEL,
-    SCI_SETSELECTIONEND, SCI_SETSELECTIONSTART, SCI_SETTABWIDTH, SCI_SETTEXT, SCI_SETXOFFSET,
-    SCI_STYLEGETBACK, SCI_STYLEGETFORE, SC_EOL_CR, SC_EOL_CRLF, SC_EOL_LF, STYLE_DEFAULT,
+    SCI_RELEASEDOCUMENT, SCI_SETDOCPOINTER, SCI_SETEMPTYSELECTION, SCI_SETEOLMODE,
+    SCI_SETSAVEPOINT, SCI_SETSEL, SCI_SETSELECTIONEND, SCI_SETSELECTIONSTART, SCI_SETTABWIDTH,
+    SCI_SETTEXT, SCI_SETXOFFSET, SCI_STYLEGETBACK, SCI_STYLEGETFORE, SC_EOL_CR, SC_EOL_CRLF,
+    SC_EOL_LF, STYLE_DEFAULT,
 };
 use codepp_shell::{ClipboardData, SearchFlags, UiPlatform};
 use objc2_app_kit::{
@@ -850,6 +851,32 @@ impl UiPlatform for CocoaUi {
             },
             false,
         )
+    }
+
+    fn release_doc(&mut self, doc: isize) {
+        if doc == 0 {
+            // "Never materialized" sentinel — nothing to release.
+            return;
+        }
+        // Drops the tab-owned reference. A still-bound document only
+        // goes 2→1 here (the view holds its own reference; the free
+        // happens at the next `SCI_SETDOCPOINTER`); an unbound one is
+        // freed immediately — the same shape `action_close_tab`'s
+        // release relies on, and consistent with the `LAST_SEEDED_DOC`
+        // ABA premise in `lib.rs`: nothing here frees a document a
+        // pending bind is about to install. See the trait docs.
+        //
+        // One count on this backend the trait docs' 2→1 walkthrough
+        // does not include: an open Document Map holds its *own*
+        // `SCI_SETDOCPOINTER` reference to the active tab's document
+        // (`docmap::sync_to_active_tab`), so the moment-of-release
+        // count can be 3. That is a deferral, never a hazard —
+        // Scintilla keeps the document alive until the map re-points,
+        // which `refresh_tab_chrome` does unconditionally after every
+        // drain / open / switch / close. A refactor that makes that
+        // resync conditional would turn the deferral into a leak for
+        // as long as the map sits on the dead tab's document.
+        self.editor.send(SCI_RELEASEDOCUMENT, 0, doc);
     }
 
     fn mark_active_buffer_dirty(&mut self) {
