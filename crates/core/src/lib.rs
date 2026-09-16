@@ -4,6 +4,7 @@
 //! code. It is unit-testable without an OS event loop. See DESIGN.md
 //! §2.2 and §5.1–§5.2.
 
+pub mod dock;
 pub mod encoding;
 pub mod eol;
 pub mod fif;
@@ -18,6 +19,10 @@ pub mod session;
 pub mod shortcuts;
 pub mod styles;
 
+pub use dock::{
+    compute_frame, resolve_drop, BandFrame, DockFrame, DockGroup, DockLayout, DockLocation,
+    DockPanel, DockRect, DockSide, DragSubject, DropTarget, DropZones,
+};
 pub use encoding::{Encoding, EncodingError};
 pub use eol::Eol;
 pub use fif::{

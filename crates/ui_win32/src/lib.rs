@@ -93,6 +93,7 @@
 )]
 
 mod dlgtemplate;
+mod dock_panels;
 mod preferences;
 mod print;
 mod print_preview;
@@ -118,6 +119,7 @@ use codepp_editor::EditorHandle;
 // `editor` with the lexer theme table (see `codepp_editor::theme`)
 // so the GTK backend can share them; imported by name here so the
 // call sites read exactly as they did before the move.
+use codepp_core::dock::DockPanel;
 use codepp_editor::theme::{
     apply_brace_styles, apply_default_styles, apply_indent_guide_style, apply_line_number_margin,
 };
@@ -233,8 +235,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
     CBS_AUTOHSCROLL, CBS_DROPDOWN, CB_ADDSTRING, CB_RESETCONTENT, CB_SETEDITSEL, CREATESTRUCTW,
     CS_HREDRAW, CS_VREDRAW, CW_USEDEFAULT, DC_HASDEFID, DI_NORMAL, DM_GETDEFID, DWLP_MSGRESULT,
     ES_AUTOHSCROLL, ES_NUMBER, ES_READONLY, FALT, FCONTROL, FSHIFT, FVIRTKEY, GWLP_USERDATA,
-    GWL_EXSTYLE, HACCEL, HICON, HMENU, IDCANCEL, IDC_ARROW, IDC_HAND, IDC_SIZENS, IDC_SIZEWE, IDNO,
-    IDOK, IDYES, IMAGE_ICON, LR_DEFAULTCOLOR, LWA_ALPHA, MB_ICONQUESTION, MB_ICONWARNING, MB_OK,
+    GWL_EXSTYLE, HACCEL, HICON, HMENU, IDCANCEL, IDC_ARROW, IDC_HAND, IDC_SIZENS, IDNO, IDOK,
+    IDYES, IMAGE_ICON, LR_DEFAULTCOLOR, LWA_ALPHA, MB_ICONQUESTION, MB_ICONWARNING, MB_OK,
     MB_OKCANCEL, MB_YESNO, MB_YESNOCANCEL, MENUITEMINFOW, MENU_ITEM_FLAGS, MFS_CHECKED,
     MFS_UNCHECKED, MFT_RADIOCHECK, MFT_RIGHTJUSTIFY, MFT_SEPARATOR, MF_BYCOMMAND, MF_BYPOSITION,
     MF_CHECKED, MF_ENABLED, MF_GRAYED, MF_POPUP, MF_SEPARATOR, MF_STRING, MF_UNCHECKED, MIIM_FTYPE,
@@ -671,24 +673,11 @@ const FIF_SPLITTER_CLASS: PCWSTR = w!("CodePlusPlusFifSplitter");
 /// header + action bar and forwards commands. Registered lazily
 /// in [`register_workspace_classes`] on first `run()` invocation.
 const WORKSPACE_PANEL_CLASS: PCWSTR = w!("CodePlusPlusWorkspacePanel");
-/// Vertical splitter that sits between the workspace panel and
-/// the tab-strip / editor stack. Owns the horizontal resize
-/// cursor and forwards drag events to the parent so
-/// `layout_children` can re-apply with the new workspace width.
-const WORKSPACE_SPLITTER_CLASS: PCWSTR = w!("CodePlusPlusWorkspaceSplitter");
 /// Window class for the right-side "Document Map" panel. Same
 /// container shape as the workspace panel; different position
 /// (right edge of the editor column). Registered lazily on
 /// first [`run`] invocation via [`register_docmap_classes`].
 const DOCMAP_PANEL_CLASS: PCWSTR = w!("CodePlusPlusDocMapPanel");
-/// Window class for the docmap panel's LEFT-edge splitter —
-/// mirror of [`WORKSPACE_SPLITTER_CLASS`] on the opposite column.
-/// Owns the horizontal-resize cursor; drag events forward to the
-/// parent so [`layout_children`] re-applies with the new panel
-/// width. The sign convention flips: dragging LEFT grows the
-/// docmap (the panel sits at the right edge, the splitter to
-/// its left).
-const DOCMAP_SPLITTER_CLASS: PCWSTR = w!("CodePlusPlusDocMapSplitter");
 
 /// Control ids for the FIF progress window's three children.
 const IDC_FIF_PROGRESS_PATH: u16 = 300;
@@ -752,32 +741,10 @@ const MIN_DOCK_HEIGHT_PX: i32 = 60;
 /// this matches N++'s "the editor is the priority surface" feel.
 const MIN_SCINTILLA_HEIGHT_PX: i32 = 60;
 
-/// Width of the vertical splitter between the workspace panel and
-/// the tab-strip / editor column. Matches [`SPLITTER_HEIGHT_PX`]'s
-/// 4 px rationale — draggable without pixel-hunting.
-const WORKSPACE_SPLITTER_WIDTH_PX: i32 = 4;
-/// Initial workspace-panel width the first time the user opens a
-/// folder. Enough for a ~30-char folder name at a typical
-/// system font; persistence across sessions lands in m4.
-const DEFAULT_WORKSPACE_WIDTH_PX: i32 = 240;
-/// Minimum workspace-panel width. Below this the tree view
-/// horizontal-scrollbar dominates and the header buttons
-/// overflow; the splitter clamps at this value.
-const MIN_WORKSPACE_WIDTH_PX: i32 = 120;
 /// Minimum Scintilla width the workspace splitter preserves while
 /// the panel is shown. Same "editor is priority surface" rule as
 /// [`MIN_SCINTILLA_HEIGHT_PX`].
 const MIN_SCINTILLA_WIDTH_PX: i32 = 200;
-/// Initial Document Map panel width the first time the user
-/// opens the map. A ~160-px column is wide enough for a heavily
-/// zoomed-out overview without eating too much editor real
-/// estate; persistence across sessions rides
-/// [`codepp_core::session::DocMapSession::width`].
-const DEFAULT_DOCMAP_WIDTH_PX: i32 = 160;
-/// Width of the vertical splitter between the editor column and
-/// the docmap panel. Same 4-px rationale as
-/// [`WORKSPACE_SPLITTER_WIDTH_PX`].
-const DOCMAP_SPLITTER_WIDTH_PX: i32 = 4;
 /// Uniform alpha of the docmap viewport highlight's fill (the
 /// translucent orange wash inside the box), 0..=255. 60/255
 /// (~24% opacity) reads as a soft tint that leaves the miniature
@@ -792,29 +759,10 @@ const DOCMAP_VIEWPORT_FILL_ALPHA: u8 = 60;
 /// Matches the tone in Notepad++'s Document Map so users
 /// migrating from N++ see the same "you are here" colour.
 const DOCMAP_VIEWPORT_COLOR: u32 = 0x0000_a5ff;
-/// Minimum docmap-panel width. Below this the miniature view
-/// collapses into unreadable blocks; every layout pass clamps to
-/// this floor via [`clamp_docmap_width`], same discipline the
-/// workspace panel uses.
-const MIN_DOCMAP_WIDTH_PX: i32 = 80;
-/// Height of the Document Map panel's header row (title label +
-/// close-× button). Matches [`WORKSPACE_HEADER_HEIGHT_PX`] for
-/// visual consistency across the two docked panels.
-const DOCMAP_HEADER_HEIGHT_PX: i32 = 26;
 /// Inset applied around the docmap panel's inner content — mirror
 /// of [`WORKSPACE_INSET_PX`].
 const DOCMAP_INSET_PX: i32 = 2;
-/// Inset applied between the header row's etched frame and the
-/// label + close-× button inside. Same rationale as
-/// [`WORKSPACE_HEADER_FRAME_INSET_PX`].
-const DOCMAP_HEADER_FRAME_INSET_PX: i32 = 2;
-/// Width of the close-× button in the docmap header row. Matches
-/// [`WORKSPACE_CLOSE_BUTTON_WIDTH_PX`] for visual consistency.
-const DOCMAP_CLOSE_BUTTON_WIDTH_PX: i32 = 22;
 
-/// Height of the workspace panel's header row (title label +
-/// close-× button).
-const WORKSPACE_HEADER_HEIGHT_PX: i32 = 26;
 /// Height of the workspace panel's action row (three narrow
 /// buttons on the right).
 const WORKSPACE_ACTION_HEIGHT_PX: i32 = 26;
@@ -822,32 +770,13 @@ const WORKSPACE_ACTION_HEIGHT_PX: i32 = 26;
 /// stay within [`MIN_WORKSPACE_WIDTH_PX`] so the row never
 /// visually overflows.
 const WORKSPACE_ACTION_BUTTON_WIDTH_PX: i32 = 26;
-/// Width of the close-× button in the header row. Matches
-/// [`WORKSPACE_ACTION_BUTTON_WIDTH_PX`] for visual consistency.
-const WORKSPACE_CLOSE_BUTTON_WIDTH_PX: i32 = 22;
 /// Inset applied around the panel's inner content — a thin
 /// margin between the panel edge and header/action/tree rows.
 const WORKSPACE_INSET_PX: i32 = 2;
-/// Inset applied between the header row's etched frame and the
-/// label + close-× button inside. Two pixels lets the frame
-/// stay visible on all four sides without cropping the button's
-/// glyph.
-const WORKSPACE_HEADER_FRAME_INSET_PX: i32 = 2;
 
-/// Control ids for the workspace panel's child controls. Local
-/// to `workspace_hwnd`'s `WM_COMMAND` dispatch — they never reach
-/// `main_wnd_proc` because the panel's own `wnd_proc` handles them
-/// and either consumes (close) or forwards synthetic
-/// `WM_COMMAND` to the main window (action buttons in m3).
-const IDC_WORKSPACE_CLOSE: u16 = 500;
 const IDC_WORKSPACE_UNFOLD: u16 = 501;
 const IDC_WORKSPACE_FOLD: u16 = 502;
 const IDC_WORKSPACE_LOCATE: u16 = 503;
-
-/// Control id for the docmap header's close-× button. Local to
-/// `docmap_hwnd`'s `WM_COMMAND` dispatch — parallels
-/// [`IDC_WORKSPACE_CLOSE`] on the right-side panel.
-const IDC_DOCMAP_CLOSE: u16 = 520;
 
 /// "Go to..." dialog control ids. IDOK / IDCANCEL are the standard
 /// Win32 button ids and are reused for the dialog's OK and Cancel
@@ -1047,36 +976,6 @@ struct SplitterDrag {
     /// is `dock_height_at_start + (start_screen_y - current_y)` —
     /// dragging up grows the dock.
     dock_height_at_start: i32,
-}
-
-/// Horizontal-axis sibling of [`SplitterDrag`] — captured by the
-/// workspace splitter's `WM_LBUTTONDOWN`, consumed on each
-/// `WM_MOUSEMOVE`, cleared on `WM_LBUTTONUP`. Kept as a
-/// distinct type from `SplitterDrag` so the axis is visible in
-/// the field's type and a mixup between the two splitters would
-/// fail to compile.
-#[derive(Debug, Clone, Copy)]
-struct WorkspaceSplitterDrag {
-    /// Cursor X in screen coords at drag start. New workspace
-    /// width = `width_at_start + (current_x - start_screen_x)` —
-    /// dragging right grows the panel.
-    start_screen_x: i32,
-    /// Workspace column width at drag start.
-    width_at_start: i32,
-}
-
-/// Drag-tracking state for the Document Map splitter — mirror of
-/// [`WorkspaceSplitterDrag`] on the right column. The sign
-/// convention flips: dragging LEFT grows the panel because the
-/// panel sits at the right edge, splitter to its left.
-#[derive(Debug, Clone, Copy)]
-struct DocMapSplitterDrag {
-    /// Cursor X in screen coords at drag start. New docmap width
-    /// = `width_at_start - (current_x - start_screen_x)` —
-    /// dragging left grows the panel.
-    start_screen_x: i32,
-    /// Docmap column width at drag start.
-    width_at_start: i32,
 }
 
 /// Drag-tracking state for scroll-by-drag on the Document Map's
@@ -1445,38 +1344,51 @@ struct WindowState {
     /// `Some` iff the user is currently mid-drag on the splitter.
     fif_splitter_drag: Option<SplitterDrag>,
 
-    // --- Workspace panel (Phase 4.6 m1+) ---
+    // --- Dockable panel subsystem (plugin panels) ---
     //
-    // The "Folder as Workspace" panel — the left-column tree view
-    // reachable via File → Open Folder as Workspace... Both HWNDs
-    // are created eagerly at startup (mirroring the FIF-dock
-    // pattern) and toggled visible only when the user opens a
-    // folder or restores a persisted session.
+    // The docking model + chrome for the plugin panels ("Folder as
+    // Workspace", "Document Map"). Policy — which panel sits in
+    // which group, docked where, tabbed with what, floating at
+    // which rect — lives in `codepp_core::dock::DockLayout`;
+    // everything below is Win32 mechanism keyed off it. See
+    // `dock_panels` module docs for the window shapes.
+    /// The docking model. Every mutation funnels through
+    /// [`dock_panels::apply_dock_layout`], which reconciles the
+    /// native windows to match and writes the layout through to
+    /// the shell's session cache.
+    dock_layout: codepp_core::dock::DockLayout,
+    /// Live group container windows, keyed by the model group's id
+    /// (never by index or HWND — §7.4's identity rule).
+    dock_groups: Vec<dock_panels::DockGroupWindow>,
+    /// The four side-band resize splitters, indexed by
+    /// [`dock_panels::side_index`]. Created hidden at startup;
+    /// shown per-side while that side holds at least one group.
+    dock_splitters: [HWND; 4],
+    /// The layered grey drop-hint popup shown during a caption/tab
+    /// drag. Created hidden at startup; positioned/resized to the
+    /// resolved hint rect on every drag move.
+    dock_hint_hwnd: HWND,
+    /// In-flight caption/tab gesture, if any. See
+    /// [`dock_panels::DockDrag`].
+    dock_drag: Option<dock_panels::DockDrag>,
+    /// In-flight side-splitter drag, if any.
+    dock_side_drag: Option<dock_panels::DockSideDrag>,
+    /// Tab-bar icons (24 px premultiplied-BGRA DIBs), indexed
+    /// workspace = 0, docmap = 1 — the same `assets/icons/` art
+    /// the toolbar's quick-action buttons use, per the feature
+    /// spec.
+    dock_tab_icons: [HBITMAP; 2],
+
+    // --- Workspace panel content (Phase 4.6 m1+) ---
     //
-    // m1 ships all fields present + zero-effect wiring: the panel
-    // is created hidden, `workspace_visible` starts false, and
-    // `layout_children` short-circuits the workspace column when
-    // hidden. Subsequent milestones fill in the picker (m2), the
-    // tree body (m3), and cross-session persistence (m4).
-    /// Container HWND for the workspace panel. Header bar + action
-    /// bar + tree body land inside as children in m2/m3.
+    // The "Folder as Workspace" panel body — action row + lazily
+    // populated tree. Created once at startup as a child of the
+    // main window and REPARENTED into whichever dock group
+    // currently holds the panel (back under the main window,
+    // hidden, when closed). The old per-panel header row is gone:
+    // the dock group's caption carries the title + close now.
+    /// Container HWND for the workspace panel content.
     workspace_hwnd: HWND,
-    /// Vertical splitter between the workspace panel and the tab
-    /// strip / editor column. Hidden alongside `workspace_hwnd`.
-    workspace_splitter_hwnd: HWND,
-    /// Whether the workspace panel + splitter are currently shown.
-    /// Toggled by the File → Open Folder as Workspace... flow
-    /// (m2), the View → Folder as Workspace check (m4), the
-    /// header's X button (m2), and session restore (m4).
-    workspace_visible: bool,
-    /// Persisted workspace-column width across show/hide cycles
-    /// within one session. Cross-session persistence lands with
-    /// [`codepp_core::session::Session`] in m4.
-    workspace_width: i32,
-    /// `Some` iff the user is currently mid-drag on the workspace
-    /// splitter. Mirror of `fif_splitter_drag` for the horizontal
-    /// axis — see [`WorkspaceSplitterDrag`].
-    workspace_splitter_drag: Option<WorkspaceSplitterDrag>,
     /// Root path of the currently-shown workspace. `None` when
     /// the panel has never been opened this session (or was
     /// closed without re-opening). Set by the folder picker in
@@ -1487,24 +1399,10 @@ struct WindowState {
     // In-panel child controls (all children of `workspace_hwnd`).
     // Positioned by the panel's own `WM_SIZE` handler; visible
     // whenever the panel is visible (their parent's visibility
-    // gates them).
-    /// Header row: `SS_ETCHEDFRAME` STATIC enclosing the title
-    /// label + close-× button as one visually-grouped box. Same
-    /// technique as the About dialog's "MIT License" frame —
-    /// paints under the label + close via z-order (created
-    /// before them so they sit above at paint time).
-    workspace_header_frame: HWND,
-    /// Header row: fixed title STATIC ("Folder as Workspace") on
-    /// the left; the close-× button on the right. Both painted
-    /// on top of [`Self::workspace_header_frame`].
-    workspace_header_label: HWND,
-    workspace_close_hwnd: HWND,
+    // gates them). The old header row (frame + title + close-×)
+    // is gone — the dock group's caption bar owns title + close.
     /// Action row: three narrow buttons on the right — unfold
-    /// all, fold all, locate current file. m2 lays them out and
-    /// wires the close-only path; the three action buttons'
-    /// click handlers (walk-and-expand, walk-and-collapse,
-    /// walk-ancestors-and-reveal) land in m3 alongside the tree
-    /// body itself.
+    /// all, fold all, locate current file.
     workspace_action_unfold: HWND,
     workspace_action_fold: HWND,
     workspace_action_locate: HWND,
@@ -1590,41 +1488,17 @@ struct WindowState {
     /// picked up by the next click. Each context menu populates
     /// this field afresh.
     workspace_ctx_target: Option<WorkspaceCtxTarget>,
-    /// Container HWND for the right-side Document Map panel.
-    /// Mirror of [`Self::workspace_hwnd`].
+    /// Container HWND for the Document Map panel content. Mirror
+    /// of [`Self::workspace_hwnd`] — reparented between dock
+    /// groups by the reconciler, never destroyed. Its only child
+    /// is the miniature Scintilla view; the dock group's caption
+    /// carries the title + close.
     docmap_hwnd: HWND,
-    /// Vertical splitter on the LEFT edge of the docmap panel
-    /// — mirror of [`Self::workspace_splitter_hwnd`] on the
-    /// opposite column. Drag events forward to
-    /// [`layout_children`] with a new docmap width.
-    docmap_splitter_hwnd: HWND,
-    /// Whether the docmap panel + splitter are currently shown.
-    /// Toggled by the View → Document Map menu, the docmap
-    /// toolbar button, the header's close-× button, and session
-    /// restore.
-    docmap_visible: bool,
-    /// Persisted docmap-column width across show/hide cycles
-    /// AND across interactive splitter drags. Cross-session
-    /// persistence rides
-    /// [`codepp_core::session::DocMapSession::width`].
-    docmap_width: i32,
-    /// `Some` iff the user is currently mid-drag on the docmap
-    /// splitter. Mirror of [`Self::workspace_splitter_drag`].
-    docmap_splitter_drag: Option<DocMapSplitterDrag>,
     /// `Some` iff the user is currently mid-drag on the docmap
     /// Scintilla view (drag-to-scroll — see [`DocMapScrollDrag`]).
     /// Every `WM_MOUSEMOVE` while this is `Some` scrolls the main
     /// editor to the line under the cursor.
     docmap_scroll_drag: Option<DocMapScrollDrag>,
-    /// Header row `SS_ETCHEDFRAME` STATIC — same construction as
-    /// [`Self::workspace_header_frame`].
-    docmap_header_frame: HWND,
-    /// Header row title STATIC ("Document Map"). Painted on top
-    /// of [`Self::docmap_header_frame`].
-    docmap_header_label: HWND,
-    /// Header row close-× button. Consumed by the panel's own
-    /// `wnd_proc` via [`IDC_DOCMAP_CLOSE`].
-    docmap_close_hwnd: HWND,
     /// Second Scintilla control — the miniature view. Bound to
     /// the active tab's document via `SCI_SETDOCPOINTER` so it
     /// mirrors the main editor's text without duplicating any
@@ -5963,17 +5837,17 @@ fn build_main_menu() -> windows::core::Result<BuiltMenuBar> {
             w!("&Restore Zoom\tCtrl+0"),
         )?;
         AppendMenuW(view_menu, MF_SEPARATOR, 0, PCWSTR::null())?;
-        // Toggle — check state syncs to `WindowState.workspace_visible`
-        // via `refresh_view_menu` (fired from `WM_INITMENUPOPUP`).
+        // Toggle — check state reflects whether the panel is
+        // visible in the dock layout (`DockLayout::is_visible`),
+        // pushed via `refresh_view_menu` on `WM_INITMENUPOPUP`.
         AppendMenuW(
             view_menu,
             MF_STRING,
             ID_VIEW_FOLDER_AS_WORKSPACE as usize,
             w!("&Folder as Workspace"),
         )?;
-        // Document Map — right-column mirror of the workspace
-        // panel. Check state syncs to `WindowState.docmap_visible`
-        // via `refresh_view_menu`.
+        // Document Map — the other dock panel. Check state comes
+        // from `DockLayout::is_visible` via `refresh_view_menu`.
         AppendMenuW(
             view_menu,
             MF_STRING,
@@ -6372,12 +6246,11 @@ unsafe fn refresh_view_menu(
     mark(ID_VIEW_WORDWRAP, wrap_on);
     mark(ID_VIEW_SHOWWS, ws_on);
     mark(ID_VIEW_SHOWEOL, eol_on);
-    // Workspace toggle — reads the cached `workspace_visible` bit
-    // rather than probing the panel HWND, so the check state
-    // stays in lockstep with the layout code that also gates on
-    // this bit.
+    // Workspace + Docmap toggles — the caller passes
+    // `DockLayout::is_visible` for each, so the check state stays
+    // in lockstep with the dock model that owns panel visibility
+    // (a panel behind another tab still counts as "open").
     mark(ID_VIEW_FOLDER_AS_WORKSPACE, workspace_visible);
-    // Docmap toggle — same cached-bit discipline.
     mark(ID_VIEW_DOCMAP, docmap_visible);
 }
 
@@ -17289,13 +17162,14 @@ pub fn run(initial_path: Option<PathBuf>, perf: codepp_core::perf::Perf) -> Resu
             None,
         )?;
 
-        // Workspace panel + splitter — both hidden at startup, both
-        // eagerly created so `layout_children` always has valid
-        // HWNDs to reason about (mirrors the FIF pattern above).
-        // The panel body (header + action bar + tree) is populated
-        // in m2/m3; m1 just registers the classes and holds the
-        // container.
+        // Workspace panel content — hidden at startup, eagerly
+        // created so the dock reconciler always has a valid HWND
+        // to reparent. Lives under the main window while hidden
+        // and inside whichever dock group shows it. The old
+        // per-panel header (title + close-×) is gone: the dock
+        // group's caption bar owns both now.
         register_workspace_classes();
+        dock_panels::register_dock_classes();
         let workspace_hwnd = CreateWindowExW(
             WINDOW_EX_STYLE::default(),
             WORKSPACE_PANEL_CLASS,
@@ -17307,77 +17181,6 @@ pub fn run(initial_path: Option<PathBuf>, perf: codepp_core::perf::Perf) -> Resu
             0,
             Some(main_hwnd),
             None,
-            Some(instance.into()),
-            None,
-        )?;
-        let workspace_splitter_hwnd = CreateWindowExW(
-            WINDOW_EX_STYLE::default(),
-            WORKSPACE_SPLITTER_CLASS,
-            PCWSTR::null(),
-            WS_CHILD,
-            0,
-            0,
-            0,
-            0,
-            Some(main_hwnd),
-            None,
-            Some(instance.into()),
-            None,
-        )?;
-
-        // Workspace in-panel children: header title STATIC + close-×
-        // button, and three action-row buttons. All are children of
-        // `workspace_hwnd`, so their visibility is transitively
-        // gated by the panel's own visibility (the panel starts
-        // hidden). Positioned by `workspace_panel_wnd_proc`'s
-        // `WM_SIZE` handler on every panel-size change.
-        //
-        // Frame created FIRST so z-order (later-created siblings
-        // paint above earlier) puts it behind the label + close.
-        // Same z-order technique the About dialog uses for its
-        // "MIT License" etched frame.
-        let workspace_header_frame = CreateWindowExW(
-            WINDOW_EX_STYLE::default(),
-            w!("STATIC"),
-            PCWSTR::null(),
-            WS_CHILD | WS_VISIBLE | style_bits(SS_ETCHEDFRAME as i32),
-            0,
-            0,
-            0,
-            0,
-            Some(workspace_hwnd),
-            None,
-            Some(instance.into()),
-            None,
-        )?;
-        let workspace_header_label = CreateWindowExW(
-            WINDOW_EX_STYLE::default(),
-            w!("STATIC"),
-            w!("Folder as Workspace"),
-            WS_CHILD | WS_VISIBLE | style_bits(SS_CENTERIMAGE as i32),
-            0,
-            0,
-            0,
-            0,
-            Some(workspace_hwnd),
-            None,
-            Some(instance.into()),
-            None,
-        )?;
-        let workspace_close_hwnd = CreateWindowExW(
-            WINDOW_EX_STYLE::default(),
-            w!("BUTTON"),
-            // Multiplication-sign U+2715 — same close-glyph pattern
-            // as the FIF dock's × button. Reads as "close" at small
-            // sizes without a custom-drawn button.
-            w!("\u{2715}"),
-            WS_CHILD | WS_VISIBLE | style_bits(BS_PUSHBUTTON),
-            0,
-            0,
-            0,
-            0,
-            Some(workspace_hwnd),
-            Some(HMENU(IDC_WORKSPACE_CLOSE as usize as *mut c_void)),
             Some(instance.into()),
             None,
         )?;
@@ -17514,11 +17317,10 @@ pub fn run(initial_path: Option<PathBuf>, perf: codepp_core::perf::Perf) -> Resu
             None,
         )?;
 
-        // Document Map panel + splitter. Symmetric with the
-        // workspace panel above but positioned at the right edge
-        // by `layout_children`. Both start hidden; toggled by
-        // the View → Document Map menu, the docmap toolbar
-        // button, or session restore.
+        // Document Map panel content. Symmetric with the workspace
+        // panel above — hidden at startup, reparented into dock
+        // groups on show. No header chrome of its own; the dock
+        // group's caption carries title + close.
         register_docmap_classes();
         let docmap_hwnd = CreateWindowExW(
             WINDOW_EX_STYLE::default(),
@@ -17534,66 +17336,17 @@ pub fn run(initial_path: Option<PathBuf>, perf: codepp_core::perf::Perf) -> Resu
             Some(instance.into()),
             None,
         )?;
-        let docmap_splitter_hwnd = CreateWindowExW(
-            WINDOW_EX_STYLE::default(),
-            DOCMAP_SPLITTER_CLASS,
-            PCWSTR::null(),
-            WS_CHILD,
-            0,
-            0,
-            0,
-            0,
-            Some(main_hwnd),
-            None,
-            Some(instance.into()),
-            None,
-        )?;
-        // In-panel header chrome for the docmap. Frame FIRST for
-        // the same z-order rationale as the workspace header
-        // (later siblings paint above earlier siblings, so the
-        // etched frame sits behind the label + close-×).
-        let docmap_header_frame = CreateWindowExW(
-            WINDOW_EX_STYLE::default(),
-            w!("STATIC"),
-            PCWSTR::null(),
-            WS_CHILD | WS_VISIBLE | style_bits(SS_ETCHEDFRAME as i32),
-            0,
-            0,
-            0,
-            0,
-            Some(docmap_hwnd),
-            None,
-            Some(instance.into()),
-            None,
-        )?;
-        let docmap_header_label = CreateWindowExW(
-            WINDOW_EX_STYLE::default(),
-            w!("STATIC"),
-            w!("Document Map"),
-            WS_CHILD | WS_VISIBLE | style_bits(SS_CENTERIMAGE as i32),
-            0,
-            0,
-            0,
-            0,
-            Some(docmap_hwnd),
-            None,
-            Some(instance.into()),
-            None,
-        )?;
-        let docmap_close_hwnd = CreateWindowExW(
-            WINDOW_EX_STYLE::default(),
-            w!("BUTTON"),
-            w!("\u{2715}"),
-            WS_CHILD | WS_VISIBLE | style_bits(BS_PUSHBUTTON),
-            0,
-            0,
-            0,
-            0,
-            Some(docmap_hwnd),
-            Some(HMENU(IDC_DOCMAP_CLOSE as usize as *mut c_void)),
-            Some(instance.into()),
-            None,
-        )?;
+
+        // Dock chrome: the four (hidden) side splitters + the
+        // (hidden) layered drop hint, plus the two tab-bar icons —
+        // the same quick-action-bar art the feature spec names.
+        let (dock_splitters, dock_hint_hwnd) = dock_panels::create_dock_chrome(main_hwnd);
+        let dock_tab_icons = [
+            toolbar::png_to_hbitmap(include_bytes!("../../../assets/icons/folder-workspace.png"))
+                .unwrap_or_default(),
+            toolbar::png_to_hbitmap(include_bytes!("../../../assets/icons/document-map.png"))
+                .unwrap_or_default(),
+        ];
         // Miniature Scintilla view inside the docmap panel body.
         // Bound to the active tab's document via
         // `SCI_SETDOCPOINTER` — the two views share the same
@@ -18012,15 +17765,15 @@ pub fn run(initial_path: Option<PathBuf>, perf: codepp_core::perf::Perf) -> Resu
             fif_dock_visible: false,
             fif_dock_height: DEFAULT_DOCK_HEIGHT_PX,
             fif_splitter_drag: None,
+            dock_layout: codepp_core::dock::DockLayout::new(),
+            dock_groups: Vec::new(),
+            dock_splitters,
+            dock_hint_hwnd,
+            dock_drag: None,
+            dock_side_drag: None,
+            dock_tab_icons,
             workspace_hwnd,
-            workspace_splitter_hwnd,
-            workspace_visible: false,
-            workspace_width: DEFAULT_WORKSPACE_WIDTH_PX,
-            workspace_splitter_drag: None,
             workspace_root: None,
-            workspace_header_frame,
-            workspace_header_label,
-            workspace_close_hwnd,
             workspace_action_unfold,
             workspace_action_fold,
             workspace_action_locate,
@@ -18032,14 +17785,7 @@ pub fn run(initial_path: Option<PathBuf>, perf: codepp_core::perf::Perf) -> Resu
             workspace_unfold_label,
             workspace_ctx_target: None,
             docmap_hwnd,
-            docmap_splitter_hwnd,
-            docmap_visible: false,
-            docmap_width: DEFAULT_DOCMAP_WIDTH_PX,
-            docmap_splitter_drag: None,
             docmap_scroll_drag: None,
-            docmap_header_frame,
-            docmap_header_label,
-            docmap_close_hwnd,
             docmap_scintilla_hwnd,
             docmap_editor,
             fif_progress_hwnd: None,
@@ -18183,13 +17929,6 @@ pub fn run(initial_path: Option<PathBuf>, perf: codepp_core::perf::Perf) -> Resu
                 }
             }
         }
-
-        // Snapshot the FIF layout defaults from the live state so
-        // the initial `layout_children` call below has a single
-        // source of truth — if the WindowState initializer ever
-        // changes, the layout call follows automatically.
-        let initial_dock_visible = state.fif_dock_visible;
-        let initial_dock_height = state.fif_dock_height;
 
         // Apply the saved window geometry (or defaults) before
         // installing GWLP_USERDATA + showing. `apply_initial_window_size`
@@ -18341,55 +18080,22 @@ pub fn run(initial_path: Option<PathBuf>, perf: codepp_core::perf::Perf) -> Resu
             tracing::warn!("SetTimer for auto-save failed; relying on shutdown save only");
         }
 
-        // Show + size + focus.
+        // Show + size + focus. The initial layout runs against the
+        // (still empty) dock model — panels come back in the
+        // restore step right below, before the pump starts, so
+        // the first paint already shows the final arrangement.
         let _ = ShowWindow(main_hwnd, show_cmd);
-        let mut rect = RECT::default();
-        GetClientRect(main_hwnd, &raw mut rect)?;
-        layout_children(
-            toolbar_hwnd,
-            toolbar::toolbar_height_px(toolbar_bitmap_px),
-            tab_hwnd,
-            scintilla_hwnd,
-            status_hwnd,
-            fif_splitter_hwnd,
-            fif_dock_hwnd,
-            initial_dock_visible,
-            initial_dock_height,
-            // Tab strip is visible by default — the only path that
-            // hides it is `NPPM_HIDETABBAR`, which can't fire
-            // before `WM_APP_WAKE`.
-            false,
-            WorkspaceLayout {
-                panel: workspace_hwnd,
-                splitter: workspace_splitter_hwnd,
-                visible: false,
-                width: DEFAULT_WORKSPACE_WIDTH_PX,
-            },
-            DocMapLayout {
-                panel: docmap_hwnd,
-                splitter: docmap_splitter_hwnd,
-                visible: false,
-                width: DEFAULT_DOCMAP_WIDTH_PX,
-            },
-            rect.right,
-            rect.bottom,
-        );
-        // Cold-start restore: if the previous session had the
-        // workspace panel open, pop it back up at the same root
-        // and width. Runs AFTER the initial layout so
-        // `show_workspace_panel`'s own layout call correctly
-        // undoes the hardcoded `visible: false` above; both
-        // layouts happen before the message pump starts, so
-        // the user sees the final (with-panel) state on the
-        // first paint, not a flash of editor-full-width then
-        // panel-slides-in.
-        apply_saved_workspace(main_hwnd);
-        apply_saved_docmap(main_hwnd);
+        relayout_now(main_hwnd);
+        // Cold-start restore: rebuild the dock layout from the
+        // persisted `<dock>` element (or migrate the legacy
+        // `<workspace>` / `<docmap>` fields) and reconcile the
+        // native windows to it.
+        apply_saved_dock(main_hwnd);
         // Seed the map view with the active tab's document so
         // the miniature view isn't blank on first paint. Runs
-        // regardless of `docmap_visible` — the panel might be
+        // regardless of the map's visibility — the panel might be
         // hidden but toggling it on later shouldn't require a
-        // fresh sync (though `show_docmap_panel` re-syncs
+        // fresh sync (though `apply_dock_layout` re-syncs
         // defensively either way; the redundant call is cheap).
         sync_docmap_to_active_tab(main_hwnd);
         let _ = SetFocus(Some(scintilla_hwnd));
@@ -18689,33 +18395,80 @@ fn clamp_dock_height(client_height: i32, toolbar_height: i32, requested: i32) ->
     requested.clamp(MIN_DOCK_HEIGHT_PX, upper)
 }
 
-/// Workspace-panel layout inputs bundled into a small owned
-/// struct so [`layout_children`] doesn't push past clippy's
-/// too-many-arguments cap. All four fields together describe
-/// "how much of the client area does the left-column workspace
-/// take, and which HWNDs do we position for it."
-///
-/// Fully populated at every call site — the `visible: false`
-/// path leaves the panel + splitter alone (they stay wherever a
-/// previous `MoveWindow` left them; `ShowWindow(SW_HIDE)` toggles
-/// visibility orthogonally).
-#[derive(Copy, Clone)]
-struct WorkspaceLayout {
-    panel: HWND,
-    splitter: HWND,
-    visible: bool,
-    width: i32,
+/// The dock subsystem's contribution to a layout pass, snapshotted
+/// out of `WindowState` by [`relayout_now`] so `layout_children`
+/// runs with no live borrow (its `MoveWindow` calls cascade
+/// `WM_SIZE` into child procs that reach for `state_from_hwnd`).
+struct DockChrome {
+    /// Cloned model — cheap (two small vecs) and it makes the
+    /// layout pass a pure function of its inputs.
+    layout: codepp_core::dock::DockLayout,
+    /// Group id → container HWND.
+    groups: Vec<dock_panels::DockGroupWindow>,
+    /// Side splitters, indexed by [`dock_panels::side_index`].
+    splitters: [HWND; 4],
 }
 
-/// "How much of the client area does the right-column Document
-/// Map take, and which HWNDs do we position for it." Mirror of
-/// [`WorkspaceLayout`] on the opposite edge.
-#[derive(Copy, Clone)]
-struct DocMapLayout {
-    panel: HWND,
-    splitter: HWND,
-    visible: bool,
-    width: i32,
+/// Snapshot the chrome out of `WindowState` and run a full layout
+/// pass at the window's current client size. The single call every
+/// "something changed shape" site uses — panel toggles, dock
+/// mutations, splitter drags, FIF dock changes, `WM_SIZE`.
+unsafe fn relayout_now(main_hwnd: HWND) {
+    let snap = unsafe { state_from_hwnd(main_hwnd) }.map(|state| {
+        (
+            state.toolbar_hwnd,
+            state.toolbar_bitmap_px,
+            state.tab_hwnd,
+            state.scintilla_hwnd,
+            state.status_hwnd,
+            state.fif_splitter_hwnd,
+            state.fif_dock_hwnd,
+            state.fif_dock_visible,
+            state.fif_dock_height,
+            DockChrome {
+                layout: state.dock_layout.clone(),
+                groups: state.dock_groups.clone(),
+                splitters: state.dock_splitters,
+            },
+        )
+    });
+    let Some((
+        toolbar_hwnd,
+        toolbar_bitmap_px,
+        tabs,
+        scintilla,
+        status,
+        fif_splitter,
+        fif_dock,
+        fif_dock_visible,
+        fif_dock_height,
+        chrome,
+    )) = snap
+    else {
+        return;
+    };
+    unsafe {
+        let mut rect = RECT::default();
+        if GetClientRect(main_hwnd, &raw mut rect).is_err() {
+            return;
+        }
+        let tab_hidden = !IsWindowVisible(tabs).as_bool();
+        layout_children(
+            toolbar_hwnd,
+            toolbar::toolbar_height_px(toolbar_bitmap_px),
+            tabs,
+            scintilla,
+            status,
+            fif_splitter,
+            fif_dock,
+            fif_dock_visible,
+            fif_dock_height,
+            tab_hidden,
+            &chrome,
+            rect.right,
+            rect.bottom,
+        );
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -18730,80 +18483,44 @@ unsafe fn layout_children(
     dock_visible: bool,
     dock_height: i32,
     tab_hidden: bool,
-    workspace: WorkspaceLayout,
-    docmap: DocMapLayout,
+    dock_chrome: &DockChrome,
     width: i32,
     height: i32,
 ) {
     // Module-level `TAB_HEIGHT_PX` / `STATUS_HEIGHT_PX` carry the
-    // 96-DPI defaults. `SB_GETBORDERS` / `TCM_GETITEMRECT` could
-    // measure these precisely; the constants become measured
-    // values once `layout_children` goes DPI-aware (Phase 4 polish
-    // item).
-    //
-    // When the tab strip is hidden (NPPM_HIDETABBAR), it claims
-    // zero height and the Scintilla view starts at y=0 — the same
-    // visual result Notepad++ produces when its own tab strip is
-    // hidden. The `MoveWindow` call below still runs and keeps
-    // the (already invisible via ShowWindow(SW_HIDE)) tab control
-    // at full width with height=0 — a zero-height window costs
-    // nothing to keep around, and the visibility toggle stays
-    // orthogonal to the layout.
+    // 96-DPI defaults. When the tab strip is hidden
+    // (NPPM_HIDETABBAR) it claims zero height — same visual result
+    // Notepad++ produces.
     let tab_height = if tab_hidden { 0 } else { TAB_HEIGHT_PX };
     let status_height = STATUS_HEIGHT_PX;
-    // Workspace column takes the left band of the mid-region
-    // (between toolbar-bottom and status-bar-top). Clamped to
-    // `MIN_WORKSPACE_WIDTH_PX..=(width - MIN_SCINTILLA_WIDTH_PX
-    //  - WORKSPACE_SPLITTER_WIDTH_PX)` so a window-resize-down
-    // that pushes past the splitter's minimums is corrected
-    // here — same idempotence rule as [`clamp_dock_height`] does
-    // for the vertical splitter. When the panel is hidden the
-    // column collapses to zero width and the layout math is
-    // identical to the pre-workspace behaviour.
-    let (workspace_col_width, editor_x_shift) = if workspace.visible {
-        let clamped = clamp_workspace_width(width, workspace.width);
-        (clamped, clamped + WORKSPACE_SPLITTER_WIDTH_PX)
-    } else {
-        (0, 0)
-    };
-    // Symmetric right-side accounting for the Document Map
-    // panel. `docmap_col_width` is the pixel column the panel
-    // eats off the right edge; `editor_x_shrink_right` is what
-    // every horizontal-width calc below subtracts to keep the
-    // editor / tabs / FIF dock from underlapping the map, and
-    // includes the splitter band alongside the panel body so a
-    // hover over the seam gets the resize cursor.
-    // `clamp_docmap_width` is the same authority
-    // [`apply_saved_docmap`] and the splitter drag consult, so a
-    // window-resize-down that pushes past the docmap's ceiling
-    // is corrected here and the layout stays idempotent (mirror
-    // of `clamp_workspace_width` on the left column).
-    let (docmap_col_width, editor_x_shrink_right) = if docmap.visible {
-        let clamped = clamp_docmap_width(width, docmap.width);
-        (clamped, clamped + DOCMAP_SPLITTER_WIDTH_PX)
-    } else {
-        (0, 0)
-    };
+
+    // The dock area — everything between toolbar-bottom and
+    // status-bar-top — is carved by the shared model: each occupied
+    // side gets a band (full-height verticals first, then the
+    // horizontals spanning between them), every band gets a
+    // splitter, groups stack inside their band, and what is left is
+    // the editor cell holding tab strip + Scintilla + FIF dock.
+    // All clamping (band minimums, editor floors, crush handling)
+    // lives in `compute_frame` and is re-applied idempotently on
+    // every pass, so a window-resize-down past a persisted band
+    // size is corrected here without rewriting the stored size.
+    let mid = codepp_core::dock::DockRect::new(
+        0,
+        toolbar_height,
+        width.max(0),
+        (height - status_height - toolbar_height).max(0),
+    );
+    let frame = codepp_core::dock::compute_frame(
+        mid,
+        &dock_chrome.layout,
+        MIN_SCINTILLA_WIDTH_PX,
+        MIN_SCINTILLA_HEIGHT_PX,
+    );
+
     unsafe {
-        // Toolbar at the very top (y=0), full width — the workspace
-        // panel starts *below* the toolbar so users can still see
-        // the whole toolbar regardless of workspace state.
+        // Toolbar at the very top (y=0), full width; status bar at
+        // the very bottom, full width — dock bands live between.
         let _ = MoveWindow(toolbar, 0, 0, width, toolbar_height, true);
-        // Tab strip: sits above the editor, shifted right by the
-        // workspace column so the workspace panel spans from just
-        // below the toolbar to just above the status bar, AND
-        // shrunk on the right by the docmap column so the map
-        // panel spans the same vertical band on the opposite
-        // edge.
-        let tabs_w = (width - editor_x_shift - editor_x_shrink_right).max(0);
-        let _ = MoveWindow(
-            tabs,
-            editor_x_shift,
-            toolbar_height,
-            tabs_w,
-            tab_height,
-            true,
-        );
         let _ = MoveWindow(
             status,
             0,
@@ -18812,85 +18529,47 @@ unsafe fn layout_children(
             status_height,
             true,
         );
-        // Workspace panel: fills the left column from toolbar-bottom
-        // to status-bar-top. Splitter sits flush to its right edge.
-        // Both hidden → `ShowWindow(SW_HIDE)` was called at panel
-        // close; we still MoveWindow them so their off-screen
-        // position doesn't matter if a future SW_SHOW fires.
-        let ws_top = toolbar_height;
-        let ws_height = (height - status_height - toolbar_height).max(0);
-        if workspace.visible {
-            let _ = MoveWindow(
-                workspace.panel,
-                0,
-                ws_top,
-                workspace_col_width,
-                ws_height,
-                true,
-            );
-            let _ = MoveWindow(
-                workspace.splitter,
-                workspace_col_width,
-                ws_top,
-                WORKSPACE_SPLITTER_WIDTH_PX,
-                ws_height,
-                true,
-            );
-        }
-        // Docmap panel + splitter: right-column mirror of the
-        // workspace pair. Splitter sits flush to the panel's
-        // LEFT edge (opposite of the workspace splitter's right
-        // edge). Hidden → skip both `MoveWindow` calls;
-        // `ShowWindow(SW_HIDE)` was called at panel close.
-        if docmap.visible {
-            let docmap_x = (width - docmap_col_width).max(0);
-            let splitter_x = (docmap_x - DOCMAP_SPLITTER_WIDTH_PX).max(0);
-            let _ = MoveWindow(
-                docmap.splitter,
-                splitter_x,
-                ws_top,
-                DOCMAP_SPLITTER_WIDTH_PX,
-                ws_height,
-                true,
-            );
-            let _ = MoveWindow(
-                docmap.panel,
-                docmap_x,
-                ws_top,
-                docmap_col_width,
-                ws_height,
-                true,
-            );
+
+        // Docked bands: splitter + stacked group containers. Only
+        // *positioning* happens here — show/hide is
+        // `apply_dock_layout`'s job, so this stays idempotent and
+        // callable from any resize path.
+        for band in &frame.bands {
+            let sp = dock_chrome.splitters[dock_panels::side_index(band.side)];
+            if !sp.is_invalid() {
+                let _ = MoveWindow(
+                    sp,
+                    band.splitter.x,
+                    band.splitter.y,
+                    band.splitter.w,
+                    band.splitter.h,
+                    true,
+                );
+            }
+            for (gid, rect) in &band.groups {
+                if let Some(gw) = dock_chrome.groups.iter().find(|g| g.id == *gid) {
+                    let _ = MoveWindow(gw.hwnd, rect.x, rect.y, rect.w, rect.h, true);
+                }
+            }
         }
 
-        let scintilla_top = toolbar_height + tab_height;
-        let mid_height = (height - status_height - tab_height - toolbar_height).max(0);
+        // The editor cell: tab strip on top, then Scintilla (and
+        // the FIF dock below it when visible).
+        let cell = frame.editor;
+        let _ = MoveWindow(tabs, cell.x, cell.y, cell.w.max(0), tab_height, true);
+
+        let scintilla_top = cell.y + tab_height;
+        let cell_mid_height = (cell.h - tab_height).max(0);
 
         // Inset the Scintilla view by `EDITOR_BORDER_PX` on every
-        // side of its allocated cell. The parent's
-        // `WM_ERASEBKGND` paints the revealed strips with
-        // `editor_border_brush`, producing a four-sided delimiter
-        // around the edit area on every layout pass.
-        //
-        // The splitter and FIF dock keep their full window-width
-        // — the splitter is itself a visual band between the
-        // Scintilla view and the dock, so a border there would
-        // double up with no gain. Insetting just the editor
-        // proper means the visible gray frame ends at the
-        // splitter (when the dock is open) or at the status bar
-        // (when the dock is closed), which is the natural
-        // "around the actual edit area" reading of the request.
-        //
-        // The editor's x-origin shifts right by `editor_x_shift`
-        // (workspace column + splitter width) when the workspace
-        // is shown; this keeps the editor column snug against the
-        // workspace splitter without a second inset.
-        let editor_x = editor_x_shift + EDITOR_BORDER_PX;
-        let editor_w =
-            (width - editor_x_shift - editor_x_shrink_right - 2 * EDITOR_BORDER_PX).max(0);
+        // side of its cell; the parent's `WM_ERASEBKGND` paints the
+        // revealed strips with `editor_border_brush`, producing the
+        // four-sided delimiter around the edit area.
+        let editor_x = cell.x + EDITOR_BORDER_PX;
+        let editor_w = (cell.w - 2 * EDITOR_BORDER_PX).max(0);
         let editor_y = scintilla_top + EDITOR_BORDER_PX;
-        let fif_dock_x = editor_x_shift;
-        let fif_dock_w = (width - editor_x_shift - editor_x_shrink_right).max(0);
+        let fif_dock_x = cell.x;
+        let fif_dock_w = cell.w.max(0);
 
         if dock_visible {
             // Authoritative clamp — re-applies the same rule the
@@ -18898,19 +18577,14 @@ unsafe fn layout_children(
             // pushes past the persisted dock height is corrected
             // here and the layout stays idempotent.
             let dock_h = clamp_dock_height(height, toolbar_height, dock_height);
-            let usable = mid_height.saturating_sub(SPLITTER_HEIGHT_PX);
+            let usable = cell_mid_height.saturating_sub(SPLITTER_HEIGHT_PX);
             let scintilla_height = (usable - dock_h).max(MIN_SCINTILLA_HEIGHT_PX);
             let splitter_top = scintilla_top + scintilla_height;
             let dock_top = splitter_top + SPLITTER_HEIGHT_PX;
-            let actual_dock_height = (mid_height - scintilla_height - SPLITTER_HEIGHT_PX).max(0);
-            // Editor: top + left + right insets only — the
+            let actual_dock_height =
+                (cell_mid_height - scintilla_height - SPLITTER_HEIGHT_PX).max(0);
+            // Editor: top + left + right insets only — the FIF
             // splitter sits flush below it as the bottom delimiter.
-            // The `- EDITOR_BORDER_PX` matches the `editor_y +=
-            // EDITOR_BORDER_PX` shift above so the bottom edge
-            // lands exactly at `scintilla_top + scintilla_height`
-            // (i.e. flush against the splitter); without this
-            // subtraction the editor would overlap the splitter
-            // top by `EDITOR_BORDER_PX` pixels.
             let editor_h = (scintilla_height - EDITOR_BORDER_PX).max(0);
             let _ = MoveWindow(scintilla, editor_x, editor_y, editor_w, editor_h, true);
             let _ = MoveWindow(
@@ -18936,54 +18610,10 @@ unsafe fn layout_children(
             // Splitter and dock are hidden — leave them where they
             // are; ShowWindow toggles their visibility separately.
             // Editor: full inset on all four sides.
-            let editor_h = (mid_height - 2 * EDITOR_BORDER_PX).max(0);
+            let editor_h = (cell_mid_height - 2 * EDITOR_BORDER_PX).max(0);
             let _ = MoveWindow(scintilla, editor_x, editor_y, editor_w, editor_h, true);
         }
     }
-}
-
-/// Clamp a requested workspace-panel width to
-/// `[MIN_WORKSPACE_WIDTH_PX, upper]` where `upper` leaves room
-/// for the editor's minimum plus the splitter. Analogous to
-/// [`clamp_dock_height`] on the vertical axis — a
-/// window-resize-down that pushes past the horizontal splitter's
-/// minimums lands here and the layout stays idempotent. Also
-/// the single source of truth for the eventual splitter drag
-/// (lands in m2), so a change to the minimums flows through
-/// both call sites.
-fn clamp_workspace_width(client_width: i32, requested: i32) -> i32 {
-    let usable = client_width.saturating_sub(WORKSPACE_SPLITTER_WIDTH_PX);
-    // Same `.max(MIN_WORKSPACE_WIDTH_PX)` pattern as
-    // `clamp_dock_height` — `clamp(MIN, MIN)` collapses to
-    // exactly `MIN_WORKSPACE_WIDTH_PX` on a window crushed below
-    // the splitter's minimums, rather than panicking on low > high.
-    let upper = (usable - MIN_SCINTILLA_WIDTH_PX).max(MIN_WORKSPACE_WIDTH_PX);
-    requested.clamp(MIN_WORKSPACE_WIDTH_PX, upper)
-}
-
-/// Clamp a requested docmap-panel width to
-/// `[MIN_DOCMAP_WIDTH_PX, upper]` where `upper` leaves room for
-/// the editor's minimum AND the docmap splitter's own 4-px band.
-/// Same shape as [`clamp_workspace_width`], applied on every
-/// layout pass so a persisted
-/// [`codepp_core::session::DocMapSession::width`] value that was
-/// saved on a wider display — or hand-edited / crash-corrupted to
-/// something wild — can never drive `MoveWindow` with a
-/// nonsensical dimension. Also enforces the invariant on cold
-/// start via [`apply_saved_docmap`] and on splitter drag.
-///
-/// Does NOT subtract the workspace column's width. When both
-/// panels are visible on a very narrow window the editor's
-/// `.max(0)` guard still catches a would-be negative width
-/// safely — worst case is the editor visually squeezes to zero
-/// with the two panels butting up against each other, not a
-/// crash or an overlap. Coordinating the two panels'
-/// simultaneous clamps against a shared editor floor is tracked
-/// as a Phase 5 polish item.
-fn clamp_docmap_width(client_width: i32, requested: i32) -> i32 {
-    let usable = client_width.saturating_sub(DOCMAP_SPLITTER_WIDTH_PX);
-    let upper = (usable - MIN_SCINTILLA_WIDTH_PX).max(MIN_DOCMAP_WIDTH_PX);
-    requested.clamp(MIN_DOCMAP_WIDTH_PX, upper)
 }
 
 /// Register the FIF dock and splitter window classes. Idempotent —
@@ -19041,15 +18671,17 @@ unsafe fn register_fif_classes() {
     });
 }
 
-/// Register the workspace panel and its splitter window classes.
-/// Idempotent via `OnceLock` (same pattern as
-/// [`register_fif_classes`]).
+/// Register the workspace panel content class. Idempotent via
+/// `OnceLock` (same pattern as [`register_fif_classes`]). The old
+/// dedicated workspace splitter class is gone — side-band resizing
+/// belongs to the shared dock splitters
+/// ([`dock_panels::register_dock_classes`]).
 ///
 /// # Safety
 ///
 /// `RegisterClassExW` is pure Win32 registration; the only invariant
-/// is that the `wnd_proc` pointers we hand it (`workspace_panel_wnd_proc`,
-/// `workspace_splitter_wnd_proc`) live for the app's lifetime — which
+/// is that the `wnd_proc` pointer we hand it
+/// (`workspace_panel_wnd_proc`) lives for the app's lifetime — which
 /// is trivially true for `extern "system" fn` items.
 unsafe fn register_workspace_classes() {
     use std::sync::OnceLock;
@@ -19058,10 +18690,8 @@ unsafe fn register_workspace_classes() {
         let instance = GetModuleHandleW(None).unwrap_or_default();
         // Panel container. Empty background painted with the shared
         // dialog-chrome brush (`dialog_bg_brush`) so the panel
-        // visually reads as one continuous surface with the tab
-        // strip; the header + action bar paint their own chrome on
-        // top in m2. Default arrow cursor everywhere except the
-        // splitter.
+        // visually reads as one continuous surface with the dock
+        // group chrome around it.
         let panel_class = WNDCLASSEXW {
             cbSize: std::mem::size_of::<WNDCLASSEXW>() as u32,
             style: CS_HREDRAW | CS_VREDRAW,
@@ -19073,34 +18703,17 @@ unsafe fn register_workspace_classes() {
             ..Default::default()
         };
         let _ = RegisterClassExW(&raw const panel_class);
-
-        // Splitter: vertical band with the horizontal-drag cursor
-        // (`IDC_SIZEWE`). Background matches the panel so the seam
-        // is invisible until hover reveals the cursor change —
-        // parity with the FIF splitter's affordance model.
-        let splitter_class = WNDCLASSEXW {
-            cbSize: std::mem::size_of::<WNDCLASSEXW>() as u32,
-            style: CS_HREDRAW | CS_VREDRAW,
-            lpfnWndProc: Some(workspace_splitter_wnd_proc),
-            hInstance: instance.into(),
-            hCursor: LoadCursorW(None, IDC_SIZEWE).unwrap_or_default(),
-            hbrBackground: dialog_bg_brush(),
-            lpszClassName: WORKSPACE_SPLITTER_CLASS,
-            ..Default::default()
-        };
-        let _ = RegisterClassExW(&raw const splitter_class);
     });
 }
 
-/// Register the Document Map panel + splitter window classes.
-/// Idempotent via `OnceLock`, same shape as
+/// Register the Document Map panel content class. Idempotent via
+/// `OnceLock`, same shape (and same no-splitter rationale) as
 /// [`register_workspace_classes`].
 ///
 /// # Safety
 ///
-/// `RegisterClassExW` invariants: the `wnd_proc` pointers we hand
-/// it (`docmap_panel_wnd_proc`, `docmap_splitter_wnd_proc`) are
-/// `extern "system" fn` items that live for the app's lifetime.
+/// `RegisterClassExW` invariants: `docmap_panel_wnd_proc` is an
+/// `extern "system" fn` item that lives for the app's lifetime.
 unsafe fn register_docmap_classes() {
     use std::sync::OnceLock;
     static REGISTERED: OnceLock<()> = OnceLock::new();
@@ -19117,18 +18730,6 @@ unsafe fn register_docmap_classes() {
             ..Default::default()
         };
         let _ = RegisterClassExW(&raw const panel_class);
-
-        let splitter_class = WNDCLASSEXW {
-            cbSize: std::mem::size_of::<WNDCLASSEXW>() as u32,
-            style: CS_HREDRAW | CS_VREDRAW,
-            lpfnWndProc: Some(docmap_splitter_wnd_proc),
-            hInstance: instance.into(),
-            hCursor: LoadCursorW(None, IDC_SIZEWE).unwrap_or_default(),
-            hbrBackground: dialog_bg_brush(),
-            lpszClassName: DOCMAP_SPLITTER_CLASS,
-            ..Default::default()
-        };
-        let _ = RegisterClassExW(&raw const splitter_class);
     });
 }
 
@@ -19162,7 +18763,7 @@ extern "system" fn workspace_panel_wnd_proc(
             WM_SIZE => {
                 let width = (lparam.0 & 0xFFFF) as i32;
                 let height = ((lparam.0 >> 16) & 0xFFFF) as i32;
-                // Snapshot the five child HWNDs under a brief borrow,
+                // Snapshot the child HWNDs under a brief borrow,
                 // drop it, then call `layout_workspace_panel_children`
                 // with the snapshot. `MoveWindow(..., true)` can post
                 // repaint notifications that re-enter our wnd_proc,
@@ -19171,11 +18772,15 @@ extern "system" fn workspace_panel_wnd_proc(
                 // aliasing UB under Rust's `noalias` optimizer even
                 // before behavioural bugs appear. Same discipline as
                 // `fif_dock_wnd_proc`'s `WM_SIZE`.
-                let hwnds = state_from_hwnd(GetParent(hwnd).unwrap_or_default()).map(|state| {
+                //
+                // The main window is found by walking up the parent
+                // chain (`find_main_hwnd`), never by one-level
+                // `GetParent` — this panel lives inside a dock group
+                // container now, one that may itself be a floating
+                // popup.
+                let main = dock_panels::find_main_hwnd(hwnd).unwrap_or_default();
+                let hwnds = state_from_hwnd(main).map(|state| {
                     (
-                        state.workspace_header_frame,
-                        state.workspace_header_label,
-                        state.workspace_close_hwnd,
                         state.workspace_action_unfold,
                         state.workspace_action_fold,
                         state.workspace_action_locate,
@@ -19184,23 +18789,9 @@ extern "system" fn workspace_panel_wnd_proc(
                         state.workspace_unfold_label,
                     )
                 });
-                if let Some((
-                    header_frame,
-                    header_label,
-                    close,
-                    unfold,
-                    fold,
-                    locate,
-                    tree,
-                    unfold_progress,
-                    unfold_label,
-                )) = hwnds
-                {
+                if let Some((unfold, fold, locate, tree, unfold_progress, unfold_label)) = hwnds {
                     layout_workspace_panel_children(
                         WorkspacePanelChildren {
-                            header_frame,
-                            header_label,
-                            close,
                             unfold,
                             fold,
                             locate,
@@ -19215,21 +18806,15 @@ extern "system" fn workspace_panel_wnd_proc(
                 LRESULT(0)
             }
             WM_COMMAND => {
-                let cmd = (wparam.0 & 0xFFFF) as u16;
-                let parent = GetParent(hwnd).unwrap_or_default();
-                if cmd == IDC_WORKSPACE_CLOSE {
-                    if !parent.0.is_null() {
-                        hide_workspace_panel(parent);
-                    }
-                    return LRESULT(0);
-                }
                 // Unfold / Fold / Locate: `DefWindowProcW` does NOT
-                // forward WM_COMMAND to the grandparent (main window)
-                // — Windows sends it only to the control's direct
-                // parent, which is us. Explicitly re-send to
-                // `main_wnd_proc` so m3's handlers there can consume
-                // it. Same idiom `fif_dock_wnd_proc` uses for its
-                // WM_NOTIFY bubble-up.
+                // forward WM_COMMAND up the ancestor chain — Windows
+                // sends it only to the control's direct parent,
+                // which is us. Explicitly re-send to `main_wnd_proc`
+                // (via the class-walking lookup, since our direct
+                // parent is a dock group container) so its handlers
+                // can consume it. The old close-× branch is gone —
+                // the dock group's caption owns close now.
+                let parent = dock_panels::find_main_hwnd(hwnd).unwrap_or_default();
                 if !parent.0.is_null() {
                     SendMessageW(parent, msg, Some(wparam), Some(lparam));
                 }
@@ -19253,7 +18838,9 @@ extern "system" fn workspace_panel_wnd_proc(
                 // guaranteed by the Windows notification ABI).
                 let nmhdr = &*(lparam.0 as *const NMHDR);
                 let workspace_hwnd_here = hwnd;
-                let parent = GetParent(hwnd).unwrap_or_default();
+                // Main-window lookup by class walk — the direct
+                // parent is a dock group container now.
+                let parent = dock_panels::find_main_hwnd(hwnd).unwrap_or_default();
                 if nmhdr.code == TVN_ITEMEXPANDINGW {
                     // `TVN_ITEMEXPANDINGW` uses `NMTREEVIEWW`. The
                     // `action` field tells us expand vs collapse.
@@ -19317,20 +18904,15 @@ extern "system" fn workspace_panel_wnd_proc(
     }
 }
 
-/// Snapshot of the workspace panel's six child HWNDs. Owned by
-/// value so [`layout_workspace_panel_children`] doesn't need to
-/// hold a `&mut WindowState` borrow while it issues `MoveWindow`
-/// calls that could re-enter our `wnd_proc` via child repaint
+/// Snapshot of the workspace panel's child HWNDs. Owned by value
+/// so [`layout_workspace_panel_children`] doesn't need to hold a
+/// `&mut WindowState` borrow while it issues `MoveWindow` calls
+/// that could re-enter our `wnd_proc` via child repaint
 /// notifications. Mirrors the snapshot-then-drop discipline the
-/// FIF dock uses.
+/// FIF dock uses. The old header-row fields (frame, title, close)
+/// are gone — the dock group's caption bar owns title + close.
 #[derive(Copy, Clone)]
 struct WorkspacePanelChildren {
-    /// Etched-frame STATIC that visually groups the header row.
-    /// Painted first (via z-order) so `header_label` + `close`
-    /// sit on top.
-    header_frame: HWND,
-    header_label: HWND,
-    close: HWND,
     unfold: HWND,
     fold: HWND,
     locate: HWND,
@@ -19344,30 +18926,28 @@ struct WorkspacePanelChildren {
     unfold_label: HWND,
 }
 
-/// Lay out the workspace panel's five children within its client
-/// rect. Called from the panel's `WM_SIZE` handler (which
-/// snapshots the child HWNDs before invoking) and from
-/// [`show_workspace_panel`] via the same `WM_SIZE` cascade fired
-/// by `MoveWindow` on the panel.
+/// Lay out the workspace panel's children within its client rect.
+/// Called from the panel's `WM_SIZE` handler (which snapshots the
+/// child HWNDs before invoking), which itself cascades from the
+/// dock group container's own layout.
 ///
 /// Row structure (top-to-bottom):
 ///
-///   * Header (`WORKSPACE_HEADER_HEIGHT_PX`): title label left,
-///     close-× button pinned to the right edge.
 ///   * Action row (`WORKSPACE_ACTION_HEIGHT_PX`): three narrow
 ///     buttons on the right (unfold / fold / locate).
-///   * Body: everything below — reserved for the m3 tree view.
+///   * Body: everything below — the tree view (or the "Unfold
+///     All" progress overlay while a walk runs).
 ///
-/// A negative or zero client dimension is treated as "panel
-/// isn't laid out yet"; all `MoveWindow` calls run through
-/// `.max(0)` clamps so a zero-height row collapses cleanly rather
-/// than panicking.
+/// A negative or zero client dimension is treated as "panel isn't
+/// laid out yet"; all `MoveWindow` calls run through `.max(0)`
+/// clamps so a zero-height row collapses cleanly rather than
+/// panicking.
 ///
 /// # Safety
 ///
 /// Every HWND in `children` must be live (created in `run()`,
-/// destroyed only at panel/window teardown). Runs on the UI
-/// thread; no cross-thread invariants.
+/// destroyed only at window teardown). Runs on the UI thread; no
+/// cross-thread invariants.
 unsafe fn layout_workspace_panel_children(
     children: WorkspacePanelChildren,
     width: i32,
@@ -19378,47 +18958,8 @@ unsafe fn layout_workspace_panel_children(
     let inner_right = (width - inset).max(inner_left);
     let inner_width = (inner_right - inner_left).max(0);
 
-    // Header row — etched frame encloses title + close-× as a
-    // visually-grouped box. Frame spans the full header row;
-    // label and close inset inside so they don't overpaint the
-    // frame's border.
-    let header_y = inset;
-    let frame_pad = WORKSPACE_HEADER_FRAME_INSET_PX;
-    let content_left = inner_left + frame_pad;
-    let content_right = (inner_right - frame_pad).max(content_left);
-    let close_w = WORKSPACE_CLOSE_BUTTON_WIDTH_PX;
-    let close_x = (content_right - close_w).max(content_left);
-    let label_w = (close_x - content_left).max(0);
-    let inner_h = (WORKSPACE_HEADER_HEIGHT_PX - 2 * frame_pad).max(0);
-    unsafe {
-        let _ = MoveWindow(
-            children.header_frame,
-            inner_left,
-            header_y,
-            inner_width,
-            WORKSPACE_HEADER_HEIGHT_PX,
-            true,
-        );
-        let _ = MoveWindow(
-            children.header_label,
-            content_left,
-            header_y + frame_pad,
-            label_w,
-            inner_h,
-            true,
-        );
-        let _ = MoveWindow(
-            children.close,
-            close_x,
-            header_y + frame_pad,
-            close_w,
-            inner_h,
-            true,
-        );
-    }
-
     // Action row — three buttons pinned to the right edge.
-    let action_y = header_y + WORKSPACE_HEADER_HEIGHT_PX;
+    let action_y = inset;
     let btn_w = WORKSPACE_ACTION_BUTTON_WIDTH_PX;
     let locate_x = (inner_right - btn_w).max(inner_left);
     let fold_x = (locate_x - btn_w).max(inner_left);
@@ -19497,102 +19038,19 @@ unsafe fn layout_workspace_panel_children(
     }
 }
 
-/// Snapshot of the Document Map panel's chrome + body children:
-/// header frame, title label, close-× button, and the miniature
-/// Scintilla view that fills the body. Same snapshot-then-drop
-/// discipline as [`WorkspacePanelChildren`].
-#[derive(Copy, Clone)]
-struct DocMapPanelChildren {
-    header_frame: HWND,
-    header_label: HWND,
-    close: HWND,
-    /// Second Scintilla control filling the panel body — bound
-    /// via `SCI_SETDOCPOINTER` to the active tab's document.
-    scintilla: HWND,
-}
-
-/// Lay out the docmap panel's chrome + body children within its
-/// client rect. Header row at the top (etched frame + title +
-/// close-×); the Scintilla miniature view fills the rest of the
-/// panel below the header, using the panel's full inner width.
-///
-/// # Safety
-///
-/// Every HWND in `children` must be live (created in [`run`],
-/// destroyed only at window teardown). UI-thread only.
-unsafe fn layout_docmap_panel_children(children: DocMapPanelChildren, width: i32, height: i32) {
-    let inset = DOCMAP_INSET_PX;
-    let inner_left = inset;
-    let inner_right = (width - inset).max(inner_left);
-    let inner_width = (inner_right - inner_left).max(0);
-    let header_y = inset;
-    let frame_pad = DOCMAP_HEADER_FRAME_INSET_PX;
-    let content_left = inner_left + frame_pad;
-    let content_right = (inner_right - frame_pad).max(content_left);
-    let close_w = DOCMAP_CLOSE_BUTTON_WIDTH_PX;
-    let close_x = (content_right - close_w).max(content_left);
-    let label_w = (close_x - content_left).max(0);
-    let inner_h = (DOCMAP_HEADER_HEIGHT_PX - 2 * frame_pad).max(0);
-    unsafe {
-        let _ = MoveWindow(
-            children.header_frame,
-            inner_left,
-            header_y,
-            inner_width,
-            DOCMAP_HEADER_HEIGHT_PX,
-            true,
-        );
-        let _ = MoveWindow(
-            children.header_label,
-            content_left,
-            header_y + frame_pad,
-            label_w,
-            inner_h,
-            true,
-        );
-        let _ = MoveWindow(
-            children.close,
-            close_x,
-            header_y + frame_pad,
-            close_w,
-            inner_h,
-            true,
-        );
-    }
-    // Body — miniature Scintilla view fills the panel below the
-    // header, using the full inner width. A negative body_h
-    // (panel narrower than the header) clamps to zero via `.max`
-    // — the `MoveWindow` no-ops on a zero-dim window rather
-    // than panicking.
-    let body_top = header_y + DOCMAP_HEADER_HEIGHT_PX;
-    let body_bottom = (height - inset).max(body_top);
-    let body_h = (body_bottom - body_top).max(0);
-    unsafe {
-        let _ = MoveWindow(
-            children.scintilla,
-            inner_left,
-            body_top,
-            inner_width,
-            body_h,
-            true,
-        );
-    }
-}
-
-/// `Wnd_proc` for the Document Map panel container. Handles:
-///
-///   * `WM_SIZE`: lay out the header chrome (frame + title +
-///     close-×) plus the miniature Scintilla view that fills
-///     the body.
-///   * `WM_COMMAND`: consume the close-× button and route to
-///     [`hide_docmap_panel`].
+/// `Wnd_proc` for the Document Map panel content container. Since
+/// the dock group's caption took over the title + close chrome,
+/// the panel's whole job is to keep the miniature Scintilla view
+/// filling its client rect.
 ///
 /// # Safety
 ///
 /// Standard `extern "system"` `wnd_proc` invariants — must not
 /// unwind across the FFI boundary. All Win32 API calls are
 /// wrapped in `unsafe`; parent-state access goes through
-/// `state_from_hwnd` under `PluginCallGuard`.
+/// `state_from_hwnd` (reached via `find_main_hwnd` — the direct
+/// parent is a dock group container, possibly floating) under
+/// `PluginCallGuard`.
 extern "system" fn docmap_panel_wnd_proc(
     hwnd: HWND,
     msg: u32,
@@ -19604,400 +19062,16 @@ extern "system" fn docmap_panel_wnd_proc(
             WM_SIZE => {
                 let width = (lparam.0 & 0xFFFF) as i32;
                 let height = ((lparam.0 >> 16) & 0xFFFF) as i32;
-                // Snapshot the four child HWNDs under a brief
-                // borrow, drop it, then call the layout helper.
-                // Same aliasing-safety rationale as
+                // Snapshot under a brief borrow, drop it, then
+                // MoveWindow — same aliasing-safety rationale as
                 // `workspace_panel_wnd_proc`'s WM_SIZE.
-                let hwnds = state_from_hwnd(GetParent(hwnd).unwrap_or_default()).map(|state| {
-                    (
-                        state.docmap_header_frame,
-                        state.docmap_header_label,
-                        state.docmap_close_hwnd,
-                        state.docmap_scintilla_hwnd,
-                    )
-                });
-                if let Some((header_frame, header_label, close, scintilla)) = hwnds {
-                    layout_docmap_panel_children(
-                        DocMapPanelChildren {
-                            header_frame,
-                            header_label,
-                            close,
-                            scintilla,
-                        },
-                        width,
-                        height,
-                    );
-                }
-                LRESULT(0)
-            }
-            WM_COMMAND => {
-                let cmd = (wparam.0 & 0xFFFF) as u16;
-                if cmd == IDC_DOCMAP_CLOSE {
-                    let parent = GetParent(hwnd).unwrap_or_default();
-                    if !parent.0.is_null() {
-                        hide_docmap_panel(parent);
-                    }
-                    return LRESULT(0);
-                }
-                DefWindowProcW(hwnd, msg, wparam, lparam)
-            }
-            WM_CTLCOLORSTATIC => {
-                // Paint the header label's background with the
-                // shared chrome brush so it merges into the
-                // panel — same technique the workspace panel's
-                // header uses (via `fif_dock_wnd_proc`'s
-                // WM_CTLCOLORSTATIC handler pattern; keeping
-                // both panels visually consistent).
-                let hdc = wparam.0 as *mut c_void;
-                SetBkMode(HDC(hdc), TRANSPARENT);
-                LRESULT(dialog_bg_brush().0 as isize)
-            }
-            _ => DefWindowProcW(hwnd, msg, wparam, lparam),
-        }
-    }
-}
-
-/// `Wnd_proc` for the workspace splitter — horizontal-axis
-/// mirror of [`splitter_wnd_proc`]. Captures drag state on
-/// `WM_LBUTTONDOWN`, applies the new workspace width on each
-/// `WM_MOUSEMOVE`, releases on `WM_LBUTTONUP`. Reads/writes the
-/// parent `WindowState` via `state_from_hwnd(GetParent(...))` so
-/// all drag state lives in one place.
-///
-/// # Safety
-///
-/// Standard `extern "system"` `wnd_proc` invariants — must not
-/// unwind across the FFI boundary. All bodies wrap Win32 API
-/// calls in `unsafe {}`; parent-state access goes through
-/// `state_from_hwnd` under `PluginCallGuard`.
-extern "system" fn workspace_splitter_wnd_proc(
-    hwnd: HWND,
-    msg: u32,
-    wparam: WPARAM,
-    lparam: LPARAM,
-) -> LRESULT {
-    unsafe {
-        match msg {
-            WM_SETCURSOR => {
-                if let Ok(cursor) = LoadCursorW(None, IDC_SIZEWE) {
-                    let _ = SetCursor(Some(cursor));
-                }
-                LRESULT(1)
-            }
-            WM_LBUTTONDOWN => {
-                let parent = GetParent(hwnd).unwrap_or_default();
-                if let Some(state) = state_from_hwnd(parent) {
-                    let mut pt = POINT::default();
-                    if GetCursorPos(&raw mut pt).is_ok() {
-                        state.workspace_splitter_drag = Some(WorkspaceSplitterDrag {
-                            start_screen_x: pt.x,
-                            width_at_start: state.workspace_width,
-                        });
-                        let _ = SetCapture(hwnd);
-                    }
-                }
-                LRESULT(0)
-            }
-            WM_MOUSEMOVE => {
-                let parent = GetParent(hwnd).unwrap_or_default();
-                // Same snapshot-then-drop-borrow pattern as the FIF
-                // splitter to avoid re-entering `&mut WindowState`
-                // via `MoveWindow → WM_SIZE → workspace_panel_wnd_proc`
-                // on the panel's own children.
-                let snap = if let Some(state) = state_from_hwnd(parent) {
-                    state.workspace_splitter_drag.map(|drag| {
-                        (
-                            drag,
-                            state.workspace_width,
-                            state.toolbar_hwnd,
-                            state.toolbar_bitmap_px,
-                            state.tab_hwnd,
-                            state.scintilla_hwnd,
-                            state.status_hwnd,
-                            state.fif_splitter_hwnd,
-                            state.fif_dock_hwnd,
-                            state.fif_dock_visible,
-                            state.fif_dock_height,
-                            WorkspaceLayout {
-                                panel: state.workspace_hwnd,
-                                splitter: state.workspace_splitter_hwnd,
-                                visible: state.workspace_visible,
-                                width: state.workspace_width,
-                            },
-                            DocMapLayout {
-                                panel: state.docmap_hwnd,
-                                splitter: state.docmap_splitter_hwnd,
-                                visible: state.docmap_visible,
-                                width: state.docmap_width,
-                            },
-                        )
-                    })
-                } else {
-                    None
-                };
-                let Some((
-                    drag,
-                    current_width,
-                    toolbar_hwnd,
-                    toolbar_bitmap_px,
-                    tabs,
-                    scintilla,
-                    status,
-                    fif_splitter,
-                    fif_dock,
-                    fif_dock_visible,
-                    fif_dock_height,
-                    mut workspace,
-                    docmap,
-                )) = snap
-                else {
-                    return LRESULT(0);
-                };
-                let mut pt = POINT::default();
-                if GetCursorPos(&raw mut pt).is_err() {
-                    return LRESULT(0);
-                }
-                let mut rect = RECT::default();
-                if GetClientRect(parent, &raw mut rect).is_err() {
-                    return LRESULT(0);
-                }
-                // Dragging right grows the panel; dragging left
-                // shrinks it. `clamp_workspace_width` is the same
-                // authority `layout_children` consults, so the value
-                // we write back into state matches what gets rendered.
-                let proposed = drag.width_at_start + (pt.x - drag.start_screen_x);
-                let new_width = clamp_workspace_width(rect.right, proposed);
-                if new_width == current_width {
-                    return LRESULT(0);
-                }
-                if let Some(state) = state_from_hwnd(parent) {
-                    state.workspace_width = new_width;
-                }
-                workspace.width = new_width;
-                let tab_hidden = !IsWindowVisible(tabs).as_bool();
-                // Suppress Scintilla's WM_PAINT storm during the
-                // drag's `MoveWindow` burst. Without this, every
-                // pixel of drag fires WM_SIZE on Scintilla, which
-                // invalidates and repaints the entire editor —
-                // visible as heavy flicker on wider windows.
-                //
-                // [`ScintillaRedrawGuard`] handles the SETREDRAW
-                // pair as RAII: enter() suppresses paints,
-                // Drop restores + `InvalidateRect`s in one shot.
-                // Using the guard rather than a manual bracket
-                // guarantees redraw is restored even if a future
-                // edit to `layout_children` introduces a panic
-                // path — a stuck-frozen Scintilla view would be
-                // unrecoverable for the user.
-                //
-                // Scoped block so the guard's Drop runs BEFORE the
-                // explicit `UpdateWindow` below — we want the
-                // guard's InvalidateRect to have marked the region
-                // dirty by the time UpdateWindow forces a paint.
-                {
-                    let _redraw = ScintillaRedrawGuard::enter(scintilla);
-                    layout_children(
-                        toolbar_hwnd,
-                        toolbar::toolbar_height_px(toolbar_bitmap_px),
-                        tabs,
-                        scintilla,
-                        status,
-                        fif_splitter,
-                        fif_dock,
-                        fif_dock_visible,
-                        fif_dock_height,
-                        tab_hidden,
-                        workspace,
-                        docmap,
-                        rect.right,
-                        rect.bottom,
-                    );
-                }
-                let _ = UpdateWindow(scintilla);
-                LRESULT(0)
-            }
-            WM_LBUTTONUP => {
-                let parent = GetParent(hwnd).unwrap_or_default();
-                if let Some(state) = state_from_hwnd(parent) {
-                    state.workspace_splitter_drag = None;
-                }
-                let _ = ReleaseCapture();
-                LRESULT(0)
-            }
-            WM_CAPTURECHANGED => {
-                // Defensive: some UI operation stole capture mid-drag
-                // (e.g. Alt+Tab). Clear drag state so the next
-                // WM_MOUSEMOVE without a fresh WM_LBUTTONDOWN
-                // doesn't resize the panel to whatever the cursor
-                // happens to be over.
-                let parent = GetParent(hwnd).unwrap_or_default();
-                if let Some(state) = state_from_hwnd(parent) {
-                    state.workspace_splitter_drag = None;
-                }
-                LRESULT(0)
-            }
-            _ => DefWindowProcW(hwnd, msg, wparam, lparam),
-        }
-    }
-}
-
-/// `Wnd_proc` for the Document Map splitter — right-column mirror
-/// of [`workspace_splitter_wnd_proc`]. Sign convention flips:
-/// dragging LEFT grows the panel because the panel sits at the
-/// right edge and the splitter to its left.
-///
-/// # Safety
-///
-/// Standard `extern "system"` `wnd_proc` invariants — must not
-/// unwind across the FFI boundary. All bodies wrap Win32 API
-/// calls in `unsafe {}`; parent-state access goes through
-/// `state_from_hwnd` under `PluginCallGuard`.
-extern "system" fn docmap_splitter_wnd_proc(
-    hwnd: HWND,
-    msg: u32,
-    wparam: WPARAM,
-    lparam: LPARAM,
-) -> LRESULT {
-    unsafe {
-        match msg {
-            WM_SETCURSOR => {
-                if let Ok(cursor) = LoadCursorW(None, IDC_SIZEWE) {
-                    let _ = SetCursor(Some(cursor));
-                }
-                LRESULT(1)
-            }
-            WM_LBUTTONDOWN => {
-                let parent = GetParent(hwnd).unwrap_or_default();
-                if let Some(state) = state_from_hwnd(parent) {
-                    let mut pt = POINT::default();
-                    if GetCursorPos(&raw mut pt).is_ok() {
-                        state.docmap_splitter_drag = Some(DocMapSplitterDrag {
-                            start_screen_x: pt.x,
-                            width_at_start: state.docmap_width,
-                        });
-                        let _ = SetCapture(hwnd);
-                    }
-                }
-                LRESULT(0)
-            }
-            WM_MOUSEMOVE => {
-                let parent = GetParent(hwnd).unwrap_or_default();
-                let snap = if let Some(state) = state_from_hwnd(parent) {
-                    state.docmap_splitter_drag.map(|drag| {
-                        (
-                            drag,
-                            state.docmap_width,
-                            state.toolbar_hwnd,
-                            state.toolbar_bitmap_px,
-                            state.tab_hwnd,
-                            state.scintilla_hwnd,
-                            state.status_hwnd,
-                            state.fif_splitter_hwnd,
-                            state.fif_dock_hwnd,
-                            state.fif_dock_visible,
-                            state.fif_dock_height,
-                            WorkspaceLayout {
-                                panel: state.workspace_hwnd,
-                                splitter: state.workspace_splitter_hwnd,
-                                visible: state.workspace_visible,
-                                width: state.workspace_width,
-                            },
-                            DocMapLayout {
-                                panel: state.docmap_hwnd,
-                                splitter: state.docmap_splitter_hwnd,
-                                visible: state.docmap_visible,
-                                width: state.docmap_width,
-                            },
-                            state.editor,
-                            state.docmap_editor,
-                        )
-                    })
-                } else {
-                    None
-                };
-                let Some((
-                    drag,
-                    current_width,
-                    toolbar_hwnd,
-                    toolbar_bitmap_px,
-                    tabs,
-                    scintilla,
-                    status,
-                    fif_splitter,
-                    fif_dock,
-                    fif_dock_visible,
-                    fif_dock_height,
-                    workspace,
-                    mut docmap,
-                    main_editor,
-                    docmap_editor,
-                )) = snap
-                else {
-                    return LRESULT(0);
-                };
-                let mut pt = POINT::default();
-                if GetCursorPos(&raw mut pt).is_err() {
-                    return LRESULT(0);
-                }
-                let mut rect = RECT::default();
-                if GetClientRect(parent, &raw mut rect).is_err() {
-                    return LRESULT(0);
-                }
-                // Sign flip vs the workspace splitter: dragging
-                // LEFT grows the docmap (subtract the delta).
-                let proposed = drag.width_at_start - (pt.x - drag.start_screen_x);
-                let new_width = clamp_docmap_width(rect.right, proposed);
-                if new_width == current_width {
-                    return LRESULT(0);
-                }
-                if let Some(state) = state_from_hwnd(parent) {
-                    state.docmap_width = new_width;
-                }
-                docmap.width = new_width;
-                let tab_hidden = !IsWindowVisible(tabs).as_bool();
-                // Same anti-flicker discipline as the workspace
-                // splitter — Scintilla's WM_PAINT burst during
-                // rapid MoveWindow is bracketed by
-                // `ScintillaRedrawGuard`.
-                {
-                    let _redraw = ScintillaRedrawGuard::enter(scintilla);
-                    layout_children(
-                        toolbar_hwnd,
-                        toolbar::toolbar_height_px(toolbar_bitmap_px),
-                        tabs,
-                        scintilla,
-                        status,
-                        fif_splitter,
-                        fif_dock,
-                        fif_dock_visible,
-                        fif_dock_height,
-                        tab_hidden,
-                        workspace,
-                        docmap,
-                        rect.right,
-                        rect.bottom,
-                    );
-                }
-                let _ = UpdateWindow(scintilla);
-                // Panel width change alters the miniature
-                // view's lines-on-screen — the highlight-center
-                // math would drift otherwise. Update pulls both
-                // handles by value, no reentrant `state_from_hwnd`.
-                update_docmap_viewport_indicator(main_editor, docmap_editor);
-                LRESULT(0)
-            }
-            WM_LBUTTONUP => {
-                let parent = GetParent(hwnd).unwrap_or_default();
-                if let Some(state) = state_from_hwnd(parent) {
-                    state.docmap_splitter_drag = None;
-                }
-                let _ = ReleaseCapture();
-                LRESULT(0)
-            }
-            WM_CAPTURECHANGED => {
-                let parent = GetParent(hwnd).unwrap_or_default();
-                if let Some(state) = state_from_hwnd(parent) {
-                    state.docmap_splitter_drag = None;
+                let main = dock_panels::find_main_hwnd(hwnd).unwrap_or_default();
+                let scintilla = state_from_hwnd(main).map(|state| state.docmap_scintilla_hwnd);
+                if let Some(scintilla) = scintilla {
+                    let inset = DOCMAP_INSET_PX;
+                    let w = (width - 2 * inset).max(0);
+                    let h = (height - 2 * inset).max(0);
+                    let _ = MoveWindow(scintilla, inset, inset, w, h, true);
                 }
                 LRESULT(0)
             }
@@ -20057,11 +19131,13 @@ unsafe extern "system" fn docmap_scintilla_subclass_proc(
     _dwrefdata: usize,
 ) -> LRESULT {
     unsafe {
-        // Walk `map_scintilla → docmap_panel → main_hwnd`. The
-        // panel HWND doesn't have `WindowState` installed on
-        // `GWLP_USERDATA`; state lives on the main window.
-        let panel = GetParent(hwnd).unwrap_or_default();
-        let main = GetParent(panel).unwrap_or_default();
+        // Walk `map_scintilla → docmap_panel → dock group →
+        // main_hwnd` by class rather than by a fixed number of
+        // `GetParent` hops — the panel lives inside a dock group
+        // container now, and a floating group is an owned popup
+        // (whose `GetParent` returns the owner, which the walker
+        // handles for free).
+        let main = dock_panels::find_main_hwnd(hwnd).unwrap_or_default();
         match msg {
             WM_LBUTTONDOWN => {
                 if let Some(state) = state_from_hwnd(main) {
@@ -21283,71 +20359,17 @@ unsafe fn show_fif_dock(main_hwnd: HWND) {
             return;
         }
         state.fif_dock_visible = true;
-        Some((
-            state.toolbar_hwnd,
-            state.toolbar_bitmap_px,
-            state.tab_hwnd,
-            state.scintilla_hwnd,
-            state.status_hwnd,
-            state.fif_splitter_hwnd,
-            state.fif_dock_hwnd,
-            state.fif_dock_height,
-            WorkspaceLayout {
-                panel: state.workspace_hwnd,
-                splitter: state.workspace_splitter_hwnd,
-                visible: state.workspace_visible,
-                width: state.workspace_width,
-            },
-            DocMapLayout {
-                panel: state.docmap_hwnd,
-                splitter: state.docmap_splitter_hwnd,
-                visible: state.docmap_visible,
-                width: state.docmap_width,
-            },
-        ))
+        Some((state.fif_splitter_hwnd, state.fif_dock_hwnd))
     } else {
         None
     };
-    let Some((
-        toolbar_hwnd,
-        toolbar_bitmap_px,
-        tabs,
-        scintilla,
-        status,
-        splitter,
-        dock,
-        dock_height,
-        workspace,
-        docmap,
-    )) = snapshot
-    else {
+    let Some((splitter, dock)) = snapshot else {
         return;
     };
     unsafe {
         let _ = ShowWindow(splitter, SW_SHOW);
         let _ = ShowWindow(dock, SW_SHOW);
-        let mut rect = RECT::default();
-        if GetClientRect(main_hwnd, &raw mut rect).is_ok() {
-            // Read current tab-strip visibility — `IsWindowVisible`
-            // is the source of truth (toggled by `NPPM_HIDETABBAR`).
-            let tab_hidden = !IsWindowVisible(tabs).as_bool();
-            layout_children(
-                toolbar_hwnd,
-                toolbar::toolbar_height_px(toolbar_bitmap_px),
-                tabs,
-                scintilla,
-                status,
-                splitter,
-                dock,
-                true,
-                dock_height,
-                tab_hidden,
-                workspace,
-                docmap,
-                rect.right,
-                rect.bottom,
-            );
-        }
+        relayout_now(main_hwnd);
     }
 }
 
@@ -21360,69 +20382,17 @@ unsafe fn hide_fif_dock(main_hwnd: HWND) {
             return;
         }
         state.fif_dock_visible = false;
-        Some((
-            state.toolbar_hwnd,
-            state.toolbar_bitmap_px,
-            state.tab_hwnd,
-            state.scintilla_hwnd,
-            state.status_hwnd,
-            state.fif_splitter_hwnd,
-            state.fif_dock_hwnd,
-            state.fif_dock_height,
-            WorkspaceLayout {
-                panel: state.workspace_hwnd,
-                splitter: state.workspace_splitter_hwnd,
-                visible: state.workspace_visible,
-                width: state.workspace_width,
-            },
-            DocMapLayout {
-                panel: state.docmap_hwnd,
-                splitter: state.docmap_splitter_hwnd,
-                visible: state.docmap_visible,
-                width: state.docmap_width,
-            },
-        ))
+        Some((state.fif_splitter_hwnd, state.fif_dock_hwnd))
     } else {
         None
     };
-    let Some((
-        toolbar_hwnd,
-        toolbar_bitmap_px,
-        tabs,
-        scintilla,
-        status,
-        splitter,
-        dock,
-        dock_height,
-        workspace,
-        docmap,
-    )) = snapshot
-    else {
+    let Some((splitter, dock)) = snapshot else {
         return;
     };
     unsafe {
         let _ = ShowWindow(splitter, SW_HIDE);
         let _ = ShowWindow(dock, SW_HIDE);
-        let mut rect = RECT::default();
-        if GetClientRect(main_hwnd, &raw mut rect).is_ok() {
-            let tab_hidden = !IsWindowVisible(tabs).as_bool();
-            layout_children(
-                toolbar_hwnd,
-                toolbar::toolbar_height_px(toolbar_bitmap_px),
-                tabs,
-                scintilla,
-                status,
-                splitter,
-                dock,
-                false,
-                dock_height,
-                tab_hidden,
-                workspace,
-                docmap,
-                rect.right,
-                rect.bottom,
-            );
-        }
+        relayout_now(main_hwnd);
     }
 }
 
@@ -23013,188 +21983,63 @@ unsafe fn remove_workspace_root(main_hwnd: HWND) {
     unsafe { sync_workspace_state_to_shell(main_hwnd) };
 }
 
-/// Show the workspace panel rooted at `root`. Idempotent on the
-/// visibility flag; overwrites `workspace_root` on every call so
+/// Show the workspace panel rooted at `root`. Idempotent on
+/// visibility; overwrites `workspace_root` on every call so
 /// `File → Open Folder as Workspace...` can re-root an already-
 /// open panel without the user having to close it first.
 ///
-/// The initial layout re-runs `layout_children` under a snapshot
-/// borrow (same pattern as `show_fif_dock`) so `MoveWindow` →
-/// `WM_SIZE` on the panel doesn't re-enter a live
-/// `&mut WindowState`.
+/// "Show" means: populate the tree, then reveal through the dock
+/// model — the panel reopens wherever the user last had it
+/// (docked side, tab in a group, or floating) via the model's
+/// remembered location, and [`dock_panels::apply_dock_layout`]
+/// reconciles the native windows.
 ///
 /// # Safety
 ///
 /// `main_hwnd` must be a live main window HWND. UI thread only.
 unsafe fn show_workspace_panel(main_hwnd: HWND, root: PathBuf) {
-    // The header title stays fixed at "Folder as Workspace" (the
-    // text seeded on control creation). Earlier iterations
-    // overwrote it with the root basename here, but that was
-    // never the intended design — the header is a label for the
-    // panel itself, not for the currently-loaded folder. The
-    // root folder's name is already visible as the top tree node.
-    let snapshot = if let Some(state) = unsafe { state_from_hwnd(main_hwnd) } {
+    let tree = if let Some(state) = unsafe { state_from_hwnd(main_hwnd) } {
         state.workspace_root = Some(root.clone());
-        state.workspace_visible = true;
-        Some((
-            state.toolbar_hwnd,
-            state.toolbar_bitmap_px,
-            state.tab_hwnd,
-            state.scintilla_hwnd,
-            state.status_hwnd,
-            state.fif_splitter_hwnd,
-            state.fif_dock_hwnd,
-            state.fif_dock_visible,
-            state.fif_dock_height,
-            state.workspace_tree_hwnd,
-            WorkspaceLayout {
-                panel: state.workspace_hwnd,
-                splitter: state.workspace_splitter_hwnd,
-                visible: true,
-                width: state.workspace_width,
-            },
-            DocMapLayout {
-                panel: state.docmap_hwnd,
-                splitter: state.docmap_splitter_hwnd,
-                visible: state.docmap_visible,
-                width: state.docmap_width,
-            },
-        ))
+        state.workspace_tree_hwnd
     } else {
-        None
-    };
-    let Some((
-        toolbar_hwnd,
-        toolbar_bitmap_px,
-        tabs,
-        scintilla,
-        status,
-        fif_splitter,
-        fif_dock,
-        fif_dock_visible,
-        fif_dock_height,
-        tree,
-        workspace,
-        docmap,
-    )) = snapshot
-    else {
         return;
     };
     unsafe {
-        // Clear + repopulate the tree. Only the root + its
-        // direct children hit disk here (one `read_dir`);
-        // subfolders defer to `TVN_ITEMEXPANDING`.
+        // Clear + repopulate the tree. Only the root + its direct
+        // children hit disk here (one `read_dir`); subfolders
+        // defer to `TVN_ITEMEXPANDING`.
         populate_workspace_root(main_hwnd, tree, &root);
-        let _ = ShowWindow(workspace.panel, SW_SHOW);
-        let _ = ShowWindow(workspace.splitter, SW_SHOW);
-        let mut rect = RECT::default();
-        if GetClientRect(main_hwnd, &raw mut rect).is_ok() {
-            let tab_hidden = !IsWindowVisible(tabs).as_bool();
-            layout_children(
-                toolbar_hwnd,
-                toolbar::toolbar_height_px(toolbar_bitmap_px),
-                tabs,
-                scintilla,
-                status,
-                fif_splitter,
-                fif_dock,
-                fif_dock_visible,
-                fif_dock_height,
-                tab_hidden,
-                workspace,
-                docmap,
-                rect.right,
-                rect.bottom,
-            );
+        if let Some(state) = state_from_hwnd(main_hwnd) {
+            state.dock_layout.show(DockPanel::Workspace);
         }
+        dock_panels::apply_dock_layout(main_hwnd);
     }
 }
 
-/// Hide the workspace panel, reclaiming the horizontal space for
-/// the editor. Idempotent. `workspace_root` is deliberately
-/// preserved so the next `View → Folder as Workspace` toggle
-/// re-opens with the same root without asking again — matches
-/// N++'s behaviour.
+/// Hide the workspace panel, reclaiming its space. Idempotent.
+/// `workspace_root` is deliberately preserved so the next
+/// `View → Folder as Workspace` toggle re-opens with the same
+/// root without asking again — matches N++'s behaviour. The dock
+/// model likewise remembers *where* the panel was, so the reopen
+/// lands at the same spot.
 ///
 /// # Safety
 ///
 /// Same invariants as [`show_workspace_panel`].
 unsafe fn hide_workspace_panel(main_hwnd: HWND) {
-    // Kill any in-flight "Unfold All" walk BEFORE we tear the
-    // panel state down — the timer would otherwise keep firing
-    // and reach into a tree HWND whose parent's visibility just
-    // flipped underneath it.
+    // Kill any in-flight "Unfold All" walk BEFORE the panel is
+    // reparented/hidden — the timer would otherwise keep firing
+    // into a tree whose visibility just flipped underneath it.
     unsafe { cancel_workspace_unfold(main_hwnd) };
-    let snapshot = if let Some(state) = unsafe { state_from_hwnd(main_hwnd) } {
-        if !state.workspace_visible {
-            return;
+    let was_visible = unsafe { state_from_hwnd(main_hwnd) }.is_some_and(|state| {
+        let visible = state.dock_layout.is_visible(DockPanel::Workspace);
+        if visible {
+            state.dock_layout.hide(DockPanel::Workspace);
         }
-        state.workspace_visible = false;
-        Some((
-            state.toolbar_hwnd,
-            state.toolbar_bitmap_px,
-            state.tab_hwnd,
-            state.scintilla_hwnd,
-            state.status_hwnd,
-            state.fif_splitter_hwnd,
-            state.fif_dock_hwnd,
-            state.fif_dock_visible,
-            state.fif_dock_height,
-            WorkspaceLayout {
-                panel: state.workspace_hwnd,
-                splitter: state.workspace_splitter_hwnd,
-                visible: false,
-                width: state.workspace_width,
-            },
-            DocMapLayout {
-                panel: state.docmap_hwnd,
-                splitter: state.docmap_splitter_hwnd,
-                visible: state.docmap_visible,
-                width: state.docmap_width,
-            },
-        ))
-    } else {
-        None
-    };
-    let Some((
-        toolbar_hwnd,
-        toolbar_bitmap_px,
-        tabs,
-        scintilla,
-        status,
-        fif_splitter,
-        fif_dock,
-        fif_dock_visible,
-        fif_dock_height,
-        workspace,
-        docmap,
-    )) = snapshot
-    else {
-        return;
-    };
-    unsafe {
-        let _ = ShowWindow(workspace.panel, SW_HIDE);
-        let _ = ShowWindow(workspace.splitter, SW_HIDE);
-        let mut rect = RECT::default();
-        if GetClientRect(main_hwnd, &raw mut rect).is_ok() {
-            let tab_hidden = !IsWindowVisible(tabs).as_bool();
-            layout_children(
-                toolbar_hwnd,
-                toolbar::toolbar_height_px(toolbar_bitmap_px),
-                tabs,
-                scintilla,
-                status,
-                fif_splitter,
-                fif_dock,
-                fif_dock_visible,
-                fif_dock_height,
-                tab_hidden,
-                workspace,
-                docmap,
-                rect.right,
-                rect.bottom,
-            );
-        }
+        visible
+    });
+    if was_visible {
+        unsafe { dock_panels::apply_dock_layout(main_hwnd) };
     }
 }
 
@@ -23237,7 +22082,10 @@ unsafe fn open_workspace_folder_flow(main_hwnd: HWND) {
 /// Same invariants as [`show_workspace_panel`].
 unsafe fn toggle_workspace_panel(main_hwnd: HWND) {
     let (visible, root) = if let Some(state) = unsafe { state_from_hwnd(main_hwnd) } {
-        (state.workspace_visible, state.workspace_root.clone())
+        (
+            state.dock_layout.is_visible(DockPanel::Workspace),
+            state.workspace_root.clone(),
+        )
     } else {
         return;
     };
@@ -23250,22 +22098,38 @@ unsafe fn toggle_workspace_panel(main_hwnd: HWND) {
     }
 }
 
+/// Close a panel from its dock group's caption ✕. Routes to the
+/// full per-panel hide path (the workspace one cancels an
+/// in-flight Unfold All, etc.) rather than mutating the model
+/// directly — the ✕ must behave exactly like the View-menu
+/// toggle's hide half.
+///
+/// # Safety
+///
+/// `main_hwnd` must be the main window HWND. UI thread only.
+unsafe fn dock_close_panel(main_hwnd: HWND, panel: DockPanel) {
+    unsafe {
+        match panel {
+            DockPanel::Workspace => hide_workspace_panel(main_hwnd),
+            DockPanel::DocMap => hide_docmap_panel(main_hwnd),
+        }
+    }
+}
+
 /// Snapshot the current workspace panel state into
-/// `Shell.session.workspace` so the next `save_session` writes
-/// it through to disk. Called immediately before every
-/// `save_session` invocation (the periodic autosave tick + the
-/// `WM_DESTROY` shutdown save) so a clean shutdown or a
-/// mid-session autosave both capture the latest state.
+/// `Shell.session.workspace` so the next `save_session` writes it
+/// through to disk. The dock layout itself persists separately
+/// (via [`sync_dock_state_to_shell`]); this legacy mirror carries
+/// the **root path** — which is content state, not layout — plus
+/// visible/width for downgrade tolerance and cross-platform
+/// sessions.
 ///
 /// If the user has never opened a workspace this session
 /// (`workspace_root` is `None`), we deliberately preserve any
 /// pre-existing `WorkspaceSession` on the Shell rather than
-/// overwriting with `None`. That way a user who launched into a
-/// restored workspace, then closed the app without touching
-/// the panel, still gets the same restore next launch. The
-/// panel-close X and `View → Folder as Workspace` toggle both
-/// leave `workspace_root` populated for exactly this reason
-/// (matches N++'s behaviour).
+/// overwriting with `None` — a user who launched into a restored
+/// workspace, then closed the app without touching the panel,
+/// still gets the same restore next launch.
 ///
 /// # Safety
 ///
@@ -23279,250 +22143,161 @@ unsafe fn sync_workspace_state_to_shell(main_hwnd: HWND) {
         // previously-loaded `WorkspaceSession` alone (see doc).
         return;
     };
+    let visible = state.dock_layout.is_visible(DockPanel::Workspace);
+    let width = legacy_band_width(&state.dock_layout, DockPanel::Workspace);
     state
         .shell
         .set_workspace_session(Some(codepp_core::session::WorkspaceSession {
             root: Some(root),
-            visible: state.workspace_visible,
-            width: Some(state.workspace_width),
+            visible,
+            width: Some(width),
         }));
 }
 
-/// Cold-start restore: read `Shell.saved_workspace_session()`
-/// and apply it. If the session had a workspace with `visible ==
-/// true`, this pops the panel open at the saved root and
-/// applies the saved width. If `visible == false` but a root is
-/// present, we seed `state.workspace_root` + `state.workspace_width`
-/// so a later `View → Folder as Workspace` opens at the
-/// remembered root without needing to prompt again.
-///
-/// Called once from `run()` after `SetWindowLongPtrW(GWLP_USERDATA)`
-/// installs the state pointer + the initial `layout_children`
-/// call. Placing it after the initial layout means the first
-/// paint already reflects the restored panel state — no visible
-/// "editor first, then panel slides in" flash.
+/// The band width to mirror into the legacy `<workspace>` /
+/// `<docmap>` session fields: the size of the side the panel is
+/// currently docked on, falling back to its default side's stored
+/// size when floating/hidden. Only downgrade/cross-build
+/// tolerance rides on this — a dock-aware build restores from
+/// `<dock>` and never reads it.
+fn legacy_band_width(layout: &codepp_core::dock::DockLayout, panel: DockPanel) -> i32 {
+    let side = match layout.group_of(panel).map(|g| g.location) {
+        Some(codepp_core::dock::DockLocation::Side(s)) => s,
+        _ => panel.default_side(),
+    };
+    layout.side_size(side)
+}
+
+/// Push the whole dock layout into the shell's session cache so
+/// the next `save_session` persists it. Called from the periodic
+/// autosave and shutdown paths; the interactive mutation paths
+/// ([`dock_panels::apply_dock_layout`], splitter release) already
+/// write through on their own.
 ///
 /// # Safety
 ///
 /// `main_hwnd` must be the main window HWND. UI thread only.
-unsafe fn apply_saved_workspace(main_hwnd: HWND) {
-    let saved = if let Some(state) = unsafe { state_from_hwnd(main_hwnd) } {
-        state.shell.saved_workspace_session()
+unsafe fn sync_dock_state_to_shell(main_hwnd: HWND) {
+    let Some(state) = (unsafe { state_from_hwnd(main_hwnd) }) else {
+        return;
+    };
+    let session = state.dock_layout.to_session();
+    state.shell.set_dock_session(Some(session));
+}
+
+/// Cold-start restore of the whole dock arrangement: rebuild the
+/// model from the persisted `<dock>` element (or the legacy
+/// `<workspace>` / `<docmap>` migration — the precedence lives on
+/// `Shell::restored_dock_layout`, shared by all three backends),
+/// gate the workspace panel on actually having a root to show,
+/// clamp floating rects back into reach of the main window, then
+/// reconcile.
+///
+/// Runs once from `run()` after the state pointer is installed
+/// and after the initial layout, so the first paint already
+/// reflects the restored arrangement.
+///
+/// # Safety
+///
+/// `main_hwnd` must be the main window HWND. UI thread only.
+unsafe fn apply_saved_dock(main_hwnd: HWND) {
+    let Some((mut layout, saved_workspace)) =
+        (unsafe { state_from_hwnd(main_hwnd) }).map(|state| {
+            (
+                state.shell.restored_dock_layout(),
+                state.shell.saved_workspace_session(),
+            )
+        })
+    else {
+        return;
+    };
+    // The workspace panel is only showable with a root folder. A
+    // layout that claims it visible but a session with no root
+    // (hand-edited, or the root entry was dropped) degrades to
+    // "hidden, remembered where it was" rather than presenting an
+    // empty husk.
+    let root = saved_workspace.and_then(|w| w.root);
+    if root.is_none() && layout.is_visible(DockPanel::Workspace) {
+        layout.hide(DockPanel::Workspace);
+    }
+    // A float rect persisted on a bigger display (or hand-edited
+    // to the moon) must stay retrievable: clamp every floating
+    // rect so a draggable corner remains inside the main window.
+    let mut wr = RECT::default();
+    if unsafe { GetWindowRect(main_hwnd, &raw mut wr) }.is_ok() {
+        layout.clamp_floating_to_area(codepp_core::dock::DockRect::new(
+            wr.left,
+            wr.top,
+            (wr.right - wr.left).max(0),
+            (wr.bottom - wr.top).max(0),
+        ));
+    }
+    let workspace_visible = layout.is_visible(DockPanel::Workspace);
+    let tree = if let Some(state) = unsafe { state_from_hwnd(main_hwnd) } {
+        state.dock_layout = layout;
+        state.workspace_root.clone_from(&root);
+        state.workspace_tree_hwnd
     } else {
         return;
     };
-    let Some(ws) = saved else {
-        return;
-    };
-    let Some(root) = ws.root else {
-        return;
-    };
-    // Seed the width first so the panel opens at the persisted
-    // size rather than snapping to the default and then resizing.
-    if let Some(width) = ws.width {
-        if let Some(state) = unsafe { state_from_hwnd(main_hwnd) } {
-            state.workspace_width = width;
+    if workspace_visible {
+        if let Some(root) = &root {
+            unsafe { populate_workspace_root(main_hwnd, tree, root) };
         }
     }
-    if ws.visible {
-        // `show_workspace_panel` handles the state seeding
-        // (`workspace_root`, `workspace_visible`), tree populate,
-        // `ShowWindow`, and layout re-run. One call restores
-        // everything.
-        unsafe { show_workspace_panel(main_hwnd, root) };
-    } else if let Some(state) = unsafe { state_from_hwnd(main_hwnd) } {
-        // Not visible — remember the root so the next `View →
-        // Folder as Workspace` opens at it without prompting.
-        state.workspace_root = Some(root);
-    }
+    unsafe { dock_panels::apply_dock_layout(main_hwnd) };
 }
 
-/// Show the Document Map panel. Idempotent on the visibility
-/// flag. Symmetric with [`show_workspace_panel`] minus the
-/// tree/root plumbing (docmap doesn't bind to a resource — it
-/// mirrors whatever buffer is active).
+/// Show the Document Map panel. Idempotent on visibility.
+/// Symmetric with [`show_workspace_panel`] minus the tree/root
+/// plumbing (the docmap mirrors whatever buffer is active; the
+/// doc rebind + viewport seed run inside
+/// [`dock_panels::apply_dock_layout`]).
 ///
 /// # Safety
 ///
 /// `main_hwnd` must be a live main window HWND. UI thread only.
 unsafe fn show_docmap_panel(main_hwnd: HWND) {
-    let snapshot = if let Some(state) = unsafe { state_from_hwnd(main_hwnd) } {
-        if state.docmap_visible {
-            return;
+    let changed = unsafe { state_from_hwnd(main_hwnd) }.is_some_and(|state| {
+        if state.dock_layout.is_visible(DockPanel::DocMap) {
+            return false;
         }
-        state.docmap_visible = true;
-        Some((
-            state.toolbar_hwnd,
-            state.toolbar_bitmap_px,
-            state.tab_hwnd,
-            state.scintilla_hwnd,
-            state.status_hwnd,
-            state.fif_splitter_hwnd,
-            state.fif_dock_hwnd,
-            state.fif_dock_visible,
-            state.fif_dock_height,
-            WorkspaceLayout {
-                panel: state.workspace_hwnd,
-                splitter: state.workspace_splitter_hwnd,
-                visible: state.workspace_visible,
-                width: state.workspace_width,
-            },
-            DocMapLayout {
-                panel: state.docmap_hwnd,
-                splitter: state.docmap_splitter_hwnd,
-                visible: true,
-                width: state.docmap_width,
-            },
-        ))
-    } else {
-        None
-    };
-    let Some((
-        toolbar_hwnd,
-        toolbar_bitmap_px,
-        tabs,
-        scintilla,
-        status,
-        fif_splitter,
-        fif_dock,
-        fif_dock_visible,
-        fif_dock_height,
-        workspace,
-        docmap,
-    )) = snapshot
-    else {
-        return;
-    };
-    unsafe {
-        let _ = ShowWindow(docmap.panel, SW_SHOW);
-        let _ = ShowWindow(docmap.splitter, SW_SHOW);
-        let mut rect = RECT::default();
-        if GetClientRect(main_hwnd, &raw mut rect).is_ok() {
-            let tab_hidden = !IsWindowVisible(tabs).as_bool();
-            layout_children(
-                toolbar_hwnd,
-                toolbar::toolbar_height_px(toolbar_bitmap_px),
-                tabs,
-                scintilla,
-                status,
-                fif_splitter,
-                fif_dock,
-                fif_dock_visible,
-                fif_dock_height,
-                tab_hidden,
-                workspace,
-                docmap,
-                rect.right,
-                rect.bottom,
-            );
-        }
-        // Sync the toolbar's Document Map button check state to
-        // the new visibility. `refresh_state` doesn't touch this
-        // bit (docmap visibility isn't a Scintilla-derived state),
-        // so we push it explicitly here.
-        toolbar::set_button_checked(toolbar_hwnd, ID_VIEW_DOCMAP, true);
-        // Defensive re-sync of the map view's bound doc — cold
-        // start already seeded it, but a panel toggle after a
-        // tab activation that happened while the panel was
-        // hidden needs this to catch up. `sync_docmap_to_active_tab`
-        // trails an `update_docmap_viewport_indicator` call
-        // internally, so the reveal paints the highlight at the
-        // main editor's current viewport in the same frame.
-        sync_docmap_to_active_tab(main_hwnd);
+        state.dock_layout.show(DockPanel::DocMap);
+        true
+    });
+    if changed {
+        unsafe { dock_panels::apply_dock_layout(main_hwnd) };
     }
 }
 
-/// Hide the Document Map panel, reclaiming the horizontal space
-/// for the editor. Idempotent. Mirror of [`hide_workspace_panel`].
+/// Hide the Document Map panel. Idempotent. Mirror of
+/// [`hide_workspace_panel`] without the unfold-cancel step.
 ///
 /// # Safety
 ///
 /// Same invariants as [`show_docmap_panel`].
 unsafe fn hide_docmap_panel(main_hwnd: HWND) {
-    let snapshot = if let Some(state) = unsafe { state_from_hwnd(main_hwnd) } {
-        if !state.docmap_visible {
-            return;
+    let changed = unsafe { state_from_hwnd(main_hwnd) }.is_some_and(|state| {
+        if !state.dock_layout.is_visible(DockPanel::DocMap) {
+            return false;
         }
-        state.docmap_visible = false;
-        Some((
-            state.toolbar_hwnd,
-            state.toolbar_bitmap_px,
-            state.tab_hwnd,
-            state.scintilla_hwnd,
-            state.status_hwnd,
-            state.fif_splitter_hwnd,
-            state.fif_dock_hwnd,
-            state.fif_dock_visible,
-            state.fif_dock_height,
-            WorkspaceLayout {
-                panel: state.workspace_hwnd,
-                splitter: state.workspace_splitter_hwnd,
-                visible: state.workspace_visible,
-                width: state.workspace_width,
-            },
-            DocMapLayout {
-                panel: state.docmap_hwnd,
-                splitter: state.docmap_splitter_hwnd,
-                visible: false,
-                width: state.docmap_width,
-            },
-        ))
-    } else {
-        None
-    };
-    let Some((
-        toolbar_hwnd,
-        toolbar_bitmap_px,
-        tabs,
-        scintilla,
-        status,
-        fif_splitter,
-        fif_dock,
-        fif_dock_visible,
-        fif_dock_height,
-        workspace,
-        docmap,
-    )) = snapshot
-    else {
-        return;
-    };
-    unsafe {
-        let _ = ShowWindow(docmap.panel, SW_HIDE);
-        let _ = ShowWindow(docmap.splitter, SW_HIDE);
-        let mut rect = RECT::default();
-        if GetClientRect(main_hwnd, &raw mut rect).is_ok() {
-            let tab_hidden = !IsWindowVisible(tabs).as_bool();
-            layout_children(
-                toolbar_hwnd,
-                toolbar::toolbar_height_px(toolbar_bitmap_px),
-                tabs,
-                scintilla,
-                status,
-                fif_splitter,
-                fif_dock,
-                fif_dock_visible,
-                fif_dock_height,
-                tab_hidden,
-                workspace,
-                docmap,
-                rect.right,
-                rect.bottom,
-            );
-        }
-        toolbar::set_button_checked(toolbar_hwnd, ID_VIEW_DOCMAP, false);
+        state.dock_layout.hide(DockPanel::DocMap);
+        true
+    });
+    if changed {
+        unsafe { dock_panels::apply_dock_layout(main_hwnd) };
     }
 }
 
-/// Toggle the Document Map panel. Convenience wrapper around
-/// [`show_docmap_panel`] / [`hide_docmap_panel`] driven by the
-/// View → Document Map menu, the docmap toolbar button, and the
-/// header's close-× (via [`IDC_DOCMAP_CLOSE`]).
+/// Toggle for the Document Map — the View-menu item, the toolbar
+/// button, and `NPPM`-driven flips all land here.
 ///
 /// # Safety
 ///
 /// Same invariants as the show/hide helpers.
 unsafe fn toggle_docmap_panel(main_hwnd: HWND) {
-    let visible = unsafe { state_from_hwnd(main_hwnd) }.is_some_and(|s| s.docmap_visible);
+    let visible = unsafe { state_from_hwnd(main_hwnd) }
+        .is_some_and(|s| s.dock_layout.is_visible(DockPanel::DocMap));
     if visible {
         unsafe { hide_docmap_panel(main_hwnd) };
     } else {
@@ -23691,58 +22466,14 @@ unsafe fn sync_docmap_state_to_shell(main_hwnd: HWND) {
     let Some(state) = (unsafe { state_from_hwnd(main_hwnd) }) else {
         return;
     };
+    let visible = state.dock_layout.is_visible(DockPanel::DocMap);
+    let width = legacy_band_width(&state.dock_layout, DockPanel::DocMap);
     state
         .shell
         .set_docmap_session(Some(codepp_core::session::DocMapSession {
-            visible: state.docmap_visible,
-            width: Some(state.docmap_width),
+            visible,
+            width: Some(width),
         }));
-}
-
-/// Cold-start restore: read `Shell.saved_docmap_session()` and
-/// apply it. Mirrors [`apply_saved_workspace`] on the right column.
-///
-/// # Safety
-///
-/// `main_hwnd` must be the main window HWND. UI thread only.
-unsafe fn apply_saved_docmap(main_hwnd: HWND) {
-    let saved = if let Some(state) = unsafe { state_from_hwnd(main_hwnd) } {
-        state.shell.saved_docmap_session()
-    } else {
-        return;
-    };
-    let Some(dm) = saved else {
-        return;
-    };
-    // Seed the width first so the panel opens at the persisted
-    // size rather than snapping to the default. Clamp against
-    // the current client width so a saved value from a wider
-    // display (or a hand-edited / crash-corrupted session.xml)
-    // can never drive `MoveWindow` with a nonsensical dimension
-    // — belt-and-braces alongside the same clamp
-    // `layout_children` applies on every pass.
-    if let Some(width) = dm.width {
-        let mut rect = RECT::default();
-        let client_width =
-            if unsafe { GetClientRect(main_hwnd, &raw mut rect) }.is_ok() && rect.right > 0 {
-                rect.right
-            } else {
-                // Pre-first-`WM_SIZE` fallback (window not yet
-                // sized). The layout pass that fires after
-                // `show_docmap_panel` will re-clamp against the
-                // real client width; the initial-default
-                // ceiling here just keeps the seeded value
-                // sane for that first call.
-                DEFAULT_DOCMAP_WIDTH_PX + MIN_SCINTILLA_WIDTH_PX
-            };
-        let clamped = clamp_docmap_width(client_width, width);
-        if let Some(state) = unsafe { state_from_hwnd(main_hwnd) } {
-            state.docmap_width = clamped;
-        }
-    }
-    if dm.visible {
-        unsafe { show_docmap_panel(main_hwnd) };
-    }
 }
 
 /// `Wnd_proc` for the FIF dock container. Owns the layout of its
@@ -23869,46 +22600,14 @@ extern "system" fn splitter_wnd_proc(
                         (
                             drag,
                             state.fif_dock_height,
-                            state.toolbar_hwnd,
                             state.toolbar_bitmap_px,
-                            state.tab_hwnd,
                             state.scintilla_hwnd,
-                            state.status_hwnd,
-                            state.fif_splitter_hwnd,
-                            state.fif_dock_hwnd,
-                            state.fif_dock_visible,
-                            WorkspaceLayout {
-                                panel: state.workspace_hwnd,
-                                splitter: state.workspace_splitter_hwnd,
-                                visible: state.workspace_visible,
-                                width: state.workspace_width,
-                            },
-                            DocMapLayout {
-                                panel: state.docmap_hwnd,
-                                splitter: state.docmap_splitter_hwnd,
-                                visible: state.docmap_visible,
-                                width: state.docmap_width,
-                            },
                         )
                     })
                 } else {
                     None
                 };
-                let Some((
-                    drag,
-                    current_height,
-                    toolbar_hwnd,
-                    toolbar_bitmap_px,
-                    tabs,
-                    scintilla,
-                    status,
-                    splitter,
-                    dock,
-                    dock_visible,
-                    workspace,
-                    docmap,
-                )) = snap
-                else {
+                let Some((drag, current_height, toolbar_bitmap_px, scintilla)) = snap else {
                     return LRESULT(0);
                 };
                 let toolbar_height = toolbar::toolbar_height_px(toolbar_bitmap_px);
@@ -23930,13 +22629,12 @@ extern "system" fn splitter_wnd_proc(
                     return LRESULT(0);
                 }
                 // Brief write-back. Borrow ends at the closing
-                // `}` so layout_children below has no live
+                // `}` so relayout_now below has no live
                 // `&mut WindowState` to alias.
                 if let Some(state) = state_from_hwnd(parent) {
                     state.fif_dock_height = new_height;
                 }
-                let tab_hidden = !IsWindowVisible(tabs).as_bool();
-                // Same anti-flicker discipline as the workspace
+                // Same anti-flicker discipline as the dock-side
                 // splitter's drag — bracket the layout burst with
                 // `ScintillaRedrawGuard` so Scintilla batches all
                 // WM_SIZE-driven repaints into one after the guard
@@ -23945,22 +22643,7 @@ extern "system" fn splitter_wnd_proc(
                 // windows.
                 {
                     let _redraw = ScintillaRedrawGuard::enter(scintilla);
-                    layout_children(
-                        toolbar_hwnd,
-                        toolbar_height,
-                        tabs,
-                        scintilla,
-                        status,
-                        splitter,
-                        dock,
-                        dock_visible,
-                        new_height,
-                        tab_hidden,
-                        workspace,
-                        docmap,
-                        rect.right,
-                        rect.bottom,
-                    );
+                    relayout_now(parent);
                 }
                 let _ = UpdateWindow(scintilla);
                 LRESULT(0)
@@ -27174,8 +25857,8 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                         refresh_view_menu(
                             state.view_menu,
                             &state.editor,
-                            state.workspace_visible,
-                            state.docmap_visible,
+                            state.dock_layout.is_visible(DockPanel::Workspace),
+                            state.dock_layout.is_visible(DockPanel::DocMap),
                         );
                     } else if popup_hmenu_value == state.encoding_menu.0 as usize {
                         if let Some(active) = state.shell.active() {
@@ -27199,38 +25882,14 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
             }
             WM_SIZE => {
                 let width = (lparam.0 & 0xFFFF) as i32;
-                let height = ((lparam.0 >> 16) & 0xFFFF) as i32;
+                // `relayout_now` snapshots the chrome under its own
+                // brief borrow and runs the layout pass with NO
+                // live `&mut WindowState` — required now that the
+                // pass MoveWindows dock group containers whose
+                // procs reach for `state_from_hwnd` from their own
+                // `WM_SIZE`.
+                relayout_now(hwnd);
                 let editors = if let Some(state) = state_from_hwnd(hwnd) {
-                    let tab_hidden = !IsWindowVisible(state.tab_hwnd).as_bool();
-                    let toolbar_height = toolbar::toolbar_height_px(state.toolbar_bitmap_px);
-                    let workspace = WorkspaceLayout {
-                        panel: state.workspace_hwnd,
-                        splitter: state.workspace_splitter_hwnd,
-                        visible: state.workspace_visible,
-                        width: state.workspace_width,
-                    };
-                    let docmap = DocMapLayout {
-                        panel: state.docmap_hwnd,
-                        splitter: state.docmap_splitter_hwnd,
-                        visible: state.docmap_visible,
-                        width: state.docmap_width,
-                    };
-                    layout_children(
-                        state.toolbar_hwnd,
-                        toolbar_height,
-                        state.tab_hwnd,
-                        state.scintilla_hwnd,
-                        state.status_hwnd,
-                        state.fif_splitter_hwnd,
-                        state.fif_dock_hwnd,
-                        state.fif_dock_visible,
-                        state.fif_dock_height,
-                        tab_hidden,
-                        workspace,
-                        docmap,
-                        width,
-                        height,
-                    );
                     // Re-apply the 7-part layout so the spring
                     // (part 1) absorbs the width delta. The fixed
                     // right-side parts keep their designed widths;
@@ -27372,6 +26031,7 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                         // right-side Document Map panel.
                         sync_workspace_state_to_shell(hwnd);
                         sync_docmap_state_to_shell(hwnd);
+                        sync_dock_state_to_shell(hwnd);
                         let (shell, mut ui) = state.split();
                         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                             shell.save_session(&mut ui)
@@ -27468,6 +26128,7 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                 // runs — same rationale as the autosave path above.
                 sync_workspace_state_to_shell(hwnd);
                 sync_docmap_state_to_shell(hwnd);
+                sync_dock_state_to_shell(hwnd);
                 if let Some(state) = state_from_hwnd(hwnd) {
                     let (shell, mut ui) = state.split();
                     // catch_unwind for the same reason as

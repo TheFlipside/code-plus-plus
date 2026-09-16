@@ -5639,6 +5639,15 @@ impl Shell {
         // path; snapshot here so the fresh session carries it
         // forward.
         session.docmap = self.session.docmap;
+        // Same discipline for the dock layout — the docking
+        // subsystem's `<dock>` element. Kept in sync by
+        // `set_dock_session` from the UI's mutation, autosave and
+        // shutdown paths; snapshot here so the fresh session
+        // carries it forward. This is the authoritative panel-
+        // layout state; `workspace`/`docmap` above are the legacy
+        // mirror kept only for the workspace root path and
+        // downgrade tolerance (see `restored_dock_layout`).
+        session.dock.clone_from(&self.session.dock);
         // Same discipline for view-level toggles (indent guide,
         // future siblings). Kept in sync by `set_view_settings`
         // whenever the user flips a toggle; snapshot here so the
@@ -6334,6 +6343,41 @@ impl Shell {
     /// Symmetric with [`Self::set_workspace_session`].
     pub fn set_docmap_session(&mut self, docmap: Option<codepp_core::session::DocMapSession>) {
         self.session.docmap = docmap;
+    }
+
+    /// The dock layout to restore at cold start: the persisted
+    /// `<dock>` element when present, otherwise a migration of the
+    /// legacy `<workspace>` / `<docmap>` elements (sessions written
+    /// before the docking subsystem shipped). The precedence
+    /// decision lives HERE, once, so the three backends cannot
+    /// drift on it — each just calls this and applies the result.
+    ///
+    /// Note the workspace *root path* is not part of the dock
+    /// layout (the layout says where the panel sits, not what it
+    /// shows); the UI still reads it from
+    /// [`Self::saved_workspace_session`].
+    #[must_use]
+    pub fn restored_dock_layout(&self) -> codepp_core::dock::DockLayout {
+        if let Some(dock) = &self.session.dock {
+            codepp_core::dock::DockLayout::from_session(dock)
+        } else {
+            codepp_core::dock::DockLayout::from_legacy(
+                self.session
+                    .workspace
+                    .as_ref()
+                    .map(|w| (w.visible, w.width)),
+                self.session.docmap.map(|d| (d.visible, d.width)),
+            )
+        }
+    }
+
+    /// Update the cached dock layout from the UI. Called from the
+    /// periodic autosave and shutdown paths (alongside
+    /// [`Self::set_workspace_session`], which still carries the
+    /// workspace root and the legacy visible/width mirror) so the
+    /// next launch cold-starts into the same panel arrangement.
+    pub fn set_dock_session(&mut self, dock: Option<codepp_core::session::DockSession>) {
+        self.session.dock = dock;
     }
 
     /// Persisted global editor-view toggles read from session.xml
@@ -8024,6 +8068,8 @@ fn write_session_files(path: &Path, files: &[PathBuf]) -> bool {
         window: None,
         workspace: None,
         docmap: None,
+
+        dock: None,
         view: codepp_core::session::ViewSettings::default(),
         tabs: files
             .iter()
@@ -11545,6 +11591,8 @@ mod tests {
             window: None,
             workspace: None,
             docmap: None,
+
+            dock: None,
             view: codepp_core::session::ViewSettings::default(),
             tabs: vec![
                 CoreTab {
@@ -13487,6 +13535,8 @@ mod tests {
             window: None,
             workspace: None,
             docmap: None,
+
+            dock: None,
             view: codepp_core::session::ViewSettings::default(),
             tabs: vec![
                 mk("a", false),
@@ -13537,6 +13587,8 @@ mod tests {
             window: None,
             workspace: None,
             docmap: None,
+
+            dock: None,
             view: codepp_core::session::ViewSettings::default(),
             tabs: vec![
                 CoreTab {
@@ -15152,5 +15204,48 @@ mod tests {
         assert_eq!(ExportFileKind::Rtf.dialog_filter().2, "rtf");
         // Other forces no extension, so a chosen name is written verbatim.
         assert_eq!(ExportFileKind::Other.dialog_filter().2, "");
+    }
+
+    /// `restored_dock_layout` precedence: a persisted `<dock>`
+    /// element wins outright; without one, the legacy
+    /// `<workspace>` / `<docmap>` fields migrate. This is the one
+    /// decision all three backends share (each just applies the
+    /// returned layout), so it is pinned here rather than three
+    /// times in UI code.
+    #[test]
+    fn restored_dock_layout_prefers_dock_over_legacy() {
+        use codepp_core::dock::{DockLayout, DockLocation, DockPanel, DockSide};
+
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+
+        // Legacy only: workspace visible on the left migrates.
+        shell.set_workspace_session(Some(codepp_core::session::WorkspaceSession {
+            root: Some(std::path::PathBuf::from("C:/src")),
+            visible: true,
+            width: Some(250),
+        }));
+        shell.set_dock_session(None);
+        let migrated = shell.restored_dock_layout();
+        assert_eq!(
+            migrated.group_of(DockPanel::Workspace).unwrap().location,
+            DockLocation::Side(DockSide::Left)
+        );
+        assert_eq!(migrated.side_size(DockSide::Left), 250);
+
+        // A dock session present: it wins even though the legacy
+        // fields still say "workspace visible on the left".
+        let mut layout = DockLayout::new();
+        layout.show(DockPanel::Workspace);
+        layout.move_panel(
+            DockPanel::Workspace,
+            codepp_core::dock::DropTarget::Side(DockSide::Bottom),
+        );
+        shell.set_dock_session(Some(layout.to_session()));
+        let restored = shell.restored_dock_layout();
+        assert_eq!(
+            restored.group_of(DockPanel::Workspace).unwrap().location,
+            DockLocation::Side(DockSide::Bottom)
+        );
     }
 }

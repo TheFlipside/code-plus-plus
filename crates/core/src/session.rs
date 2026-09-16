@@ -255,6 +255,103 @@ pub struct DocMapSession {
     pub width: Option<i32>,
 }
 
+/// Persisted dock layout — the plugin-panel docking subsystem's
+/// on-disk shape (`<dock>` element). The *semantic* layer lives in
+/// [`crate::dock::DockLayout`]; these structs are the dumb wire
+/// format, kept separate so serde derives stay trivial and the
+/// model's validation (`DockLayout::from_session`) is the single
+/// place hostile input is bounded — `session.xml` is hand-editable
+/// and a crash can truncate it mid-write, so nothing here is
+/// trusted as-is.
+///
+/// `None` on sessions written before the docking subsystem shipped;
+/// the loader then falls back to migrating the legacy `<workspace>`
+/// / `<docmap>` elements (see `DockLayout::from_legacy`), which are
+/// still written for the workspace *root* path and for downgrade
+/// tolerance.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DockSession {
+    /// Band thickness per side, pixels. `None` = default.
+    #[serde(rename = "@left", skip_serializing_if = "Option::is_none", default)]
+    pub left: Option<i32>,
+    /// See [`Self::left`].
+    #[serde(rename = "@right", skip_serializing_if = "Option::is_none", default)]
+    pub right: Option<i32>,
+    /// See [`Self::left`].
+    #[serde(rename = "@top", skip_serializing_if = "Option::is_none", default)]
+    pub top: Option<i32>,
+    /// See [`Self::left`].
+    #[serde(rename = "@bottom", skip_serializing_if = "Option::is_none", default)]
+    pub bottom: Option<i32>,
+    /// Visible groups, in stack order.
+    #[serde(rename = "group", default, skip_serializing_if = "Vec::is_empty")]
+    pub groups: Vec<DockGroupSession>,
+    /// Remembered locations of hidden panels, so a re-toggle after
+    /// a restart reopens where the user last had the panel.
+    #[serde(rename = "remember", default, skip_serializing_if = "Vec::is_empty")]
+    pub remembered: Vec<DockRememberSession>,
+}
+
+/// One visible group in the persisted dock layout.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DockGroupSession {
+    /// `"left"` / `"right"` / `"top"` / `"bottom"` / `"float"`.
+    /// A string rather than an enum so an unknown value (future
+    /// build, hand edit) degrades to "drop this group" instead of
+    /// failing the whole session parse.
+    #[serde(rename = "@side", default)]
+    pub side: String,
+    /// Floating rect, present only when `side == "float"`.
+    #[serde(rename = "@x", skip_serializing_if = "Option::is_none", default)]
+    pub x: Option<i32>,
+    /// See [`Self::x`].
+    #[serde(rename = "@y", skip_serializing_if = "Option::is_none", default)]
+    pub y: Option<i32>,
+    /// See [`Self::x`].
+    #[serde(rename = "@w", skip_serializing_if = "Option::is_none", default)]
+    pub w: Option<i32>,
+    /// See [`Self::x`].
+    #[serde(rename = "@h", skip_serializing_if = "Option::is_none", default)]
+    pub h: Option<i32>,
+    /// Index of the active tab. Clamped on load.
+    #[serde(rename = "@active", default)]
+    pub active: usize,
+    /// The group's panels in tab order.
+    #[serde(rename = "panel", default)]
+    pub panels: Vec<DockPanelSession>,
+}
+
+/// One panel reference inside a persisted group.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DockPanelSession {
+    /// The panel's stable key — see `dock::DockPanel::persist_key`.
+    #[serde(rename = "@kind", default)]
+    pub kind: String,
+}
+
+/// A hidden panel's remembered location.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DockRememberSession {
+    /// The panel's stable key.
+    #[serde(rename = "@kind", default)]
+    pub kind: String,
+    /// Same encoding as [`DockGroupSession::side`].
+    #[serde(rename = "@side", default)]
+    pub side: String,
+    /// Floating rect, present only when `side == "float"`.
+    #[serde(rename = "@x", skip_serializing_if = "Option::is_none", default)]
+    pub x: Option<i32>,
+    /// See [`Self::x`].
+    #[serde(rename = "@y", skip_serializing_if = "Option::is_none", default)]
+    pub y: Option<i32>,
+    /// See [`Self::x`].
+    #[serde(rename = "@w", skip_serializing_if = "Option::is_none", default)]
+    pub w: Option<i32>,
+    /// See [`Self::x`].
+    #[serde(rename = "@h", skip_serializing_if = "Option::is_none", default)]
+    pub h: Option<i32>,
+}
+
 /// Persisted global (view-level) editor toggles. Room to grow —
 /// every one of these fields corresponds to a Scintilla view-style
 /// property (`viewIndentationGuides`, `wrap`, `viewWhitespace`,
@@ -335,6 +432,12 @@ pub struct Session {
     /// round-trip cleanly.
     #[serde(rename = "docmap", skip_serializing_if = "Option::is_none", default)]
     pub docmap: Option<DocMapSession>,
+    /// Persisted dock layout for the plugin-panel docking
+    /// subsystem. `None` on sessions written before it shipped —
+    /// the loader migrates the legacy `workspace` / `docmap`
+    /// fields instead (`dock::DockLayout::from_legacy`).
+    #[serde(rename = "dock", skip_serializing_if = "Option::is_none", default)]
+    pub dock: Option<DockSession>,
     /// Persisted global editor view toggles (indent guide, and
     /// future siblings). Round-trips as a `<view/>` element via
     /// [`ViewSettings`]; absence deserialises to the all-off
@@ -508,6 +611,8 @@ mod tests {
             window: None,
             workspace: None,
             docmap: None,
+
+            dock: None,
             view: ViewSettings::default(),
             tabs: vec![
                 Tab {
@@ -547,6 +652,8 @@ mod tests {
             window: None,
             workspace: None,
             docmap: None,
+
+            dock: None,
             view: ViewSettings::default(),
             tabs: vec![Tab {
                 path: Some(PathBuf::from("legacy.txt")),
@@ -576,6 +683,8 @@ mod tests {
             window: None,
             workspace: None,
             docmap: None,
+
+            dock: None,
             view: ViewSettings::default(),
             tabs: vec![Tab {
                 path: None,
@@ -606,6 +715,8 @@ mod tests {
             window: None,
             workspace: None,
             docmap: None,
+
+            dock: None,
             view: ViewSettings::default(),
             tabs: vec![
                 Tab {
@@ -661,6 +772,8 @@ mod tests {
             window: None,
             workspace: None,
             docmap: None,
+
+            dock: None,
             view: ViewSettings::default(),
             tabs: vec![Tab {
                 path: None,
@@ -693,6 +806,8 @@ mod tests {
             window: None,
             workspace: None,
             docmap: None,
+
+            dock: None,
             view: ViewSettings::default(),
             tabs: vec![Tab {
                 path: Some(PathBuf::from("notes.txt")),
@@ -727,6 +842,8 @@ mod tests {
             window: None,
             workspace: None,
             docmap: None,
+
+            dock: None,
             view: ViewSettings::default(),
             tabs: vec![Tab {
                 path: Some(PathBuf::from("pinned.txt")),
@@ -758,6 +875,8 @@ mod tests {
             window: None,
             workspace: None,
             docmap: None,
+
+            dock: None,
             view: ViewSettings::default(),
             tabs: vec![Tab {
                 path: Some(PathBuf::from("plain.txt")),
@@ -848,6 +967,8 @@ mod tests {
             }),
             workspace: None,
             docmap: None,
+
+            dock: None,
             view: ViewSettings::default(),
             tabs: vec![],
         };
@@ -870,6 +991,8 @@ mod tests {
             }),
             workspace: None,
             docmap: None,
+
+            dock: None,
             view: ViewSettings::default(),
             tabs: vec![],
         };
@@ -927,6 +1050,8 @@ mod tests {
             window: None,
             workspace: None,
             docmap: None,
+
+            dock: None,
             view: ViewSettings::default(),
             tabs: vec![],
         };
@@ -952,6 +1077,8 @@ mod tests {
                 width: Some(280),
             }),
             docmap: None,
+
+            dock: None,
             view: ViewSettings::default(),
             tabs: vec![],
         };
@@ -984,6 +1111,8 @@ mod tests {
                 width: None,
             }),
             docmap: None,
+
+            dock: None,
             view: ViewSettings::default(),
             tabs: vec![],
         };
@@ -1013,6 +1142,8 @@ mod tests {
                 width: None,
             }),
             docmap: None,
+
+            dock: None,
             view: ViewSettings::default(),
             tabs: vec![],
         };
@@ -1054,6 +1185,8 @@ mod tests {
             window: None,
             workspace: None,
             docmap: None,
+
+            dock: None,
             view: ViewSettings::default(),
             tabs: vec![],
         };
@@ -1192,6 +1325,92 @@ mod tests {
         );
         let loaded = Session::load_from_xml(&path).unwrap();
         assert_eq!(loaded.view, ViewSettings::default());
+    }
+
+    /// Round-trip a session with a populated `<dock>` element —
+    /// nested `<group>`/`<panel>`/`<remember>` children plus the
+    /// four band-size attributes, exactly as `DockLayout::to_session`
+    /// produces them. Pins the quick-xml wire shape: attributes on
+    /// the elements, panels as child elements (order significant —
+    /// it IS the tab order).
+    #[test]
+    fn round_trip_dock_session() {
+        let (_dir, path) = temp_session_path();
+        let session = Session {
+            dock: Some(DockSession {
+                left: Some(260),
+                right: Some(160),
+                top: None,
+                bottom: Some(200),
+                groups: vec![
+                    DockGroupSession {
+                        side: "left".into(),
+                        x: None,
+                        y: None,
+                        w: None,
+                        h: None,
+                        active: 1,
+                        panels: vec![
+                            DockPanelSession {
+                                kind: "workspace".into(),
+                            },
+                            DockPanelSession {
+                                kind: "docmap".into(),
+                            },
+                        ],
+                    },
+                    DockGroupSession {
+                        side: "float".into(),
+                        x: Some(-20),
+                        y: Some(64),
+                        w: Some(300),
+                        h: Some(420),
+                        active: 0,
+                        panels: vec![DockPanelSession {
+                            kind: "docmap".into(),
+                        }],
+                    },
+                ],
+                remembered: vec![DockRememberSession {
+                    kind: "workspace".into(),
+                    side: "bottom".into(),
+                    x: None,
+                    y: None,
+                    w: None,
+                    h: None,
+                }],
+            }),
+            ..Session::default()
+        };
+        session.save_to_xml(&path).unwrap();
+        let loaded = Session::load_from_xml(&path).unwrap();
+        assert_eq!(session, loaded);
+        let dock = loaded.dock.expect("dock should round-trip");
+        assert_eq!(dock.groups.len(), 2);
+        assert_eq!(dock.groups[0].panels.len(), 2);
+        assert_eq!(dock.groups[0].panels[0].kind, "workspace");
+        assert_eq!(dock.groups[0].active, 1);
+        assert_eq!(dock.groups[1].x, Some(-20));
+        assert_eq!(dock.remembered[0].side, "bottom");
+    }
+
+    /// A session with no dock layout must elide the `<dock>` element
+    /// entirely — same discipline as `<window>` / `<workspace>` /
+    /// `<docmap>` — and a pre-dock session.xml must load with
+    /// `dock == None` so the loader can route to legacy migration.
+    #[test]
+    fn empty_dock_not_serialized_and_legacy_loads_as_none() {
+        let (_dir, path) = temp_session_path();
+        let session = Session::default();
+        session.save_to_xml(&path).unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            !text.contains("<dock"),
+            "<dock> element should be elided when None: {text}"
+        );
+        std::fs::write(&path, "<session><tab path=\"C:/a.txt\"/></session>").unwrap();
+        let loaded = Session::load_from_xml(&path).unwrap();
+        assert_eq!(loaded.dock, None);
     }
 
     /// Round-trip a session with a populated `DocMapSession` —
