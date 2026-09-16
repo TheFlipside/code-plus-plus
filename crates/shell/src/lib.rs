@@ -463,16 +463,20 @@ pub trait UiPlatform {
 
     /// Whether the host is currently rendering its own chrome
     /// in dark mode. Drives `NPPM_ISDARKMODEENABLED`. Code++
-    /// Phase 4 returns `false` (no host-side dark mode); Phase
-    /// 5 wires the live theme state. Same `cfg(windows)` gate
-    /// as the other plugin-host-typed methods.
+    /// has no host-side dark-mode rendering on any backend
+    /// (tracked in DESIGN.md §7.4), so this default `false` is
+    /// the production answer everywhere — no backend overrides
+    /// it. A backend implements it only once it actually
+    /// renders dark chrome, reading its live theme state.
     fn is_dark_mode_enabled(&self) -> bool {
         false
     }
 
     /// Write the host's dark-mode palette into `out` if dark
-    /// mode is active. Drives `NPPM_GETDARKMODECOLORS`. Code++
-    /// Phase 4 returns `false` without touching `out`.
+    /// mode is active. Drives `NPPM_GETDARKMODECOLORS`. Same
+    /// status as [`Self::is_dark_mode_enabled`]: no host-side
+    /// dark mode yet, so the default `false` (out-buffer left
+    /// untouched) is the production answer on every backend.
     fn dark_mode_colors(&self, _out: &mut codepp_plugin_host::NppDarkModeColors) -> bool {
         false
     }
@@ -9210,17 +9214,9 @@ mod tests {
             // exercises the success/failure surface.
             true
         }
-        #[cfg(target_os = "windows")]
-        fn is_dark_mode_enabled(&self) -> bool {
-            // FakeUi has no theme state — matches production:
-            // Code++ Phase 4 has no host-side dark mode.
-            false
-        }
-        #[cfg(target_os = "windows")]
-        fn dark_mode_colors(&self, _out: &mut codepp_plugin_host::NppDarkModeColors) -> bool {
-            // No palette to share when dark mode is off.
-            false
-        }
+        // `is_dark_mode_enabled` / `dark_mode_colors`: FakeUi
+        // uses the trait defaults (`false`), exactly like every
+        // production backend — no host-side dark mode exists.
         #[cfg(target_os = "windows")]
         fn create_plugin_scintilla(
             &mut self,

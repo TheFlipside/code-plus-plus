@@ -182,8 +182,9 @@ pub const NPPM_GETZOOMLEVEL: u32 = NPPMSG + 102;
 /// [`NPPN_DARKMODECHANGED`] then re-read this value to know
 /// whether the host is actually following the system flip (the
 /// user can override host-level dark mode independently of the
-/// system setting). Code++ returns FALSE today — Phase 5 wires
-/// up the host-side dark-mode rendering.
+/// system setting). Code++ returns FALSE today, on every
+/// backend — host-side dark-mode rendering is unimplemented
+/// (tracked in DESIGN.md §7.4).
 pub const NPPM_ISDARKMODEENABLED: u32 = NPPMSG + 110;
 /// wparam: size of the plugin's `NppDarkModeColors` struct
 ///         (host validates against `sizeof(NppDarkModeColors)`).
@@ -192,7 +193,8 @@ pub const NPPM_ISDARKMODEENABLED: u32 = NPPMSG + 110;
 /// the buffer, FALSE otherwise.
 ///
 /// Code++ today returns FALSE because the host has no dark-mode
-/// palette to share (no dark mode rendering yet; Phase 5 polish).
+/// palette to share (no dark-mode rendering on any backend yet;
+/// tracked in DESIGN.md §7.4).
 /// Plugins that gate on [`NPPM_ISDARKMODEENABLED`] (which also
 /// returns FALSE) skip the call entirely and never observe the
 /// gap.
@@ -1236,19 +1238,21 @@ pub trait HostServices {
 
     /// Returns `true` iff the host is currently rendering its
     /// own chrome in dark mode. Drives
-    /// [`NPPM_ISDARKMODEENABLED`]. Code++ Phase 4 returns
-    /// `false` unconditionally — host-side dark-mode rendering
-    /// is Phase 5 polish (DESIGN.md §7.4). Once Phase 5 lands
-    /// the impl reads the host's live theme state.
+    /// [`NPPM_ISDARKMODEENABLED`]. Code++ returns `false` on
+    /// every backend — host-side dark-mode rendering is not
+    /// implemented anywhere yet (tracked in DESIGN.md §7.4).
+    /// When it lands, the impl reads the host's live theme
+    /// state.
     fn is_dark_mode_enabled(&self) -> bool;
 
     /// Write the host's live dark-mode palette into `out` if
     /// dark mode is active, otherwise return `false` without
     /// touching `out`. Drives [`NPPM_GETDARKMODECOLORS`].
-    /// Code++ Phase 4 returns `false` — host has no dark-mode
-    /// palette to share (no dark mode rendering yet). Plugins
-    /// gating on [`Self::is_dark_mode_enabled`] (which also
-    /// returns `false`) never reach this call in production.
+    /// Code++ returns `false` on every backend — the host has
+    /// no dark-mode palette to share (no dark-mode rendering
+    /// yet; tracked in DESIGN.md §7.4). Plugins gating on
+    /// [`Self::is_dark_mode_enabled`] (which also returns
+    /// `false`) never reach this call in production.
     fn dark_mode_colors(&self, out: &mut crate::ffi::NppDarkModeColors) -> bool;
 
     /// Code++ extension for [`CODEPPM_SETCLIPBOARD`](crate::CODEPPM_SETCLIPBOARD).
@@ -2486,11 +2490,12 @@ pub unsafe fn dispatch_nppm<S: HostServices>(
 
         NPPM_ISDARKMODEENABLED => {
             // No args. Returns BOOL — TRUE iff the host renders
-            // its own chrome in dark mode. Code++ Phase 4 has
-            // no dark-mode rendering, so this always returns
-            // FALSE; plugins watching `NPPN_DARKMODECHANGED`
-            // and gating on this query gracefully skip their
-            // dark-mode code paths.
+            // its own chrome in dark mode. Code++ has no
+            // dark-mode rendering on any backend yet, so this
+            // always returns FALSE (the trait default); plugins
+            // watching `NPPN_DARKMODECHANGED` and gating on
+            // this query gracefully skip their dark-mode code
+            // paths.
             isize::from(services.is_dark_mode_enabled())
         }
 
@@ -4159,9 +4164,9 @@ mod tests {
 
     #[test]
     fn is_dark_mode_enabled_returns_zero_when_disabled() {
-        // Production default: Code++ Phase 4 has no host-side
-        // dark-mode rendering, so the trait reports false and
-        // the dispatcher echoes 0.
+        // Production default: Code++ has no host-side dark-mode
+        // rendering on any backend, so the trait reports false
+        // and the dispatcher echoes 0.
         let mut s = MockServices::default();
         let r = unsafe { dispatch_nppm(&mut s, NPPM_ISDARKMODEENABLED, 0, 0) };
         assert_eq!(r, Some(0));
@@ -4169,8 +4174,9 @@ mod tests {
 
     #[test]
     fn is_dark_mode_enabled_returns_one_when_enabled() {
-        // Phase-5 path: host-side dark mode active. Trait
-        // reports true; dispatcher echoes 1.
+        // Future path (once a backend renders dark chrome):
+        // host-side dark mode active. Trait reports true;
+        // dispatcher echoes 1.
         let mut s = MockServices {
             dark_mode_enabled: true,
             ..Default::default()

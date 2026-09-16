@@ -310,7 +310,7 @@ pub struct TbRect {
 /// The host writes the 12 colours through this struct when
 /// dark mode is active. Code++ today returns FALSE from
 /// `NPPM_ISDARKMODEENABLED` and `NPPM_GETDARKMODECOLORS` —
-/// the host has no dark-mode rendering yet (Phase 5 polish,
+/// no backend has dark-mode rendering yet (tracked in
 /// DESIGN.md §7.4) — so the buffer is never written.
 #[repr(C)]
 #[derive(Clone, Copy, Default, Debug, PartialEq, Eq)]

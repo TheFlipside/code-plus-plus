@@ -3045,24 +3045,11 @@ impl UiPlatform for Win32Ui {
         true
     }
 
-    fn is_dark_mode_enabled(&self) -> bool {
-        // Code++ Phase 4 has no host-side dark-mode rendering
-        // (DESIGN.md §7.4 Phase-5 polish item). The honest
-        // answer is FALSE; plugins watching `NPPN_DARKMODECHANGED`
-        // and gating on this query gracefully skip their
-        // dark-mode code paths until the host-side dark mode
-        // lands.
-        false
-    }
-
-    fn dark_mode_colors(&self, _out: &mut codepp_plugin_host::NppDarkModeColors) -> bool {
-        // No host-side dark mode → no palette to share. The
-        // dispatcher already gated on size + nullness, so
-        // returning false is the only honest answer here. When
-        // Phase 5 wires dark-mode rendering, this writes the
-        // 12 active COLORREFs into `out` and returns true.
-        false
-    }
+    // `is_dark_mode_enabled` / `dark_mode_colors` deliberately
+    // use the `UiPlatform` trait defaults (`false`), like every
+    // other backend — no backend has host-side dark-mode
+    // rendering yet (tracked in DESIGN.md §7.4). A backend
+    // overrides them only once it actually renders dark chrome.
 
     fn create_plugin_scintilla(
         &mut self,
