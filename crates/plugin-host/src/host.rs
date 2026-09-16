@@ -24,7 +24,7 @@ use codepp_platform::{has_plugin_extension, DynLib};
 use crate::dispatch::{NPPN_READY, NPPN_TBMODIFICATION};
 use crate::ffi::{
     BeNotifiedFn, FuncItem, GetFuncsArrayFn, GetNameFn, IsUnicodeFn, MessageProcFn, NppData,
-    SCNotification, SciNotifyHeader, SetInfoFn,
+    SCNotification, SciNotifyHeader, SetInfoFn, ShortcutKey,
 };
 
 /// One discovered plugin candidate, by path. Holds whichever lifecycle
@@ -91,6 +91,31 @@ impl PluginInfo {
         } else {
             None
         }
+    }
+
+    /// The `p_sh_key` accelerators snapshotted at load time,
+    /// index-aligned with [`Self::func_items`]. `None` per entry
+    /// means the plugin declared no accelerator for that command.
+    #[must_use]
+    pub fn shortcut_defaults(&self) -> Option<&[Option<ShortcutKey>]> {
+        if let PluginState::Loaded(p) = &self.state {
+            Some(&p.shortcut_defaults)
+        } else {
+            None
+        }
+    }
+
+    /// The plugin's file name on disk (`mimeTools.dll`), the same
+    /// basename `disabled.txt` and `shortcuts.xml` key on. Empty
+    /// only for a path with no final component, which discovery
+    /// cannot produce.
+    #[must_use]
+    pub fn filename(&self) -> String {
+        self.path
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or("")
+            .to_string()
     }
 
     /// `beNotified` entry point if loaded. The dispatcher (next
@@ -194,6 +219,14 @@ struct LoadedPlugin {
     /// `FuncItem` is `Copy` (no heap pointers we own — `p_sh_key` is
     /// owned by the plugin), so cloning is safe.
     funcs: Vec<FuncItem>,
+    /// The `p_sh_key` accelerators, dereferenced and copied at load
+    /// time — index-aligned with `funcs`. Snapshotting here (rather
+    /// than letting consumers chase the raw pointer later) keeps the
+    /// one unsafe dereference next to the `FuncItem` copy it shares a
+    /// validity argument with; everything downstream sees plain
+    /// values. `None` = no accelerator (NULL pointer, or a
+    /// zero-`_key` struct, which no real chord uses).
+    shortcut_defaults: Vec<Option<ShortcutKey>>,
     /// Plugin's getName return value, decoded to UTF-8.
     name: String,
 }
@@ -477,12 +510,7 @@ impl PluginHost {
             .enumerate()
             .map(|(idx, p)| PluginAdminEntry {
                 index: idx,
-                filename: p
-                    .path
-                    .file_name()
-                    .and_then(|s| s.to_str())
-                    .unwrap_or("")
-                    .to_string(),
+                filename: p.filename(),
                 display_label: p.display_label(),
                 path: p.path.clone(),
                 disabled: p.disabled,
@@ -841,6 +869,7 @@ fn load_inner(
             message_proc,
             is_unicode,
             funcs,
+            shortcut_defaults: Vec::new(),
             name,
         });
     }
@@ -858,9 +887,10 @@ fn load_inner(
     // (e.g. as a const initializer in the .rdata section) cause an
     // access violation at the write — Notepad++ has the same
     // requirement, so this matches the public ABI.
-    let funcs = unsafe {
+    let (funcs, shortcut_defaults) = unsafe {
         let count = count as usize;
         let mut out = Vec::with_capacity(count);
+        let mut shortcuts = Vec::with_capacity(count);
         for i in 0..count {
             let id = cmd_id_base.saturating_add(i as i32);
             // Write the id back through the plugin's pointer first,
@@ -868,8 +898,13 @@ fn load_inner(
             // Vec — guarantees our copy and the plugin's copy agree.
             (*raw.add(i)).cmd_id = id;
             out.push(*raw.add(i));
+            // Dereference the accelerator now, while the DLL is
+            // freshly mapped and under the same validity contract
+            // as the FuncItem read above (PluginInterface.h: the
+            // ShortcutKey outlives the plugin until SHUTDOWN).
+            shortcuts.push(snapshot_shortcut_key((*raw.add(i)).p_sh_key));
         }
-        out
+        (out, shortcuts)
     };
 
     Ok(LoadedPlugin {
@@ -881,8 +916,33 @@ fn load_inner(
         message_proc,
         is_unicode,
         funcs,
+        shortcut_defaults,
         name,
     })
+}
+
+/// Copy a plugin's `ShortcutKey` out of its address space, or `None`
+/// for a NULL pointer or a zero-`key` struct (no real chord binds
+/// virtual-key 0; N++ treats it as "unassigned" too). Read is
+/// unaligned — the ABI struct is 4 × `u8` so any alignment is legal,
+/// and a plugin handing out a pointer into packed storage must not
+/// fault the host.
+///
+/// # Safety
+///
+/// `p` must be NULL or point to a `ShortcutKey` that is valid for
+/// reads — the `FuncItem._pShKey` ABI contract (plugin-owned, lives
+/// until shutdown). Callers pass pointers obtained from a
+/// just-loaded plugin's `getFuncsArray`.
+unsafe fn snapshot_shortcut_key(p: *mut ShortcutKey) -> Option<ShortcutKey> {
+    if p.is_null() {
+        return None;
+    }
+    let key = unsafe { p.read_unaligned() };
+    if key.key == 0 {
+        return None;
+    }
+    Some(key)
 }
 
 /// Decide whether a `*.dll` candidate found at `depth` in the plugins
@@ -964,6 +1024,25 @@ unsafe fn wide_to_string(mut p: *const u16) -> String {
 #[cfg(all(test, target_os = "windows"))]
 mod tests {
     use super::*;
+
+    /// The one unsafe dereference the shortcut path adds: NULL and
+    /// zero-key pointers yield `None`, a real chord copies by value.
+    /// (The end-to-end read out of a real DLL's `FuncItem`s is covered
+    /// by the windows-gated load tests once a bundled plugin ships a
+    /// default shortcut.)
+    #[test]
+    fn snapshot_shortcut_key_handles_null_zero_and_real_chords() {
+        assert_eq!(unsafe { snapshot_shortcut_key(std::ptr::null_mut()) }, None);
+        let mut sk = ShortcutKey {
+            is_ctrl: 1,
+            is_alt: 1,
+            is_shift: 0,
+            key: 0x48,
+        };
+        assert_eq!(unsafe { snapshot_shortcut_key(&raw mut sk) }, Some(sk));
+        sk.key = 0;
+        assert_eq!(unsafe { snapshot_shortcut_key(&raw mut sk) }, None);
+    }
 
     #[test]
     fn discover_missing_dir_is_zero() {

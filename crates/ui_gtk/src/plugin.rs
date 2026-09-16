@@ -176,10 +176,18 @@ pub(crate) fn ensure_loaded_and_rebuild(menu: &gtk::Menu) {
     let data = npp_data();
     with_state(|st| st.shell.ensure_plugins_loaded(data, dispatch));
     rebuild_menu(menu);
+    // The load may have absorbed new plugin-shortcut defaults; rebuild
+    // the accel group so their chords become live this session (Win32
+    // does the equivalent `refresh_plugin_accels` after its populate).
+    rebuild_plugin_accel_group();
     // NPPN_READY fired synchronously inside `ensure_plugins_loaded`; any
     // notifications a plugin queued back are drained on the next wake.
     crate::drain_shell();
 }
+
+/// One row of a plugin submenu: label, command id, whether it is a
+/// command (vs. a separator), and its display chord if any.
+type PluginMenuRow = (String, i32, bool, Option<(bool, bool, bool, u8)>);
 
 /// Rebuild the Plugins menu: one submenu per loaded plugin (its items
 /// taken from the plugin's `FuncItem` array, null `p_func` → separator),
@@ -196,9 +204,16 @@ fn rebuild_menu(menu: &gtk::Menu) {
         st.shell
             .loaded_plugin_funcs()
             .map(|(name, funcs)| {
-                let items: Vec<(String, i32, bool)> = funcs
+                let items: Vec<PluginMenuRow> = funcs
                     .iter()
-                    .map(|f| (funcitem_label(f), f.cmd_id, f.p_func.is_some()))
+                    .map(|f| {
+                        (
+                            funcitem_label(f),
+                            f.cmd_id,
+                            f.p_func.is_some(),
+                            st.shell.plugin_shortcut_chord_for_cmd_id(f.cmd_id),
+                        )
+                    })
                     .collect();
                 (name, items)
             })
@@ -213,10 +228,30 @@ fn rebuild_menu(menu: &gtk::Menu) {
     } else {
         for (name, items) in entries {
             let submenu = gtk::Menu::new();
-            for (label, cmd_id, is_command) in items {
+            for (label, cmd_id, is_command, chord) in items {
                 if is_command {
                     let item = gtk::MenuItem::with_label(&label);
                     item.connect_activate(move |_| on_plugin_command(cmd_id));
+                    // Show the shortcut hint via the display-only accel
+                    // group (never routes the key — the real binding is
+                    // `register_startup_shortcuts`). Only a chord that
+                    // will actually fire is advertised (the shell
+                    // filtered policy-refused / dedupe-losing chords).
+                    if let Some((ctrl, alt, shift, key)) = chord {
+                        if let Some((gdk_key, mods)) = chord_to_gdk(ctrl, alt, shift, key) {
+                            PLUGIN_HINT_ACCEL.with(|h| {
+                                if let Some(hint) = h.borrow().as_ref() {
+                                    item.add_accelerator(
+                                        "activate",
+                                        hint,
+                                        *gdk_key,
+                                        mods,
+                                        gtk::AccelFlags::VISIBLE,
+                                    );
+                                }
+                            });
+                        }
+                    }
                     submenu.append(&item);
                 } else {
                     submenu.append(&gtk::SeparatorMenuItem::new());
@@ -445,6 +480,181 @@ fn on_plugin_command(cmd_id: i32) {
     crate::drain_shell();
 }
 
+thread_local! {
+    /// Display-only accel group for plugin menu-item shortcut hints.
+    /// Never added to a window, so `add_accelerator` on it renders
+    /// the "Ctrl+H" label without routing the key — the real,
+    /// always-on binding is [`rebuild_plugin_accel_group`]'s
+    /// `connect_accel_group` on the plugin accel group. Same
+    /// display-hint discipline as the File menu's `FILE_HINT_ACCEL`.
+    static PLUGIN_HINT_ACCEL: std::cell::RefCell<Option<gtk::AccelGroup>> =
+        const { std::cell::RefCell::new(None) };
+    /// The live plugin accelerator group attached to the main window.
+    /// Rebuilt from the current [`codepp_shell::Shell::startup_plugin_chords`]
+    /// whenever the cache changes (startup, and after each plugin
+    /// load) so a shortcut absorbed this session becomes live without
+    /// a restart, and a removed one stops being registered. The
+    /// fire-time [`fire_plugin_chord`] check is the belt to this
+    /// suspenders — it covers an `NPPM_REMOVESHORTCUTBYCMDID` between
+    /// rebuilds.
+    static PLUGIN_ACCEL_GROUP: std::cell::RefCell<Option<gtk::AccelGroup>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Map a portable key to its GDK keyval. `None` for keys with no
+/// faithful GDK identity (`core::shortcuts::portable_key` already
+/// declined the layout-dependent ones, so this only fails if a name
+/// lookup does).
+fn portable_key_to_gdk(pk: codepp_core::shortcuts::PortableKey) -> Option<gtk::gdk::keys::Key> {
+    use codepp_core::shortcuts::{NamedKey, PortableKey};
+    let key = match pk {
+        // ASCII letters and digits: the GDK keyval is the codepoint.
+        PortableKey::Letter(c) | PortableKey::Digit(c) => {
+            gtk::gdk::keys::Key::from_unicode(c.into())
+        }
+        PortableKey::Function(n) => gtk::gdk::keys::Key::from_name(&format!("F{n}")),
+        PortableKey::Named(n) => gtk::gdk::keys::Key::from_name(match n {
+            NamedKey::Space => "space",
+            NamedKey::Insert => "Insert",
+            NamedKey::Delete => "Delete",
+            NamedKey::Home => "Home",
+            NamedKey::End => "End",
+            NamedKey::PageUp => "Page_Up",
+            NamedKey::PageDown => "Page_Down",
+            NamedKey::Left => "Left",
+            NamedKey::Right => "Right",
+            NamedKey::Up => "Up",
+            NamedKey::Down => "Down",
+        }),
+    };
+    // `from_name` yields VoidSymbol (0) for an unknown name; treat
+    // that as "no faithful mapping" rather than binding key 0.
+    (*key != 0).then_some(key)
+}
+
+/// Translate a Code++ chord to a GDK `(keyval, ModifierType)`.
+fn chord_to_gdk(
+    ctrl: bool,
+    alt: bool,
+    shift: bool,
+    key: u8,
+) -> Option<(gtk::gdk::keys::Key, gtk::gdk::ModifierType)> {
+    let gdk_key = portable_key_to_gdk(codepp_core::shortcuts::portable_key(key)?)?;
+    let mut mods = gtk::gdk::ModifierType::empty();
+    if ctrl {
+        mods |= gtk::gdk::ModifierType::CONTROL_MASK;
+    }
+    if alt {
+        mods |= gtk::gdk::ModifierType::MOD1_MASK;
+    }
+    if shift {
+        mods |= gtk::gdk::ModifierType::SHIFT_MASK;
+    }
+    Some((gdk_key, mods))
+}
+
+/// Build the plugin accelerator group for the first time and attach
+/// it to the main window. Called once at startup **after**
+/// `discover()` (the chord set is filtered to discovered plugins);
+/// [`rebuild_plugin_accel_group`] does the work and is re-run after
+/// each plugin load.
+pub(crate) fn register_startup_shortcuts() {
+    PLUGIN_HINT_ACCEL.with(|h| *h.borrow_mut() = Some(gtk::AccelGroup::new()));
+    rebuild_plugin_accel_group();
+}
+
+/// (Re)build the live plugin accelerator group from the current
+/// `startup_plugin_chords`. Removes the previous group from the
+/// window and installs a fresh one — the GTK analogue of Win32's
+/// `refresh_plugin_accels` HACCEL swap — so a chord absorbed this
+/// session (a plugin's default, first seen on load) becomes live
+/// immediately, and one dropped by `NPPM_REMOVESHORTCUTBYCMDID` is
+/// no longer registered after the next rebuild.
+///
+/// Each closure fires by *chord*, not by a captured identity: it
+/// re-resolves through [`fire_plugin_chord`] at press time, so the
+/// live cache is the authority even between rebuilds.
+pub(crate) fn rebuild_plugin_accel_group() {
+    let Some(window) = with_state(|st| st.window.clone()) else {
+        return;
+    };
+    // Detach the previous group before installing the new one.
+    if let Some(old) = PLUGIN_ACCEL_GROUP.with(|g| g.borrow_mut().take()) {
+        window.remove_accel_group(&old);
+    }
+    let accel = gtk::AccelGroup::new();
+    window.add_accel_group(&accel);
+
+    let chords = with_state(|st| st.shell.startup_plugin_chords()).unwrap_or_default();
+    for chord in chords {
+        let Some((gdk_key, mods)) = chord_to_gdk(chord.ctrl, chord.alt, chord.shift, chord.key)
+        else {
+            tracing::debug!(
+                module = chord.module_key.as_str(),
+                key = chord.key,
+                "plugin shortcut has no GDK mapping; skipped on GTK"
+            );
+            continue;
+        };
+        let (ctrl, alt, shift, key) = (chord.ctrl, chord.alt, chord.shift, chord.key);
+        accel.connect_accel_group(
+            *gdk_key,
+            mods,
+            gtk::AccelFlags::VISIBLE,
+            // Return whether the chord actually dispatched: `false`
+            // lets GTK propagate the key to the editor, so a chord
+            // whose plugin/command no longer resolves (e.g. a bogus
+            // hand-edited `internalID`) does not silently swallow the
+            // keystroke.
+            move |_, _, _, _| fire_plugin_chord(ctrl, alt, shift, key),
+        );
+    }
+    PLUGIN_ACCEL_GROUP.with(|g| *g.borrow_mut() = Some(accel));
+}
+
+/// Fire the plugin shortcut bound to a pressed chord. Resolves the
+/// chord against the **live** cache ([`codepp_shell::Shell::match_plugin_chord`]),
+/// lazy-loads every pending plugin (the hotkey is the §6.4 load
+/// trigger), resolves the identity to the loaded command, and
+/// dispatches it. Returns `true` iff a command actually ran — the
+/// accel-group closure propagates the key to the editor on `false`,
+/// and a removed binding (`match` returns `None`) fires nothing.
+fn fire_plugin_chord(ctrl: bool, alt: bool, shift: bool, key: u8) -> bool {
+    // Live-cache check first: a chord removed via NPPM (or otherwise
+    // no longer registrable) must not fire, even though its closure
+    // is still installed until the next rebuild.
+    let Some((module_key, internal_id)) =
+        with_state(|st| st.shell.match_plugin_chord(ctrl, alt, shift, key)).flatten()
+    else {
+        return false;
+    };
+    let data = npp_data();
+    let dispatch: Option<HostDispatchFn> = Some(plugin_dispatch);
+    with_state(|st| st.shell.ensure_plugins_loaded(data, dispatch));
+    // The load may have absorbed new defaults — for *other* commands
+    // than the one just pressed (`ensure_plugins_loaded` loads every
+    // pending plugin). Rebuild the accel group so those become live
+    // this session, matching Win32's `refresh_plugin_accels` after
+    // `handle_plugin_shortcut_shim`'s load. Deferred to a glib idle
+    // rather than done inline: this runs *inside* the accel group's
+    // own closure, and tearing the group down under itself is the
+    // kind of reentrancy this backend has been bitten by before.
+    glib::idle_add_local_once(rebuild_plugin_accel_group);
+    let cmd_id = with_state(|st| st.shell.resolve_plugin_command(&module_key, internal_id))
+        .flatten()
+        .map(|(cmd_id, _)| cmd_id);
+    if let Some(cmd_id) = cmd_id {
+        on_plugin_command(cmd_id);
+        true
+    } else {
+        // Loaded but the identity didn't resolve to a live command
+        // (a stale index into the plugin's FuncItems). Drain any
+        // load-time notifications, but let the key through.
+        crate::drain_shell();
+        false
+    }
+}
+
 /// Deliver every queued `NPPN_*` notification to the loaded plugins.
 /// Called after each drain. Each `beNotified` runs with no `with_state`
 /// borrow held by us beyond the immutable one `notify_plugins` needs, so
@@ -454,5 +664,38 @@ pub(crate) fn deliver_notifications() {
     let notes = with_state(|st| st.shell.take_notifications()).unwrap_or_default();
     for note in notes {
         with_state(|st| st.shell.notify_plugins(note, npp_sentinel()));
+    }
+}
+
+#[cfg(test)]
+mod shortcut_tests {
+    use super::chord_to_gdk;
+
+    #[test]
+    fn chord_to_gdk_maps_keys_and_modifiers() {
+        // Ctrl+Alt+H -> keyval 'h' with Control+Mod1.
+        let (key, mods) = chord_to_gdk(true, true, false, 0x48).unwrap();
+        assert_eq!(*key, u32::from(b'h'));
+        assert!(mods.contains(gtk::gdk::ModifierType::CONTROL_MASK));
+        assert!(mods.contains(gtk::gdk::ModifierType::MOD1_MASK));
+        assert!(!mods.contains(gtk::gdk::ModifierType::SHIFT_MASK));
+
+        // A digit and Shift+F3.
+        assert_eq!(
+            *chord_to_gdk(true, false, false, 0x31).unwrap().0,
+            u32::from(b'1')
+        );
+        let (key, mods) = chord_to_gdk(false, false, true, 0x72).unwrap();
+        assert_eq!(*key, *gtk::gdk::keys::constants::F3);
+        assert!(mods.contains(gtk::gdk::ModifierType::SHIFT_MASK));
+
+        // A named key resolves.
+        assert_eq!(
+            *chord_to_gdk(true, false, false, 0x2E).unwrap().0,
+            *gtk::gdk::keys::constants::Delete
+        );
+
+        // A layout-dependent OEM key has no portable mapping.
+        assert!(chord_to_gdk(true, false, false, 0xBF).is_none());
     }
 }

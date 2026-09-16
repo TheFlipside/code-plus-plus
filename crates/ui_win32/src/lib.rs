@@ -551,6 +551,25 @@ const ID_UDL_OPEN_COLLECTION: u16 = 2102;
 const ID_UDL_ITEM_BASE: u16 = 2200;
 const ID_UDL_ITEM_END: u16 = 3099;
 
+// Pre-load plugin-shortcut shim ids. A cached plugin shortcut
+// (shortcuts.xml) must be an accelerator **before** its plugin is
+// loaded — that is the whole point of the cache (DESIGN.md §6.4's
+// hotkey lazy-load trigger) — but a real plugin `cmd_id` only
+// exists after `getFuncsArray`. So an unloaded plugin's chord is
+// installed under a shim id from this band, mapped through
+// `WindowState.plugin_shortcut_shims` to its `(module_key,
+// internalID)` cache identity. Firing one loads every pending
+// plugin, resolves the identity to the real cmd id, re-posts it
+// as an ordinary `WM_COMMAND`, and rebuilds the table with real
+// ids (`refresh_plugin_accels`) so `NPPM_GETSHORTCUTBYCMDID`'s
+// live-HACCEL introspection sees plugin bindings under their
+// real ids from then on. The band sits in the free space between
+// the last host menu id (`ID_UDL_ITEM_END` = 3099) and N++'s
+// `IDM_BASE` (40000); 800 ids comfortably exceeds any plausible
+// shortcut count while staying clear of both namespaces.
+const ID_PLUGIN_SHORTCUT_SHIM_BASE: u16 = 3200;
+const ID_PLUGIN_SHORTCUT_SHIM_END: u16 = 3999;
+
 /// Notepad++ User Defined Languages Collection URL — the community
 /// showcase of UDL XML files linked from N++'s own Language menu.
 /// Opened by [`ID_UDL_OPEN_COLLECTION`] via `ShellExecuteW("open",
@@ -1313,6 +1332,20 @@ struct WindowState {
     /// effect on the very next keystroke. Cleaned up via
     /// `DestroyAcceleratorTable` in `WM_DESTROY`.
     accel_handle: HACCEL,
+    /// Shim-id → cache-identity map for plugin shortcuts whose
+    /// plugin is not loaded yet. A cached plugin chord
+    /// (shortcuts.xml) is installed in `accel_handle` under a
+    /// synthetic id from the
+    /// [`ID_PLUGIN_SHORTCUT_SHIM_BASE`]..=[`ID_PLUGIN_SHORTCUT_SHIM_END`]
+    /// band; when it fires (`WM_COMMAND`), this map resolves the
+    /// shim id to the plugin's `(module_key, internalID)` so the
+    /// firing path can lazy-load the plugin and dispatch the real
+    /// command. Rebuilt whenever the accelerator table is
+    /// (`refresh_plugin_accels`): a chord whose plugin is now
+    /// loaded moves from a shim id to its real `cmd_id` and drops
+    /// out of this map. Empty once every cached-shortcut plugin
+    /// has been loaded.
+    plugin_shortcut_shims: std::collections::HashMap<u16, (String, u32)>,
     /// HMENU for the per-plugin submenu under "Plugins". Plugins query
     /// this via `NPPM_GETMENUHANDLE(NPPPLUGINMENU)` to add their menu
     /// items. Populated lazily on the first `WM_INITMENUPOPUP` for
@@ -7190,6 +7223,74 @@ unsafe fn refresh_window_menu(window_menu: HMENU, shell: &Shell) {
     }
 }
 
+/// Fire a pre-load plugin-shortcut shim: resolve the shim id to its
+/// cached `(module_key, internalID)`, lazy-load every pending plugin
+/// (the hotkey is the §6.4 lazy-load trigger), rebuild the
+/// accelerator table so the chord now binds to the plugin's real
+/// `cmd_id`, and dispatch that command.
+///
+/// # Safety
+///
+/// UI thread only; the same re-entrance discipline as the
+/// `WM_INITMENUPOPUP` lazy-load — the load runs under a
+/// `PluginCallGuard` + `catch_unwind`, and the real command is
+/// **posted** (not called inline) so it re-enters the ordinary
+/// plugin `WM_COMMAND` arm with no borrow held.
+unsafe fn handle_plugin_shortcut_shim(hwnd: HWND, shim_id: u16) {
+    // Resolve the shim identity under a brief borrow, then drop it.
+    let Some((module_key, internal_id)) = (unsafe { state_from_hwnd(hwnd) })
+        .and_then(|s| s.plugin_shortcut_shims.get(&shim_id).cloned())
+    else {
+        // No mapping — a stale accelerator whose table entry the
+        // last refresh already dropped. Nothing to do.
+        return;
+    };
+    // Build NppData under a brief borrow (mirrors WM_INITMENUPOPUP).
+    let Some(npp_data) = (unsafe { state_from_hwnd(hwnd) }).map(|state| NppData {
+        npp_handle: hwnd.0,
+        scintilla_main_handle: state.scintilla_hwnd.0,
+        scintilla_second_handle: core::ptr::null_mut(),
+    }) else {
+        return;
+    };
+    // Lazy-load every pending plugin. Guard + catch_unwind so a
+    // re-entrant NPPM_* from setInfo can't alias, and a plugin
+    // panic can't unwind across extern "system". Same shape as the
+    // WM_INITMENUPOPUP load.
+    if let Some(state) = unsafe { state_from_hwnd(hwnd) } {
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = PluginCallGuard::enter();
+            state.shell.ensure_plugins_loaded(npp_data, None);
+        }));
+    }
+    // Rebuild the accelerator table: the chord that fired under a
+    // shim id now binds to the plugin's real cmd id (and leaves the
+    // shim map), so a second press dispatches directly and
+    // NPPM_GETSHORTCUTBYCMDID sees the binding under its real id.
+    if let Some(state) = unsafe { state_from_hwnd(hwnd) } {
+        unsafe { refresh_plugin_accels(state) };
+    }
+    // Resolve the real command and post it, so the ordinary plugin
+    // WM_COMMAND arm dispatches it with no borrow held.
+    let real_cmd = (unsafe { state_from_hwnd(hwnd) })
+        .and_then(|s| s.shell.resolve_plugin_command(&module_key, internal_id))
+        .and_then(|(cmd_id, _)| u16::try_from(cmd_id).ok());
+    if let Some(cmd) = real_cmd {
+        let _ = unsafe { PostMessageW(Some(hwnd), WM_COMMAND, WPARAM(cmd as usize), LPARAM(0)) };
+    } else {
+        // Load failed, or the cached index no longer resolves to a
+        // command (a plugin that dropped or reordered its FuncItems
+        // since the cache was written). The stale entry stays in
+        // shortcuts.xml but simply never fires — no menu path is
+        // affected, so this is a silent, self-correcting miss.
+        tracing::debug!(
+            module = module_key.as_str(),
+            internal_id,
+            "plugin shortcut shim did not resolve to a live command"
+        );
+    }
+}
+
 /// Append loaded-plugin `FuncItems` onto the per-plugin submenu after
 /// a successful lazy-load round. Each plugin gets its own popup
 /// submenu under the top-level "Plugins" entry, with the plugin's
@@ -7224,17 +7325,31 @@ unsafe fn populate_plugin_menu(plugin_menu: HMENU, shell: &Shell) {
                 }
                 continue;
             }
-            // FuncItem.item_name is a fixed-length null-terminated UTF-16
-            // array; pass its pointer directly to AppendMenuW.
-            let label = PCWSTR(func.item_name.as_ptr());
+            // Build an owned label: sanitize the plugin's item name
+            // (it is third-party data — an embedded `\t` would forge
+            // a fake shortcut column, and control chars corrupt the
+            // menu, the same reasons `sanitize_menu_label` exists for
+            // recent-files entries), then append the persisted
+            // shortcut as its own `\t<chord>` suffix when the chord
+            // actually fires (`plugin_shortcut_label_for_cmd_id`
+            // returns `None` for a policy-refused or dedupe-losing
+            // chord, so the menu never advertises a dead key).
+            let name = sanitize_menu_label(&funcitem_name_to_string(&func.item_name));
+            let mut text = name;
+            if let Some(sc) = shell.plugin_shortcut_label_for_cmd_id(func.cmd_id) {
+                text.push('\t');
+                text.push_str(&sc);
+            }
+            let label_w: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
             // `cmd_id` is i32 (signed) but AppendMenuW expects usize.
             // Plugin cmd_ids are always positive (assigned from
             // PLUGIN_CMD_ID_BASE = 50000), so the cast is value-preserving.
             let id = func.cmd_id as usize;
-            // SAFETY: `submenu` is the HMENU we just created; `label`
-            // points into a static null-terminated wide string the
-            // plugin owns for its lifetime.
-            if let Err(e) = unsafe { AppendMenuW(submenu, MF_STRING, id, label) } {
+            // SAFETY: `submenu` is the HMENU we just created;
+            // `label_w` is a local null-terminated wide string that
+            // outlives the call (AppendMenuW copies it).
+            if let Err(e) = unsafe { AppendMenuW(submenu, MF_STRING, id, PCWSTR(label_w.as_ptr())) }
+            {
                 tracing::warn!(plugin = ?plugin_name, error = ?e, "AppendMenuW (item) failed");
             }
         }
@@ -16555,6 +16670,165 @@ fn decode_accel_to_shortcut_key(a: &ACCEL) -> codepp_plugin_host::ShortcutKey {
     }
 }
 
+/// Build an `ACCEL` for a plugin shortcut — the inverse of
+/// [`decode_accel_to_shortcut_key`]. `cmd` is the id the table
+/// entry fires (a real plugin `cmd_id`, or a shim id from the
+/// [`ID_PLUGIN_SHORTCUT_SHIM_BASE`] band while the plugin is
+/// unloaded). Every plugin accelerator is a virtual-key entry
+/// (`FVIRTKEY`), matching the host defaults.
+fn shortcut_key_to_accel(ctrl: bool, alt: bool, shift: bool, key: u8, cmd: u16) -> ACCEL {
+    let mut bits = FVIRTKEY.0;
+    if ctrl {
+        bits |= FCONTROL.0;
+    }
+    if alt {
+        bits |= FALT.0;
+    }
+    if shift {
+        bits |= FSHIFT.0;
+    }
+    ACCEL {
+        fVirt: ACCEL_VIRT_FLAGS(bits),
+        key: u16::from(key),
+        cmd,
+    }
+}
+
+/// True for an accelerator `cmd` that belongs to the plugin
+/// subsystem — a real plugin command id (≥ [`PLUGIN_CMD_ID_BASE`])
+/// or a pre-load shim id. [`refresh_plugin_accels`] strips exactly
+/// these before re-adding the current plugin set, so a host
+/// accelerator (including one a prior `NPPM_REMOVESHORTCUTBYCMDID`
+/// deleted) is never disturbed by a plugin-side rebuild.
+fn is_plugin_accel_cmd(cmd: u16) -> bool {
+    i32::from(cmd) >= PLUGIN_CMD_ID_BASE
+        || (ID_PLUGIN_SHORTCUT_SHIM_BASE..=ID_PLUGIN_SHORTCUT_SHIM_END).contains(&cmd)
+}
+
+/// Compute the `ACCEL` entries for every cached plugin shortcut,
+/// plus the shim-id → `(module_key, internalID)` map for the ones
+/// whose plugin is not loaded yet.
+///
+/// The shell has already filtered to discovered, registrable,
+/// first-wins chords ([`Shell::startup_plugin_chords`]); this only
+/// decides, per chord, whether it binds to a real `cmd_id` (plugin
+/// loaded, command resolves) or to a freshly-assigned shim id
+/// (not yet loaded — the pre-load case the whole feature exists
+/// for). A chord whose real cmd id doesn't fit a `u16` is skipped
+/// (unreachable: plugin cmd ids live in 50000..=65500), as is one
+/// that would overflow the shim band.
+fn build_plugin_accel_entries(
+    shell: &Shell,
+) -> (Vec<ACCEL>, std::collections::HashMap<u16, (String, u32)>) {
+    let mut accels = Vec::new();
+    let mut shims = std::collections::HashMap::new();
+    let mut next_shim = ID_PLUGIN_SHORTCUT_SHIM_BASE;
+    for chord in shell.startup_plugin_chords() {
+        let cmd = if let Some((cmd_id, _)) =
+            shell.resolve_plugin_command(&chord.module_key, chord.internal_id)
+        {
+            // Plugin loaded — bind to the real command id.
+            let Ok(c) = u16::try_from(cmd_id) else {
+                tracing::warn!(cmd_id, "plugin cmd id exceeds u16; shortcut skipped");
+                continue;
+            };
+            c
+        } else if shell.is_module_loaded(&chord.module_key) {
+            // The plugin is loaded but this identity did not resolve
+            // to a real command — a bogus hand-edited `internalID` or
+            // a separator slot. Skip it entirely rather than install
+            // an accelerator that would consume the key and do
+            // nothing (the Win32 half of the security-audit Medium;
+            // GTK/Cocoa let the key through by having their fire path
+            // return "not handled").
+            tracing::debug!(
+                module = chord.module_key.as_str(),
+                internal_id = chord.internal_id,
+                "plugin shortcut does not resolve on a loaded plugin; not registered"
+            );
+            continue;
+        } else {
+            // Not loaded — assign a pre-load shim id (unreachable
+            // only if the shim band is exhausted, which no realistic
+            // plugin set reaches).
+            if next_shim > ID_PLUGIN_SHORTCUT_SHIM_END {
+                tracing::warn!("plugin shortcut shim band exhausted; chord dropped");
+                continue;
+            }
+            let id = next_shim;
+            next_shim += 1;
+            shims.insert(id, (chord.module_key.clone(), chord.internal_id));
+            id
+        };
+        accels.push(shortcut_key_to_accel(
+            chord.ctrl,
+            chord.alt,
+            chord.shift,
+            chord.key,
+            cmd,
+        ));
+    }
+    (accels, shims)
+}
+
+/// Rebuild the live accelerator table so plugin shortcuts reflect
+/// the current load state: chords whose plugin has since loaded
+/// move from shim ids to real `cmd_id`s (and out of the shim map),
+/// and any newly-absorbed cache entry appears. Host accelerators
+/// are preserved verbatim — the table is copied and only
+/// [`is_plugin_accel_cmd`] entries are replaced, so a prior
+/// `NPPM_REMOVESHORTCUTBYCMDID` on a built-in binding survives.
+///
+/// # Safety
+///
+/// UI thread only; same single-mutator invariant on
+/// `state.accel_handle` as `remove_shortcut_for_cmd_id`.
+unsafe fn refresh_plugin_accels(state: &mut WindowState) {
+    let old = state.accel_handle;
+    let mut entries: Vec<ACCEL> = Vec::new();
+    if !old.is_invalid() {
+        let count = unsafe { CopyAcceleratorTableW(old, None) };
+        if count > 0 {
+            entries = vec![ACCEL::default(); count as usize];
+            let written = unsafe { CopyAcceleratorTableW(old, Some(&mut entries)) };
+            if written <= 0 {
+                // The copy failed after reporting a non-zero count —
+                // don't proceed to install a table missing the host
+                // accelerators we couldn't read. Same bail as
+                // `remove_shortcut_for_cmd_id`; keep the old table.
+                tracing::warn!("refresh_plugin_accels: CopyAcceleratorTableW read-back failed; keeping old table");
+                return;
+            }
+            entries.truncate(written as usize);
+        }
+    }
+    entries.retain(|a| !is_plugin_accel_cmd(a.cmd));
+    let (plugin_accels, shims) = build_plugin_accel_entries(&state.shell);
+    entries.extend(plugin_accels);
+    let new = match unsafe { CreateAcceleratorTableW(&entries) } {
+        Ok(h) => h,
+        Err(e) => {
+            tracing::warn!(error = ?e, "refresh_plugin_accels: CreateAcceleratorTableW failed, keeping old table");
+            return;
+        }
+    };
+    // Write-new-then-destroy-old, same ordering discipline as
+    // `remove_shortcut_for_cmd_id`: the pump reads the slot fresh
+    // each iteration and must never see a destroyed handle.
+    state.accel_handle = new;
+    state.plugin_shortcut_shims = shims;
+    if !old.is_invalid() {
+        let _ = unsafe { DestroyAcceleratorTable(old) };
+    }
+}
+
+/// Decode a `FuncItem.item_name` (`[u16; 64]`, null-terminated)
+/// into a Rust `String`, stopping at the first NUL.
+fn funcitem_name_to_string(name: &[u16]) -> String {
+    let end = name.iter().position(|&c| c == 0).unwrap_or(name.len());
+    String::from_utf16_lossy(&name[..end])
+}
+
 /// Build the host's default accelerator table — the keyboard
 /// shortcuts the message pump consults via `TranslateAcceleratorW`.
 /// Single source of truth for both the initial `HACCEL` creation
@@ -17660,7 +17934,15 @@ pub fn run(initial_path: Option<PathBuf>, perf: codepp_core::perf::Perf) -> Resu
         // replace the handle. The pump reads the slot fresh on
         // every iteration so a recreate inside a NPPM dispatch
         // takes effect on the very next keystroke.
-        let initial_accels = build_default_accel_table();
+        // Merge cached plugin shortcuts into the initial table.
+        // No plugin is loaded yet (discovery only records paths),
+        // so every registrable cached chord installs under a shim
+        // id — which is exactly what lets a plugin hotkey fire, and
+        // trigger the plugin's first load, before any menu is
+        // opened (DESIGN.md §6.4).
+        let mut initial_accels = build_default_accel_table();
+        let (plugin_accels, initial_plugin_shims) = build_plugin_accel_entries(&shell);
+        initial_accels.extend(plugin_accels);
         let initial_accel_handle: HACCEL = CreateAcceleratorTableW(&initial_accels)?;
 
         // Load the tab-strip save icons (blue = clean, red = dirty)
@@ -17780,6 +18062,7 @@ pub fn run(initial_path: Option<PathBuf>, perf: codepp_core::perf::Perf) -> Resu
             editor,
             shell,
             accel_handle: initial_accel_handle,
+            plugin_shortcut_shims: initial_plugin_shims,
         });
 
         // Resolve the initial files:
@@ -26699,6 +26982,18 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                             handle_window_menu_click(hwnd, tab_idx);
                             return LRESULT(0);
                         }
+                        // Pre-load plugin-shortcut shim. A cached
+                        // chord for a not-yet-loaded plugin fires
+                        // under a shim id; this loads the plugin,
+                        // resolves the real command, and dispatches
+                        // it — the hotkey *is* the lazy-load trigger
+                        // (DESIGN.md §6.4).
+                        if (ID_PLUGIN_SHORTCUT_SHIM_BASE..=ID_PLUGIN_SHORTCUT_SHIM_END)
+                            .contains(&cmd_u16)
+                        {
+                            handle_plugin_shortcut_shim(hwnd, cmd_u16);
+                            return LRESULT(0);
+                        }
                         // Plugin menu-command dispatch. Plugin cmd-ids
                         // start at PLUGIN_CMD_ID_BASE (50000) — well
                         // above any host built-in. Look up the
@@ -26845,6 +27140,12 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                     // span the population.
                     if let Some(state) = state_from_hwnd(hwnd) {
                         populate_plugin_menu(state.plugin_menu, &state.shell);
+                        // The menu-open load may have absorbed new
+                        // plugin-shortcut defaults; rebuild the accel
+                        // table so their chords bind to real cmd ids
+                        // (any pre-load shim entries drop out). Cheap
+                        // and idempotent — a no-op when nothing changed.
+                        refresh_plugin_accels(state);
                         // Force the menu bar to redraw so the user
                         // sees the populated submenu on this very
                         // open (without a redraw, the items only
@@ -28078,6 +28379,131 @@ mod cf_html_tests {
             assert!(payload.contains("<!--StartFragment-->"), "input {evil:?}");
             assert!(payload.contains("<!--EndFragment-->"), "input {evil:?}");
         }
+    }
+}
+
+#[cfg(test)]
+mod plugin_accel_tests {
+    use super::{
+        build_plugin_accel_entries, decode_accel_to_shortcut_key, funcitem_name_to_string,
+        is_plugin_accel_cmd, shortcut_key_to_accel, ID_PLUGIN_SHORTCUT_SHIM_BASE,
+        ID_PLUGIN_SHORTCUT_SHIM_END, ID_UDL_ITEM_END, PLUGIN_CMD_ID_BASE,
+    };
+    use std::sync::Arc;
+
+    /// A cached chord for a discovered-but-unloaded plugin must install
+    /// under a shim id (no real `cmd_id` exists pre-load) and be
+    /// recorded in the shim map — the exact pre-load state the whole
+    /// feature turns on. Uses a real `Shell` with a fake plugin file
+    /// discovered from a temp dir (discovery records paths without
+    /// mapping, so an empty `.dll` is a valid "installed, unloaded"
+    /// plugin).
+    #[test]
+    fn build_plugin_accel_entries_assigns_shims_for_unloaded_plugins() {
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = codepp_shell::Shell::new(wake).unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir
+            .path()
+            .join(format!("cpaccel_x.{}", codepp_platform::PLUGIN_EXTENSION));
+        std::fs::write(&file, b"").unwrap();
+        shell.discover_plugins(dir.path()).unwrap();
+        let mut sc = codepp_core::PluginShortcuts::new();
+        sc.insert_default(codepp_core::PluginShortcut {
+            module: format!("cpaccel_x.{}", codepp_platform::PLUGIN_EXTENSION),
+            internal_id: 2,
+            ctrl: true,
+            alt: false,
+            shift: false,
+            key: 0x4B, // Ctrl+K
+        });
+        shell.set_plugin_shortcuts_for_tests(sc);
+
+        let (accels, shims) = build_plugin_accel_entries(&shell);
+        assert_eq!(accels.len(), 1);
+        let cmd = accels[0].cmd;
+        assert!(
+            (ID_PLUGIN_SHORTCUT_SHIM_BASE..=ID_PLUGIN_SHORTCUT_SHIM_END).contains(&cmd),
+            "unloaded plugin chord should bind to a shim id, got {cmd}"
+        );
+        assert_eq!(shims.get(&cmd), Some(&("cpaccel_x".to_string(), 2)));
+        // The accel round-trips the chord.
+        let sk = decode_accel_to_shortcut_key(&accels[0]);
+        assert_eq!(
+            (sk.is_ctrl, sk.is_alt, sk.is_shift, sk.key),
+            (1, 0, 0, 0x4B)
+        );
+    }
+
+    /// A cache entry for a plugin that was never installed produces no
+    /// accelerator and no shim — a dead key swallow would be worse than
+    /// silence.
+    #[test]
+    fn build_plugin_accel_entries_ignores_undiscovered_plugins() {
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = codepp_shell::Shell::new(wake).unwrap();
+        let mut sc = codepp_core::PluginShortcuts::new();
+        sc.insert_default(codepp_core::PluginShortcut {
+            module: "cpaccel_ghost.dll".to_string(),
+            internal_id: 0,
+            ctrl: true,
+            alt: false,
+            shift: false,
+            key: 0x4B,
+        });
+        shell.set_plugin_shortcuts_for_tests(sc);
+        let (accels, shims) = build_plugin_accel_entries(&shell);
+        assert!(accels.is_empty());
+        assert!(shims.is_empty());
+    }
+
+    /// Building an ACCEL from a chord and decoding it back yields the
+    /// same modifiers and key — the encode/decode pair the plugin
+    /// shortcut table round-trips through.
+    #[test]
+    fn shortcut_key_accel_round_trip() {
+        for (ctrl, alt, shift, key) in [
+            (true, false, false, 0x42u8), // Ctrl+B
+            (true, true, false, 0x48),    // Ctrl+Alt+H
+            (false, false, true, 0x72),   // Shift+F3
+            (true, false, true, 0x7A),    // Ctrl+Shift+Z
+            (false, false, false, 0x75),  // F6 bare
+        ] {
+            let accel = shortcut_key_to_accel(ctrl, alt, shift, key, 50_123);
+            assert_eq!(accel.cmd, 50_123);
+            let sk = decode_accel_to_shortcut_key(&accel);
+            assert_eq!(sk.is_ctrl != 0, ctrl);
+            assert_eq!(sk.is_alt != 0, alt);
+            assert_eq!(sk.is_shift != 0, shift);
+            assert_eq!(sk.key, key);
+        }
+    }
+
+    #[test]
+    fn is_plugin_accel_cmd_covers_real_and_shim_bands() {
+        // Real plugin command ids.
+        assert!(is_plugin_accel_cmd(PLUGIN_CMD_ID_BASE as u16));
+        assert!(is_plugin_accel_cmd(50_500));
+        // Shim band.
+        assert!(is_plugin_accel_cmd(ID_PLUGIN_SHORTCUT_SHIM_BASE));
+        assert!(is_plugin_accel_cmd(ID_PLUGIN_SHORTCUT_SHIM_END));
+        // Host ids are not plugin ids — a rebuild must not strip them.
+        assert!(!is_plugin_accel_cmd(ID_UDL_ITEM_END));
+        assert!(!is_plugin_accel_cmd(1000));
+        // The gap directly below the shim band stays a host id.
+        assert!(!is_plugin_accel_cmd(ID_PLUGIN_SHORTCUT_SHIM_BASE - 1));
+    }
+
+    #[test]
+    fn funcitem_name_stops_at_nul() {
+        let mut buf = [0u16; 64];
+        for (i, c) in "Encode\0GARBAGE".encode_utf16().enumerate() {
+            buf[i] = c;
+        }
+        assert_eq!(funcitem_name_to_string(&buf), "Encode");
+        // A full buffer with no NUL uses the whole slice.
+        let full = [0x41u16; 64];
+        assert_eq!(funcitem_name_to_string(&full).len(), 64);
     }
 }
 

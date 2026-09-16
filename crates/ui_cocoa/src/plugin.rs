@@ -248,6 +248,11 @@ pub(crate) fn ensure_loaded_and_rebuild(menu: &NSMenu, actions: &Actions) {
     crate::drain_shell();
 }
 
+/// One row of a plugin submenu, snapshotted under the `with_state`
+/// borrow: label, command id, whether it is a command (vs. a
+/// separator), and its display chord `(ctrl, alt, shift, key)` if any.
+type PluginMenuRow = (String, i32, bool, Option<(bool, bool, bool, u8)>);
+
 /// Rebuild the Plugins menu: one submenu per loaded plugin (its items
 /// taken from the plugin's `FuncItem` array, a null `p_func` rendering
 /// as a separator), or a greyed placeholder when none is loaded. Then,
@@ -260,9 +265,16 @@ fn rebuild_menu(menu: &NSMenu, actions: &Actions, mtm: MainThreadMarker) {
         st.shell
             .loaded_plugin_funcs()
             .map(|(name, funcs)| {
-                let items: Vec<(String, i32, bool)> = funcs
+                let items: Vec<PluginMenuRow> = funcs
                     .iter()
-                    .map(|f| (funcitem_label(f), f.cmd_id, f.p_func.is_some()))
+                    .map(|f| {
+                        (
+                            funcitem_label(f),
+                            f.cmd_id,
+                            f.p_func.is_some(),
+                            st.shell.plugin_shortcut_chord_for_cmd_id(f.cmd_id),
+                        )
+                    })
                     .collect();
                 (name, items)
             })
@@ -275,12 +287,27 @@ fn rebuild_menu(menu: &NSMenu, actions: &Actions, mtm: MainThreadMarker) {
     } else {
         for (name, items) in entries {
             let submenu = NSMenu::new(mtm);
-            for (label, cmd_id, is_command) in items {
+            for (label, cmd_id, is_command, chord) in items {
                 if is_command {
+                    // Show the shortcut in the item *title* rather than
+                    // as an `NSMenuItem` key equivalent. A key equivalent
+                    // would let AppKit's own key-equivalent search fire
+                    // this command independently of the keyDown monitor —
+                    // and, worse, keep firing a chord the plugin has since
+                    // dropped via `NPPM_REMOVESHORTCUTBYCMDID` until the
+                    // menu is next rebuilt. The monitor is the single
+                    // firing authority and consults the live cache, so the
+                    // title carries display only. `chord` is already the
+                    // winning, registrable chord (the shell filtered the
+                    // rest).
+                    let title = match chord.map(|(c, a, s, k)| chord_menu_suffix(c, a, s, k)) {
+                        Some(suffix) => format!("{label}\t{suffix}"),
+                        None => label,
+                    };
                     let item = crate::menu::add(
                         &submenu,
                         mtm,
-                        &label,
+                        &title,
                         sel!(codeppPluginCommand:),
                         "",
                         Some(actions),
@@ -345,6 +372,61 @@ pub(crate) fn on_plugin_command(cmd_id: i32) {
     // edit, while the borrow above was held, and was declined.
     crate::drain_shell();
     crate::refresh_tab_chrome();
+}
+
+/// Fire a plugin shortcut identified by its `(module_key, internalID)`
+/// cache identity: lazy-load every pending plugin (a hotkey is the §6.4
+/// load trigger, the second permitted one after the first menu open —
+/// see the `startup_discovers_plugins_without_loading_them` guard),
+/// resolve the identity to the loaded command, and dispatch it.
+///
+/// Returns `true` iff a command actually ran. The keyDown monitor
+/// swallows the event only on `true`, so a chord that fails to resolve
+/// (a bogus hand-edited `internalID`, or a plugin whose load failed)
+/// still reaches the editor rather than being silently eaten. The drain
+/// runs regardless so a partial load's `NPPN_READY` reaches the plugins.
+pub(crate) fn fire_plugin_chord(module_key: &str, internal_id: u32) -> bool {
+    let data = npp_data();
+    let dispatch: Option<HostDispatchFn> = Some(plugin_dispatch);
+    with_state(|st| st.shell.ensure_plugins_loaded(data, dispatch));
+    let cmd_id = with_state(|st| st.shell.resolve_plugin_command(module_key, internal_id))
+        .flatten()
+        .map(|(cmd_id, _)| cmd_id);
+    if let Some(cmd_id) = cmd_id {
+        on_plugin_command(cmd_id);
+        true
+    } else {
+        crate::drain_shell();
+        false
+    }
+}
+
+/// Format a chord as the macOS glyph string shown in a plugin menu
+/// item's title (`⌘⇧K`, `⌥F5`). `is_ctrl` maps to ⌘ (Command) — the
+/// macOS-primary modifier and the convention every built-in Code++
+/// shortcut follows — with `is_alt` → ⌥ and `is_shift` → ⇧, in the
+/// conventional ⌥⇧⌘ order with ⌘ adjacent to the key.
+///
+/// This is display only, and deliberately *not* an `NSMenuItem`
+/// key equivalent: a key equivalent would let AppKit fire the command
+/// independently of the keyDown monitor and would keep firing a chord
+/// the plugin later removes until the menu is rebuilt. The monitor is
+/// the single firing authority; the title just shows what it will do.
+/// The key name comes from `core::shortcuts::vk_display_name`, shared
+/// with the Win32/GTK label path.
+fn chord_menu_suffix(ctrl: bool, alt: bool, shift: bool, key: u8) -> String {
+    let mut out = String::new();
+    if alt {
+        out.push('\u{2325}'); // ⌥
+    }
+    if shift {
+        out.push('\u{21E7}'); // ⇧
+    }
+    if ctrl {
+        out.push('\u{2318}'); // ⌘
+    }
+    out.push_str(&codepp_core::shortcuts::vk_display_name(key));
+    out
 }
 
 /// Deliver every queued `NPPN_*` notification to the loaded plugins.
@@ -670,4 +752,23 @@ fn add_column(
     column.setWidth(width);
     column.setMinWidth(40.0);
     table.addTableColumn(&column);
+}
+
+#[cfg(test)]
+mod shortcut_tests {
+    use super::chord_menu_suffix;
+
+    #[test]
+    fn chord_menu_suffix_formats_macos_glyphs() {
+        // Ctrl(⌘)+Alt(⌥)+H, in ⌥⇧⌘ order with ⌘ adjacent to the key.
+        assert_eq!(
+            chord_menu_suffix(true, true, false, 0x48),
+            "\u{2325}\u{2318}H"
+        );
+        // Shift+F3 (bare of ⌘) → ⇧F3.
+        assert_eq!(chord_menu_suffix(false, false, true, 0x72), "\u{21E7}F3");
+        // Plain ⌘ and a named key.
+        assert_eq!(chord_menu_suffix(true, false, false, 0x31), "\u{2318}1");
+        assert_eq!(chord_menu_suffix(true, false, false, 0x2E), "\u{2318}Del");
+    }
 }

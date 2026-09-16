@@ -35,7 +35,7 @@ pub struct NppData {
 /// `bool`) plus 1-byte `u8` (Win32 `UCHAR`), total 4 bytes —
 /// matching the public ABI.
 #[repr(C)]
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ShortcutKey {
     pub is_ctrl: u8,
     pub is_alt: u8,

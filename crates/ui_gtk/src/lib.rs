@@ -331,6 +331,12 @@ pub fn run(initial_path: Option<PathBuf>, perf: Perf) -> Result<(), GtkUiError> 
     // deferred to the first Plugins-menu open — DESIGN.md §6.4). The app
     // has already staged the bundled plugins into this directory.
     plugin::discover();
+    // Register cached plugin shortcuts (shortcuts.xml) on a dedicated
+    // accel group now that discovery has run, so a plugin hotkey can
+    // fire — and trigger that plugin's first load — before any menu
+    // open. MUST run after `discover()`: the chord set is filtered to
+    // discovered plugins.
+    plugin::register_startup_shortcuts();
 
     // Geometry tracking, save-on-close and the periodic auto-save. MUST
     // run after `restore_window_geometry` — see the function.

@@ -476,12 +476,10 @@ pub fn run(initial_path: Option<PathBuf>, perf: Perf) -> Result<(), CocoaUiError
     // outlive it, which the binding below guarantees.
     let autosave = actions.start_autosave(mtm);
 
-    // The opening edge of the §8 keystroke interval; see the function.
-    // `None` when the state is somehow unreachable, which only costs a
-    // measurement — never a failed startup.
-    let key_probe = PERF
-        .with(|p| p.borrow().clone())
-        .and_then(|perf| install_key_probe(&sci_view, &window, &perf));
+    // The two keyDown monitors: the `--perf` latency probe and the
+    // always-on plugin-shortcut firing authority (§6.4). Both must be
+    // kept alive for the session; see `install_event_monitors`.
+    let (key_probe, plugin_shortcut_monitor) = install_event_monitors(&sci_view, &window);
 
     // Ordering the window front and activating happens in the
     // application delegate's `applicationDidFinishLaunching:`, **not**
@@ -519,7 +517,13 @@ pub fn run(initial_path: Option<PathBuf>, perf: Perf) -> Result<(), CocoaUiError
     // the menu items are the binding constraint.) Binding to a named
     // local rather than `let _ =` is what pins them: `let _ =` drops
     // immediately.
-    let _keepalive = (app_delegate, actions, autosave, key_probe);
+    let _keepalive = (
+        app_delegate,
+        actions,
+        autosave,
+        key_probe,
+        plugin_shortcut_monitor,
+    );
 
     // Blocks until the user quits. Everything after this is unreachable
     // on the standard Quit path — `terminate:` calls `exit()` — which is
@@ -1009,6 +1013,21 @@ fn build_content(
 ///
 /// Returns the monitor, which the caller must keep alive; dropping it
 /// unregisters the observation.
+/// Install both keyDown monitors and return them for the caller to
+/// keep alive: the `--perf` latency probe (only when `--perf` is set)
+/// and the always-on plugin-shortcut firing monitor. Grouped so `run`
+/// wires event observation in one place.
+type EventMonitor = Option<Retained<objc2::runtime::AnyObject>>;
+fn install_event_monitors(sci_view: &NSView, window: &NSWindow) -> (EventMonitor, EventMonitor) {
+    // `None` when the state is somehow unreachable, which only costs a
+    // measurement — never a failed startup.
+    let key_probe = PERF
+        .with(|p| p.borrow().clone())
+        .and_then(|perf| install_key_probe(sci_view, window, &perf));
+    let plugin_shortcut_monitor = install_plugin_shortcut_monitor(window);
+    (key_probe, plugin_shortcut_monitor)
+}
+
 fn install_key_probe(
     sci_view: &NSView,
     window: &NSWindow,
@@ -1074,6 +1093,142 @@ fn event_is_typed_into_editor(event: &NSEvent, window: &NSWindow, sci_view: &NSV
 /// composes (⌥e, ⌥u), so it must not be.
 fn modifiers_type_a_character(flags: NSEventModifierFlags) -> bool {
     !flags.intersects(NSEventModifierFlags::Command | NSEventModifierFlags::Control)
+}
+
+/// Map a macOS key-equivalent code point (from `charactersIgnoringModifiers`)
+/// back to the Win32 virtual-key code the shortcut cache stores. The
+/// inverse of `plugin::chord_to_key_equivalent`'s key half, over exactly
+/// the set `core::shortcuts::portable_key` covers. `None` for anything
+/// outside that set (punctuation, dead keys), which the cache never holds
+/// a registrable entry for anyway.
+fn vk_from_ns_char(ch: u32) -> Option<u8> {
+    match ch {
+        0x20 => Some(0x20),                                  // Space
+        0x30..=0x39 | 0x41..=0x5A => Some(ch as u8),         // '0'..'9' / 'A'..'Z' == VK
+        0x61..=0x7A => Some((ch - 0x20) as u8),              // 'a'..'z' -> VK upper
+        0xF704..=0xF71B => Some(0x70 + (ch - 0xF704) as u8), // F1..F24
+        0xF700 => Some(0x26),                                // Up
+        0xF701 => Some(0x28),                                // Down
+        0xF702 => Some(0x25),                                // Left
+        0xF703 => Some(0x27),                                // Right
+        0xF727 => Some(0x2D),                                // Insert
+        0xF728 => Some(0x2E),                                // Delete
+        0xF729 => Some(0x24),                                // Home
+        0xF72B => Some(0x23),                                // End
+        0xF72C => Some(0x21),                                // PageUp
+        0xF72D => Some(0x22),                                // PageDown
+        _ => None,
+    }
+}
+
+/// Extract the `(ctrl, alt, shift, vk)` chord from a keyDown, or `None`
+/// when it is not a candidate plugin shortcut. `is_ctrl`↔⌘ (the
+/// macOS-primary modifier convention, matching the menu-display half in
+/// `plugin::chord_menu_suffix`).
+///
+/// The final gate is `core::shortcuts::is_registrable_chord` — the same
+/// policy the shell registers by — rather than an ad-hoc "must hold ⌘/⌥"
+/// test. That is load-bearing: a bare or Shift-only **function** key
+/// (`F5`, `Shift+F3`, `NppExec`'s classic bare `F6`) *is* a registrable
+/// plugin shortcut, and a plain-modifier gate would silently make those
+/// unfireable pre-load — the exact case the cache exists to serve. It
+/// also keeps the common keystroke cheap: ordinary typing (a bare
+/// letter/digit) fails the policy here and never reaches the O(1)
+/// `match_plugin_chord`.
+fn event_to_plugin_chord(event: &NSEvent) -> Option<(bool, bool, bool, u8)> {
+    let flags = event.modifierFlags();
+    let ctrl = flags.contains(NSEventModifierFlags::Command);
+    let alt = flags.contains(NSEventModifierFlags::Option);
+    let shift = flags.contains(NSEventModifierFlags::Shift);
+    let chars = event.charactersIgnoringModifiers()?;
+    let first = chars.to_string().chars().next()?;
+    let vk = vk_from_ns_char(first as u32)?;
+    codepp_core::shortcuts::is_registrable_chord(ctrl, alt, shift, vk)
+        .then_some((ctrl, alt, shift, vk))
+}
+
+/// Install the always-on keyDown monitor that fires plugin shortcuts.
+///
+/// This is the **sole** firing authority for plugin shortcuts on this
+/// backend. Plugin menu items deliberately carry no `NSMenuItem` key
+/// equivalent (their shortcut is shown in the title instead), for two
+/// reasons: AppKit does not populate the lazy Plugins submenu when it
+/// searches for a key equivalent (m4f established this by measurement),
+/// so a menu key equivalent could not be the pre-load trigger anyway;
+/// and a key equivalent would keep firing a chord the plugin later
+/// dropped via `NPPM_REMOVESHORTCUTBYCMDID` until the menu was next
+/// rebuilt. A monitor that re-queries the live cache on every keyDown
+/// has neither problem.
+///
+/// For a keyDown that resolves to a *live* cached plugin chord, it first
+/// asks AppKit whether the main menu already handles that equivalent —
+/// which now matches only **host** commands (plugin items have no key
+/// equivalent), so a colliding host command wins (⌘S stays Save). If a
+/// host item handled it, the event is swallowed (already dispatched);
+/// otherwise the plugin is loaded-on-demand and its command dispatched
+/// here, and the event is swallowed only when a command actually ran.
+/// Every other key — ordinary typing, and any chord no longer in the
+/// cache — passes through untouched.
+///
+/// Returns the monitor; the caller keeps it alive (dropping it
+/// unregisters).
+fn install_plugin_shortcut_monitor(
+    window: &NSWindow,
+) -> Option<Retained<objc2::runtime::AnyObject>> {
+    let window = window.retain();
+    let handler = block2::RcBlock::new(move |event: std::ptr::NonNull<NSEvent>| {
+        // SAFETY: AppKit hands the monitor a live, autoreleased event for
+        // the duration of the call.
+        let event: &NSEvent = unsafe { event.as_ref() };
+        let keep = std::ptr::from_ref::<NSEvent>(event).cast_mut();
+        let swallow: *mut NSEvent = std::ptr::null_mut();
+        at_callback_boundary("plugin:keyDown", keep, || {
+            let Some(mtm) = MainThreadMarker::new() else {
+                return keep;
+            };
+            // Only intervene when the editor's own window is key — a
+            // plugin hotkey must not fire from inside the Find panel or
+            // an alert, matching Win32 (its accelerators run only after
+            // the modeless dialogs' `IsDialogMessage` checks).
+            if event.window(mtm).as_deref() != Some(&*window) {
+                return keep;
+            }
+            let Some((ctrl, alt, shift, vk)) = event_to_plugin_chord(event) else {
+                return keep;
+            };
+            let matched =
+                with_state(|st| st.shell.match_plugin_chord(ctrl, alt, shift, vk)).flatten();
+            let Some((module_key, internal_id)) = matched else {
+                // Not a live plugin chord (never was, or was removed
+                // via NPPM). Pass it through — plugin menu items carry
+                // no key equivalent, so AppKit has nothing stale to
+                // fire, and a removal takes effect immediately.
+                return keep;
+            };
+            // The chord is a live plugin shortcut. Defer to AppKit's
+            // menu first, so a colliding *host* command wins (⌘S stays
+            // Save) — plugin items have no key equivalent, so this only
+            // ever matches host items. If nothing host-side claims it,
+            // fire the plugin here; swallow only when we actually
+            // dispatched, so a chord that fails to resolve (e.g. a
+            // bogus hand-edited `internalID`) still reaches the editor.
+            let app = NSApplication::sharedApplication(mtm);
+            let handled = app
+                .mainMenu()
+                .is_some_and(|m| m.performKeyEquivalent(event));
+            // `||` short-circuits: fire the plugin only when no host
+            // command claimed the chord, and swallow only when either
+            // path actually handled it.
+            if handled || crate::plugin::fire_plugin_chord(&module_key, internal_id) {
+                swallow
+            } else {
+                keep
+            }
+        })
+    });
+    // SAFETY: the block outlives the call — `RcBlock` is refcounted and
+    // AppKit retains the handler for the monitor's lifetime.
+    unsafe { NSEvent::addLocalMonitorForEventsMatchingMask_handler(NSEventMask::KeyDown, &handler) }
 }
 
 /// Order the main window front, focus the editor, and activate the app.
@@ -3066,6 +3221,34 @@ mod modifier_tests {
         // ⌥ does not rescue a chord, unlike GTK's Ctrl+Alt.
         assert!(!types(F::Control | F::Option));
     }
+
+    /// `vk_from_ns_char` maps the code points `charactersIgnoringModifiers`
+    /// produces back to the Win32 VK the shortcut cache stores — the
+    /// monitor's key-derivation half. Covers exactly the set
+    /// `core::shortcuts::portable_key` accepts (letters both cases, digits,
+    /// F1..F24, and the named keys), plus the decline cases.
+    #[test]
+    fn vk_from_ns_char_covers_the_registrable_set() {
+        use super::vk_from_ns_char;
+        // Uppercase and lowercase letters both resolve to the VK.
+        assert_eq!(vk_from_ns_char(u32::from('A')), Some(0x41));
+        assert_eq!(vk_from_ns_char(u32::from('a')), Some(0x41));
+        assert_eq!(vk_from_ns_char(u32::from('Z')), Some(0x5A));
+        assert_eq!(vk_from_ns_char(u32::from('z')), Some(0x5A));
+        // Digits.
+        assert_eq!(vk_from_ns_char(u32::from('0')), Some(0x30));
+        assert_eq!(vk_from_ns_char(u32::from('9')), Some(0x39));
+        // Function keys (NSF1FunctionKey = 0xF704).
+        assert_eq!(vk_from_ns_char(0xF704), Some(0x70)); // F1
+        assert_eq!(vk_from_ns_char(0xF71B), Some(0x87)); // F24
+                                                         // Named keys.
+        assert_eq!(vk_from_ns_char(0x20), Some(0x20)); // Space
+        assert_eq!(vk_from_ns_char(0xF728), Some(0x2E)); // Delete
+        assert_eq!(vk_from_ns_char(0xF702), Some(0x25)); // Left
+                                                         // Declines: punctuation (e.g. a shifted digit's '#') and control.
+        assert_eq!(vk_from_ns_char(u32::from('#')), None);
+        assert_eq!(vk_from_ns_char(0), None);
+    }
 }
 
 #[cfg(test)]
@@ -4502,26 +4685,48 @@ let msg = \"found scintilla_cocoa_new() calls\";
     /// asserted that `run` does not mention `ensure_plugins_loaded`,
     /// and a mutation that moved the load one helper function away
     /// passed it cleanly. Pinning the number of call sites in the whole
-    /// crate — and which function owns the one that exists — closes
-    /// that, because any new path to the loader is a second call site
-    /// wherever it is hidden.
+    /// crate — and which functions own them — closes that, because any
+    /// new path to the loader is a call site wherever it is hidden.
+    ///
+    /// There are **two** permitted triggers, both first-user-interaction
+    /// per §6.4: the first Plugins-menu open (`ensure_loaded_and_rebuild`)
+    /// and a plugin hotkey (`fire_plugin_chord`) — a cached shortcut
+    /// firing before its plugin is loaded is the very case the
+    /// `shortcuts.xml` cache exists to serve, and loading in response
+    /// is exactly the lazy-load §6.4 describes. Neither is on `run`'s
+    /// startup path, which is the property that actually matters.
     #[test]
     fn startup_discovers_plugins_without_loading_them() {
         assert!(
             fn_body(production_src(), "run").contains("plugin::discover();"),
             "startup no longer discovers plugins, so the Plugins menu has nothing to load"
         );
-        let src = plugin_src();
-        assert_eq!(
-            src.matches("ensure_plugins_loaded(").count(),
-            1,
-            "plugin dylibs are mapped from more than one place; the only permitted \
-             trigger is the first Plugins-menu open (DESIGN.md §6.4, §8)"
+        assert!(
+            !fn_body(production_src(), "run").contains("ensure_plugins_loaded("),
+            "run() maps plugins at startup; loading must stay on first user interaction"
         );
+        // Count across the *whole crate*, not just plugin.rs: the
+        // hotkey path is reached from a keyDown-monitor closure that
+        // lives in lib.rs, so a future edit could inline the load
+        // there, one file away from where a plugin.rs-only scan looks.
+        assert_eq!(
+            all_production_code()
+                .matches("ensure_plugins_loaded(")
+                .count(),
+            2,
+            "plugin dylibs are mapped from an unexpected place; the only permitted \
+             triggers are the first Plugins-menu open and a plugin hotkey \
+             (DESIGN.md §6.4, §8)"
+        );
+        let src = plugin_src();
         assert!(
             fn_body(&src, "ensure_loaded_and_rebuild").contains("ensure_plugins_loaded("),
-            "the one call to `ensure_plugins_loaded` has moved out of the menu's \
-             lazy-load handler, so plugins may now be mapped before the user asks"
+            "the menu's lazy-load handler no longer loads plugins"
+        );
+        assert!(
+            fn_body(&src, "fire_plugin_chord").contains("ensure_plugins_loaded("),
+            "the plugin-hotkey path no longer lazy-loads; a cached shortcut would \
+             be dead until the user opened the Plugins menu"
         );
     }
 

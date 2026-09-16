@@ -173,6 +173,19 @@ pub fn styles_xml_path() -> Option<PathBuf> {
     config_dir().map(|d| d.join("styles.xml"))
 }
 
+/// Path to `shortcuts.xml` under [`config_dir`] — the persisted
+/// plugin-command shortcut cache (Notepad++'s file name and
+/// `<PluginCommands>` schema, so a user migrating from N++ can
+/// copy their existing file over). It exists to break the
+/// lazy-load circularity DESIGN.md §7.4 records: a plugin's
+/// `FuncItem` shortcuts are only learnable at load time, so the
+/// cache is what lets a hotkey fire — and trigger that load —
+/// before the plugin has ever been loaded this session.
+#[must_use]
+pub fn shortcuts_xml_path() -> Option<PathBuf> {
+    config_dir().map(|d| d.join("shortcuts.xml"))
+}
+
 /// User Defined Language directory: `config_dir/userDefineLangs/`.
 /// Phase 4.6's UDL runtime scans this directory at startup and
 /// loads every `*.xml` file into `LANG_TABLE`'s dynamic-id

@@ -1712,6 +1712,74 @@ pub struct Shell {
     /// startup failure — same graceful-degradation discipline as
     /// missing `session.xml`).
     pub udl_registry: codepp_udl::UdlRegistry,
+    /// Persisted plugin-command shortcut cache — the Code++ version
+    /// of Notepad++'s `shortcuts.xml` (`core::shortcuts` documents
+    /// the schema). Loaded at startup; grown by
+    /// [`Self::ensure_plugins_loaded`] absorbing each freshly-loaded
+    /// plugin's `FuncItem` defaults. It exists to break the lazy-load
+    /// circularity (DESIGN.md §6.4/§7.4): the chords cached here are
+    /// registrable at startup, *before* any plugin is loaded, so a
+    /// hotkey can be the interaction that triggers the load.
+    ///
+    /// **Private, and mutated only through methods that invalidate
+    /// [`Self::plugin_chord_index`].** The memoized index is kept
+    /// correct by pairing every mutation with an invalidation; a raw
+    /// `pub` field made that a convention a future (cross-crate)
+    /// caller could forget — a security audit's finding — so it is no
+    /// longer reachable outside this crate. Production writes go
+    /// through [`Self::absorb_plugin_shortcut_defaults`] and
+    /// [`Self::remove_plugin_shortcut_by_cmd_id`] (both invalidate and
+    /// persist); tests seed via [`Self::set_plugin_shortcuts_for_tests`]
+    /// or, in-crate, the field directly plus a manual invalidation.
+    plugin_shortcuts: codepp_core::shortcuts::PluginShortcuts,
+    /// Memoized, hash-indexed view of [`Self::plugin_shortcuts`]
+    /// filtered to discovered + registrable + first-wins chords.
+    /// Rebuilt lazily on first query after any invalidation, never
+    /// per call — the reason it exists is cost: `shortcuts.xml` is
+    /// hand-editable up to a megabyte, and the un-memoized recompute
+    /// (an O(n²) dedupe) ran on the cold-start path, on every
+    /// Plugins-menu rebuild, and on every ⌘/⌥ keystroke on Cocoa,
+    /// which a large file turned into a UI-freeze denial of service.
+    /// Invalidated
+    /// (set to `None`) by every path that changes the cache or the
+    /// discovered-plugin set: [`Self::absorb_plugin_shortcut_defaults`],
+    /// [`Self::remove_plugin_shortcut_by_cmd_id`],
+    /// [`Self::discover_plugins`], [`Self::set_plugin_disabled`].
+    /// `RefCell` because the query methods are `&self`.
+    plugin_chord_index: std::cell::RefCell<Option<PluginChordIndex>>,
+}
+
+/// The memoized chord table backing [`Shell::startup_plugin_chords`]
+/// and [`Shell::match_plugin_chord`]. Both `chords` (registration
+/// order, first-wins deduped) and `by_chord` (O(1) fire-time lookup)
+/// are built together in one pass so they can never disagree about
+/// which command owns a chord.
+#[derive(Clone, Debug, Default)]
+struct PluginChordIndex {
+    chords: Vec<PluginChord>,
+    by_chord: std::collections::HashMap<(bool, bool, bool, u8), (String, u32)>,
+}
+
+/// One plugin-command chord a backend should register at startup —
+/// the output shape of [`Shell::startup_plugin_chords`]. Carries the
+/// cache identity (`module_key` + `internal_id`) rather than a
+/// `cmd_id`, because before the plugin loads no `cmd_id` exists; a
+/// firing backend resolves the identity through
+/// [`Shell::resolve_plugin_command`] *after* ensuring plugins are
+/// loaded.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PluginChord {
+    /// Normalized plugin identity (`core::shortcuts::module_key`).
+    pub module_key: String,
+    /// Index into the plugin's `FuncItem` array.
+    pub internal_id: u32,
+    pub ctrl: bool,
+    pub alt: bool,
+    pub shift: bool,
+    /// Win32 virtual-key code (the on-disk convention on every
+    /// platform; non-Windows backends translate via
+    /// `core::shortcuts::portable_key`).
+    pub key: u8,
 }
 
 /// Search-option bitset matching Scintilla's `SCFIND_*` flags. Held
@@ -2084,6 +2152,8 @@ impl Shell {
             file_change_debounce: std::collections::HashMap::new(),
             styles: load_styles(),
             udl_registry,
+            plugin_shortcuts: load_plugin_shortcuts(),
+            plugin_chord_index: std::cell::RefCell::new(None),
         })
     }
 
@@ -2672,6 +2742,9 @@ impl Shell {
         // corrupted config can't lock the user out of plugins.
         let disabled = read_disabled_plugins_list();
         self.plugins.apply_disabled_list(&disabled);
+        // The discovered/disabled set the chord index filters on
+        // just changed.
+        self.invalidate_plugin_chord_index();
         Ok(count)
     }
 
@@ -2725,6 +2798,8 @@ impl Shell {
             if let Err(e) = write_disabled_plugins_list(&disabled_filenames) {
                 tracing::warn!(error = ?e, "failed to persist disabled plugins list");
             }
+            // A disabled plugin drops out of the chord index's filter.
+            self.invalidate_plugin_chord_index();
         }
         changed
     }
@@ -2763,6 +2838,285 @@ impl Shell {
                 tracing::warn!(idx = idx, error = ?e, "plugin load failed");
             }
         }
+        // Fold each freshly-loaded plugin's FuncItem accelerators into
+        // the persistent cache. Sitting here (rather than in each
+        // backend) is what guarantees the cache is refreshed on every
+        // load path — menu open and hotkey alike — on all three
+        // platforms.
+        self.absorb_plugin_shortcut_defaults();
+    }
+
+    /// Insert every loaded plugin's `FuncItem` shortcut defaults into
+    /// [`Self::plugin_shortcuts`] and persist if anything was new. An
+    /// existing entry always wins over a default — that is the rule
+    /// that makes a hand-edited remap in `shortcuts.xml` stick across
+    /// sessions and plugin updates (Notepad++ semantics).
+    fn absorb_plugin_shortcut_defaults(&mut self) {
+        let defaults: Vec<codepp_core::PluginShortcut> = self
+            .plugins
+            .iter()
+            .filter(|p| p.is_loaded())
+            .flat_map(|p| {
+                let module = p.filename();
+                p.shortcut_defaults()
+                    .unwrap_or(&[])
+                    .iter()
+                    .enumerate()
+                    .filter_map(move |(i, sk)| {
+                        sk.map(|sk| codepp_core::PluginShortcut {
+                            module: module.clone(),
+                            internal_id: u32::try_from(i).unwrap_or(u32::MAX),
+                            ctrl: sk.is_ctrl != 0,
+                            alt: sk.is_alt != 0,
+                            shift: sk.is_shift != 0,
+                            key: sk.key,
+                        })
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        let mut changed = false;
+        for d in defaults {
+            changed |= self.plugin_shortcuts.insert_default(d);
+        }
+        if changed {
+            self.invalidate_plugin_chord_index();
+            save_plugin_shortcuts(&self.plugin_shortcuts);
+        }
+    }
+
+    /// Build the [`PluginChordIndex`] from the current cache and
+    /// discovered set: entries whose plugin is discovered (and not
+    /// disabled), passing the shared registrability policy, deduped
+    /// by chord with the first entry winning. O(n) — `HashSet`
+    /// discovered-set membership and a `HashMap` for the dedupe, not
+    /// the linear scans an un-memoized recompute per keystroke could
+    /// not afford.
+    fn build_plugin_chord_index(&self) -> PluginChordIndex {
+        let discovered: std::collections::HashSet<String> = self
+            .plugins
+            .iter()
+            .filter(|p| !p.disabled)
+            .map(|p| codepp_core::shortcuts::module_key(&p.filename()))
+            .collect();
+        let mut chords: Vec<PluginChord> = Vec::new();
+        let mut by_chord: std::collections::HashMap<(bool, bool, bool, u8), (String, u32)> =
+            std::collections::HashMap::new();
+        for e in self.plugin_shortcuts.entries() {
+            let module_key = e.module_key();
+            if !discovered.contains(&module_key) {
+                continue;
+            }
+            if !codepp_core::shortcuts::is_registrable_chord(e.ctrl, e.alt, e.shift, e.key) {
+                tracing::debug!(
+                    module = e.module.as_str(),
+                    internal_id = e.internal_id,
+                    key = e.key,
+                    "plugin shortcut refused by registrability policy"
+                );
+                continue;
+            }
+            let chord = e.chord();
+            if by_chord.contains_key(&chord) {
+                tracing::warn!(
+                    module = e.module.as_str(),
+                    internal_id = e.internal_id,
+                    "plugin shortcut chord already claimed; first entry wins"
+                );
+                continue;
+            }
+            by_chord.insert(chord, (module_key.clone(), e.internal_id));
+            chords.push(PluginChord {
+                module_key,
+                internal_id: e.internal_id,
+                ctrl: e.ctrl,
+                alt: e.alt,
+                shift: e.shift,
+                key: e.key,
+            });
+        }
+        PluginChordIndex { chords, by_chord }
+    }
+
+    /// Borrow the memoized chord index, building it on first access
+    /// after an invalidation.
+    fn plugin_chord_index(&self) -> std::cell::Ref<'_, PluginChordIndex> {
+        if self.plugin_chord_index.borrow().is_none() {
+            let built = self.build_plugin_chord_index();
+            *self.plugin_chord_index.borrow_mut() = Some(built);
+        }
+        std::cell::Ref::map(self.plugin_chord_index.borrow(), |o| {
+            o.as_ref().expect("index built above")
+        })
+    }
+
+    /// Drop the memoized chord index so the next query rebuilds it.
+    /// Called by every path that mutates [`Self::plugin_shortcuts`]
+    /// or the discovered-plugin set.
+    fn invalidate_plugin_chord_index(&self) {
+        *self.plugin_chord_index.borrow_mut() = None;
+    }
+
+    /// Replace the shortcut cache wholesale and invalidate the
+    /// memoized index, **without** persisting. `#[doc(hidden)]` and
+    /// named for what it is: the seam a *cross-crate* test uses to
+    /// stand up a deterministic cache (the in-crate tests reach the
+    /// `pub(crate)` field directly). Production never sets the cache
+    /// this way — it grows through [`Self::absorb_plugin_shortcut_defaults`]
+    /// and shrinks through [`Self::remove_plugin_shortcut_by_cmd_id`],
+    /// both of which persist. Not persisting here keeps tests from
+    /// writing over the developer's real `shortcuts.xml`.
+    #[doc(hidden)]
+    pub fn set_plugin_shortcuts_for_tests(
+        &mut self,
+        shortcuts: codepp_core::shortcuts::PluginShortcuts,
+    ) {
+        self.plugin_shortcuts = shortcuts;
+        self.invalidate_plugin_chord_index();
+    }
+
+    /// The plugin-command chords a backend should register at
+    /// startup: cache entries whose plugin is actually discovered
+    /// (and not disabled), filtered by the shared registrability
+    /// policy, deduplicated by chord with the first entry winning.
+    /// Reads the memoized index; [`Self::match_plugin_chord`]
+    /// resolves against the same table so what fires is exactly what
+    /// was registered.
+    #[must_use]
+    pub fn startup_plugin_chords(&self) -> Vec<PluginChord> {
+        self.plugin_chord_index().chords.clone()
+    }
+
+    /// Resolve a pressed chord to the plugin command it addresses,
+    /// per the *current* cache — the fire-time authority every
+    /// backend consults, so an `NPPM_REMOVESHORTCUTBYCMDID` takes
+    /// effect on the next keypress regardless of what the backend
+    /// registered at startup. O(1) against the memoized index.
+    #[must_use]
+    pub fn match_plugin_chord(
+        &self,
+        ctrl: bool,
+        alt: bool,
+        shift: bool,
+        key: u8,
+    ) -> Option<(String, u32)> {
+        self.plugin_chord_index()
+            .by_chord
+            .get(&(ctrl, alt, shift, key))
+            .cloned()
+    }
+
+    /// Whether a *loaded* plugin's normalized module key equals
+    /// `module_key`. Lets a backend tell "not loaded yet" (register a
+    /// pre-load shim) apart from "loaded, but this `internalID` does
+    /// not resolve" (a bogus hand-edited entry or a separator slot —
+    /// don't register an accelerator that would swallow the key and
+    /// do nothing).
+    #[must_use]
+    pub fn is_module_loaded(&self, module_key: &str) -> bool {
+        self.plugins.iter().any(|p| {
+            p.is_loaded() && codepp_core::shortcuts::module_key(&p.filename()) == module_key
+        })
+    }
+
+    /// Resolve a cached shortcut identity to the live command it
+    /// names: the session `cmd_id` plus the callable. `None` until
+    /// the plugin is loaded (callers ensure-load first), for an
+    /// out-of-range index (a stale cache entry), or for a separator
+    /// slot (`p_func == None`).
+    #[must_use]
+    pub fn resolve_plugin_command(
+        &self,
+        module_key: &str,
+        internal_id: u32,
+    ) -> Option<(i32, PluginCmd)> {
+        let plugin = self.plugins.iter().find(|p| {
+            p.is_loaded() && codepp_core::shortcuts::module_key(&p.filename()) == module_key
+        })?;
+        let func = plugin.func_items()?.get(internal_id as usize)?;
+        Some((func.cmd_id, func.p_func?))
+    }
+
+    /// Map a live plugin `cmd_id` back to its cache identity
+    /// `(module_key, internal_id)`. Loaded plugins only.
+    fn plugin_cmd_identity(&self, cmd_id: i32) -> Option<(String, u32)> {
+        for p in self.plugins.iter().filter(|p| p.is_loaded()) {
+            let Some(funcs) = p.func_items() else {
+                continue;
+            };
+            if let Some(idx) = funcs.iter().position(|f| f.cmd_id == cmd_id) {
+                let module_key = codepp_core::shortcuts::module_key(&p.filename());
+                return Some((module_key, u32::try_from(idx).unwrap_or(u32::MAX)));
+            }
+        }
+        None
+    }
+
+    /// The persisted shortcut bound to a plugin `cmd_id`, in the ABI
+    /// shape `NPPM_GETSHORTCUTBYCMDID` writes out. Reports the cache
+    /// entry (the binding) without the registrability filter — a
+    /// policy-refused chord is still the recorded binding, it just
+    /// never fires.
+    #[must_use]
+    pub fn plugin_shortcut_for_cmd_id(
+        &self,
+        cmd_id: i32,
+    ) -> Option<codepp_plugin_host::ShortcutKey> {
+        let (module_key, internal_id) = self.plugin_cmd_identity(cmd_id)?;
+        let e = self.plugin_shortcuts.get(&module_key, internal_id)?;
+        Some(codepp_plugin_host::ShortcutKey {
+            is_ctrl: u8::from(e.ctrl),
+            is_alt: u8::from(e.alt),
+            is_shift: u8::from(e.shift),
+            key: e.key,
+        })
+    }
+
+    /// Drop the persisted shortcut bound to a plugin `cmd_id` and
+    /// save the cache. Backing store half of
+    /// `NPPM_REMOVESHORTCUTBYCMDID` for plugin commands; the Win32
+    /// bridge additionally strips the live accelerator-table entry.
+    pub fn remove_plugin_shortcut_by_cmd_id(&mut self, cmd_id: i32) -> bool {
+        let Some((module_key, internal_id)) = self.plugin_cmd_identity(cmd_id) else {
+            return false;
+        };
+        let removed = self.plugin_shortcuts.remove(&module_key, internal_id);
+        if removed {
+            self.invalidate_plugin_chord_index();
+            save_plugin_shortcuts(&self.plugin_shortcuts);
+        }
+        removed
+    }
+
+    /// The `(ctrl, alt, shift, key)` chord a loaded plugin command's
+    /// menu item should advertise, or `None` when it has no shortcut
+    /// **or its chord will not actually fire** — a policy-refused
+    /// chord, or one that lost the first-wins dedupe to another
+    /// command. Menus must not advertise a shortcut the keyboard
+    /// won't honour, so this (and [`Self::plugin_shortcut_label_for_cmd_id`],
+    /// which formats it) is the only display source backends use.
+    /// GTK/Cocoa render the tuple with their own key glyphs; Win32
+    /// takes the pre-formatted label.
+    #[must_use]
+    pub fn plugin_shortcut_chord_for_cmd_id(&self, cmd_id: i32) -> Option<(bool, bool, bool, u8)> {
+        let (module_key, internal_id) = self.plugin_cmd_identity(cmd_id)?;
+        let e = self.plugin_shortcuts.get(&module_key, internal_id)?;
+        let chord = e.chord();
+        let winner = self.match_plugin_chord(chord.0, chord.1, chord.2, chord.3)?;
+        (winner == (module_key, internal_id)).then_some(chord)
+    }
+
+    /// Display text ("Ctrl+Alt+H") for the shortcut on a plugin menu
+    /// item — the formatted form of [`Self::plugin_shortcut_chord_for_cmd_id`].
+    /// `None` under the same conditions (no shortcut, or a chord
+    /// that won't fire).
+    #[must_use]
+    pub fn plugin_shortcut_label_for_cmd_id(&self, cmd_id: i32) -> Option<String> {
+        let (module_key, internal_id) = self.plugin_cmd_identity(cmd_id)?;
+        let e = self.plugin_shortcuts.get(&module_key, internal_id)?;
+        let chord = e.chord();
+        let winner = self.match_plugin_chord(chord.0, chord.1, chord.2, chord.3)?;
+        (winner == (module_key, internal_id)).then(|| e.display_label())
     }
 
     /// Iterate the (display name, `FuncItem` array) pairs of every
@@ -7256,11 +7610,27 @@ impl<U: UiPlatform> HostServices for HostBridge<'_, U> {
     }
 
     fn shortcut_for_cmd_id(&self, cmd_id: i32) -> Option<codepp_plugin_host::ShortcutKey> {
+        // Plugin-band ids answer from the persistent shortcut cache
+        // — the cross-platform authority, and the only one on
+        // GTK/Cocoa where the UiPlatform default returns `None`.
+        // Built-in ids keep the platform answer (Win32's live
+        // accelerator-table introspection).
+        if cmd_id >= codepp_plugin_host::PLUGIN_CMD_ID_BASE {
+            return self.shell.plugin_shortcut_for_cmd_id(cmd_id);
+        }
         self.ui.shortcut_for_cmd_id(cmd_id)
     }
 
     fn remove_shortcut_for_cmd_id(&mut self, cmd_id: i32) -> bool {
-        let removed = self.ui.remove_shortcut_for_cmd_id(cmd_id);
+        // Plugin-band ids: drop the persisted cache entry (which is
+        // what the fire path consults on every backend), then let
+        // the platform strip any live accelerator too (Win32's
+        // HACCEL entry; a no-op default elsewhere). Either half
+        // counting as "removed" matches the message's contract —
+        // the binding no longer fires.
+        let removed_store = cmd_id >= codepp_plugin_host::PLUGIN_CMD_ID_BASE
+            && self.shell.remove_plugin_shortcut_by_cmd_id(cmd_id);
+        let removed = self.ui.remove_shortcut_for_cmd_id(cmd_id) || removed_store;
         // Queue NPPN_SHORTCUTREMAPPED only on a real removal —
         // a no-op call (cmd_id had no binding) is silent. The
         // notification drains after `&mut Shell` releases, same
@@ -7851,6 +8221,35 @@ fn save_styles(styles: &codepp_core::styles::Styles) {
     };
     if let Err(e) = styles.save_to_xml(&path) {
         tracing::warn!(path = ?path, error = ?e, "styles.xml save failed");
+    }
+}
+
+/// Load `shortcuts.xml` at startup. Mirrors [`load_styles`] —
+/// missing file → empty cache, parse failure → log + empty so a
+/// corrupt shortcuts.xml doesn't block startup (the plugins' own
+/// defaults repopulate it on the next load).
+fn load_plugin_shortcuts() -> codepp_core::PluginShortcuts {
+    let Some(path) = codepp_platform::shortcuts_xml_path() else {
+        return codepp_core::PluginShortcuts::new();
+    };
+    match codepp_core::PluginShortcuts::load_from_xml(&path) {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::warn!(path = ?path, error = ?e, "shortcuts.xml load failed; starting empty");
+            codepp_core::PluginShortcuts::new()
+        }
+    }
+}
+
+/// Save `shortcuts.xml`. Errors logged + swallowed for the same
+/// reason as [`save_styles`]: the in-memory cache is already
+/// updated, so this session behaves correctly either way.
+fn save_plugin_shortcuts(shortcuts: &codepp_core::PluginShortcuts) {
+    let Some(path) = codepp_platform::shortcuts_xml_path() else {
+        return;
+    };
+    if let Err(e) = shortcuts.save_to_xml(&path) {
+        tracing::warn!(path = ?path, error = ?e, "shortcuts.xml save failed");
     }
 }
 
@@ -9934,6 +10333,124 @@ mod tests {
             .unwrap();
         assert_eq!(n, 0);
         assert_eq!(shell.plugin_count(), 0);
+    }
+
+    /// Build a Shell with an empty shortcut cache and fake plugin
+    /// files discovered from a temp dir (discovery records paths
+    /// without mapping, so an empty file with the right extension
+    /// is a perfectly good "installed plugin" for chord tests).
+    /// Names are deliberately unusual so a developer machine's real
+    /// `disabled.txt` (which `discover_plugins` consults) cannot
+    /// collide.
+    fn shell_with_fake_plugins(names: &[&str]) -> (Shell, tempfile::TempDir) {
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        shell.plugin_shortcuts = codepp_core::PluginShortcuts::new();
+        let dir = tempfile::tempdir().unwrap();
+        for n in names {
+            let file = dir
+                .path()
+                .join(format!("{n}.{}", codepp_platform::PLUGIN_EXTENSION));
+            std::fs::write(&file, b"").unwrap();
+        }
+        shell.discover_plugins(dir.path()).unwrap();
+        (shell, dir)
+    }
+
+    fn cache_entry(module: &str, id: u32, key: u8) -> codepp_core::PluginShortcut {
+        codepp_core::PluginShortcut {
+            module: module.to_string(),
+            internal_id: id,
+            ctrl: true,
+            alt: false,
+            shift: false,
+            key,
+        }
+    }
+
+    #[test]
+    fn startup_plugin_chords_filters_to_discovered_plugins() {
+        let (mut shell, _dir) = shell_with_fake_plugins(&["cpshort_foo"]);
+        let ext = codepp_platform::PLUGIN_EXTENSION;
+        assert!(shell.plugin_shortcuts.insert_default(cache_entry(
+            &format!("cpshort_foo.{ext}"),
+            0,
+            0x48
+        )));
+        // An entry for a plugin that is not installed must not
+        // register a chord — it would be a dead key swallow.
+        assert!(shell
+            .plugin_shortcuts
+            .insert_default(cache_entry("cpshort_ghost.dll", 0, 0x4A)));
+        let chords = shell.startup_plugin_chords();
+        assert_eq!(chords.len(), 1);
+        assert_eq!(chords[0].module_key, "cpshort_foo");
+        assert_eq!(chords[0].internal_id, 0);
+        assert_eq!(chords[0].key, 0x48);
+    }
+
+    #[test]
+    fn startup_plugin_chords_applies_policy_and_first_wins_dedupe() {
+        let (mut shell, _dir) = shell_with_fake_plugins(&["cpshort_a", "cpshort_b"]);
+        let ext = codepp_platform::PLUGIN_EXTENSION;
+        let a = format!("cpshort_a.{ext}");
+        let b = format!("cpshort_b.{ext}");
+        // Bare letter — refused by the registrability policy.
+        assert!(shell
+            .plugin_shortcuts
+            .insert_default(codepp_core::PluginShortcut {
+                ctrl: false,
+                ..cache_entry(&a, 0, 0x48)
+            }));
+        // Two commands claiming Ctrl+J — the first entry wins.
+        assert!(shell
+            .plugin_shortcuts
+            .insert_default(cache_entry(&a, 1, 0x4A)));
+        assert!(shell
+            .plugin_shortcuts
+            .insert_default(cache_entry(&b, 0, 0x4A)));
+        let chords = shell.startup_plugin_chords();
+        assert_eq!(chords.len(), 1);
+        assert_eq!(chords[0].module_key, "cpshort_a");
+        assert_eq!(chords[0].internal_id, 1);
+        assert_eq!(
+            shell.match_plugin_chord(true, false, false, 0x4A),
+            Some(("cpshort_a".to_string(), 1))
+        );
+        assert_eq!(shell.match_plugin_chord(false, false, false, 0x48), None);
+    }
+
+    #[test]
+    fn match_plugin_chord_is_live_against_the_store() {
+        // The fire path consults the store at keypress time, so a
+        // removed entry stops matching immediately — this is what
+        // makes NPPM_REMOVESHORTCUTBYCMDID effective on backends
+        // whose registration (GTK accel group, Cocoa monitor) is
+        // not itself unregistered.
+        let (mut shell, _dir) = shell_with_fake_plugins(&["cpshort_live"]);
+        let ext = codepp_platform::PLUGIN_EXTENSION;
+        let module = format!("cpshort_live.{ext}");
+        shell
+            .plugin_shortcuts
+            .insert_default(cache_entry(&module, 0, 0x48));
+        assert!(shell.match_plugin_chord(true, false, false, 0x48).is_some());
+        assert!(shell.plugin_shortcuts.remove("cpshort_live", 0));
+        // Direct-field mutation bypasses the invalidation the real
+        // `remove_plugin_shortcut_by_cmd_id` path performs; do it by
+        // hand so the memoized index reflects the removal (the exact
+        // contract that method upholds in production).
+        shell.invalidate_plugin_chord_index();
+        assert_eq!(shell.match_plugin_chord(true, false, false, 0x48), None);
+    }
+
+    #[test]
+    fn resolve_plugin_command_requires_a_loaded_plugin() {
+        // Discovered-but-unloaded resolves to None — the caller's
+        // contract is ensure-loaded first, and a chord fire on a
+        // plugin whose load failed must degrade to a no-op, not a
+        // bogus cmd_id.
+        let (shell, _dir) = shell_with_fake_plugins(&["cpshort_pending"]);
+        assert!(shell.resolve_plugin_command("cpshort_pending", 0).is_none());
     }
 
     #[cfg(target_os = "windows")]
