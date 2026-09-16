@@ -1013,11 +1013,6 @@ pub const SC_SEL_RECTANGLE: u32 = 1;
 /// position around a doc-pointer swap.
 pub const SCI_GETXOFFSET: u32 = 2398;
 pub const SCI_SETXOFFSET: u32 = 2397;
-/// Wipe every line's margin text in one call. Used when replacing
-/// the entire buffer (e.g. `SCI_SETTEXT` during session restore)
-/// so per-line annotations from the doc's previous state can't
-/// leak through onto the new content.
-pub const SCI_MARGINTEXTCLEARALL: u32 = 2536;
 /// Scroll the view so the caret is visible. `SCI_SEARCHNEXT/PREV`
 /// move the selection but don't bring it into view; the Find
 /// dialog issues this after every successful hit.
@@ -1161,13 +1156,11 @@ pub const SCI_STYLECLEARALL: u32 = 2050;
 /// fore/back/font here is the way to set the editor's "default"
 /// appearance.
 pub const STYLE_DEFAULT: usize = 32;
-/// `STYLE_LINENUMBER = 33` — the style index used to render line
-/// numbers, both in Scintilla's built-in `SC_MARGIN_NUMBER` and in
-/// `SC_MARGIN_TEXT` margins whose per-line style is set to this
-/// index via `SCI_MARGINSETSTYLE`. Setting its fore/back is how the
-/// line-number bar gets its colour scheme. `SCI_STYLECLEARALL`
-/// resets this back to `STYLE_DEFAULT`, so any custom colours must
-/// be re-applied after the clear.
+/// `STYLE_LINENUMBER = 33` — the style index Scintilla's built-in
+/// `SC_MARGIN_NUMBER` margin renders line numbers in. Setting its
+/// fore/back is how the line-number bar gets its colour scheme.
+/// `SCI_STYLECLEARALL` resets this back to `STYLE_DEFAULT`, so any
+/// custom colours must be re-applied after the clear.
 pub const STYLE_LINENUMBER: usize = 33;
 
 // Margins. Scintilla supports up to `SC_MAX_MARGIN + 1` margins (5
@@ -1186,20 +1179,15 @@ pub const STYLE_LINENUMBER: usize = 33;
 // `0` hides the margin without clearing its other state, so the
 // future "show line numbers" toggle is one width-write away.
 //
-// `SCI_MARGINSETTEXT(line, char_ptr)` writes per-line text into a
-// `SC_MARGIN_TEXT` margin and `SCI_MARGINSETSTYLE(line, style)` sets
-// its style. Code++ uses these to render line numbers right-aligned
-// within a fixed-width column (1-char left pad + `digits(line_count)`
-// chars of right-aligned digits) so `1`, `99`, and `100` all share
-// the same rightmost column. Scintilla's built-in `SC_MARGIN_NUMBER`
-// also right-aligns, but anchors to the bar's full width — short
-// numbers float to the far right of the bar — and exposes no
-// alignment control. Managing the text per-line ourselves is what
-// gives us the column-width handle. Margin text is per-document
-// state in Scintilla (stored on `Document`, not the view), so it
-// survives `SCI_SETDOCPOINTER` cycles and only needs (re-)populating
-// after document creation and after `SCN_MODIFIED` events that
-// change line count.
+// Line numbers use the built-in `SC_MARGIN_NUMBER` on every backend
+// (via `EditorHandle::enable_line_number_margin`): Scintilla formats
+// and paints the numbers itself, right-aligned to the margin's edge,
+// styled by `STYLE_LINENUMBER`. Because the margin's pixel width is
+// measured to exactly fit the digit budget (`SCI_TEXTWIDTH` below),
+// `1`, `99`, and `100` all share the same rightmost column with no
+// host involvement. An earlier `ui_win32`-only scheme wrote per-line
+// margin text by hand for the same effect; it was retired when the
+// width became measured rather than fixed.
 pub const SCI_SETMARGINTYPEN: u32 = 2240;
 pub const SCI_SETMARGINWIDTHN: u32 = 2242;
 /// `SCI_TEXTWIDTH(int style, const char *text)` — pixel width of `text`
@@ -1215,8 +1203,6 @@ pub const SCI_TEXTWIDTH: u32 = 2276;
 /// from a future bookmark/fold-marker margin can't bleed into the
 /// edit-indicator strip.
 pub const SCI_SETMARGINMASKN: u32 = 2244;
-pub const SCI_MARGINSETTEXT: u32 = 2530;
-pub const SCI_MARGINSETSTYLE: u32 = 2532;
 /// Configure the symbol drawn for marker number `wparam`. Used to
 /// pick from `SC_MARK_*` shape constants — `SC_MARK_FULLRECT`
 /// fills the margin column for the line, which (in a 4-px-wide
@@ -1283,19 +1269,13 @@ pub const SC_MARKNUM_HISTORY_MODIFIED: u32 = 23;
 /// post-first-save state. Silenced via `SC_MARK_EMPTY` for the
 /// same reasons as the other two siblings.
 pub const SC_MARKNUM_HISTORY_REVERTED_TO_MODIFIED: u32 = 24;
-/// `SC_MARGIN_TEXT = 4` — the *type constant* that, when passed as
-/// the `lparam` of `SCI_SETMARGINTYPEN`, makes the addressed margin
-/// render per-line text supplied via `SCI_MARGINSETTEXT`, styled by
-/// the index supplied via `SCI_MARGINSETSTYLE`. Used by Code++ to
-/// render line numbers right-aligned within a fixed-width column —
-/// the host formats each line's text with leading spaces so the
-/// rightmost digit lands in the same column for every line.
-pub const SC_MARGIN_TEXT: u32 = 4;
 /// `SC_MARGIN_NUMBER = 1` — type constant for Scintilla's built-in
-/// line-number margin, which formats and paints the numbers itself.
-/// `ui_win32` deliberately uses [`SC_MARGIN_TEXT`] instead so it can
-/// control right-alignment per line; `ui_gtk` uses this simpler
-/// built-in until the GTK backend grows the same margin plumbing.
+/// line-number margin, which formats and paints the numbers itself
+/// (right-aligned, styled `STYLE_LINENUMBER`). All three backends
+/// use it for margin 0 via
+/// `EditorHandle::enable_line_number_margin`; the margin's pixel
+/// width is measured via `SCI_TEXTWIDTH` so the numbers share a
+/// rightmost column at any digit count.
 pub const SC_MARGIN_NUMBER: u32 = 1;
 /// `SC_MARGIN_SYMBOL = 0` — type constant for a margin that
 /// renders only markers (the `SC_MARKNUM_*` family). Code++ uses

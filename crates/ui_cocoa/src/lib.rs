@@ -3408,9 +3408,13 @@ mod source_invariants {
         let src = include_str!("platform.rs");
         assert!(src.len() > 5_000, "source scan read too little to be real");
         let body = fn_body(src, "apply_predefined_styles");
+        // `enable_line_number_margin` is deliberately absent from this
+        // list: the shared `apply_line_number_margin` configures the
+        // built-in `SC_MARGIN_NUMBER` itself (asserted by
+        // `codepp-editor`'s own tests), so a per-backend re-assert here
+        // would be the redundancy its removal cleaned up.
         for required in [
             "apply_line_number_margin",
-            "enable_line_number_margin",
             "configure_change_history_margin",
             "apply_brace_styles",
             "apply_indent_guide_style",

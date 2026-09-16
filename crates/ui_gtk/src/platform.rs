@@ -54,9 +54,9 @@ thread_local! {
     /// one cell suffices.
     ///
     /// Cross-tab correctness does **not** rest on this gate: every
-    /// tab-switch / load / reload path runs `apply_lang`, which calls
-    /// `enable_line_number_margin` *ungated* and re-measures against the
-    /// newly-active document's true line count. This gate is only the
+    /// tab-switch / load / reload path runs `apply_lang`, which routes to
+    /// the shared `apply_line_number_margin` *ungated* and re-measures
+    /// against the newly-active document's true line count. This gate is only the
     /// mid-edit backup that catches a live budget crossing between those
     /// ungated calls; because the cache is a single un-keyed cell, a
     /// coincidental match after a switch merely skips a redundant
@@ -186,25 +186,14 @@ impl GtkUi {
 }
 
 /// Configure the predefined 32-39 styles that `SCI_STYLECLEARALL`
-/// resets, then fix up the line-number margin for this backend.
-///
-/// The shared helper sets margin 0 to `SC_MARGIN_TEXT`, because
-/// `ui_win32` renders the digits itself to get them right-aligned —
-/// which means the host must write per-line margin text and keep it in
-/// step with every edit. That machinery is Win32-private and not ported
-/// yet, so a GTK buffer using `SC_MARGIN_TEXT` would show an empty
-/// gutter. Override to Scintilla's built-in `SC_MARGIN_NUMBER`, which
-/// formats and paints the numbers with no host involvement. The
-/// difference is alignment only, and it is visible line numbers versus
-/// none.
+/// resets — the line-number margin, the change-history strip's
+/// definitions, the brace-highlight pair, and the indent-guide colour.
 fn apply_predefined_styles(editor: &EditorHandle) {
-    // `apply_line_number_margin` styles STYLE_LINENUMBER (fore/back) and,
-    // for Win32's manual renderer, sets margin 0 to `SC_MARGIN_TEXT`.
-    // GTK/Cocoa use Scintilla's built-in number margin, so override the
-    // type and take the shared fixed-minimum width (steady for typical
-    // files, grows only past the digit budget — same as Win32).
+    // Styles STYLE_LINENUMBER (fore/back) and configures margin 0 as
+    // Scintilla's built-in `SC_MARGIN_NUMBER` at the shared
+    // fixed-minimum width (steady for typical files, grows only past
+    // the digit budget) — identical on all three backends.
     codepp_editor::theme::apply_line_number_margin(editor);
-    editor.enable_line_number_margin(LINE_NUMBER_MARGIN);
     // The change-history "edit indicator" strip. Shared config so it looks
     // and behaves identically to Win32 (and the coming Cocoa backend);
     // per-document enablement happens in `activate_tab`.
@@ -337,20 +326,12 @@ impl UiPlatform for GtkUi {
         // other language uses the shared Lexilla theme table. `apply_lang`
         // returns `false` for a non-UDL id, falling through below.
         if crate::udl::apply_lang(&self.editor, self.udl_registry, lang) {
-            // Re-assert the built-in number margin: the UDL path routes
-            // through `apply_default_styles`, which resets margin 0 to
-            // `SC_MARGIN_TEXT` for Win32's manual renderer — same fixup the
-            // Lexilla branch below needs.
-            self.editor.enable_line_number_margin(LINE_NUMBER_MARGIN);
             return;
         }
+        // Both branches route through `apply_default_styles`, whose
+        // `apply_line_number_margin` re-configures the built-in number
+        // margin after the style clear — no per-backend fixup needed.
         codepp_editor::theme::apply_lang_theme(&self.editor, lang);
-        // `apply_lang_theme` routes through `apply_default_styles`, which
-        // resets margin 0 to `SC_MARGIN_TEXT` for Win32's manual renderer
-        // (and re-styles STYLE_LINENUMBER). Re-assert the built-in number
-        // margin here, or a file load / language change would blank the
-        // gutter on GTK.
-        self.editor.enable_line_number_margin(LINE_NUMBER_MARGIN);
     }
 
     fn apply_default_style(&mut self, styles: &Styles) {

@@ -280,20 +280,13 @@ impl CocoaUi {
 }
 
 /// Configure the predefined 32-39 styles that `SCI_STYLECLEARALL`
-/// resets, then fix up the line-number margin for this backend.
-///
-/// The shared helper sets margin 0 to `SC_MARGIN_TEXT`, because
-/// `ui_win32` renders the digits itself to get them right-aligned —
-/// which means the host must write per-line margin text and keep it in
-/// step with every edit. That machinery is Win32-private, so a Cocoa
-/// buffer using `SC_MARGIN_TEXT` would show an empty gutter. Override to
-/// Scintilla's built-in `SC_MARGIN_NUMBER`, which formats and paints the
-/// numbers with no host involvement. The difference is alignment only,
-/// and it is visible line numbers versus none. Exactly what GTK does,
-/// and its comment already anticipated this backend.
+/// resets — the line-number margin, the change-history strip's
+/// definitions, the brace-highlight pair, and the indent-guide colour.
 pub(crate) fn apply_predefined_styles(editor: &EditorHandle) {
+    // Styles STYLE_LINENUMBER (fore/back) and configures margin 0 as
+    // Scintilla's built-in `SC_MARGIN_NUMBER` at the shared
+    // fixed-minimum width — identical on all three backends.
     codepp_editor::theme::apply_line_number_margin(editor);
-    editor.enable_line_number_margin(LINE_NUMBER_MARGIN);
     // The change-history "edit indicator" strip. Shared config, so it
     // looks and behaves identically on all three backends;
     // per-document *enablement* happens in `activate_tab`.
@@ -431,20 +424,13 @@ impl UiPlatform for CocoaUi {
         // SAFETY: `self.udl_registry` is the pointer `CocoaUiState::split`
         // captured from `Shell.udl_registry`, read-only, per its doc.
         if crate::udl::apply_lang(&self.editor, self.udl_registry, lang) {
-            // Re-assert the built-in number margin: `apply_udl_lang`
-            // routes through `apply_default_styles`, which resets margin
-            // 0 to `SC_MARGIN_TEXT` for Win32's manual renderer — the
-            // same fixup the Lexilla branch below needs.
-            self.editor.enable_line_number_margin(LINE_NUMBER_MARGIN);
             return;
         }
-        // The shared Lexilla theme table, exactly as GTK uses it.
+        // The shared Lexilla theme table, exactly as GTK uses it. Both
+        // branches route through `apply_default_styles`, whose
+        // `apply_line_number_margin` re-configures the built-in number
+        // margin after the style clear — no per-backend fixup needed.
         codepp_editor::theme::apply_lang_theme(&self.editor, lang);
-        // `apply_lang_theme` routes through `apply_default_styles`, which
-        // resets margin 0 to `SC_MARGIN_TEXT` for Win32's manual
-        // renderer. Re-assert the built-in number margin, or a file load
-        // or language change would blank the gutter.
-        self.editor.enable_line_number_margin(LINE_NUMBER_MARGIN);
     }
 
     fn apply_default_style(&mut self, styles: &Styles) {
