@@ -1128,7 +1128,7 @@ pub(crate) enum SelectStep {
 /// Pure state transition for Begin/End Select. See [`SelectStep`] for
 /// the four outputs. Broken out from the handler so the transition can
 /// be tested exhaustively without spinning up a widget — matches the
-/// [`resolve_tab_arm_commit`] precedent (DESIGN.md §7.4).
+/// `ui_win32::resolve_tab_arm_commit` precedent (DESIGN.md §7.4).
 #[must_use]
 pub(crate) fn resolve_begin_end_step(
     current: SelectMarkMode,

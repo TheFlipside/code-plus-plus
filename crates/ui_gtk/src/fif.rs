@@ -9,7 +9,8 @@
 //!
 //! The search *engine* is entirely cross-platform (`codepp_core::fif` +
 //! `codepp_shell::fif`). The GTK backend only has to (1) build a
-//! [`FifRequest`] from the dialog and call [`Shell::start_fif`], (2) drain
+//! [`FifRequest`] from the dialog and call
+//! [`Shell::start_fif`](codepp_shell::Shell::start_fif), (2) drain
 //! [`FifEvent`]s on each §5.4 wake and render them, and (3) implement the
 //! jump. Open-buffer Replace-in-Files needs no code here at all —
 //! `Shell::drain` applies it through the shared `is_doc_dirty` /

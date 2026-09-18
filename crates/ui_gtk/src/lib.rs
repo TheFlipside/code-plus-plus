@@ -1712,7 +1712,7 @@ fn confirm_discard_active() -> bool {
 
 /// The "Save file 'NAME' ?" three-way prompt. Title `Save`, question icon
 /// (matching Win32's `MB_ICONQUESTION`), buttons Save / Don't Save /
-/// Cancel — the GTK sibling of Win32's [`show_save_confirm_dialog`],
+/// Cancel — the GTK sibling of Win32's `show_save_confirm_dialog`,
 /// wording matched verbatim so muscle memory carries across platforms
 /// (DESIGN.md §7.5).
 fn save_confirm_dialog(name: &str) -> gtk::ResponseType {
