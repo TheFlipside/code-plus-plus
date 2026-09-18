@@ -627,11 +627,11 @@ impl EditorHandle {
 
     // --- Margins -----------------------------------------------------------
 
-    /// Set margin `n`'s type — e.g. `SC_MARGIN_TEXT` to render
-    /// per-line text the host writes via `SCI_MARGINSETTEXT`,
-    /// styled per-line via `SCI_MARGINSETSTYLE`. The margin's
-    /// width and per-style colours are configured separately via
-    /// [`Self::set_margin_width`] and the `style_set_*` helpers.
+    /// Set margin `n`'s type — e.g. `SC_MARGIN_NUMBER` for the
+    /// built-in line-number bar or `SC_MARGIN_SYMBOL` for a
+    /// marker-only strip. The margin's width and per-style colours
+    /// are configured separately via [`Self::set_margin_width`] and
+    /// the `style_set_*` helpers.
     pub fn set_margin_type(&self, margin: u32, ty: u32) {
         self.send(SCI_SETMARGINTYPEN, margin as uptr_t, ty as sptr_t);
     }
@@ -904,8 +904,10 @@ impl EditorHandle {
     /// Turn `margin` into Scintilla's built-in line-number margin
     /// (`SC_MARGIN_NUMBER`, which auto-renders `STYLE_LINENUMBER`-styled
     /// numbers with no per-line population) and size it to fit the current
-    /// document. Call once per view; call [`Self::update_line_number_width`]
-    /// afterwards whenever the line count may have changed.
+    /// document. Idempotent and cheap — `theme::apply_line_number_margin`
+    /// re-runs it after every `SCI_STYLECLEARALL`; call
+    /// [`Self::update_line_number_width`] alone whenever only the line
+    /// count may have changed.
     pub fn enable_line_number_margin(&self, margin: u32) {
         self.set_margin_type(margin, SC_MARGIN_NUMBER);
         self.update_line_number_width(margin);
@@ -919,8 +921,8 @@ impl EditorHandle {
     /// digit budget it never changes as the line count crosses 9→10 or
     /// 99→100, so ordinary editing never shifts the gutter — but a file
     /// large enough to need more digits (past 99 999 lines at the default
-    /// budget) grows to show its full numbers instead of clipping. Both
-    /// backends drive their line-number width through here, so the
+    /// budget) grows to show its full numbers instead of clipping. All
+    /// three backends drive their line-number width through here, so the
     /// behaviour is identical on every platform.
     ///
     /// Cheap (two direct-call reads plus a measurement), but a caller on
@@ -1115,8 +1117,8 @@ impl EditorHandle {
 /// typical file — the same deliberately-roomy bar the Win32 backend uses.
 /// Files whose line count needs *more* than this many digits (past 99 999
 /// lines) grow the margin to fit rather than clipping — see
-/// [`EditorHandle::update_line_number_width`]. Both backends clamp to this
-/// floor, so the behaviour is identical on every platform.
+/// [`EditorHandle::update_line_number_width`]. All three backends clamp to
+/// this floor, so the behaviour is identical on every platform.
 pub const LINE_NUMBER_MARGIN_DIGITS: u32 = 5;
 
 /// Decimal digit count of `n`, floored at 1. The line-number margin only

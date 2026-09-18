@@ -22,10 +22,11 @@ use codepp_scintilla_sys::{
     SCI_GETANCHOR, SCI_GETCOLUMN, SCI_GETCURRENTPOS, SCI_GETDOCPOINTER, SCI_GETFIRSTVISIBLELINE,
     SCI_GETLENGTH, SCI_GETLINECOUNT, SCI_GETMODIFY, SCI_GETOVERTYPE, SCI_GETSELECTIONEND,
     SCI_GETSELECTIONSTART, SCI_GETTEXT, SCI_GETXOFFSET, SCI_GETZOOM, SCI_GOTOPOS,
-    SCI_LINEFROMPOSITION, SCI_LINESCROLL, SCI_LINESONSCREEN, SCI_POSITIONAFTER, SCI_SETDOCPOINTER,
-    SCI_SETEMPTYSELECTION, SCI_SETEOLMODE, SCI_SETSAVEPOINT, SCI_SETSEL, SCI_SETSELECTIONEND,
-    SCI_SETSELECTIONSTART, SCI_SETTABWIDTH, SCI_SETTEXT, SCI_SETXOFFSET, SCI_STYLEGETBACK,
-    SCI_STYLEGETFORE, SC_DOCUMENTOPTION_DEFAULT, SC_EOL_CR, SC_EOL_CRLF, SC_EOL_LF, STYLE_DEFAULT,
+    SCI_LINEFROMPOSITION, SCI_LINESCROLL, SCI_LINESONSCREEN, SCI_POSITIONAFTER,
+    SCI_RELEASEDOCUMENT, SCI_SETDOCPOINTER, SCI_SETEMPTYSELECTION, SCI_SETEOLMODE,
+    SCI_SETSAVEPOINT, SCI_SETSEL, SCI_SETSELECTIONEND, SCI_SETSELECTIONSTART, SCI_SETTABWIDTH,
+    SCI_SETTEXT, SCI_SETXOFFSET, SCI_STYLEGETBACK, SCI_STYLEGETFORE, SC_DOCUMENTOPTION_DEFAULT,
+    SC_EOL_CR, SC_EOL_CRLF, SC_EOL_LF, STYLE_DEFAULT,
 };
 
 /// Visible width of a TAB, in spaces. Matches `ui_win32`'s tab-width
@@ -54,9 +55,9 @@ thread_local! {
     /// one cell suffices.
     ///
     /// Cross-tab correctness does **not** rest on this gate: every
-    /// tab-switch / load / reload path runs `apply_lang`, which calls
-    /// `enable_line_number_margin` *ungated* and re-measures against the
-    /// newly-active document's true line count. This gate is only the
+    /// tab-switch / load / reload path runs `apply_lang`, which routes to
+    /// the shared `apply_line_number_margin` *ungated* and re-measures
+    /// against the newly-active document's true line count. This gate is only the
     /// mid-edit backup that catches a live budget crossing between those
     /// ungated calls; because the cache is a single un-keyed cell, a
     /// coincidental match after a switch merely skips a redundant
@@ -186,25 +187,14 @@ impl GtkUi {
 }
 
 /// Configure the predefined 32-39 styles that `SCI_STYLECLEARALL`
-/// resets, then fix up the line-number margin for this backend.
-///
-/// The shared helper sets margin 0 to `SC_MARGIN_TEXT`, because
-/// `ui_win32` renders the digits itself to get them right-aligned —
-/// which means the host must write per-line margin text and keep it in
-/// step with every edit. That machinery is Win32-private and not ported
-/// yet, so a GTK buffer using `SC_MARGIN_TEXT` would show an empty
-/// gutter. Override to Scintilla's built-in `SC_MARGIN_NUMBER`, which
-/// formats and paints the numbers with no host involvement. The
-/// difference is alignment only, and it is visible line numbers versus
-/// none.
+/// resets — the line-number margin, the change-history strip's
+/// definitions, the brace-highlight pair, and the indent-guide colour.
 fn apply_predefined_styles(editor: &EditorHandle) {
-    // `apply_line_number_margin` styles STYLE_LINENUMBER (fore/back) and,
-    // for Win32's manual renderer, sets margin 0 to `SC_MARGIN_TEXT`.
-    // GTK/Cocoa use Scintilla's built-in number margin, so override the
-    // type and take the shared fixed-minimum width (steady for typical
-    // files, grows only past the digit budget — same as Win32).
+    // Styles STYLE_LINENUMBER (fore/back) and configures margin 0 as
+    // Scintilla's built-in `SC_MARGIN_NUMBER` at the shared
+    // fixed-minimum width (steady for typical files, grows only past
+    // the digit budget) — identical on all three backends.
     codepp_editor::theme::apply_line_number_margin(editor);
-    editor.enable_line_number_margin(LINE_NUMBER_MARGIN);
     // The change-history "edit indicator" strip. Shared config so it looks
     // and behaves identically to Win32 (and the coming Cocoa backend);
     // per-document enablement happens in `activate_tab`.
@@ -337,20 +327,12 @@ impl UiPlatform for GtkUi {
         // other language uses the shared Lexilla theme table. `apply_lang`
         // returns `false` for a non-UDL id, falling through below.
         if crate::udl::apply_lang(&self.editor, self.udl_registry, lang) {
-            // Re-assert the built-in number margin: the UDL path routes
-            // through `apply_default_styles`, which resets margin 0 to
-            // `SC_MARGIN_TEXT` for Win32's manual renderer — same fixup the
-            // Lexilla branch below needs.
-            self.editor.enable_line_number_margin(LINE_NUMBER_MARGIN);
             return;
         }
+        // Both branches route through `apply_default_styles`, whose
+        // `apply_line_number_margin` re-configures the built-in number
+        // margin after the style clear — no per-backend fixup needed.
         codepp_editor::theme::apply_lang_theme(&self.editor, lang);
-        // `apply_lang_theme` routes through `apply_default_styles`, which
-        // resets margin 0 to `SC_MARGIN_TEXT` for Win32's manual renderer
-        // (and re-styles STYLE_LINENUMBER). Re-assert the built-in number
-        // margin here, or a file load / language change would blank the
-        // gutter on GTK.
-        self.editor.enable_line_number_margin(LINE_NUMBER_MARGIN);
     }
 
     fn apply_default_style(&mut self, styles: &Styles) {
@@ -752,6 +734,19 @@ impl UiPlatform for GtkUi {
             },
             false,
         )
+    }
+
+    fn release_doc(&mut self, doc: isize) {
+        if doc == 0 {
+            // "Never materialized" sentinel — nothing to release.
+            return;
+        }
+        // Drops the tab-owned reference. A still-bound document only
+        // goes 2→1 here (the view holds its own reference; the free
+        // happens at the next `SCI_SETDOCPOINTER`); an unbound one is
+        // freed immediately. Same call `close_tab_by_id`'s `ClosedTab`
+        // path makes in `lib.rs` — see the trait docs.
+        self.editor.send(SCI_RELEASEDOCUMENT, 0, doc);
     }
 
     fn mark_active_buffer_dirty(&mut self) {

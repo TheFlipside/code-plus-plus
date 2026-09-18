@@ -355,8 +355,8 @@ use codepp_scintilla_sys::{
     SCE_V_OPERATOR, SCE_V_OUTPUT, SCE_V_PORT_CONNECT, SCE_V_PREPROCESSOR, SCE_V_STRING,
     SCE_V_STRINGEOL, SCE_V_USER, SCE_V_WORD, SCE_V_WORD2, SCE_V_WORD3, SCE_YAML_COMMENT,
     SCE_YAML_DOCUMENT, SCE_YAML_IDENTIFIER, SCE_YAML_KEYWORD, SCE_YAML_NUMBER, SCE_YAML_OPERATOR,
-    SCE_YAML_REFERENCE, SCE_YAML_TEXT, SCI_COLOURISE, SC_MARGIN_TEXT, STYLE_BRACEBAD,
-    STYLE_BRACELIGHT, STYLE_INDENTGUIDE, STYLE_LINENUMBER,
+    SCE_YAML_REFERENCE, SCE_YAML_TEXT, SCI_COLOURISE, STYLE_BRACEBAD, STYLE_BRACELIGHT,
+    STYLE_INDENTGUIDE, STYLE_LINENUMBER,
 };
 
 // --- Phase 4 m1 default theme -------------------------------------------
@@ -441,12 +441,20 @@ pub fn apply_default_styles(editor: &EditorHandle) {
     apply_brace_styles(editor);
     apply_indent_guide_style(editor);
 }
-/// Configure the line-number margin: type, width, and the
-/// `STYLE_LINENUMBER` colour pair. Idempotent — safe to call
-/// repeatedly. Called both at editor creation (margin appears
+/// Configure the line-number margin: the `STYLE_LINENUMBER` colour
+/// pair, then Scintilla's built-in `SC_MARGIN_NUMBER` type + width via
+/// [`EditorHandle::enable_line_number_margin`]. Idempotent — safe to
+/// call repeatedly. Called both at editor creation (margin appears
 /// before the first paint) and at the tail of [`apply_default_styles`]
-/// (re-applies after `SCI_STYLECLEARALL` has reset
-/// `STYLE_LINENUMBER` back to `STYLE_DEFAULT`).
+/// (re-applies after `SCI_STYLECLEARALL` has reset `STYLE_LINENUMBER`
+/// back to `STYLE_DEFAULT`).
+///
+/// The built-in margin renders the numbers itself — no per-line host
+/// population, so it costs nothing on edits or scrolls. Shared by all
+/// three backends; `ui_win32` formerly wrote per-line margin text by
+/// hand to control the right-alignment column, which the measured
+/// width made redundant (the numbers right-align to the margin edge,
+/// and the edge *is* the shared rightmost column).
 ///
 /// Width comes from [`EditorHandle::update_line_number_width`]: a fixed
 /// minimum that holds steady for typical files and grows only for ones
@@ -455,19 +463,10 @@ pub fn apply_default_styles(editor: &EditorHandle) {
 /// numbers" view toggle becomes
 /// `editor.set_margin_width(LINE_NUMBER_MARGIN, 0)` to hide (Scintilla
 /// hides a margin via width-zero without resetting its type or styles).
-///
-/// We use `SC_MARGIN_TEXT` (left-aligned per-line text we manage
-/// ourselves) rather than `SC_MARGIN_NUMBER` (right-aligned,
-/// auto-rendered by Scintilla) — the right-aligned built-in mode
-/// floats short numbers to the right edge of the bar and there's
-/// no Scintilla setting to override that. Population happens at
-/// document creation in `Win32Ui::activate_tab` and incrementally
-/// via the `SCN_MODIFIED` handler when line count changes.
 pub fn apply_line_number_margin(editor: &EditorHandle) {
-    editor.set_margin_type(LINE_NUMBER_MARGIN, SC_MARGIN_TEXT);
     editor.style_set_fore(STYLE_LINENUMBER, FG_LINE_NUMBER);
     editor.style_set_back(STYLE_LINENUMBER, BG_LINE_NUMBER);
-    editor.update_line_number_width(LINE_NUMBER_MARGIN);
+    editor.enable_line_number_margin(LINE_NUMBER_MARGIN);
 }
 // --- Brace-match highlight colours ----------------------------------
 //
@@ -9090,6 +9089,80 @@ pub fn apply_lang_theme(editor: &EditorHandle, lang: LangType) {
         editor.set_property(name, value);
     }
     editor.send(SCI_COLOURISE, 0, -1);
+}
+
+#[cfg(test)]
+mod line_number_margin_guard {
+    //! Source-scan guard: [`super::apply_line_number_margin`] must
+    //! configure the built-in `SC_MARGIN_NUMBER` margin itself, via
+    //! `enable_line_number_margin(`.
+    //!
+    //! All three backends dropped their per-backend re-asserts on the
+    //! strength of exactly this fact (`ui_cocoa`'s
+    //! `apply_predefined_styles_runs_the_shared_helpers` names this
+    //! guard as the reason `enable_line_number_margin` is absent from
+    //! its own required list). If the call ever leaves this helper,
+    //! every backend's gutter goes blank on the next
+    //! `SCI_STYLECLEARALL` — a failure no headless test can see, which
+    //! is why this is a scan. It matches the call form, not the bare
+    //! identifier, so a mention in a comment cannot satisfy it.
+
+    /// `theme.rs` truncated at its first `#[cfg(test)]`, so the scan
+    /// can never be satisfied by its own assertion strings or by
+    /// doc comments inside test modules.
+    fn production_src() -> &'static str {
+        let src = include_str!("theme.rs");
+        match src.find("#[cfg(test)]") {
+            Some(cut) => &src[..cut],
+            None => src,
+        }
+    }
+
+    /// Body of the first `fn <name>` in `src`, by brace counting.
+    fn fn_body(src: &str, name: &str) -> String {
+        let sig = format!("fn {name}(");
+        let start = src
+            .find(&sig)
+            .unwrap_or_else(|| panic!("`fn {name}` not found in theme.rs"));
+        let open = src[start..]
+            .find('{')
+            .map_or_else(|| panic!("`fn {name}` has no body"), |o| start + o);
+        let mut depth = 0usize;
+        for (i, c) in src[open..].char_indices() {
+            match c {
+                '{' => depth += 1,
+                '}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return src[open..=open + i].to_string();
+                    }
+                }
+                _ => {}
+            }
+        }
+        panic!("`fn {name}` body braces never closed");
+    }
+
+    #[test]
+    fn apply_line_number_margin_enables_the_builtin_margin() {
+        let src = production_src();
+        assert!(src.len() > 5_000, "source scan read too little to be real");
+        let body = fn_body(src, "apply_line_number_margin");
+        assert!(
+            body.contains("enable_line_number_margin("),
+            "`apply_line_number_margin` no longer calls \
+             `enable_line_number_margin`. The backends rely on this \
+             helper to set the built-in `SC_MARGIN_NUMBER` type after \
+             every `SCI_STYLECLEARALL`; without it, all three gutters \
+             render blank."
+        );
+        // The colour half of the helper's contract, same reasoning.
+        assert!(
+            body.contains("style_set_fore(STYLE_LINENUMBER"),
+            "`apply_line_number_margin` no longer re-applies the \
+             `STYLE_LINENUMBER` foreground after the style clear."
+        );
+    }
 }
 
 #[cfg(test)]

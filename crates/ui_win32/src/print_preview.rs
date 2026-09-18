@@ -35,6 +35,23 @@
 //! Cross-platform note: Win32-only for now (Phase 5 wires GTK / Cocoa
 //! preview windows alongside the rest of the print backend — the
 //! scale-and-render math is Scintilla-agnostic and ports directly).
+//!
+//! **Why this is not a `#32770` dialog.** Every other modal and
+//! modeless window in this backend moved to the standard dialog class
+//! (see `crate::dlgtemplate` and DESIGN.md §7.4); this one did not,
+//! and the reason is keyboard focus. `handle_key` implements the
+//! page-navigation keys — `PageUp`/`PageDown`, `Home`/`End`, arrows,
+//! `Enter`, `Escape` — from this window's own `WM_KEYDOWN`, which
+//! requires the *window* to hold focus. A dialog never can:
+//! `DefDlgProc` answers `WM_SETFOCUS` by moving focus to a control,
+//! so `SetFocus(dialog)` silently lands on the first tabstop instead.
+//! Measured during the migration — the keys stopped working and the
+//! focused control came back as `IDC_PREVIEW_FIRST`.
+//!
+//! Nothing is given up by staying: the dialog class buys a themed
+//! background and `WM_CTLCOLOR*` defaults, and this window paints
+//! every pixel itself through a mem-DC double buffer (`WM_ERASEBKGND`
+//! returns 1, so even the class brush is never drawn).
 
 use core::ffi::c_void;
 use std::sync::OnceLock;
