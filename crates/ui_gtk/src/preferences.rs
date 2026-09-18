@@ -104,7 +104,11 @@ pub(crate) fn show(window: &gtk::Window) {
     // grey it out otherwise, and keep that in step as the radio changes.
     custom_spin.set_sensitive(custom.is_active());
     let spin = custom_spin.clone();
-    custom.connect_toggled(move |r| spin.set_sensitive(r.is_active()));
+    custom.connect_toggled(move |r| {
+        crate::at_callback_boundary("preferences:custom:toggled", (), || {
+            spin.set_sensitive(r.is_active());
+        });
+    });
 
     dialog.show_all();
     dialog.run();

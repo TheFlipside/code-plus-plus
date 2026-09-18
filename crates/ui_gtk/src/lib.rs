@@ -176,7 +176,7 @@ pub fn run(initial_path: Option<PathBuf>, perf: Perf) -> Result<(), GtkUiError> 
     // from `GWLP_USERDATA`.
     let wake: Arc<dyn Fn() + Send + Sync> = Arc::new(|| {
         glib::MainContext::default().invoke(|| {
-            drain_shell();
+            crate::at_callback_boundary("lib:wake", (), drain_shell);
         });
     });
     let shell = Shell::new(wake).map_err(|e| GtkUiError::Shell(e.to_string()))?;
@@ -383,23 +383,44 @@ pub fn run(initial_path: Option<PathBuf>, perf: Perf) -> Result<(), GtkUiError> 
 /// `maximize()` does not capture a transient size.
 fn connect_session_persistence(window: &gtk::Window) {
     window.connect_configure_event(|_, _| {
-        sync_window_geometry_to_shell();
-        false // observe only — GTK must still process the resize
+        crate::at_callback_boundary("lib:window:configure_event", false, || {
+            sync_window_geometry_to_shell();
+            false // observe only — GTK must still process the resize
+        })
     });
     window.connect_window_state_event(|_, _| {
-        sync_window_geometry_to_shell();
-        glib::Propagation::Proceed
+        crate::at_callback_boundary(
+            "lib:window:window_state_event",
+            glib::Propagation::Proceed,
+            || {
+                sync_window_geometry_to_shell();
+                glib::Propagation::Proceed
+            },
+        )
     });
 
     window.connect_delete_event(|_, _| {
-        save_session_now();
-        gtk::main_quit();
-        glib::Propagation::Proceed
+        crate::at_callback_boundary(
+            "lib:window:delete_event",
+            glib::Propagation::Proceed,
+            || {
+                // The save runs at its own boundary so a panic inside it
+                // cannot skip `main_quit`: with one shared boundary the
+                // window would close (GTK's default handling proceeds)
+                // while the loop kept running with nothing left to quit
+                // it from.
+                crate::at_callback_boundary("lib:window:delete_event:save", (), save_session_now);
+                gtk::main_quit();
+                glib::Propagation::Proceed
+            },
+        )
     });
 
     glib::timeout_add_seconds_local(AUTOSAVE_INTERVAL_SECS, || {
-        save_session_now();
-        glib::ControlFlow::Continue
+        crate::at_callback_boundary("lib:autosave:timeout", glib::ControlFlow::Continue, || {
+            save_session_now();
+            glib::ControlFlow::Continue
+        })
     });
 }
 
@@ -424,55 +445,59 @@ fn connect_session_persistence(window: &gtk::Window) {
 ///      stays isolated.
 fn connect_sci_notify(sci_widget: &gtk::Widget) {
     sci_widget.connect_local("sci-notify", false, |values| {
-        // A UDL container-lexer paint fires an `SCN_MODIFIED(ChangeStyle)`
-        // per `SCI_SETSTYLING`; skip those so one capped paint doesn't
-        // re-run this whole resync once per token. See
-        // `is_style_only_modification`.
-        if is_style_only_modification(values) {
-            return None;
-        }
-        // The mouse-wheel / trackpad horizontal-scroll path
-        // (`Editor::HorizontalScrollTo`) has no upper clamp, so a
-        // horizontal gesture glides `xOffset` far past the content into
-        // empty space — independent of `scrollWidth`, which only bounds
-        // the scrollbar thumb. Re-clamp it here on every `SCN_UPDATEUI`.
-        if notification_code(values) == Some(codepp_scintilla_sys::SCN_UPDATEUI) {
-            with_state(|st| clamp_horizontal_overscroll(st));
-        }
-        let text_modified = is_text_modification(values);
-        with_state(|st| {
-            if text_modified {
-                // Tracking-mode scrollWidth is a high-water mark — it grows
-                // for a wider line but never shrinks when long lines are
-                // deleted, so the scrollbar would linger after the long
-                // line is gone. Reset to 1 px on every text insert/delete;
-                // the next paint recomputes from visible content. Mirrors
-                // Win32's SCN_MODIFIED handler.
-                st.editor
-                    .send(codepp_scintilla_sys::SCI_SETSCROLLWIDTH, 1, 0);
+        crate::at_callback_boundary("lib:sci_notify:chrome", None, || {
+            // A UDL container-lexer paint fires an `SCN_MODIFIED(ChangeStyle)`
+            // per `SCI_SETSTYLING`; skip those so one capped paint doesn't
+            // re-run this whole resync once per token. See
+            // `is_style_only_modification`.
+            if is_style_only_modification(values) {
+                return None;
             }
-            let (_, ui) = st.split();
-            ui.refresh_dynamic_status();
-        });
-        // Resync the strip only when the dirty marker actually flips —
-        // twice per edit session (first keystroke after a save, and the
-        // save itself), not on every caret move. `sync` rebuilds each tab's
-        // label widget, far too much to do per notification.
-        if refresh_active_dirty() == DirtyPoll::Changed {
-            sync_tab_strip();
-        }
-        // Track the main editor's viewport in the Document Map. A no-op when
-        // the map is hidden; when shown it re-centres the miniature and
-        // repaints the orange box for the current visible range.
-        docmap::refresh();
-        None
+            // The mouse-wheel / trackpad horizontal-scroll path
+            // (`Editor::HorizontalScrollTo`) has no upper clamp, so a
+            // horizontal gesture glides `xOffset` far past the content into
+            // empty space — independent of `scrollWidth`, which only bounds
+            // the scrollbar thumb. Re-clamp it here on every `SCN_UPDATEUI`.
+            if notification_code(values) == Some(codepp_scintilla_sys::SCN_UPDATEUI) {
+                with_state(|st| clamp_horizontal_overscroll(st));
+            }
+            let text_modified = is_text_modification(values);
+            with_state(|st| {
+                if text_modified {
+                    // Tracking-mode scrollWidth is a high-water mark — it grows
+                    // for a wider line but never shrinks when long lines are
+                    // deleted, so the scrollbar would linger after the long
+                    // line is gone. Reset to 1 px on every text insert/delete;
+                    // the next paint recomputes from visible content. Mirrors
+                    // Win32's SCN_MODIFIED handler.
+                    st.editor
+                        .send(codepp_scintilla_sys::SCI_SETSCROLLWIDTH, 1, 0);
+                }
+                let (_, ui) = st.split();
+                ui.refresh_dynamic_status();
+            });
+            // Resync the strip only when the dirty marker actually flips —
+            // twice per edit session (first keystroke after a save, and the
+            // save itself), not on every caret move. `sync` rebuilds each tab's
+            // label widget, far too much to do per notification.
+            if refresh_active_dirty() == DirtyPoll::Changed {
+                sync_tab_strip();
+            }
+            // Track the main editor's viewport in the Document Map. A no-op when
+            // the map is hidden; when shown it re-centres the miniature and
+            // repaints the orange box for the current visible range.
+            docmap::refresh();
+            None
+        })
     });
 
     sci_widget.connect_local("sci-notify", false, |values| {
-        if let Some(position) = style_needed_position(values) {
-            udl::on_style_needed(position);
-        }
-        None
+        crate::at_callback_boundary("lib:sci_notify:udl", None, || {
+            if let Some(position) = style_needed_position(values) {
+                udl::on_style_needed(position);
+            }
+            None
+        })
     });
 }
 
@@ -575,56 +600,60 @@ fn connect_tab_strip_signals(tab_strip: &tabs::TabStrip) {
     // provokes both of these signals itself while rewriting the
     // notebook — see the `tabs` module docs for the measurements.
     tab_strip.notebook.connect_switch_page(|_, _, num| {
-        if tabs::is_suppressed() {
-            return;
-        }
-        // Attribute the outgoing buffer's modify bit to the outgoing
-        // tab, while the view is still bound to its document. After
-        // `active_tab` moves it would land on the wrong tab.
-        capture_active_dirty();
-        let moved = with_state(|st| {
-            let idx = num as usize;
-            if idx < st.shell.tabs.len() {
-                st.shell.active_tab = Some(idx);
-                true
-            } else {
-                // The control and the model disagree. Defensive only —
-                // `sync` keeps them in lockstep — but silently doing
-                // nothing beats binding the view to a tab that is not
-                // there.
-                tracing::warn!(idx, "switch-page for an index Shell does not have");
-                false
+        crate::at_callback_boundary("lib:notebook:switch_page", (), || {
+            if tabs::is_suppressed() {
+                return;
+            }
+            // Attribute the outgoing buffer's modify bit to the outgoing
+            // tab, while the view is still bound to its document. After
+            // `active_tab` moves it would land on the wrong tab.
+            capture_active_dirty();
+            let moved = with_state(|st| {
+                let idx = num as usize;
+                if idx < st.shell.tabs.len() {
+                    st.shell.active_tab = Some(idx);
+                    true
+                } else {
+                    // The control and the model disagree. Defensive only —
+                    // `sync` keeps them in lockstep — but silently doing
+                    // nothing beats binding the view to a tab that is not
+                    // there.
+                    tracing::warn!(idx, "switch-page for an index Shell does not have");
+                    false
+                }
+            });
+            if moved == Some(true) {
+                rebind_active_view();
+                // No `queue_buffer_activated` here: it is
+                // `#[cfg(target_os = "windows")]` in `shell` because it
+                // queues the `NPPN_BUFFERACTIVATED` plugin notification,
+                // and `platform::dynlib` has no `dlopen` arm yet, so GTK
+                // loads no plugins to notify. It joins this handler when
+                // the plugin host is ported.
             }
         });
-        if moved == Some(true) {
-            rebind_active_view();
-            // No `queue_buffer_activated` here: it is
-            // `#[cfg(target_os = "windows")]` in `shell` because it
-            // queues the `NPPN_BUFFERACTIVATED` plugin notification,
-            // and `platform::dynlib` has no `dlopen` arm yet, so GTK
-            // loads no plugins to notify. It joins this handler when
-            // the plugin host is ported.
-        }
     });
 
     let strip_for_reorder = tab_strip.clone();
     tab_strip
         .notebook
         .connect_page_reordered(move |_, child, num| {
-            if tabs::is_suppressed() {
-                return;
-            }
-            let Some(from) = strip_for_reorder.index_before_reorder(child) else {
-                tracing::warn!("page-reordered for a page the strip does not know");
-                return;
-            };
-            // `move_tab` enforces the pinned-prefix invariant and returns
-            // false for a drag that would break it. Either way the strip
-            // is resynced below: on success it reflects the new order, and
-            // on rejection the relabel-by-index puts the visible order
-            // back where the model says it should be.
-            with_state(|st| st.shell.move_tab(from, num as usize));
-            refresh_tab_chrome();
+            crate::at_callback_boundary("lib:notebook:page_reordered", (), || {
+                if tabs::is_suppressed() {
+                    return;
+                }
+                let Some(from) = strip_for_reorder.index_before_reorder(child) else {
+                    tracing::warn!("page-reordered for a page the strip does not know");
+                    return;
+                };
+                // `move_tab` enforces the pinned-prefix invariant and returns
+                // false for a drag that would break it. Either way the strip
+                // is resynced below: on success it reflects the new order, and
+                // on rejection the relabel-by-index puts the visible order
+                // back where the model says it should be.
+                with_state(|st| st.shell.move_tab(from, num as usize));
+                refresh_tab_chrome();
+            });
         });
 }
 
@@ -654,15 +683,21 @@ fn connect_tab_strip_signals(tab_strip: &tabs::TabStrip) {
 fn connect_perf_probes(sci_widget: &gtk::Widget, perf: &Rc<Perf>) {
     let perf_key = Rc::clone(perf);
     sci_widget.connect_key_press_event(move |_, ev| {
-        let state = ev.state();
-        // Ctrl held without Alt is an editing chord. With Alt it is
-        // `AltGr` on many layouts, which types real characters.
-        let is_chord = state.contains(gtk::gdk::ModifierType::CONTROL_MASK)
-            && !state.contains(gtk::gdk::ModifierType::MOD1_MASK);
-        if !is_chord {
-            perf_key.key_pressed();
-        }
-        glib::Propagation::Proceed
+        crate::at_callback_boundary(
+            "lib:sci_widget:key_press_event",
+            glib::Propagation::Proceed,
+            || {
+                let state = ev.state();
+                // Ctrl held without Alt is an editing chord. With Alt it is
+                // `AltGr` on many layouts, which types real characters.
+                let is_chord = state.contains(gtk::gdk::ModifierType::CONTROL_MASK)
+                    && !state.contains(gtk::gdk::ModifierType::MOD1_MASK);
+                if !is_chord {
+                    perf_key.key_pressed();
+                }
+                glib::Propagation::Proceed
+            },
+        )
     });
 
     // Scintilla reports both remaining edges through `sci-notify`.
@@ -674,22 +709,24 @@ fn connect_perf_probes(sci_widget: &gtk::Widget, perf: &Rc<Perf>) {
     // now measure the same span rather than approximately the same one.
     let perf_notify = Rc::clone(perf);
     sci_widget.connect_local("sci-notify", false, move |values| {
-        match notification_code(values) {
-            // `SC_MOD_INSERTTEXT | SC_MOD_DELETETEXT` would be the
-            // tighter filter, but reading `modificationType` means
-            // depending on the layout of the whole `SCNotification`
-            // rather than just its header. Every `SCN_MODIFIED` this
-            // backend can receive is a text change today — it sets no
-            // margin, annotation or fold-level state — so the code
-            // alone is sufficient and the ABI surface stays minimal.
-            Some(codepp_scintilla_sys::SCN_MODIFIED) => perf_notify.text_modified(),
-            Some(codepp_scintilla_sys::SCN_PAINTED) => {
-                perf_notify.mark_first_draw();
-                perf_notify.painted();
+        crate::at_callback_boundary("lib:sci_notify:perf", None, || {
+            match notification_code(values) {
+                // `SC_MOD_INSERTTEXT | SC_MOD_DELETETEXT` would be the
+                // tighter filter, but reading `modificationType` means
+                // depending on the layout of the whole `SCNotification`
+                // rather than just its header. Every `SCN_MODIFIED` this
+                // backend can receive is a text change today — it sets no
+                // margin, annotation or fold-level state — so the code
+                // alone is sufficient and the ABI surface stays minimal.
+                Some(codepp_scintilla_sys::SCN_MODIFIED) => perf_notify.text_modified(),
+                Some(codepp_scintilla_sys::SCN_PAINTED) => {
+                    perf_notify.mark_first_draw();
+                    perf_notify.painted();
+                }
+                _ => {}
             }
-            _ => {}
-        }
-        None
+            None
+        })
     });
 }
 
@@ -855,14 +892,16 @@ fn dropped_uri_list(values: &[glib::Value]) -> Option<String> {
 /// overlap, so a drop is handled exactly once.
 fn connect_file_drop(window: &gtk::Window, sci_widget: &gtk::Widget) {
     sci_widget.connect_local("sci-notify", false, |values| {
-        if let Some(list) = dropped_uri_list(values) {
-            let paths = parse_uri_list(&list);
-            tracing::debug!(?paths, "SCN_URIDROPPED on the editor");
-            if !paths.is_empty() {
-                menu::open_paths(paths);
+        crate::at_callback_boundary("lib:sci_notify:drop", None, || {
+            if let Some(list) = dropped_uri_list(values) {
+                let paths = parse_uri_list(&list);
+                tracing::debug!(?paths, "SCN_URIDROPPED on the editor");
+                if !paths.is_empty() {
+                    menu::open_paths(paths);
+                }
             }
-        }
-        None
+            None
+        })
     });
 
     let uri_targets = [gtk::TargetEntry::new(
@@ -879,15 +918,17 @@ fn connect_file_drop(window: &gtk::Window, sci_widget: &gtk::Widget) {
         gtk::gdk::DragAction::COPY,
     );
     window.connect_drag_data_received(|_, _, _, _, data, _, _| {
-        let paths: Vec<PathBuf> = data
-            .uris()
-            .iter()
-            .filter_map(|uri| uri_to_local_path(uri))
-            .collect();
-        tracing::debug!(?paths, "text/uri-list dropped on the window chrome");
-        if !paths.is_empty() {
-            menu::open_paths(paths);
-        }
+        crate::at_callback_boundary("lib:window:drag_data_received", (), || {
+            let paths: Vec<PathBuf> = data
+                .uris()
+                .iter()
+                .filter_map(|uri| uri_to_local_path(uri))
+                .collect();
+            tracing::debug!(?paths, "text/uri-list dropped on the window chrome");
+            if !paths.is_empty() {
+                menu::open_paths(paths);
+            }
+        });
     });
 }
 
@@ -954,6 +995,87 @@ mod uri_list_tests {
             vec![PathBuf::from("/tmp/ok.txt")]
         );
     }
+}
+
+/// Sets a thread-local re-entrancy flag for the lifetime of the guard
+/// and clears it on drop.
+///
+/// Every "set true, do a few GTK calls, set false" flag in this crate
+/// (`PRESENTING`, `menu::REFRESHING_MARKS`, the two `SYNCING`s, …) goes
+/// through this rather than a bare pair of `set` calls, for the reason
+/// `tabs::SuppressGuard` and [`DrainFreeze`] already give: an early
+/// return or a panic inside the block must not leave the flag stuck.
+/// Before [`at_callback_boundary`] a panic there aborted the process;
+/// now it is caught and execution continues, so a hand-cleared flag
+/// would stay `true` for the rest of the session and silently disable
+/// whatever it guards — dialogs, menu marks, the panel toggles.
+///
+/// Not re-entrant: a nested guard on the same flag would clear it on the
+/// inner exit. Every flag using this is checked-and-returned-early by
+/// its handlers before the guard is taken, so nesting cannot occur.
+pub(crate) struct FlagGuard(&'static std::thread::LocalKey<Cell<bool>>);
+
+impl FlagGuard {
+    /// Set `flag` and return the guard that clears it.
+    pub(crate) fn set(flag: &'static std::thread::LocalKey<Cell<bool>>) -> Self {
+        flag.with(|f| f.set(true));
+        Self(flag)
+    }
+}
+
+impl Drop for FlagGuard {
+    fn drop(&mut self) {
+        self.0.with(|f| f.set(false));
+    }
+}
+
+/// Run `f` at a boundary that GTK (or `GLib`) calls into.
+///
+/// **Why every signal handler, timer and main-context hop needs this.**
+/// gtk-rs delivers a signal to a Rust closure through an `extern "C"`
+/// trampoline, and a timer or `MainContext::invoke` closure is reached
+/// the same way from `GLib`'s C main loop. A Rust panic unwinding out of
+/// such a closure therefore hits a frame that cannot unwind. On the
+/// pinned toolchain that is a defined abort (`panic in a function that
+/// cannot unwind`), not undefined behaviour — and the release profile is
+/// `panic = "abort"` regardless (DESIGN.md §9.1) — so what this buys is
+/// *swallow-and-continue* over *abort-with-message* in dev and test
+/// builds, which is exactly where a developer is most likely to trip a
+/// panic and least likely to want the whole editor gone as the
+/// diagnostic. The two closures that run plugin code before reaching
+/// `plugin_dispatch`'s own boundary (the Plugins-menu `activate` and the
+/// plugin accel-group closure) are the sharpest case: a malformed
+/// `shortcuts.xml` edge or a plugin returning malformed `FuncItem`s
+/// during a load would otherwise take the process down.
+///
+/// The rest of the workspace already treats this as non-negotiable —
+/// `ui_win32`'s window and dialog procs, `ui_cocoa`'s AppKit overrides
+/// (its `at_callback_boundary` is the model for this one) and
+/// `plugin-host`'s dispatcher all wrap their native-invoked boundaries
+/// the same way; DESIGN.md §6.5 states the convention for the plugin
+/// case. `ui_gtk` had not, crate-wide, until Phase 5 closed the §7.4
+/// entry. It is applied at **every** GTK-invoked entry point rather than
+/// only the plugin pair, so the two non-Windows backends express the rule
+/// identically; the `callback_boundary_source_invariant` source scan
+/// pins that every `connect_*`, `timeout_add_*`, `idle_add_*` and
+/// `invoke` closure in this crate begins with this call.
+///
+/// A caught panic is logged and swallowed, and the caller gets
+/// `fallback` — `Propagation::Proceed` for an event handler so the key
+/// or click still reaches the widget, `ControlFlow::Continue` for the
+/// auto-save timer so one bad save does not silence it for the session.
+/// It is not a licence to panic: nothing here is expected to, and the
+/// log line is deliberately at `error` so one that does is not mistaken
+/// for normal operation.
+pub(crate) fn at_callback_boundary<R>(
+    entry: &'static str,
+    fallback: R,
+    f: impl FnOnce() -> R,
+) -> R {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)).unwrap_or_else(|_| {
+        tracing::error!(entry, "panic caught at a GTK callback boundary");
+        fallback
+    })
 }
 
 /// Drain everything `Shell` has queued and present any dialogs it
@@ -1071,11 +1193,10 @@ fn pump_dialogs() {
     if PRESENTING.with(Cell::get) {
         return;
     }
-    PRESENTING.with(|p| p.set(true));
+    let _presenting = FlagGuard::set(&PRESENTING);
     while let Some(dialog) = DIALOG_QUEUE.with(|q| q.borrow_mut().pop_front()) {
         present_dialog(&dialog);
     }
-    PRESENTING.with(|p| p.set(false));
 }
 
 /// Map a [`PendingDialog`] onto a native GTK dialog.
@@ -1321,6 +1442,12 @@ pub(crate) fn restore_default_window_size() {
     // settles this well within the window; capture resumes when the
     // one-shot timer clears the flag.
     WINDOW_RESET_SETTLING.with(|c| c.set(true));
+    // The thaw is scheduled *before* the requests below, not after: this
+    // flag is cleared by a timer rather than a `FlagGuard`, so if the
+    // block between set and schedule ever panicked (now caught at the
+    // boundary rather than aborting) the timer would never be armed and
+    // geometry capture would stay frozen for the session.
+    schedule_window_reset_thaw();
     with_state(|st| {
         let win = &st.window;
         win.unmaximize();
@@ -1339,18 +1466,24 @@ pub(crate) fn restore_default_window_size() {
             maximized: false,
         });
     });
-    // Thaw once the requests have settled. 500 ms is generously beyond any
-    // WM's resize/move latency (typically <100 ms); a save that lands
-    // before the thaw sees the frozen default, and after it the window has
-    // reached the default so normal capture is a no-op change anyway.
-    //
-    // The freeze is blanket, so it also drops a *legitimate* user resize
-    // that happens to land in this same 500 ms window (reset, then drag,
-    // then close, all within half a second). Accepted: the worst outcome
-    // is the default persists instead of that just-made manual change —
-    // strictly better than the reset itself failing to stick.
+}
+
+/// Thaw geometry capture once [`restore_default_window_size`]'s requests
+/// have settled. 500 ms is generously beyond any WM's resize/move
+/// latency (typically <100 ms); a save that lands before the thaw sees
+/// the frozen default, and after it the window has reached the default
+/// so normal capture is a no-op change anyway.
+///
+/// The freeze is blanket, so it also drops a *legitimate* user resize
+/// that happens to land in this same 500 ms window (reset, then drag,
+/// then close, all within half a second). Accepted: the worst outcome
+/// is the default persists instead of that just-made manual change —
+/// strictly better than the reset itself failing to stick.
+fn schedule_window_reset_thaw() {
     glib::timeout_add_local_once(std::time::Duration::from_millis(500), || {
-        WINDOW_RESET_SETTLING.with(|c| c.set(false));
+        crate::at_callback_boundary("lib:restore_default_window_size:timeout", (), || {
+            WINDOW_RESET_SETTLING.with(|c| c.set(false));
+        });
     });
 }
 
@@ -2158,6 +2291,153 @@ pub(crate) fn refresh_tab_chrome() {
     sync_tab_strip();
 }
 
+/// Shared helpers for this crate's source-level guards — the
+/// single-view invariant and the callback-boundary invariant below.
+/// Both pin properties that a runtime test cannot observe (a
+/// destroyed view faults inside vendored C++; an unguarded closure
+/// only matters once something panics inside it), so they read the
+/// source instead.
+#[cfg(test)]
+mod source_scan {
+    /// Strip line comments and the contents of string literals, so a
+    /// scanner matches code rather than prose. Crude — it does not
+    /// handle raw strings or block comments — but the first version of
+    /// the single-view guard counted its own assertion text and a doc
+    /// comment as real calls, so "crude" needs to at least exclude those.
+    pub(crate) fn code_only(text: &str) -> String {
+        let mut out = String::with_capacity(text.len());
+        for line in text.lines() {
+            let line = line.split("//").next().unwrap_or("");
+            let mut in_str = false;
+            let mut prev_backslash = false;
+            for c in line.chars() {
+                match c {
+                    '"' if !prev_backslash => in_str = !in_str,
+                    _ if in_str => {}
+                    _ => out.push(c),
+                }
+                prev_backslash = c == '\\' && !prev_backslash;
+            }
+            out.push('\n');
+        }
+        out
+    }
+
+    /// Advance past a char literal starting at `i` (`'{'`, `'\n'`), or
+    /// return `i` unchanged for a lifetime. Only needed because a
+    /// bracket inside a char literal would unbalance a brace walk.
+    /// Like [`code_only`] it is deliberately crude: a `'\u{7B}'` escape,
+    /// a raw string or a block comment would desync the walk. None
+    /// occurs in this crate; if one is ever needed, extend this first.
+    pub(crate) fn skip_char_literal(text: &[u8], i: usize) -> usize {
+        match (text.get(i + 1), text.get(i + 2), text.get(i + 3)) {
+            (Some(b'\\'), _, Some(b'\'')) => i + 4,
+            (_, Some(b'\''), _) => i + 3,
+            _ => i,
+        }
+    }
+
+    /// Remove every `#[cfg(test)] mod … { … }` block from already
+    /// comment-stripped source. Test modules sit *mid-file* in several
+    /// of this crate's sources with production code after them, so the
+    /// earlier "cut at the first `#[cfg(test)]`" silently dropped that
+    /// code from every scan — `menu.rs` lost half of itself.
+    pub(crate) fn strip_test_modules(text: &str) -> String {
+        const ATTR: &str = "#[cfg(test)]";
+        let bytes = text.as_bytes();
+        let mut out = String::with_capacity(text.len());
+        let mut pos = 0;
+        while let Some(rel) = text[pos..].find(ATTR) {
+            let attr_at = pos + rel;
+            let after = attr_at + ATTR.len();
+            // Only a module: an attribute on some other item is kept.
+            let rest = text[after..].trim_start();
+            let rest = rest.strip_prefix("pub(crate) ").unwrap_or(rest);
+            let rest = rest.strip_prefix("pub ").unwrap_or(rest);
+            let Some(module) = rest.strip_prefix("mod ") else {
+                out.push_str(&text[pos..after]);
+                pos = after;
+                continue;
+            };
+            let Some(brace_rel) = module.find('{') else {
+                out.push_str(&text[pos..after]);
+                pos = after;
+                continue;
+            };
+            let open = text.len() - module.len() + brace_rel;
+            let mut depth = 0usize;
+            let mut i = open;
+            while i < bytes.len() {
+                match bytes[i] {
+                    b'\'' => {
+                        i = skip_char_literal(bytes, i).max(i + 1);
+                        continue;
+                    }
+                    b'{' => depth += 1,
+                    b'}' => {
+                        depth -= 1;
+                        if depth == 0 {
+                            break;
+                        }
+                    }
+                    _ => {}
+                }
+                i += 1;
+            }
+            out.push_str(&text[pos..attr_at]);
+            pos = (i + 1).min(text.len());
+        }
+        out.push_str(&text[pos..]);
+        out
+    }
+
+    /// This backend's own source, comments and string literals
+    /// removed, every test module excised. A standalone `#[cfg(test)]
+    /// fn` item is *kept* (only modules are excised), so a test-only
+    /// fixture at file scope is scanned as production code — a false
+    /// positive rather than a false negative, i.e. it fails safe.
+    pub(crate) fn production_code() -> String {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut out = String::new();
+        for entry in std::fs::read_dir(&dir)
+            .expect("ui_gtk/src is readable")
+            .flatten()
+        {
+            let path = entry.path();
+            if path.extension().is_some_and(|e| e == "rs") {
+                let text = std::fs::read_to_string(&path).unwrap_or_default();
+                out.push_str(&strip_test_modules(&code_only(&text)));
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn test_modules_are_excised_wherever_they_sit() {
+        let sample = "\
+fn keep_a() {}
+#[cfg(test)]
+mod early_tests {
+    fn fixture() { let c = '{'; let _ = c; }
+    #[test] fn t() { assert!(true); }
+}
+fn keep_b() {}
+#[cfg(test)]
+pub(crate) mod late_tests { fn t() {} }
+fn keep_c() {}
+#[cfg(test)]
+fn test_only_helper() {}
+";
+        let stripped = strip_test_modules(&code_only(sample));
+        for kept in ["fn keep_a", "fn keep_b", "fn keep_c", "fn test_only_helper"] {
+            assert!(stripped.contains(kept), "dropped production item `{kept}`");
+        }
+        for gone in ["early_tests", "fixture", "late_tests"] {
+            assert!(!stripped.contains(gone), "kept test-module text `{gone}`");
+        }
+    }
+}
+
 /// Guards the permanent-view model at the source level.
 ///
 /// `EditorHandle` is `Copy` with no lifetime, so a copy outliving its
@@ -2186,50 +2466,7 @@ pub(crate) fn refresh_tab_chrome() {
 /// the Document Map extended it from one permanent view to two.
 #[cfg(test)]
 mod single_view_source_invariant {
-    /// Strip line comments and the contents of string literals, so a
-    /// scanner matches code rather than prose. Crude — it does not
-    /// handle raw strings or block comments — but the first version of
-    /// this guard counted its own assertion text and a doc comment as
-    /// real calls, so "crude" needs to at least exclude those.
-    fn code_only(text: &str) -> String {
-        let mut out = String::with_capacity(text.len());
-        for line in text.lines() {
-            let line = line.split("//").next().unwrap_or("");
-            let mut in_str = false;
-            let mut prev_backslash = false;
-            for c in line.chars() {
-                match c {
-                    '"' if !prev_backslash => in_str = !in_str,
-                    _ if in_str => {}
-                    _ => out.push(c),
-                }
-                prev_backslash = c == '\\' && !prev_backslash;
-            }
-            out.push('\n');
-        }
-        out
-    }
-
-    /// This backend's own source, comments and string literals
-    /// removed, tests excluded.
-    fn production_code() -> String {
-        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
-        let mut out = String::new();
-        for entry in std::fs::read_dir(&dir)
-            .expect("ui_gtk/src is readable")
-            .flatten()
-        {
-            let path = entry.path();
-            if path.extension().is_some_and(|e| e == "rs") {
-                let text = std::fs::read_to_string(&path).unwrap_or_default();
-                // Fixtures legitimately build their own widget, so cut
-                // at the first test module in each file.
-                let cut = text.find("#[cfg(test)]").unwrap_or(text.len());
-                out.push_str(&code_only(&text[..cut]));
-            }
-        }
-        out
-    }
+    use super::source_scan::{code_only, production_code};
 
     #[test]
     fn the_scanner_ignores_comments_and_strings() {
@@ -2320,6 +2557,229 @@ let msg = \"found scintilla_new() calls\";
             0,
             "found `expand_all(`: it re-enters the lazy loader for unread folders and \
              defeats the Unfold All ceilings; use `expand_populated` instead"
+        );
+    }
+}
+
+/// Every closure GTK or `GLib` can call into runs at
+/// [`crate::at_callback_boundary`] — see its docs for why. Pinned
+/// at the source level because the property is invisible at
+/// runtime until something panics inside a handler, and a
+/// signal-connect site added without the boundary compiles, runs
+/// and looks identical to one with it.
+///
+/// The scan matches the *construct* — the closure literal passed to
+/// a `connect_*` / timer / `invoke` call must begin with the
+/// boundary call — rather than counting identifiers, on the lesson
+/// DESIGN.md §7.2 records three times over: a guard satisfied by a
+/// different call than the one it is guarding is not a guard.
+#[cfg(test)]
+mod callback_boundary_source_invariant {
+    use super::source_scan::{code_only, production_code, skip_char_literal};
+
+    /// The GLib/GTK entries into Rust this crate uses. A new kind of
+    /// entry (a `GestureDrag`, a `spawn_local`, …) must be added here
+    /// *and* wrapped, or it is simply not scanned.
+    const ENTRY_POINTS: &[&str] = &[
+        ".connect_",
+        ".invoke(",
+        "timeout_add_local(",
+        "timeout_add_seconds_local(",
+        "timeout_add_local_once(",
+        "idle_add_local_once(",
+    ];
+
+    const BOUNDARY: &str = "crate::at_callback_boundary(";
+
+    /// Scan comment-stripped source. Returns the number of entry-point
+    /// call sites seen and a description of each whose closure does not
+    /// begin at the boundary — including sites that pass a bare function
+    /// instead of a closure, which the boundary cannot wrap.
+    fn unguarded_sites(src: &str) -> (usize, Vec<String>) {
+        let bytes = src.as_bytes();
+        let mut sites = 0;
+        let mut bad = Vec::new();
+        for pattern in ENTRY_POINTS {
+            for (at, _) in src.match_indices(pattern) {
+                let Some(open) = open_paren(src, at, pattern) else {
+                    continue;
+                };
+                sites += 1;
+                let line_start = src[..at].rfind('\n').map_or(0, |i| i + 1);
+                let context = src[line_start..]
+                    .lines()
+                    .next()
+                    .unwrap_or("")
+                    .trim()
+                    .to_owned();
+                match closure_body_start(bytes, open) {
+                    None => bad.push(format!("bare function argument: `{context}`")),
+                    Some((body, _)) if !src[body..].starts_with(BOUNDARY) => {
+                        bad.push(format!("closure not at the boundary: `{context}`"));
+                    }
+                    Some((body, is_block)) if !boundary_spans_body(bytes, body, is_block) => {
+                        bad.push(format!("code after the boundary call: `{context}`"));
+                    }
+                    Some(_) => {}
+                }
+            }
+        }
+        (sites, bad)
+    }
+
+    /// Index of the call's `(`, or `None` when the match is not a call
+    /// (`.connect_` must be followed by a signal name and a paren).
+    fn open_paren(src: &str, at: usize, pattern: &str) -> Option<usize> {
+        if pattern.ends_with('(') {
+            return Some(at + pattern.len() - 1);
+        }
+        let rest = &src[at + pattern.len()..];
+        let name_len = rest
+            .bytes()
+            .take_while(|b| b.is_ascii_lowercase() || *b == b'_')
+            .count();
+        (name_len > 0 && rest[name_len..].starts_with('(')).then_some(at + pattern.len() + name_len)
+    }
+
+    fn whitespace_len(bytes: &[u8]) -> usize {
+        bytes.iter().take_while(|b| b.is_ascii_whitespace()).count()
+    }
+
+    /// Whether the boundary call starting at `body` is the closure's
+    /// *only* statement: after its matching `)` and an optional `;`,
+    /// the next byte must close the body — `}` for a block, or the
+    /// enclosing call's `)` / `,` for a bare expression. A statement
+    /// appended after the call would run outside the `catch_unwind`
+    /// while the site still *looked* guarded; this is the check that
+    /// the first version of the scanner lacked.
+    fn boundary_spans_body(bytes: &[u8], body: usize, is_block: bool) -> bool {
+        let open = body + BOUNDARY.len() - 1;
+        let Some(close) = matching_paren(bytes, open) else {
+            return false;
+        };
+        let mut i = close + 1 + whitespace_len(&bytes[close + 1..]);
+        if bytes.get(i) == Some(&b';') {
+            i += 1 + whitespace_len(&bytes[i + 1..]);
+        }
+        match bytes.get(i) {
+            Some(b'}') => is_block,
+            Some(b')' | b',') => !is_block,
+            _ => false,
+        }
+    }
+
+    /// Index of the `)` matching the `(` at `open`.
+    fn matching_paren(bytes: &[u8], open: usize) -> Option<usize> {
+        let mut depth = 0usize;
+        let mut i = open;
+        while i < bytes.len() {
+            match bytes[i] {
+                b'\'' => {
+                    i = skip_char_literal(bytes, i).max(i + 1);
+                    continue;
+                }
+                b'(' | b'[' | b'{' => depth += 1,
+                b')' | b']' | b'}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return Some(i);
+                    }
+                }
+                _ => {}
+            }
+            i += 1;
+        }
+        None
+    }
+
+    /// Walk the call's arguments for the closure literal; return the
+    /// index just past its `|…|` header (and an opening brace, if the
+    /// body is a block — the flag says which), or `None` when the call
+    /// ends without one.
+    fn closure_body_start(bytes: &[u8], open: usize) -> Option<(usize, bool)> {
+        let mut depth = 0usize;
+        let mut i = open + 1;
+        while i < bytes.len() {
+            match bytes[i] {
+                b'\'' => {
+                    i = skip_char_literal(bytes, i).max(i + 1);
+                    continue;
+                }
+                b'(' | b'[' | b'{' => depth += 1,
+                b')' | b']' | b'}' if depth == 0 => return None,
+                b')' | b']' | b'}' => depth -= 1,
+                b'|' if depth == 0 => {
+                    let header_end = if bytes.get(i + 1) == Some(&b'|') {
+                        i + 2
+                    } else {
+                        let close = bytes[i + 1..].iter().position(|b| *b == b'|')?;
+                        i + 1 + close + 1
+                    };
+                    // The body is either the boundary call itself or a
+                    // `{ … }` block whose first statement is; skip the
+                    // brace so both shapes (rustfmt picks per width) pass.
+                    let mut body = header_end + whitespace_len(&bytes[header_end..]);
+                    let is_block = bytes.get(body) == Some(&b'{');
+                    if is_block {
+                        body += 1 + whitespace_len(&bytes[body + 1..]);
+                    }
+                    return Some((body, is_block));
+                }
+                _ => {}
+            }
+            i += 1;
+        }
+        None
+    }
+
+    #[test]
+    fn the_scanner_flags_each_way_a_site_can_be_wrong() {
+        let sample = "\
+a.connect_clicked(|_| crate::at_callback_boundary(\"\", (), on_click));
+b.connect_draw(move |w, cr| { draw(w, cr); glib::Propagation::Proceed });
+c.connect_show(populate);
+glib::timeout_add_local(d, || crate::at_callback_boundary(\"\", (), tick));
+ctx.invoke(move || { drain(); });
+e.connect_local(\"sci-notify\", false, |v| {
+    crate::at_callback_boundary(\"\", None, || handle(v))
+});
+f.connect_clicked(|_| {
+    crate::at_callback_boundary(\"decoy\", (), || {});
+    dangerous_call();
+});
+g.connect_clicked(|_| {
+    crate::at_callback_boundary(\"\", (), on_click);
+});
+";
+        let (sites, bad) = unguarded_sites(&code_only(sample));
+        assert_eq!(sites, 8, "every site must be counted: {bad:?}");
+        assert_eq!(bad.len(), 4, "{bad:#?}");
+        assert!(bad[0].contains("b.connect_draw"), "{bad:#?}");
+        assert!(bad[1].starts_with("bare function"), "{bad:#?}");
+        assert!(
+            bad[2].starts_with("code after the boundary call"),
+            "{bad:#?}"
+        );
+        assert!(bad[2].contains("f.connect_clicked"), "{bad:#?}");
+        assert!(bad[3].contains("ctx.invoke"), "{bad:#?}");
+    }
+
+    #[test]
+    fn every_gtk_invoked_closure_runs_at_the_callback_boundary() {
+        let src = production_code();
+        let (sites, bad) = unguarded_sites(&src);
+        assert!(
+            sites >= 100,
+            "scanned only {sites} entry points; the walk is broken, so a clean result \
+             proves nothing"
+        );
+        assert!(
+            bad.is_empty(),
+            "{} GTK-invoked closure(s) do not run at `crate::at_callback_boundary` — a \
+             panic inside one unwinds into a GLib C frame and aborts the process rather \
+             than being logged and swallowed (see the helper's docs):\n  {}",
+            bad.len(),
+            bad.join("\n  ")
         );
     }
 }

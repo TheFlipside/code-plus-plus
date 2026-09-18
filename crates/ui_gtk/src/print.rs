@@ -192,55 +192,61 @@ fn build_print_operation(editor: EditorHandle, doc_name: &str) -> gtk::PrintOper
     // --- begin-print: paginate ---------------------------------------
     let starts_for_begin = Rc::clone(&page_starts);
     op.connect_begin_print(move |op, ctx| {
-        let Some(cr) = ctx.cairo_context() else {
-            // No surface to measure against; fall back to a single page so
-            // the operation still completes rather than dividing by nothing.
-            op.set_n_pages(1);
-            *starts_for_begin.borrow_mut() = vec![0];
-            return;
-        };
-        let (text_rc, page_rc) = page_rects(ctx);
-        let hdc = cr.to_raw_none().cast::<c_void>();
-        let starts = paginate(doc_len, |cp| {
-            format_range(editor, hdc, false, text_rc, page_rc, cp, doc_len)
+        crate::at_callback_boundary("print:op:begin_print", (), || {
+            let Some(cr) = ctx.cairo_context() else {
+                // No surface to measure against; fall back to a single page so
+                // the operation still completes rather than dividing by nothing.
+                op.set_n_pages(1);
+                *starts_for_begin.borrow_mut() = vec![0];
+                return;
+            };
+            let (text_rc, page_rc) = page_rects(ctx);
+            let hdc = cr.to_raw_none().cast::<c_void>();
+            let starts = paginate(doc_len, |cp| {
+                format_range(editor, hdc, false, text_rc, page_rc, cp, doc_len)
+            });
+            op.set_n_pages(i32::try_from(starts.len()).unwrap_or(i32::MAX));
+            *starts_for_begin.borrow_mut() = starts;
         });
-        op.set_n_pages(i32::try_from(starts.len()).unwrap_or(i32::MAX));
-        *starts_for_begin.borrow_mut() = starts;
     });
 
     // --- draw-page: header + one page of text ------------------------
     let starts_for_draw = Rc::clone(&page_starts);
     let name_for_draw = doc_name.to_owned();
     op.connect_draw_page(move |_op, ctx, page_nr| {
-        let Some(cr) = ctx.cairo_context() else {
-            return;
-        };
-        let (text_rc, page_rc) = page_rects(ctx);
-        let starts = starts_for_draw.borrow();
-        let total = starts.len();
-        let idx = usize::try_from(page_nr).unwrap_or(0);
-        let cp_min = starts.get(idx).copied().unwrap_or_else(|| {
-            // Unreachable under normal `GtkPrintOperation` semantics (it only
-            // asks for pages `begin-print` declared); log rather than silently
-            // mis-render if that ever changes.
-            tracing::warn!(
-                page = idx,
-                total,
-                "print: draw-page out of range; starting at 0"
-            );
-            0
+        crate::at_callback_boundary("print:op:draw_page", (), || {
+            let Some(cr) = ctx.cairo_context() else {
+                return;
+            };
+            let (text_rc, page_rc) = page_rects(ctx);
+            let starts = starts_for_draw.borrow();
+            let total = starts.len();
+            let idx = usize::try_from(page_nr).unwrap_or(0);
+            let cp_min = starts.get(idx).copied().unwrap_or_else(|| {
+                // Unreachable under normal `GtkPrintOperation` semantics (it only
+                // asks for pages `begin-print` declared); log rather than silently
+                // mis-render if that ever changes.
+                tracing::warn!(
+                    page = idx,
+                    total,
+                    "print: draw-page out of range; starting at 0"
+                );
+                0
+            });
+
+            draw_header(&cr, ctx, &name_for_draw, idx + 1, total);
+
+            let hdc = cr.to_raw_none().cast::<c_void>();
+            format_range(editor, hdc, true, text_rc, page_rc, cp_min, doc_len);
         });
-
-        draw_header(&cr, ctx, &name_for_draw, idx + 1, total);
-
-        let hdc = cr.to_raw_none().cast::<c_void>();
-        format_range(editor, hdc, true, text_rc, page_rc, cp_min, doc_len);
     });
 
     // --- end-print: release Scintilla's format cache -----------------
     op.connect_end_print(move |_op, _ctx| {
-        // wparam = 0, lparam = NULL: free the pagination/format cache.
-        editor.send(SCI_FORMATRANGEFULL, 0, 0);
+        crate::at_callback_boundary("print:op:end_print", (), || {
+            // wparam = 0, lparam = NULL: free the pagination/format cache.
+            editor.send(SCI_FORMATRANGEFULL, 0, 0);
+        });
     });
 
     op

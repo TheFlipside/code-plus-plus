@@ -366,6 +366,39 @@ fn report_find(found: Option<u64>) {
     });
 }
 
+/// Make closing the dialog *hide* it rather than destroy it.
+///
+/// Modeless: the next Ctrl+F reuses the window, and destroying it would
+/// dangle the state's reference. Escape hides too, matching the modal
+/// dialogs (Goto, the confirm prompts) that get it from GTK for free — a
+/// plain `gtk::Window` has no such behaviour, so it is wired explicitly.
+fn connect_hide_on_close(window: &gtk::Window) {
+    window.connect_delete_event(|w, _| {
+        crate::at_callback_boundary(
+            "search:window:delete_event",
+            glib::Propagation::Proceed,
+            || {
+                w.hide();
+                glib::Propagation::Stop
+            },
+        )
+    });
+    window.connect_key_press_event(|w, ev| {
+        crate::at_callback_boundary(
+            "search:window:key_press_event",
+            glib::Propagation::Proceed,
+            || {
+                if ev.keyval() == gtk::gdk::keys::constants::Escape {
+                    w.hide();
+                    glib::Propagation::Stop
+                } else {
+                    glib::Propagation::Proceed
+                }
+            },
+        )
+    });
+}
+
 /// Build the dialog and wire every button. The widgets it returns are
 /// stored on the state; the handlers reach `Shell` through `with_state`
 /// when they fire, so they capture no state themselves.
@@ -376,24 +409,7 @@ fn build_dialog() -> FindReplaceDialog {
     window.set_transient_for(parent.as_ref());
     window.set_type_hint(gtk::gdk::WindowTypeHint::Dialog);
     window.set_resizable(false);
-    // Modeless: closing it must hide, not destroy, so the next Ctrl+F
-    // reuses it. Destroying would dangle the state's reference.
-    window.connect_delete_event(|w, _| {
-        w.hide();
-        glib::Propagation::Stop
-    });
-    // Escape closes (hides) the window too, matching the modal dialogs
-    // (Goto, the confirm prompts) that get it from GTK for free. A plain
-    // `gtk::Window` has no such behaviour, so wire it explicitly; hide
-    // rather than destroy for the same reuse reason as delete-event.
-    window.connect_key_press_event(|w, ev| {
-        if ev.keyval() == gtk::gdk::keys::constants::Escape {
-            w.hide();
-            glib::Propagation::Stop
-        } else {
-            glib::Propagation::Proceed
-        }
-    });
+    connect_hide_on_close(&window);
 
     let outer = gtk::Box::new(gtk::Orientation::Vertical, 6);
     outer.set_margin_top(10);
@@ -455,13 +471,24 @@ fn build_dialog() -> FindReplaceDialog {
     // Handlers reach the dialog's own widgets back through `with_state`
     // when they fire, so they can read the query and options that are
     // live at click time rather than a snapshot from build time.
-    btn_next.connect_clicked(|_| do_find(true));
-    btn_prev.connect_clicked(|_| do_find(false));
-    btn_count.connect_clicked(|_| do_count());
-    btn_replace.connect_clicked(|_| do_replace_one());
-    btn_replace_all.connect_clicked(|_| do_replace_all());
+    btn_next.connect_clicked(|_| {
+        crate::at_callback_boundary("search:btn_next:clicked", (), || do_find(true));
+    });
+    btn_prev.connect_clicked(|_| {
+        crate::at_callback_boundary("search:btn_prev:clicked", (), || do_find(false));
+    });
+    btn_count
+        .connect_clicked(|_| crate::at_callback_boundary("search:btn_count:clicked", (), do_count));
+    btn_replace.connect_clicked(|_| {
+        crate::at_callback_boundary("search:btn_replace:clicked", (), do_replace_one);
+    });
+    btn_replace_all.connect_clicked(|_| {
+        crate::at_callback_boundary("search:btn_replace_all:clicked", (), do_replace_all);
+    });
     // Enter in the find field is Find Next.
-    find_entry.connect_activate(|_| do_find(true));
+    find_entry.connect_activate(|_| {
+        crate::at_callback_boundary("search:find_entry:activate", (), || do_find(true));
+    });
 
     FindReplaceDialog {
         window,
@@ -525,9 +552,19 @@ fn build_fif_page(notebook: &gtk::Notebook) -> FifPageWidgets {
 
     notebook.append_page(&page, Some(&gtk::Label::new(Some("Find in Files"))));
 
-    btn_browse.connect_clicked(|_| browse_fif_directory());
-    btn_find_all.connect_clicked(|_| do_find_all());
-    btn_replace_in_files.connect_clicked(|_| do_replace_in_files());
+    btn_browse.connect_clicked(|_| {
+        crate::at_callback_boundary("search:btn_browse:clicked", (), browse_fif_directory);
+    });
+    btn_find_all.connect_clicked(|_| {
+        crate::at_callback_boundary("search:btn_find_all:clicked", (), do_find_all);
+    });
+    btn_replace_in_files.connect_clicked(|_| {
+        crate::at_callback_boundary(
+            "search:btn_replace_in_files:clicked",
+            (),
+            do_replace_in_files,
+        );
+    });
 
     FifPageWidgets {
         directory,

@@ -292,22 +292,32 @@ pub fn build_dock(paned: &gtk::Paned) -> FifDock {
 
     // Double-click a row → open the file and jump to the match.
     tree.connect_row_activated(|tree, path, _col| {
-        on_row_activated(tree, path);
+        crate::at_callback_boundary("fif:tree:row_activated", (), || {
+            on_row_activated(tree, path);
+        });
     });
     cancel_btn.connect_clicked(|_| {
-        with_state(|st| {
-            st.shell.cancel_fif();
-            st.fif_dock.header.set_text("Cancelling…");
+        crate::at_callback_boundary("fif:cancel_btn:clicked", (), || {
+            with_state(|st| {
+                st.shell.cancel_fif();
+                st.fif_dock.header.set_text("Cancelling…");
+            });
         });
     });
     close_btn.connect_clicked(|_| {
-        // Hide the dock, and cancel any still-running job so no orphaned
-        // worker keeps posting wakes at an invisible dock.
-        with_state(|st| {
-            if st.fif_dock.active_job.take().is_some() {
-                st.shell.cancel_fif();
-            }
-            st.fif_dock.container.hide();
+        crate::at_callback_boundary("fif:close_btn:clicked", (), || {
+            // Hide the dock, and cancel any still-running job so no orphaned
+            // worker keeps posting wakes at an invisible dock.
+            with_state(|st| {
+                // Cancel before forgetting the handle: the other order
+                // would orphan a running worker if `cancel_fif` panicked
+                // between the two (caught at the boundary, so survivable).
+                if st.fif_dock.active_job.is_some() {
+                    st.shell.cancel_fif();
+                    st.fif_dock.active_job = None;
+                }
+                st.fif_dock.container.hide();
+            });
         });
     });
 

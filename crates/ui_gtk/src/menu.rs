@@ -110,7 +110,8 @@ fn build_right_shortcuts() -> gtk::MenuBar {
     // x-height. `with_label` (not `with_mnemonic`) so the glyph is literal.
     let new_item = gtk::MenuItem::with_label("\u{FF0B}");
     new_item.set_tooltip_text(Some("New"));
-    new_item.connect_activate(|_| on_new());
+    new_item
+        .connect_activate(|_| crate::at_callback_boundary("menu:new_item:activate", (), on_new));
     bar.append(&new_item);
 
     // ▼ open-files switcher. Its submenu is rebuilt from the live tab list
@@ -118,14 +119,18 @@ fn build_right_shortcuts() -> gtk::MenuBar {
     let list_item = gtk::MenuItem::with_label("\u{25BC}");
     list_item.set_tooltip_text(Some("Switch to open file"));
     let list_menu = gtk::Menu::new();
-    list_menu.connect_show(populate_open_files_menu);
+    list_menu.connect_show(|menu| {
+        crate::at_callback_boundary("menu:list_menu:show", (), || populate_open_files_menu(menu));
+    });
     list_item.set_submenu(Some(&list_menu));
     bar.append(&list_item);
 
     // X close active tab — the same handler as File → Close.
     let close_item = gtk::MenuItem::with_label("X");
     close_item.set_tooltip_text(Some("Close"));
-    close_item.connect_activate(|_| on_close());
+    close_item.connect_activate(|_| {
+        crate::at_callback_boundary("menu:close_item:activate", (), on_close);
+    });
     bar.append(&close_item);
 
     bar
@@ -169,7 +174,11 @@ fn populate_open_files_menu(menu: &gtk::Menu) {
             let item = gtk::CheckMenuItem::with_label(&name);
             item.set_draw_as_radio(true);
             item.set_active(is_active);
-            item.connect_activate(move |_| crate::select_tab_by_id(id));
+            item.connect_activate(move |_| {
+                crate::at_callback_boundary("menu:populate_open_files_menu:activate", (), || {
+                    crate::select_tab_by_id(id);
+                });
+            });
             menu.append(&item);
         }
     }
@@ -240,7 +249,11 @@ fn build_plugins_menu(bar: &gtk::MenuBar) {
     let Some(menu) = submenu_at(bar, 7, "Plugins") else {
         return;
     };
-    menu.connect_show(crate::plugin::ensure_loaded_and_rebuild);
+    menu.connect_show(|menu| {
+        crate::at_callback_boundary("menu:plugins:show", (), || {
+            crate::plugin::ensure_loaded_and_rebuild(menu);
+        });
+    });
     let placeholder = gtk::MenuItem::with_label("No plugins loaded");
     placeholder.set_sensitive(false);
     menu.append(&placeholder);
@@ -335,12 +348,20 @@ fn build_file_menu(bar: &gtk::MenuBar, accel: &gtk::AccelGroup) {
 fn insert_move_to_recycle_bin(menu: &gtk::Menu) {
     // Mnemonic on `b` (free in this flat File menu).
     let item = gtk::MenuItem::with_mnemonic("Move to Recycle _Bin");
-    item.connect_activate(|_| on_move_to_recycle_bin());
+    item.connect_activate(|_| {
+        crate::at_callback_boundary(
+            "menu:insert_move_to_recycle_bin:activate",
+            (),
+            on_move_to_recycle_bin,
+        );
+    });
     menu.append(&item);
     menu.connect_show(move |_| {
-        let has_path =
-            with_state(|st| st.shell.active().is_some_and(|t| t.path.is_some())).unwrap_or(false);
-        item.set_sensitive(has_path);
+        crate::at_callback_boundary("menu:insert_move_to_recycle_bin:show", (), || {
+            let has_path = with_state(|st| st.shell.active().is_some_and(|t| t.path.is_some()))
+                .unwrap_or(false);
+            item.set_sensitive(has_path);
+        });
     });
 }
 
@@ -467,7 +488,15 @@ fn insert_close_multiple_documents(menu: &gtk::Menu) {
     let mut items: Vec<(gtk::MenuItem, codepp_shell::CloseMultiKind)> = Vec::new();
     for (label, kind) in rows {
         let item = gtk::MenuItem::with_mnemonic(label);
-        item.connect_activate(move |_| crate::close_multiple_documents(kind));
+        item.connect_activate(move |_| {
+            crate::at_callback_boundary(
+                "menu:insert_close_multiple_documents:activate",
+                (),
+                || {
+                    crate::close_multiple_documents(kind);
+                },
+            );
+        });
         submenu.append(&item);
         items.push((item, kind));
     }
@@ -480,12 +509,17 @@ fn insert_close_multiple_documents(menu: &gtk::Menu) {
 
     // Grey each entry per the shared predicate whenever the File menu opens.
     menu.connect_show(move |_| {
-        with_state(|st| {
-            for (item, kind) in &items {
-                let enabled =
-                    codepp_shell::close_multi_enabled(&st.shell.tabs, st.shell.active_tab, *kind);
-                item.set_sensitive(enabled);
-            }
+        crate::at_callback_boundary("menu:insert_close_multiple_documents:show", (), || {
+            with_state(|st| {
+                for (item, kind) in &items {
+                    let enabled = codepp_shell::close_multi_enabled(
+                        &st.shell.tabs,
+                        st.shell.active_tab,
+                        *kind,
+                    );
+                    item.set_sensitive(enabled);
+                }
+            });
         });
     });
 }
@@ -517,14 +551,26 @@ fn insert_open_containing_folder(menu: &gtk::Menu) {
     // Submenu mnemonics (E / T / W) are scoped to this popup, so they cannot
     // clash with the top-level File-menu mnemonics.
     let explorer = gtk::MenuItem::with_mnemonic("File _Explorer");
-    explorer.connect_activate(|_| open_containing(ContainingAction::FileManager));
+    explorer.connect_activate(|_| {
+        crate::at_callback_boundary("menu:explorer:activate", (), || {
+            open_containing(ContainingAction::FileManager);
+        });
+    });
     submenu.append(&explorer);
     let terminal = gtk::MenuItem::with_mnemonic("_Terminal");
-    terminal.connect_activate(|_| open_containing(ContainingAction::Terminal));
+    terminal.connect_activate(|_| {
+        crate::at_callback_boundary("menu:terminal:activate", (), || {
+            open_containing(ContainingAction::Terminal);
+        });
+    });
     submenu.append(&terminal);
     submenu.append(&gtk::SeparatorMenuItem::new());
     let workspace = gtk::MenuItem::with_mnemonic("Folder as _Workspace");
-    workspace.connect_activate(|_| open_containing(ContainingAction::Workspace));
+    workspace.connect_activate(|_| {
+        crate::at_callback_boundary("menu:workspace:activate", (), || {
+            open_containing(ContainingAction::Workspace);
+        });
+    });
     submenu.append(&workspace);
 
     // Mnemonic on `g` — `_C`ontaining would clash with `_Close`, and every
@@ -536,15 +582,17 @@ fn insert_open_containing_folder(menu: &gtk::Menu) {
     // Viewer, Open Folder as Workspace — Win32's order.
     menu.insert(&parent, 2);
     menu.connect_show(move |_| {
-        let has_parent = with_state(|st| {
-            st.shell
-                .active()
-                .and_then(|t| t.path.as_deref())
-                .and_then(Path::parent)
-                .is_some()
-        })
-        .unwrap_or(false);
-        parent.set_sensitive(has_parent);
+        crate::at_callback_boundary("menu:insert_open_containing_folder:show", (), || {
+            let has_parent = with_state(|st| {
+                st.shell
+                    .active()
+                    .and_then(|t| t.path.as_deref())
+                    .and_then(Path::parent)
+                    .is_some()
+            })
+            .unwrap_or(false);
+            parent.set_sensitive(has_parent);
+        });
     });
 }
 
@@ -687,14 +735,18 @@ fn insert_open_in_default_viewer(menu: &gtk::Menu) {
     // "Recent _Files" submenu (shown when the In-Submenu recent-files pref is
     // on), `_D`efault with `Loa_d Session`, and `_V`iewer with `Sa_ve All`.
     let odv = gtk::MenuItem::with_mnemonic("Open in Default Vi_ewer");
-    odv.connect_activate(|_| on_open_in_default_viewer());
+    odv.connect_activate(|_| {
+        crate::at_callback_boundary("menu:odv:activate", (), on_open_in_default_viewer);
+    });
     // Position 3: after New (0), Open (1) and Open Containing Folder (2),
     // before Open Folder as Workspace.
     menu.insert(&odv, 3);
     menu.connect_show(move |_| {
-        let has_path =
-            with_state(|st| st.shell.active().is_some_and(|t| t.path.is_some())).unwrap_or(false);
-        odv.set_sensitive(has_path);
+        crate::at_callback_boundary("menu:insert_open_in_default_viewer:show", (), || {
+            let has_path = with_state(|st| st.shell.active().is_some_and(|t| t.path.is_some()))
+                .unwrap_or(false);
+            odv.set_sensitive(has_path);
+        });
     });
 }
 
@@ -735,17 +787,23 @@ fn build_file_menu_lower(menu: &gtk::Menu, accel: &gtk::AccelGroup) {
     // Mnemonic on the `d` — `_L` is already claimed by `Close A_ll`'s `l`,
     // which this File menu is careful to avoid colliding with elsewhere.
     let load_session = gtk::MenuItem::with_mnemonic("Loa_d Session…");
-    load_session.connect_activate(|_| on_load_session());
+    load_session.connect_activate(|_| {
+        crate::at_callback_boundary("menu:load_session:activate", (), on_load_session);
+    });
     menu.append(&load_session);
     let save_session = gtk::MenuItem::with_mnemonic("Save Sess_ion…");
-    save_session.connect_activate(|_| on_save_session());
+    save_session.connect_activate(|_| {
+        crate::at_callback_boundary("menu:save_session:activate", (), on_save_session);
+    });
     menu.append(&save_session);
     menu.append(&gtk::SeparatorMenuItem::new());
 
     // Print the active buffer (Ctrl+P).
     let print = gtk::MenuItem::with_mnemonic("_Print…");
     print.add_accelerator("activate", accel, *key::p, ctrl, gtk::AccelFlags::VISIBLE);
-    print.connect_activate(|_| crate::print::show());
+    print.connect_activate(|_| {
+        crate::at_callback_boundary("menu:print:activate", (), crate::print::show);
+    });
     menu.append(&print);
 
     // Print Now: straight to the default printer, no dialog. Placed directly
@@ -759,7 +817,9 @@ fn build_file_menu_lower(menu: &gtk::Menu, accel: &gtk::AccelGroup) {
     // click-reachable but not mnemonic-reachable — an accepted parity quirk,
     // not a free key.
     let print_now = gtk::MenuItem::with_mnemonic("Print _Now");
-    print_now.connect_activate(|_| crate::print::print_now());
+    print_now.connect_activate(|_| {
+        crate::at_callback_boundary("menu:print_now:activate", (), crate::print::print_now);
+    });
     menu.append(&print_now);
 
     // Ctrl+Shift+T (Restore Recent Closed File) is registered directly on the
@@ -773,8 +833,10 @@ fn build_file_menu_lower(menu: &gtk::Menu, accel: &gtk::AccelGroup) {
         ctrl_shift,
         gtk::AccelFlags::VISIBLE,
         |_, _, _, _| {
-            restore_recent_closed();
-            true
+            crate::at_callback_boundary("menu:accel:accel_group", false, || {
+                restore_recent_closed();
+                true
+            })
         },
     );
     let hint = gtk::AccelGroup::new();
@@ -790,7 +852,9 @@ fn build_file_menu_lower(menu: &gtk::Menu, accel: &gtk::AccelGroup) {
     let anchor = gtk::SeparatorMenuItem::new();
     menu.append(&anchor);
     RECENT_ANCHOR.with(|a| *a.borrow_mut() = Some(anchor));
-    menu.connect_show(rebuild_recent_region);
+    menu.connect_show(|menu| {
+        crate::at_callback_boundary("menu:file:show", (), || rebuild_recent_region(menu));
+    });
 
     // Exit stays at the bottom; Alt+F4 is the conventional close accelerator
     // and is shown as its hint (the window manager typically also maps it to
@@ -804,8 +868,10 @@ fn build_file_menu_lower(menu: &gtk::Menu, accel: &gtk::AccelGroup) {
         gtk::AccelFlags::VISIBLE,
     );
     exit.connect_activate(|_| {
-        save_session_now();
-        gtk::main_quit();
+        crate::at_callback_boundary("menu:exit:activate", (), || {
+            save_session_now();
+            gtk::main_quit();
+        });
     });
     menu.append(&exit);
 }
@@ -905,7 +971,11 @@ fn recent_region_items() -> Vec<gtk::Widget> {
                 codepp_shell::sanitize_str_for_display(&cfg.display_path(path))
             );
             let item = gtk::MenuItem::with_label(&label);
-            item.connect_activate(move |_| open_recent_at(index));
+            item.connect_activate(move |_| {
+                crate::at_callback_boundary("menu:recent_region_items:activate", (), || {
+                    open_recent_at(index);
+                });
+            });
             item
         })
         .collect();
@@ -928,15 +998,20 @@ fn recent_region_items() -> Vec<gtk::Widget> {
             gtk::AccelFlags::VISIBLE,
         );
     }
-    restore.connect_activate(|_| restore_recent_closed());
+    restore.connect_activate(|_| {
+        crate::at_callback_boundary("menu:restore:activate", (), restore_recent_closed);
+    });
     // No mnemonics on these two, matching Win32 (`inline_action_labels`) — and
     // it avoids an `O` clash with `_Open…` in the same flat menu.
     let open_all = gtk::MenuItem::with_label("Open All Recent Files");
     open_all.set_sensitive(has);
-    open_all.connect_activate(|_| open_all_recent());
+    open_all.connect_activate(|_| {
+        crate::at_callback_boundary("menu:open_all:activate", (), open_all_recent);
+    });
     let empty = gtk::MenuItem::with_label("Empty Recent Files List");
     empty.set_sensitive(has);
-    empty.connect_activate(|_| empty_recent());
+    empty
+        .connect_activate(|_| crate::at_callback_boundary("menu:empty:activate", (), empty_recent));
 
     if cfg.in_submenu {
         let submenu = gtk::Menu::new();
@@ -1269,7 +1344,9 @@ fn build_edit_menu(bar: &gtk::MenuBar, accel: &gtk::AccelGroup) {
         ctrl_shift,
         gtk::AccelFlags::VISIBLE,
     );
-    begin_end.connect_activate(|_| on_begin_end_select(false));
+    begin_end.connect_activate(|_| {
+        crate::at_callback_boundary("menu:begin_end:activate", (), || on_begin_end_select(false));
+    });
     menu.append(&begin_end);
     let begin_end_column = gtk::CheckMenuItem::with_mnemonic("Begin/End Select in Column _Mode");
     begin_end_column.add_accelerator(
@@ -1279,7 +1356,11 @@ fn build_edit_menu(bar: &gtk::MenuBar, accel: &gtk::AccelGroup) {
         alt_shift,
         gtk::AccelFlags::VISIBLE,
     );
-    begin_end_column.connect_activate(|_| on_begin_end_select(true));
+    begin_end_column.connect_activate(|_| {
+        crate::at_callback_boundary("menu:begin_end_column:activate", (), || {
+            on_begin_end_select(true);
+        });
+    });
     menu.append(&begin_end_column);
     BEGIN_END_SELECT_ITEM.with(|c| *c.borrow_mut() = Some(begin_end));
     BEGIN_END_SELECT_COLUMN_ITEM.with(|c| *c.borrow_mut() = Some(begin_end_column));
@@ -1379,7 +1460,7 @@ pub(crate) fn refresh_edit_menu() {
         SelectMarkMode::Stream { .. } => (true, false, true, false),
         SelectMarkMode::Column { .. } => (false, true, false, true),
     };
-    REFRESHING_EDIT_MENU_MARKS.with(|r| r.set(true));
+    let _refreshing = crate::FlagGuard::set(&REFRESHING_EDIT_MENU_MARKS);
     BEGIN_END_SELECT_ITEM.with(|c| {
         if let Some(item) = c.borrow().as_ref() {
             item.set_active(stream_checked);
@@ -1392,7 +1473,6 @@ pub(crate) fn refresh_edit_menu() {
             item.set_sensitive(column_enabled);
         }
     });
-    REFRESHING_EDIT_MENU_MARKS.with(|r| r.set(false));
 }
 
 #[cfg(test)]
@@ -1664,7 +1744,9 @@ fn append_dual_accel_edit_item(
     hbox.pack_start(&name, true, true, 0);
     hbox.pack_end(&hint_label, false, false, 0);
     item.add(&hbox);
-    item.connect_activate(move |_| action());
+    item.connect_activate(move |_| {
+        crate::at_callback_boundary("menu:append_dual_accel_edit_item:activate", (), action);
+    });
     item.add_accelerator(
         "activate",
         accel,
@@ -1787,10 +1869,12 @@ fn build_view_menu(bar: &gtk::MenuBar, accel: &gtk::AccelGroup) {
     menu.append(&gtk::SeparatorMenuItem::new());
     let workspace = gtk::CheckMenuItem::with_mnemonic("Folder as Works_pace");
     workspace.connect_toggled(|it| {
-        if crate::workspace::syncing() {
-            return;
-        }
-        crate::workspace::set_visible(it.is_active());
+        crate::at_callback_boundary("menu:workspace:toggled", (), || {
+            if crate::workspace::syncing() {
+                return;
+            }
+            crate::workspace::set_visible(it.is_active());
+        });
     });
     menu.append(&workspace);
     crate::workspace::register_menu_check(workspace);
@@ -1801,10 +1885,12 @@ fn build_view_menu(bar: &gtk::MenuBar, accel: &gtk::AccelGroup) {
     // loop by `docmap::syncing`) and stays out of `VIEW_INDICATORS`.
     let docmap = gtk::CheckMenuItem::with_mnemonic("Document _Map");
     docmap.connect_toggled(|it| {
-        if crate::docmap::syncing() {
-            return;
-        }
-        crate::docmap::set_visible(it.is_active());
+        crate::at_callback_boundary("menu:docmap:toggled", (), || {
+            if crate::docmap::syncing() {
+                return;
+            }
+            crate::docmap::set_visible(it.is_active());
+        });
     });
     menu.append(&docmap);
     crate::docmap::register_menu_check(docmap);
@@ -1815,10 +1901,18 @@ fn build_view_menu(bar: &gtk::MenuBar, accel: &gtk::AccelGroup) {
     // off-screen, or restored onto a monitor that has since changed.
     menu.append(&gtk::SeparatorMenuItem::new());
     let reset_window = gtk::MenuItem::with_mnemonic("Restore _Default Window Size");
-    reset_window.connect_activate(|_| crate::restore_default_window_size());
+    reset_window.connect_activate(|_| {
+        crate::at_callback_boundary(
+            "menu:reset_window:activate",
+            (),
+            crate::restore_default_window_size,
+        );
+    });
     menu.append(&reset_window);
 
-    menu.connect_show(|_| refresh_view_indicators());
+    menu.connect_show(|_| {
+        crate::at_callback_boundary("menu:build_view_menu:show", (), refresh_view_indicators);
+    });
     menu.show_all();
 }
 
@@ -1915,7 +2009,7 @@ pub(crate) fn refresh_view_indicators() {
     }) else {
         return;
     };
-    REFRESHING_MARKS.with(|r| r.set(true));
+    let _refreshing = crate::FlagGuard::set(&REFRESHING_MARKS);
     VIEW_INDICATORS.with(|reg| {
         let reg = reg.borrow();
         if let Some(i) = &reg.menu_word_wrap {
@@ -1937,7 +2031,6 @@ pub(crate) fn refresh_view_indicators() {
             b.set_active(indent);
         }
     });
-    REFRESHING_MARKS.with(|r| r.set(false));
 }
 
 /// Build the Encoding menu: the four wired Unicode save targets plus a
@@ -1967,15 +2060,21 @@ fn build_encoding_menu(bar: &gtk::MenuBar) {
             None => item.set_sensitive(false),
             Some(e) => {
                 let apply = e.clone();
-                item.connect_activate(move |_| apply_encoding(apply.clone()));
+                item.connect_activate(move |_| {
+                    crate::at_callback_boundary("menu:build_encoding_menu:activate", (), || {
+                        apply_encoding(apply.clone());
+                    });
+                });
                 items.push((e, item.clone()));
             }
         }
         menu.append(&item);
     }
     menu.connect_show(move |_| {
-        let active = with_state(|st| st.shell.active().map(|t| t.encoding.clone())).flatten();
-        set_encoding_marks(&items, active.as_ref());
+        crate::at_callback_boundary("menu:build_encoding_menu:show", (), || {
+            let active = with_state(|st| st.shell.active().map(|t| t.encoding.clone())).flatten();
+            set_encoding_marks(&items, active.as_ref());
+        });
     });
     menu.show_all();
 }
@@ -2000,11 +2099,10 @@ fn set_encoding_marks(
     items: &[(codepp_core::Encoding, gtk::CheckMenuItem)],
     active: Option<&codepp_core::Encoding>,
 ) {
-    REFRESHING_MARKS.with(|r| r.set(true));
+    let _refreshing = crate::FlagGuard::set(&REFRESHING_MARKS);
     for (enc, item) in items {
         item.set_active(active.is_some_and(|a| same_encoding_family(a, enc)));
     }
-    REFRESHING_MARKS.with(|r| r.set(false));
 }
 
 /// Whether `active` should light up the menu row for `item` — treating the
@@ -2089,13 +2187,15 @@ fn build_language_menu(bar: &gtk::MenuBar, window: &gtk::Window) {
     // happen to group into letters.
     let fixed_count = menu.children().len();
     menu.connect_show(move |menu| {
-        // Rebuild the UDL rows first so freshly-added rows get marked in the
-        // same pass — GTK marks from a captured item list, unlike Cocoa's
-        // `validateMenuItem:` which reads live state per item.
-        let mut all = items.clone();
-        all.extend(rebuild_udl_rows(menu, fixed_count));
-        let active = with_state(|st| st.shell.active().map(|t| t.lang.as_npp_id())).flatten();
-        set_language_marks(&all, active);
+        crate::at_callback_boundary("menu:build_language_menu:show", (), || {
+            // Rebuild the UDL rows first so freshly-added rows get marked in the
+            // same pass — GTK marks from a captured item list, unlike Cocoa's
+            // `validateMenuItem:` which reads live state per item.
+            let mut all = items.clone();
+            all.extend(rebuild_udl_rows(menu, fixed_count));
+            let active = with_state(|st| st.shell.active().map(|t| t.lang.as_npp_id())).flatten();
+            set_language_marks(&all, active);
+        });
     });
     menu.show_all();
 }
@@ -2149,7 +2249,11 @@ fn first_letter(label: &str) -> char {
 fn add_lang_item(menu: &gtk::Menu, label: &str, lang_id: i32) -> (i32, gtk::CheckMenuItem) {
     let item = gtk::CheckMenuItem::with_label(label);
     item.set_draw_as_radio(true);
-    item.connect_activate(move |_| apply_language(lang_id));
+    item.connect_activate(move |_| {
+        crate::at_callback_boundary("menu:add_lang_item:activate", (), || {
+            apply_language(lang_id);
+        });
+    });
     menu.append(&item);
     (lang_id, item.clone())
 }
@@ -2177,11 +2281,10 @@ fn apply_language(lang_id: i32) {
 
 /// Set the language menu's radio marks to the active language's id.
 fn set_language_marks(items: &[(i32, gtk::CheckMenuItem)], active: Option<i32>) {
-    REFRESHING_MARKS.with(|r| r.set(true));
+    let _refreshing = crate::FlagGuard::set(&REFRESHING_MARKS);
     for (id, item) in items {
         item.set_active(active == Some(*id));
     }
-    REFRESHING_MARKS.with(|r| r.set(false));
 }
 
 /// The "User-Defined language" submenu at the bottom of the Language menu.
@@ -2203,12 +2306,18 @@ fn build_udl_submenu(window: &gtk::Window) -> gtk::MenuItem {
 
     let open_folder = gtk::MenuItem::with_label("Open User Defined Language folder…");
     let win = window.clone();
-    open_folder.connect_activate(move |_| open_udl_folder(&win));
+    open_folder.connect_activate(move |_| {
+        crate::at_callback_boundary("menu:open_folder:activate", (), || open_udl_folder(&win));
+    });
     sub.append(&open_folder);
 
     let collection = gtk::MenuItem::with_label("Notepad++ User Defined Languages Collection");
     let win = window.clone();
-    collection.connect_activate(move |_| open_uri(&win, UDL_COLLECTION_URL));
+    collection.connect_activate(move |_| {
+        crate::at_callback_boundary("menu:collection:activate", (), || {
+            open_uri(&win, UDL_COLLECTION_URL);
+        });
+    });
     sub.append(&collection);
 
     parent.set_submenu(Some(&sub));
@@ -2265,12 +2374,18 @@ fn build_settings_menu(bar: &gtk::MenuBar, window: &gtk::Window) {
 
     let prefs = gtk::MenuItem::with_mnemonic("_Preferences…");
     let win = window.clone();
-    prefs.connect_activate(move |_| crate::preferences::show(&win));
+    prefs.connect_activate(move |_| {
+        crate::at_callback_boundary("menu:prefs:activate", (), || crate::preferences::show(&win));
+    });
     menu.append(&prefs);
 
     let style = gtk::MenuItem::with_mnemonic("_Style Configurator…");
     let win = window.clone();
-    style.connect_activate(move |_| crate::style_config::show(&win));
+    style.connect_activate(move |_| {
+        crate::at_callback_boundary("menu:style:activate", (), || {
+            crate::style_config::show(&win);
+        });
+    });
     menu.append(&style);
 
     menu.show_all();
@@ -2295,7 +2410,11 @@ fn build_help_menu(bar: &gtk::MenuBar, accel: &gtk::AccelGroup, window: &gtk::Wi
     ] {
         let item = gtk::MenuItem::with_mnemonic(label);
         let win = window.clone();
-        item.connect_activate(move |_| open_uri(&win, url));
+        item.connect_activate(move |_| {
+            crate::at_callback_boundary("menu:build_help_menu:activate", (), || {
+                open_uri(&win, url);
+            });
+        });
         menu.append(&item);
     }
 
@@ -2318,7 +2437,7 @@ fn build_help_menu(bar: &gtk::MenuBar, accel: &gtk::AccelGroup, window: &gtk::Wi
 
     // About — the one interactive item with an accelerator (F1).
     let about = gtk::MenuItem::with_mnemonic("_About Code++");
-    about.connect_activate(|_| on_about());
+    about.connect_activate(|_| crate::at_callback_boundary("menu:about:activate", (), on_about));
     about.add_accelerator(
         "activate",
         accel,
@@ -2338,7 +2457,9 @@ fn populate(menu: &gtk::Menu, accel: &gtk::AccelGroup, entries: &[Entry]) {
     for e in entries {
         let item = gtk::MenuItem::with_mnemonic(e.label);
         let action = e.action;
-        item.connect_activate(move |_| action());
+        item.connect_activate(move |_| {
+            crate::at_callback_boundary("menu:populate:activate", (), action);
+        });
         if let Some((key, modifier)) = e.accel {
             item.add_accelerator("activate", accel, *key, modifier, gtk::AccelFlags::VISIBLE);
         }
@@ -2363,7 +2484,9 @@ fn add_check(
 ) -> gtk::CheckMenuItem {
     let item = gtk::CheckMenuItem::with_mnemonic(label);
     item.set_active(initial);
-    item.connect_toggled(move |it| toggled(it.is_active()));
+    item.connect_toggled(move |it| {
+        crate::at_callback_boundary("menu:item:toggled", (), || toggled(it.is_active()));
+    });
     menu.append(&item);
     item
 }

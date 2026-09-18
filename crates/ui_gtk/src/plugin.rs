@@ -37,7 +37,6 @@
 //! `with_state`'s `try_borrow_mut` already declines true re-entry.
 
 use std::ffi::c_void;
-use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::atomic::{AtomicPtr, Ordering};
 use std::sync::OnceLock;
 use std::thread::ThreadId;
@@ -173,34 +172,43 @@ unsafe impl Send for MainThreadPtr {}
 /// earlier version of this comment claimed it did, and that the arm was
 /// the graceful teardown escape hatch — it is not, and the difference
 /// matters because it is the whole reason the paragraph above has to
-/// talk about leaked threads at all.
+/// talk about leaked threads at all. The one way the arm *is* reached
+/// in practice is a panic inside the hop: [`crate::at_callback_boundary`]
+/// swallows it (logging at `error`), the sender is dropped unanswered,
+/// and the caller gets 0 — the same answer the unknown-handle branch
+/// gives, and a logged one.
 fn send_sci_on_main(hwnd: *mut c_void, msg: u32, wparam: usize, lparam: isize) -> isize {
     let ptr = MainThreadPtr(hwnd);
     let (tx, rx) = std::sync::mpsc::sync_channel(1);
+    // `plugin_dispatch`'s boundary runs on the *plugin's* thread and
+    // cannot cover this closure, which GLib's main loop enters through
+    // its own C frames — so the hop carries its own.
     glib::MainContext::default().invoke(move || {
-        let ptr = ptr;
-        // A panic here would unwind through glib's C frames, which is UB
-        // — the same reason `plugin_dispatch` carries a boundary. That
-        // one runs on the *plugin's* thread and cannot cover this
-        // closure, so the hop needs its own.
-        let result = catch_unwind(AssertUnwindSafe(|| {
+        crate::at_callback_boundary("plugin:sci_marshal", (), || {
+            // Load-bearing, not a leftover: edition-2021 closures capture
+            // disjoint fields, so without this rebind the outer `move`
+            // closure would capture only `ptr.0` — a bare `*mut c_void`,
+            // which is not `Send` — and `invoke`'s `Send` bound fails to
+            // compile. Naming the whole `MainThreadPtr` captures the
+            // wrapper that carries the `unsafe impl Send`.
+            let ptr = ptr;
             // SAFETY: `ptr.0` passed `is_valid_scintilla` on the calling
             // thread and addresses the host's own permanently-live
             // `ScintillaObject*` (see `MainThreadPtr`). This closure runs
             // on the UI thread, which is the affinity GTK requires and
             // the reason the message was marshaled here at all.
-            unsafe { scintilla_send_message(ptr.0, msg, wparam, lparam) }
-        }))
-        .unwrap_or(0);
-        // The receiver is alive by construction — the calling thread is
-        // parked in `recv` — unless it panicked, in which case dropping
-        // the result is correct.
-        let _ = tx.send(result);
+            let result = unsafe { scintilla_send_message(ptr.0, msg, wparam, lparam) };
+            // The receiver is alive by construction — the calling thread
+            // is parked in `recv` — unless it panicked, in which case
+            // dropping the result is correct.
+            let _ = tx.send(result);
+        });
     });
     rx.recv().unwrap_or_else(|_| {
         tracing::warn!(
             msg,
-            "cross-thread SCI_* dropped: the main context went away before it ran"
+            "cross-thread SCI_* dropped: the main-thread hop never answered \
+             (it panicked — see the error above — or the context is gone)"
         );
         0
     })
@@ -210,9 +218,9 @@ fn send_sci_on_main(hwnd: *mut c_void, msg: u32, wparam: usize, lparam: isize) -
 ///
 /// `hwnd == npp_sentinel()` → an `NPPM_*` message for the host
 /// dispatcher; anything else → an `SCI_*` message for that Scintilla
-/// widget. Wrapped in `catch_unwind`: it is entered from plugin C code,
-/// and a Rust panic unwinding across that frame is UB (dev builds
-/// default to unwind).
+/// widget. Runs at a [`crate::at_callback_boundary`]: it is entered from
+/// plugin C code, and a Rust panic unwinding across that frame is UB (dev
+/// builds default to unwind).
 extern "C" fn plugin_dispatch(hwnd: *mut c_void, msg: u32, wparam: usize, lparam: isize) -> isize {
     // Nothing may reach here before `discover` armed the affinity check:
     // an unset `MAIN_THREAD` makes `on_main_thread` answer `false` for
@@ -226,13 +234,13 @@ extern "C" fn plugin_dispatch(hwnd: *mut c_void, msg: u32, wparam: usize, lparam
     // handed a handle), so this states the ordering rather than handling
     // it, in the same spirit as the crate's source-scan guards.
     //
-    // Deliberately outside the `catch_unwind` below, which would
-    // otherwise swallow the unwind and hand the plugin a plain 0.
+    // Deliberately outside the boundary below, which would otherwise
+    // swallow the unwind and hand the plugin a plain 0.
     debug_assert!(
         MAIN_THREAD.get().is_some(),
         "plugin_dispatch reached before discover() armed MAIN_THREAD",
     );
-    catch_unwind(AssertUnwindSafe(|| {
+    crate::at_callback_boundary("plugin:dispatch", 0, || {
         if std::ptr::eq(hwnd, npp_sentinel()) {
             dispatch_nppm(msg, wparam, lparam)
         } else if is_valid_scintilla(hwnd) {
@@ -263,8 +271,7 @@ extern "C" fn plugin_dispatch(hwnd: *mut c_void, msg: u32, wparam: usize, lparam
             // unknown/dangling HWND (returns 0, no dereference).
             0
         }
-    }))
-    .unwrap_or(0)
+    })
 }
 
 /// Route an `NPPM_*` message to the shared dispatcher, building the GTK
@@ -399,7 +406,11 @@ fn rebuild_menu(menu: &gtk::Menu) {
             for (label, cmd_id, is_command, chord) in items {
                 if is_command {
                     let item = gtk::MenuItem::with_label(&label);
-                    item.connect_activate(move |_| on_plugin_command(cmd_id));
+                    item.connect_activate(move |_| {
+                        crate::at_callback_boundary("plugin:item:activate", (), || {
+                            on_plugin_command(cmd_id);
+                        });
+                    });
                     // Show the shortcut hint via the display-only accel
                     // group (never routes the key — the real binding is
                     // `register_startup_shortcuts`). Only a chord that
@@ -435,10 +446,14 @@ fn rebuild_menu(menu: &gtk::Menu) {
 
     menu.append(&gtk::SeparatorMenuItem::new());
     let manager = gtk::MenuItem::with_mnemonic("_Plugin Manager…");
-    manager.connect_activate(|_| show_plugin_manager());
+    manager.connect_activate(|_| {
+        crate::at_callback_boundary("plugin:manager:activate", (), show_plugin_manager);
+    });
     menu.append(&manager);
     let folder = gtk::MenuItem::with_mnemonic("_Open Plugin Folder");
-    folder.connect_activate(|_| open_plugin_folder());
+    folder.connect_activate(|_| {
+        crate::at_callback_boundary("plugin:folder:activate", (), open_plugin_folder);
+    });
     menu.append(&folder);
 
     menu.show_all();
@@ -481,25 +496,27 @@ fn show_plugin_manager() {
     let toggle = gtk::CellRendererToggle::new();
     let store_toggle = store.clone();
     toggle.connect_toggled(move |_, path| {
-        let Some(iter) = store_toggle.iter(&path) else {
-            return;
-        };
-        // Fail safe rather than fall back to a substitute row: a type
-        // mismatch here would otherwise silently toggle plugin index 0 (or
-        // the wrong enabled state). The model is first-party and correctly
-        // typed, so this never triggers today, but a future column-order
-        // change fails closed instead of mutating the wrong plugin.
-        let (Ok(was_enabled), Ok(index)) = (
-            store_toggle.value(&iter, 0).get::<bool>(),
-            store_toggle.value(&iter, 3).get::<u64>(),
-        ) else {
-            return;
-        };
-        let now_enabled = !was_enabled;
-        // `disabled == !enabled`. Persists to disabled.txt; effective next
-        // launch (an already-loaded plugin isn't unloaded mid-session).
-        with_state(|st| st.shell.set_plugin_disabled(index as usize, !now_enabled));
-        store_toggle.set_value(&iter, 0, &now_enabled.to_value());
+        crate::at_callback_boundary("plugin:toggle:toggled", (), || {
+            let Some(iter) = store_toggle.iter(&path) else {
+                return;
+            };
+            // Fail safe rather than fall back to a substitute row: a type
+            // mismatch here would otherwise silently toggle plugin index 0 (or
+            // the wrong enabled state). The model is first-party and correctly
+            // typed, so this never triggers today, but a future column-order
+            // change fails closed instead of mutating the wrong plugin.
+            let (Ok(was_enabled), Ok(index)) = (
+                store_toggle.value(&iter, 0).get::<bool>(),
+                store_toggle.value(&iter, 3).get::<u64>(),
+            ) else {
+                return;
+            };
+            let now_enabled = !was_enabled;
+            // `disabled == !enabled`. Persists to disabled.txt; effective next
+            // launch (an already-loaded plugin isn't unloaded mid-session).
+            with_state(|st| st.shell.set_plugin_disabled(index as usize, !now_enabled));
+            store_toggle.set_value(&iter, 0, &now_enabled.to_value());
+        });
     });
     let enabled_col = gtk::TreeViewColumn::new();
     enabled_col.set_title("Enabled");
@@ -633,16 +650,17 @@ fn funcitem_label(f: &codepp_plugin_host::FuncItem) -> String {
 /// Invoke a plugin's menu command. Looks the function pointer up (a short
 /// `with_state` borrow), drops the borrow, then calls the plugin outside
 /// it — so the plugin's re-entrant `NPPM_*` calls get a fresh borrow —
-/// under `catch_unwind` (a panic must not cross the C frame).
+/// at a [`crate::at_callback_boundary`] (a panic must not cross the C
+/// frame).
 fn on_plugin_command(cmd_id: i32) {
     let cmd = with_state(|st| st.shell.lookup_plugin_command(cmd_id)).flatten();
     let Some(cmd) = cmd else {
         return;
     };
     // SAFETY: `cmd` is a plugin `FuncItem.p_func`, invoked on the UI
-    // thread with no arguments, per the N++ ABI. `catch_unwind` keeps a
+    // thread with no arguments, per the N++ ABI. The boundary keeps a
     // Rust-plugin panic from unwinding across `extern "C"`.
-    let _ = catch_unwind(AssertUnwindSafe(|| unsafe { cmd() }));
+    crate::at_callback_boundary("plugin:command", (), || unsafe { cmd() });
     // A command may have edited the buffer, changed status, or queued
     // notifications; flush the wake pipeline.
     crate::drain_shell();
@@ -774,7 +792,11 @@ pub(crate) fn rebuild_plugin_accel_group() {
             // whose plugin/command no longer resolves (e.g. a bogus
             // hand-edited `internalID`) does not silently swallow the
             // keystroke.
-            move |_, _, _, _| fire_plugin_chord(ctrl, alt, shift, key),
+            move |_, _, _, _| {
+                crate::at_callback_boundary("plugin:accel:accel_group", false, || {
+                    fire_plugin_chord(ctrl, alt, shift, key)
+                })
+            },
         );
     }
     PLUGIN_ACCEL_GROUP.with(|g| *g.borrow_mut() = Some(accel));
@@ -807,7 +829,9 @@ fn fire_plugin_chord(ctrl: bool, alt: bool, shift: bool, key: u8) -> bool {
     // rather than done inline: this runs *inside* the accel group's
     // own closure, and tearing the group down under itself is the
     // kind of reentrancy this backend has been bitten by before.
-    glib::idle_add_local_once(rebuild_plugin_accel_group);
+    glib::idle_add_local_once(|| {
+        crate::at_callback_boundary("plugin:accel_rebuild:idle", (), rebuild_plugin_accel_group);
+    });
     let cmd_id = with_state(|st| st.shell.resolve_plugin_command(&module_key, internal_id))
         .flatten()
         .map(|(cmd_id, _)| cmd_id);

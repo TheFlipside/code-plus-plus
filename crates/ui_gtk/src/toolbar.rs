@@ -72,12 +72,21 @@ fn icon_image(icons: IconPair, scale: i32) -> Option<gtk::Image> {
 
 /// Append a push button bound to `action`, or greyed if `action` is
 /// `None` (its feature is not wired on GTK yet).
-fn push(toolbar: &gtk::Toolbar, icons: IconPair, tip: &str, scale: i32, action: Option<fn()>) {
+///
+/// `tip` is `'static` so it can double as the boundary's entry name: a
+/// panic then names the button ("Save", "Undo"…) rather than the helper.
+fn push(
+    toolbar: &gtk::Toolbar,
+    icons: IconPair,
+    tip: &'static str,
+    scale: i32,
+    action: Option<fn()>,
+) {
     let button = gtk::ToolButton::new(icon_image(icons, scale).as_ref(), None);
     WidgetExt::set_tooltip_text(&button, Some(tip));
     match action {
         Some(f) => {
-            button.connect_clicked(move |_| f());
+            button.connect_clicked(move |_| crate::at_callback_boundary(tip, (), f));
         }
         None => button.set_sensitive(false),
     }
@@ -238,21 +247,33 @@ fn add_view_tools_macros(
     gtk::ToggleToolButton,
 ) {
     let word_wrap = toggle(toolbar, icon!("word-wrap"), "Word Wrap", scale);
-    word_wrap.connect_toggled(|b| menu::on_word_wrap(b.is_active()));
+    word_wrap.connect_toggled(|b| {
+        crate::at_callback_boundary("toolbar:word_wrap:toggled", (), || {
+            menu::on_word_wrap(b.is_active());
+        });
+    });
     let show_all_chars = toggle(
         toolbar,
         icon!("show-all-chars"),
         "Show All Characters",
         scale,
     );
-    show_all_chars.connect_toggled(|b| menu::on_show_all_chars(b.is_active()));
+    show_all_chars.connect_toggled(|b| {
+        crate::at_callback_boundary("toolbar:show_all_chars:toggled", (), || {
+            menu::on_show_all_chars(b.is_active());
+        });
+    });
     let indent_guide = toggle(
         toolbar,
         icon!("show-indent-guide"),
         "Show Indent Guide",
         scale,
     );
-    indent_guide.connect_toggled(|b| menu::on_indent_guide(b.is_active()));
+    indent_guide.connect_toggled(|b| {
+        crate::at_callback_boundary("toolbar:indent_guide:toggled", (), || {
+            menu::on_indent_guide(b.is_active());
+        });
+    });
     separator(toolbar);
 
     push(
@@ -268,10 +289,12 @@ fn add_view_tools_macros(
     // `docmap::syncing`), the same shape as Folder as Workspace below.
     let docmap = toggle(toolbar, icon!("document-map"), "Document Map", scale);
     docmap.connect_toggled(|b| {
-        if crate::docmap::syncing() {
-            return;
-        }
-        crate::docmap::set_visible(b.is_active());
+        crate::at_callback_boundary("toolbar:docmap:toggled", (), || {
+            if crate::docmap::syncing() {
+                return;
+            }
+            crate::docmap::set_visible(b.is_active());
+        });
     });
     crate::docmap::register_toolbar_toggle(docmap);
     disabled_toggle(toolbar, icon!("document-list"), "Document List", scale);
@@ -287,10 +310,12 @@ fn add_view_tools_macros(
         scale,
     );
     workspace.connect_toggled(|b| {
-        if crate::workspace::syncing() {
-            return;
-        }
-        crate::workspace::set_visible(b.is_active());
+        crate::at_callback_boundary("toolbar:workspace:toggled", (), || {
+            if crate::workspace::syncing() {
+                return;
+            }
+            crate::workspace::set_visible(b.is_active());
+        });
     });
     crate::workspace::register_toolbar_toggle(workspace);
     separator(toolbar);

@@ -110,7 +110,9 @@ impl DocMapPanel {
         let close_btn = gtk::Button::with_label("✕");
         close_btn.set_relief(gtk::ReliefStyle::None);
         WidgetExt::set_tooltip_text(&close_btn, Some("Close Document Map"));
-        close_btn.connect_clicked(|_| set_visible(false));
+        close_btn.connect_clicked(|_| {
+            crate::at_callback_boundary("docmap:close_btn:clicked", (), || set_visible(false));
+        });
         title_row.pack_end(&close_btn, false, false, 0);
         container.pack_start(&title_row, false, false, 0);
 
@@ -131,7 +133,16 @@ impl DocMapPanel {
         // chain (so keystrokes can never land here), and a key-press
         // swallow is belt-and-suspenders against a stray `grab_focus`.
         miniature.set_can_focus(false);
-        miniature.connect_key_press_event(|_, _| glib::Propagation::Stop);
+        // The body is a literal, so the fallback is unreachable today; it
+        // is `Stop` rather than the crate's usual `Proceed` so a future
+        // fallible edit here cannot fail *toward* letting a key through.
+        miniature.connect_key_press_event(|_, _| {
+            crate::at_callback_boundary(
+                "docmap:miniature:key_press_event",
+                glib::Propagation::Stop,
+                || glib::Propagation::Stop,
+            )
+        });
 
         // The miniature sits under a transparent drawing area. GtkOverlay
         // composites the overlay child over the base, so where the drawing
@@ -150,28 +161,7 @@ impl DocMapPanel {
                 | gtk::gdk::EventMask::BUTTON1_MOTION_MASK
                 | gtk::gdk::EventMask::SCROLL_MASK,
         );
-        overlay_area.connect_draw(|area, cr| {
-            draw_overlay(area, cr);
-            glib::Propagation::Proceed
-        });
-        overlay_area.connect_button_press_event(|_, ev| {
-            scroll_to_event_y(ev.position().1);
-            glib::Propagation::Stop
-        });
-        overlay_area.connect_motion_notify_event(|_, ev| {
-            scroll_to_event_y(ev.position().1);
-            glib::Propagation::Stop
-        });
-        overlay_area.connect_scroll_event(|_, ev| {
-            scroll_main_by_wheel(ev);
-            glib::Propagation::Stop
-        });
-        // Re-centre + repaint whenever the map area is (re)sized: on first
-        // show (the area gets its allocation), on window resize, and on a
-        // splitter drag. This is the GTK analogue of Win32 updating the
-        // indicator from the parent's `WM_SIZE`, and it seeds a correct box
-        // on the first paint after a session restore with no interaction.
-        overlay_area.connect_size_allocate(|_, _| refresh());
+        connect_overlay_signals(&overlay_area);
         overlay.add_overlay(&overlay_area);
         container.pack_start(&overlay, true, true, 0);
 
@@ -186,13 +176,15 @@ impl DocMapPanel {
         let pending_map_width: Rc<Cell<Option<i32>>> = Rc::new(Cell::new(None));
         let pending = pending_map_width.clone();
         paned.connect_size_allocate(move |p, alloc| {
-            if let Some(target) = pending.get() {
-                let pos = (alloc.width() - target.max(MIN_WIDTH_PX)).max(0);
-                if p.position() != pos {
-                    p.set_position(pos);
+            crate::at_callback_boundary("docmap:paned:size_allocate", (), || {
+                if let Some(target) = pending.get() {
+                    let pos = (alloc.width() - target.max(MIN_WIDTH_PX)).max(0);
+                    if p.position() != pos {
+                        p.set_position(pos);
+                    }
+                    pending.set(None);
                 }
-                pending.set(None);
-            }
+            });
         });
 
         // Realize the panel's children, then keep the column collapsed
@@ -252,6 +244,60 @@ impl DocMapPanel {
     }
 }
 
+/// Wire the overlay area's paint and input handlers. Split out of
+/// [`DocMapPanel::build`] for length; see the comment on the
+/// `add_events` call there for why the overlay owns the mouse.
+fn connect_overlay_signals(overlay_area: &gtk::DrawingArea) {
+    overlay_area.connect_draw(|area, cr| {
+        crate::at_callback_boundary(
+            "docmap:overlay_area:draw",
+            glib::Propagation::Proceed,
+            || {
+                draw_overlay(area, cr);
+                glib::Propagation::Proceed
+            },
+        )
+    });
+    overlay_area.connect_button_press_event(|_, ev| {
+        crate::at_callback_boundary(
+            "docmap:overlay_area:button_press_event",
+            glib::Propagation::Proceed,
+            || {
+                scroll_to_event_y(ev.position().1);
+                glib::Propagation::Stop
+            },
+        )
+    });
+    overlay_area.connect_motion_notify_event(|_, ev| {
+        crate::at_callback_boundary(
+            "docmap:overlay_area:motion_notify_event",
+            glib::Propagation::Proceed,
+            || {
+                scroll_to_event_y(ev.position().1);
+                glib::Propagation::Stop
+            },
+        )
+    });
+    overlay_area.connect_scroll_event(|_, ev| {
+        crate::at_callback_boundary(
+            "docmap:overlay_area:scroll_event",
+            glib::Propagation::Proceed,
+            || {
+                scroll_main_by_wheel(ev);
+                glib::Propagation::Stop
+            },
+        )
+    });
+    // Re-centre + repaint whenever the map area is (re)sized: on first
+    // show (the area gets its allocation), on window resize, and on a
+    // splitter drag. This is the GTK analogue of Win32 updating the
+    // indicator from the parent's `WM_SIZE`, and it seeds a correct box
+    // on the first paint after a session restore with no interaction.
+    overlay_area.connect_size_allocate(|_, _| {
+        crate::at_callback_boundary("docmap:overlay_area:size_allocate", (), refresh);
+    });
+}
+
 // --- Registration + indicator sync -----------------------------------
 
 thread_local! {
@@ -286,7 +332,7 @@ pub(crate) fn syncing() -> bool {
 
 /// Drive both indicators to `visible` without re-firing their handlers.
 fn sync_indicators(visible: bool) {
-    SYNCING.with(|s| s.set(true));
+    let _syncing = crate::FlagGuard::set(&SYNCING);
     MENU_CHECK.with(|c| {
         if let Some(item) = &*c.borrow() {
             item.set_active(visible);
@@ -297,7 +343,6 @@ fn sync_indicators(visible: bool) {
             button.set_active(visible);
         }
     });
-    SYNCING.with(|s| s.set(false));
 }
 
 // --- Public entry points ----------------------------------------------

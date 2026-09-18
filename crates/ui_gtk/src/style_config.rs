@@ -201,7 +201,11 @@ fn build_content(
     transp_scale.set_sensitive(transparency.enabled);
     // Keep the slider greyed unless transparency is enabled.
     let scale_for_toggle = transp_scale.clone();
-    transp_check.connect_toggled(move |c| scale_for_toggle.set_sensitive(c.is_active()));
+    transp_check.connect_toggled(move |c| {
+        crate::at_callback_boundary("style_config:transp_check:toggled", (), || {
+            scale_for_toggle.set_sensitive(c.is_active());
+        });
+    });
     grid.attach(&left_label("Opacity %:"), 0, 6, 1, 1);
     grid.attach(&transp_scale, 1, 6, 1, 1);
 

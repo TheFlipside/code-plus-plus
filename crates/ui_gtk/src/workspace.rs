@@ -224,7 +224,9 @@ impl WorkspacePanel {
         title.set_ellipsize(gtk::pango::EllipsizeMode::End);
         title_row.pack_start(&title, true, true, 0);
         let close_btn = header_button("✕", "Close Workspace Panel");
-        close_btn.connect_clicked(|_| set_visible(false));
+        close_btn.connect_clicked(|_| {
+            crate::at_callback_boundary("workspace:close_btn:clicked", (), || set_visible(false));
+        });
         title_row.pack_end(&close_btn, false, false, 0);
         container.pack_start(&title_row, false, false, 0);
 
@@ -245,11 +247,17 @@ impl WorkspacePanel {
         action_row.set_margin_bottom(1);
         action_row.set_margin_end(2);
         let expand_btn = header_button("⊞", "Expand All");
-        expand_btn.connect_clicked(|_| unfold_all());
+        expand_btn.connect_clicked(|_| {
+            crate::at_callback_boundary("workspace:expand_btn:clicked", (), unfold_all);
+        });
         let fold_btn = header_button("⊟", "Fold All");
-        fold_btn.connect_clicked(|_| fold_all());
+        fold_btn.connect_clicked(|_| {
+            crate::at_callback_boundary("workspace:fold_btn:clicked", (), fold_all);
+        });
         let locate_btn = header_button("◎", "Locate Current File");
-        locate_btn.connect_clicked(|_| locate_current());
+        locate_btn.connect_clicked(|_| {
+            crate::at_callback_boundary("workspace:locate_btn:clicked", (), locate_current);
+        });
         action_row.pack_end(&locate_btn, false, false, 0);
         action_row.pack_end(&fold_btn, false, false, 0);
         action_row.pack_end(&expand_btn, false, false, 0);
@@ -295,12 +303,7 @@ impl WorkspacePanel {
         container.hide();
         container.set_no_show_all(true);
 
-        // Lazy populate on first expand.
-        tree.connect_row_expanded(|_, iter, _| on_row_expanded(iter));
-        // Double-click / Enter: open a file, toggle a folder.
-        tree.connect_row_activated(|tree, path, _| on_row_activated(tree, path));
-        // Right-click: the per-kind context menu.
-        tree.connect_button_press_event(on_button_press);
+        connect_tree_signals(&tree);
 
         Self {
             paned,
@@ -359,6 +362,31 @@ impl WorkspacePanel {
         }
         self.width
     }
+}
+
+/// Wire the tree's three input handlers. Split out of
+/// [`WorkspacePanel::build`] for length.
+fn connect_tree_signals(tree: &gtk::TreeView) {
+    // Lazy populate on first expand.
+    tree.connect_row_expanded(|_, iter, _| {
+        crate::at_callback_boundary("workspace:tree:row_expanded", (), || {
+            on_row_expanded(iter);
+        });
+    });
+    // Double-click / Enter: open a file, toggle a folder.
+    tree.connect_row_activated(|tree, path, _| {
+        crate::at_callback_boundary("workspace:tree:row_activated", (), || {
+            on_row_activated(tree, path);
+        });
+    });
+    // Right-click: the per-kind context menu.
+    tree.connect_button_press_event(|tree, ev| {
+        crate::at_callback_boundary(
+            "workspace:tree:button_press_event",
+            glib::Propagation::Proceed,
+            || on_button_press(tree, ev),
+        )
+    });
 }
 
 /// A small flat header button carrying a glyph and a tooltip. The theme's
@@ -423,7 +451,7 @@ pub(crate) fn syncing() -> bool {
 
 /// Drive both indicators to `visible` without re-firing their handlers.
 fn sync_indicators(visible: bool) {
-    SYNCING.with(|s| s.set(true));
+    let _syncing = crate::FlagGuard::set(&SYNCING);
     MENU_CHECK.with(|c| {
         if let Some(item) = &*c.borrow() {
             item.set_active(visible);
@@ -434,7 +462,6 @@ fn sync_indicators(visible: bool) {
             button.set_active(visible);
         }
     });
-    SYNCING.with(|s| s.set(false));
 }
 
 // --- Public entry points ----------------------------------------------
@@ -867,7 +894,13 @@ fn unfold_all() {
     };
     glib::timeout_add_local(
         std::time::Duration::from_millis(UNFOLD_TICK_MS),
-        move || tick_unfold(generation),
+        move || {
+            crate::at_callback_boundary(
+                "workspace:unfold_all:timeout",
+                glib::ControlFlow::Break,
+                || tick_unfold(generation),
+            )
+        },
     );
 }
 
@@ -1242,7 +1275,9 @@ fn add_show_in_file_manager(menu: &gtk::Menu, dir: PathBuf) {
 /// Append a menu item bound to `action`.
 fn add_action(menu: &gtk::Menu, label: &str, action: impl Fn(&gtk::MenuItem) + 'static) {
     let item = gtk::MenuItem::with_label(label);
-    item.connect_activate(action);
+    item.connect_activate(move |item| {
+        crate::at_callback_boundary("workspace:context_item:activate", (), || action(item));
+    });
     menu.append(&item);
 }
 

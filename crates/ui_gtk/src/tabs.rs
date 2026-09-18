@@ -434,20 +434,24 @@ fn build_tab_label(tab: &Tab, scale: i32) -> gtk::Widget {
     let pin_area = gtk::DrawingArea::new();
     pin_area.set_size_request(PIN_GLYPH_PX, PIN_GLYPH_PX);
     pin_area.connect_draw(move |area, cr| {
-        draw_pin_glyph(
-            cr,
-            pinned,
-            f64::from(area.allocated_width()),
-            f64::from(area.allocated_height()),
-        );
-        glib::Propagation::Proceed
+        crate::at_callback_boundary("tabs:pin_area:draw", glib::Propagation::Proceed, || {
+            draw_pin_glyph(
+                cr,
+                pinned,
+                f64::from(area.allocated_width()),
+                f64::from(area.allocated_height()),
+            );
+            glib::Propagation::Proceed
+        })
     });
     let pin = gtk::Button::new();
     pin.set_relief(gtk::ReliefStyle::None);
     pin.set_focus_on_click(false);
     pin.set_tooltip_text(Some(if pinned { "Unpin" } else { "Pin" }));
     pin.add(&pin_area);
-    pin.connect_clicked(move |_| crate::toggle_pin_by_id(id));
+    pin.connect_clicked(move |_| {
+        crate::at_callback_boundary("tabs:pin:clicked", (), || crate::toggle_pin_by_id(id));
+    });
     row.pack_start(&pin, false, false, 0);
 
     let close = gtk::Button::new();
@@ -458,17 +462,25 @@ fn build_tab_label(tab: &Tab, scale: i32) -> gtk::Widget {
         Some("window-close-symbolic"),
         gtk::IconSize::Menu,
     ));
-    close.connect_clicked(move |_| crate::close_tab_by_id(id));
+    close.connect_clicked(move |_| {
+        crate::at_callback_boundary("tabs:close:clicked", (), || crate::close_tab_by_id(id));
+    });
     row.pack_start(&close, false, false, 0);
 
     ebox.connect_button_press_event(move |_, ev| {
-        if ev.button() == MIDDLE_BUTTON {
-            crate::close_tab_by_id(id);
-            return glib::Propagation::Stop;
-        }
-        // Anything else falls through to the notebook, which turns a
-        // left-click into the `switch-page` that selects this tab.
-        glib::Propagation::Proceed
+        crate::at_callback_boundary(
+            "tabs:ebox:button_press_event",
+            glib::Propagation::Proceed,
+            || {
+                if ev.button() == MIDDLE_BUTTON {
+                    crate::close_tab_by_id(id);
+                    return glib::Propagation::Stop;
+                }
+                // Anything else falls through to the notebook, which turns a
+                // left-click into the `switch-page` that selects this tab.
+                glib::Propagation::Proceed
+            },
+        )
     });
 
     ebox.add(&row);
