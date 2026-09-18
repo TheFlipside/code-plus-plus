@@ -60,7 +60,9 @@ pub struct GtkUiState {
     /// through their own views. Anything that closes over a tab by
     /// destroying a Scintilla widget breaks it. DESIGN.md §7.4 tracked
     /// this as an open ownership question until the tab strip landed
-    /// and settled it this way.
+    /// and settled it this way. (The editor cell holding this widget is
+    /// *moved* within the dock area by `crate::dock` as bands come and
+    /// go — a position change, never a reparent.)
     pub sci_widget: gtk::Widget,
     /// Raw `ScintillaObject*` (the `scintilla_new()` return). Handed to
     /// plugins as `NppData._scintillaMainHandle` and used as the sink for
@@ -75,7 +77,11 @@ pub struct GtkUiState {
     /// reason as [`Self::sci_widget`]: a `GObject` reference for the whole
     /// session so [`Self::docmap_editor`]'s raw pointers never dangle.
     /// Created once, never destroyed or reassigned — the same discipline
-    /// that lets [`Self::sci_widget`] be safe. See [`crate::docmap`].
+    /// that lets [`Self::sci_widget`] be safe. Its *container* is
+    /// reparented by `crate::dock` as the panel docks, tabs, floats or
+    /// parks (an unrealize/realize cycle Scintilla's GTK backend
+    /// supports), which is why this reference — not a container's — is
+    /// what keeps it alive. See [`crate::docmap`].
     #[allow(dead_code)]
     pub docmap_sci: gtk::Widget,
     /// Direct-call handle for the Document Map's miniature view. Shares
@@ -110,17 +116,18 @@ pub struct GtkUiState {
     /// until a search produces results; lives in the lower pane of the
     /// editor/dock splitter. See [`crate::fif`].
     pub fif_dock: crate::fif::FifDock,
-    /// The "Folder as Workspace" side panel: a lazily-populated directory
-    /// tree in the left pane of a horizontal splitter that wraps the
-    /// editor column. Hidden until a folder is opened. See
-    /// [`crate::workspace`].
+    /// The "Folder as Workspace" panel: a lazily-populated directory
+    /// tree. Where it is shown — docked, tabbed, floating, or hidden —
+    /// is the dock model's business (`crate::dock`); this holds the
+    /// tree and its root. See [`crate::workspace`].
     ///
     /// Not part of [`GtkUi`]: no `UiPlatform` method touches it, so it is
     /// reached only through [`with_state`] and stays out of the split.
     pub workspace: crate::workspace::WorkspacePanel,
-    /// The right-side "Document Map" panel: a zoomed-out miniature of the
-    /// active buffer with a translucent orange viewport box. Hidden until
-    /// opened. Reached only through [`with_state`]; see [`crate::docmap`].
+    /// The "Document Map" panel: a zoomed-out miniature of the active
+    /// buffer with a translucent orange viewport box. Hosted by the dock
+    /// like the workspace. Reached only through [`with_state`]; see
+    /// [`crate::docmap`].
     pub docmap: crate::docmap::DocMapPanel,
     /// Notepad++'s Begin/End Select mode. Set by the two Edit-menu items,
     /// applied and cleared on the second press, reset to `None` on every

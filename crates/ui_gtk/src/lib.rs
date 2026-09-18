@@ -40,6 +40,7 @@
     clippy::cast_sign_loss
 )]
 
+mod dock;
 mod docmap;
 mod fif;
 mod menu;
@@ -199,9 +200,11 @@ pub fn run(initial_path: Option<PathBuf>, perf: Perf) -> Result<(), GtkUiError> 
     layout.pack_start(&toolbar, false, false, 0);
 
     // Tab strip: a sibling above the editor, not a parent; its empty pages
-    // collapse to zero height. See `tabs`.
+    // collapse to zero height. See `tabs`. Packed into the editor cell
+    // below rather than into `layout` directly, so a panel docked to the
+    // Top side sits above the strip — the cell the dock area carves
+    // around is tab strip + editor + FIF dock, as on Win32.
     let tab_strip = tabs::TabStrip::new();
-    layout.pack_start(&tab_strip.notebook, false, false, 0);
 
     // SAFETY: `gtk::init` succeeded above, which is `scintilla_new`'s
     // only precondition.
@@ -238,19 +241,33 @@ pub fn run(initial_path: Option<PathBuf>, perf: Perf) -> Result<(), GtkUiError> 
     editor_dock_paned.pack1(&sci_widget, true, false);
     let fif_dock = fif::build_dock(&editor_dock_paned);
 
-    // Wrap the editor/dock column in a horizontal splitter whose left
-    // pane is the "Folder as Workspace" tree (hidden until a folder is
-    // opened) — the horizontal analogue of the FIF dock's vertical one.
-    let workspace = workspace::WorkspacePanel::build(editor_dock_paned.upcast_ref::<gtk::Widget>());
+    // The editor cell: tab strip over the editor/FIF column. This is the
+    // one widget the dock area carves the side bands around, placed at
+    // `DockFrame::editor` on every layout pass and never reparented.
+    let editor_cell = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    editor_cell.pack_start(&tab_strip.notebook, false, false, 0);
+    editor_cell.pack_start(&editor_dock_paned, true, true, 0);
 
-    // Wrap the workspace column in a second horizontal splitter whose
-    // right pane is the Document Map (hidden until opened). The docmap
-    // splitter, not the workspace one, is what goes into `layout`.
-    let docmap = docmap::DocMapPanel::build(
-        workspace.paned().upcast_ref::<gtk::Widget>(),
-        &docmap_widget,
+    // The two dockable panels' content — built once here, hosted by the
+    // dock from now on (docked, tabbed, floating, or parked hidden).
+    let workspace = workspace::WorkspacePanel::build();
+    let docmap = docmap::DocMapPanel::build(&docmap_widget);
+
+    // The dock area between the toolbar and the status bar. A
+    // `GtkLayout` so the dock can place its children at exact rects
+    // without their sizes becoming the window's minimum — see
+    // `crate::dock`'s module docs for why not a `GtkFixed` or a `Paned`
+    // tree.
+    let dock_area = gtk::Layout::new(None::<&gtk::Adjustment>, None::<&gtk::Adjustment>);
+    dock_area.put(&editor_cell, 0, 0);
+    dock::install(
+        &window,
+        &dock_area,
+        editor_cell.upcast_ref::<gtk::Widget>(),
+        workspace.content(),
+        docmap.content(),
     );
-    layout.pack_start(docmap.paned(), true, true, 0);
+    layout.pack_start(&dock_area, true, true, 0);
 
     let status = StatusBar::new();
     layout.pack_start(&status.container, false, false, 0);
@@ -317,16 +334,16 @@ pub fn run(initial_path: Option<PathBuf>, perf: Perf) -> Result<(), GtkUiError> 
     // from it. Called earlier (before the load) it read an empty session
     // and silently did nothing, which is why the window never remembered
     // its size. Still before `window.show_all()` below, so `set_default_size`
-    // takes effect. Mirrors how `workspace`/`docmap` apply saved state
-    // after the load.
+    // takes effect. Mirrors how the dock applies saved state after the
+    // load.
     restore_window_geometry(&window);
-    // Reopen the workspace folder the last session left open (if any and
-    // it still exists), sizing and showing the panel to match.
-    workspace::apply_saved();
-    // Reopen the Document Map if the last session left it open, sized to
-    // match. Runs after `restore_session` so the miniature binds to the
-    // restored active buffer.
-    docmap::apply_saved();
+    // Restore the dock arrangement — which panels are open and where
+    // (docked, tabbed, floating), band sizes — reopening the workspace
+    // folder the last session left open if it still exists. Runs after
+    // `restore_session` so the Document Map's miniature binds to the
+    // restored active buffer, and after `restore_window_geometry` so
+    // floating groups clamp against the window's saved rect.
+    dock::apply_saved();
     // Enumerate installed plugins (records paths only; loading is
     // deferred to the first Plugins-menu open — DESIGN.md §6.4). The app
     // has already staged the bundled plugins into this directory.
@@ -1952,7 +1969,8 @@ pub(crate) fn close_active_tab() -> bool {
 /// then persists. Called continuously as the window changes (from the
 /// `configure-event` / `window-state-event` handlers — the GTK analogue of
 /// Win32's `WM_SIZE` / maximize handler) *and* once more right before each
-/// save, alongside [`workspace::sync_to_shell`] / [`docmap::sync_to_shell`].
+/// save, alongside [`dock::sync_to_shell`] / [`workspace::sync_to_shell`]
+/// / [`docmap::sync_to_shell`].
 ///
 /// When maximized, `window.size()` reports the *maximized* extent, which
 /// must not be stored as the restored size. Keep the last non-maximized
@@ -2039,6 +2057,7 @@ pub(crate) fn save_session_now() {
     // first, so `save_session` carries the current root / visibility /
     // width / window geometry — the same "sync right before every save"
     // discipline `ui_win32` follows.
+    dock::sync_to_shell();
     workspace::sync_to_shell();
     docmap::sync_to_shell();
     sync_window_geometry_to_shell();
@@ -2461,9 +2480,24 @@ fn test_only_helper() {}
 /// an assertion, so the failure mode this exists to prevent is exactly
 /// the one a runtime test cannot observe.
 ///
+/// **Reparenting is permitted; destroying is not.** The docking
+/// subsystem (`crate::dock`) moves the Document Map's *panel content*
+/// — the container the miniature lives in — between dock groups,
+/// floating toplevels and a hidden parking box. That unrealizes and
+/// re-realizes the miniature, which Scintilla's GTK backend is written
+/// to survive; `gtk_widget_destroy` on it, or on any container holding
+/// it, is the hazard, because `ScintillaGTK::Dispose` unparents the
+/// view's scrollbars regardless of the reference `GtkUiState.docmap_sci`
+/// still holds. So the checks below allow `remove(` on containers, forbid
+/// `remove(` / `destroy()` on the two view bindings themselves, and
+/// [`dock_reparenting_source_invariant`] pins the container side: the
+/// dock module holds no `destroy()` at all, and the only widgets this
+/// crate ever destroys are transient dialogs.
+///
 /// DESIGN.md §7.4 carried this as an open ownership question from the
 /// Phase 5 m1 security audit until the tab strip landed and settled it;
-/// the Document Map extended it from one permanent view to two.
+/// the Document Map extended it from one permanent view to two, and the
+/// docking subsystem added the reparenting carve-out.
 #[cfg(test)]
 mod single_view_source_invariant {
     use super::source_scan::{code_only, production_code};
@@ -2558,6 +2592,174 @@ let msg = \"found scintilla_new() calls\";
             "found `expand_all(`: it re-enters the lazy loader for unread folders and \
              defeats the Unfold All ceilings; use `expand_populated` instead"
         );
+    }
+}
+
+/// The container side of the permanent-view model, added with the
+/// docking subsystem: panel content is *reparented* between hosts and
+/// never destroyed, and a group container's lifetime never takes a
+/// panel with it. See `crate::dock`'s module docs for the mechanism.
+///
+/// Two of the three checks match constructs the compiler cannot see.
+/// The third — that every `DockPanel` has a hosted content widget — is
+/// **not** a scan: `dock::Ui` carries one field per panel and resolves
+/// them through an exhaustive `match`, so a new `DockPanel` variant is a
+/// compile error in the dock module rather than a panel that builds,
+/// registers and never draws (the m4d "blank panel" shape the Cocoa
+/// `every_panel_is_added_to_the_content_view` guard exists for).
+#[cfg(test)]
+mod dock_reparenting_source_invariant {
+    use super::source_scan::{code_only, strip_test_modules};
+
+    fn dock_source() -> String {
+        strip_test_modules(&code_only(include_str!("dock.rs")))
+    }
+
+    /// Every call of anything named `…destroy(` in `src`, in all three
+    /// spellings — `x.destroy()`, the UFCS `WidgetExtManual::destroy(&x)`
+    /// (trait aliases and `<T as Trait>::` included, since only the `::`
+    /// is matched), and the raw FFI `gtk::ffi::gtk_widget_destroy(ptr)`
+    /// — as `(receiver identifier, source line)`. Matching only the
+    /// dotted form was a hole the review demonstrated, and the second
+    /// review found the FFI one: both compile, destroy the widget, and
+    /// read as clean. Detection is deliberately permissive (any
+    /// identifier ending in `destroy` followed by `(`) and the allowlist
+    /// strict, so a new spelling fails rather than passes. A receiver the
+    /// scanner cannot name (a method-chain result) comes back empty and
+    /// fails the allowlist, with the line kept so the report is usable.
+    fn destroy_calls(src: &str) -> Vec<(String, String)> {
+        let ident = |c: char| c.is_ascii_alphanumeric() || c == '_';
+        let line_of = |at: usize| {
+            let from = src[..at].rfind('\n').map_or(0, |i| i + 1);
+            src[from..].lines().next().unwrap_or("").trim().to_owned()
+        };
+        let mut out = Vec::new();
+        for (at, _) in src.match_indices("destroy(") {
+            let before = &src[..at];
+            if let Some(head) = before.strip_suffix('.') {
+                let receiver: String = head
+                    .chars()
+                    .rev()
+                    .take_while(|c| ident(*c))
+                    .collect::<Vec<char>>()
+                    .into_iter()
+                    .rev()
+                    .collect();
+                out.push((receiver, line_of(at)));
+            } else if before.ends_with("::") || before.chars().last().is_some_and(ident) {
+                // UFCS (`Trait::destroy(&x)`) and raw FFI
+                // (`gtk_widget_destroy(ptr)`) both name the widget as the
+                // first argument.
+                let arg = src[at + "destroy(".len()..].trim_start_matches(['&', ' ']);
+                let arg = arg.strip_prefix("mut ").unwrap_or(arg);
+                let receiver: String = arg.chars().take_while(|c| ident(*c)).collect();
+                out.push((receiver, line_of(at)));
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn the_scanner_sees_both_destroy_spellings() {
+        let sample = "\
+dialog.destroy();
+unsafe { gtk::prelude::WidgetExtManual::destroy(&g.frame) };
+WidgetExt::destroy(&mut w);
+make().destroy();
+unsafe { gtk::ffi::gtk_widget_destroy(raw_ptr) };
+fn destroy_all() {}
+";
+        let calls = destroy_calls(sample);
+        let receivers: Vec<&str> = calls.iter().map(|(r, _)| r.as_str()).collect();
+        // The `fn destroy_all()` declaration is not a call and is not
+        // matched (`destroy_` is followed by `all(`, not `(`).
+        assert_eq!(receivers, ["dialog", "g", "w", "", "raw_ptr"]);
+        assert!(calls[3].1.contains("make().destroy()"));
+    }
+
+    /// The dock module retires a group by `remove` after evacuating its
+    /// panels, and pools floating toplevels instead of destroying them.
+    /// A `destroy` anywhere in it would dispose whatever panel content
+    /// happened to be inside — including the Document Map's Scintilla
+    /// view — so the module must hold none at all, in either spelling.
+    /// It must also hold no `unsafe` block: `WidgetExtManual::destroy`
+    /// is the one unsafe call the module could plausibly want, and the
+    /// module's whole contract is that it never does, so an `unsafe`
+    /// appearing here is a construct-level signal that the contract is
+    /// being renegotiated — not something to wave through.
+    #[test]
+    fn the_dock_module_never_destroys_a_widget() {
+        let src = dock_source();
+        assert!(
+            src.len() > 5_000,
+            "scanned only {} bytes; the walk is broken, so a clean result proves nothing",
+            src.len()
+        );
+        let calls = destroy_calls(&src);
+        assert!(
+            calls.is_empty(),
+            "found a destroy call in dock.rs ({calls:?}): a destroyed group container \
+             disposes the panel content inside it; evacuate to parking and `remove`, or \
+             hide and pool a toplevel"
+        );
+        assert_eq!(
+            src.matches("unsafe").count(),
+            0,
+            "found `unsafe` in dock.rs: the module has no legitimate unsafe call, and the \
+             one it could want (`WidgetExtManual::destroy`) is exactly what it must never make"
+        );
+    }
+
+    /// Crate-wide, the only receivers of a `destroy` call are the
+    /// transient dialogs and file choosers each handler builds and tears
+    /// down in one go — none of which can ever be an ancestor of a
+    /// Scintilla view.
+    ///
+    /// **Known limit, accepted:** the allowlist is by receiver *name*
+    /// (`dialog` / `chooser`), not by the receiver's type. A permanent
+    /// widget bound as `let dialog = …` and then destroyed would pass;
+    /// a transient dialog bound under any other name would fail here
+    /// and have to be renamed. The name is a convention every current
+    /// call site follows (all ten bindings were checked to be
+    /// `gtk::Dialog` / `AboutDialog` / `MessageDialog` /
+    /// `FileChooserNative` locals), and the failure direction of the
+    /// limit is towards a spurious failure rather than a missed hazard
+    /// for every name but those two.
+    #[test]
+    fn only_transient_dialogs_are_ever_destroyed() {
+        let src = super::source_scan::production_code();
+        let offenders: Vec<(String, String)> = destroy_calls(&src)
+            .into_iter()
+            .filter(|(receiver, _)| !matches!(receiver.as_str(), "dialog" | "chooser"))
+            .collect();
+        assert!(
+            offenders.is_empty(),
+            "destroy called on {offenders:?}: only a transient `dialog` / `chooser` local may \
+             be destroyed; panel content, group containers and the two Scintilla views are \
+             reparented or hidden, never destroyed"
+        );
+    }
+
+    /// Panel content leaves a host only through the dock's `unparent`
+    /// helper or a group's dismantle path — never through a `hide()`,
+    /// which would leave a shown-but-invisible widget the reconciler
+    /// cannot tell from a parked one. The panel modules therefore hold
+    /// no `container.hide()` / `container.show()` of their own.
+    #[test]
+    fn panel_modules_do_not_toggle_their_own_visibility() {
+        for (name, src) in [
+            ("workspace.rs", include_str!("workspace.rs")),
+            ("docmap.rs", include_str!("docmap.rs")),
+        ] {
+            let src = strip_test_modules(&code_only(src));
+            for forbidden in ["container.hide()", "container.show()"] {
+                assert!(
+                    !src.contains(forbidden),
+                    "{name} calls `{forbidden}`: panel visibility is the dock's to manage \
+                     (parked vs hosted), not the panel's"
+                );
+            }
+        }
     }
 }
 

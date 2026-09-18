@@ -4,11 +4,15 @@
 //!
 //! # Layout
 //!
-//! The panel is the left pane of a horizontal [`gtk::Paned`] that wraps
-//! the editor/dock column. Hidden by default; showing it sets the paned
-//! position to the persisted width. This is the horizontal analogue of
-//! how [`crate::fif`] docks its results pane at the bottom of a vertical
-//! `Paned`.
+//! The panel is a *dock panel* (`DockPanel::Workspace`): its content
+//! widget — the action bar plus the tree — is built once here and then
+//! hosted by [`crate::dock`], which places it in a docked group, a tab
+//! of a shared group, or a floating window wherever the user last put
+//! it, and parks it hidden otherwise. The caption (title + close ✕) is
+//! the group's, not this panel's; so is the resize splitter. Every
+//! show/hide here funnels through `dock::set_panel_visible`, after the
+//! panel-specific preparation (populate before show, cancel a walk
+//! before hide) that the dock model cannot know about.
 //!
 //! # The value-vs-label split (security)
 //!
@@ -47,6 +51,7 @@ use gtk::gio;
 use gtk::glib;
 use gtk::prelude::*;
 
+use codepp_core::dock::DockPanel;
 use codepp_shell::sanitize_filename_for_display;
 
 use crate::state::with_state;
@@ -64,26 +69,23 @@ const COL_POPULATED: u32 = 4;
 /// [`WorkspacePanel::paths`], so pruning it is a no-op.
 const PLACEHOLDER_ID: u64 = 0;
 
-/// Default panel width in pixels, and the floor a drag cannot cross —
-/// the same figures the Win32 panel uses.
-const DEFAULT_WIDTH_PX: i32 = 240;
-const MIN_WIDTH_PX: i32 = 120;
-
 /// Freedesktop icon-theme names for the two row kinds. Present in every
 /// standard icon theme; a per-mime lookup is deferred polish.
 const ICON_FOLDER: &str = "folder";
 const ICON_FILE: &str = "text-x-generic";
 
-/// The panel's resting header title, restored after an Unfold All walk.
-const PANEL_TITLE: &str = "Folder as Workspace";
+/// The action bar's progress label at rest — empty; the panel title
+/// lives on the dock group's caption. Shows "Expanding folders: N"
+/// during an Unfold All walk.
+const PROGRESS_IDLE: &str = "";
 
 /// "Unfold All" async-walk tuning, mirroring Win32's batched walk.
 /// Folders are expanded [`UNFOLD_BATCH`] per [`UNFOLD_TICK_MS`] timer
 /// tick; the tree is *not* re-expanded row-by-row during the walk —
 /// children are read into the model under collapsed rows, so no
 /// per-folder repaint happens, and a single [`expand_populated`] pass
-/// reveals what was read at the end. The header title doubles as an "Expanding
-/// folders: N" counter meanwhile. 20 folders / 15 ms ≈ 1300 folders/s,
+/// reveals what was read at the end. The action bar's progress label
+/// shows an "Expanding folders: N" counter meanwhile. 20 folders / 15 ms ≈ 1300 folders/s,
 /// the same envelope as the Win32 walk — and, like it, the GTK main loop
 /// keeps pumping between ticks so the UI stays responsive on a huge tree.
 const UNFOLD_BATCH: usize = 20;
@@ -145,10 +147,9 @@ thread_local! {
 /// Everything the GTK backend owns for the workspace panel, held as a
 /// field on `GtkUiState`.
 pub struct WorkspacePanel {
-    /// The horizontal splitter: panel in pane 1, editor column in pane 2.
-    paned: gtk::Paned,
-    /// The panel's left column (header + tree), hidden when no workspace
-    /// is shown.
+    /// The panel content (action bar + tree) — the widget the dock
+    /// hosts. Created once; never destroyed, only reparented by
+    /// [`crate::dock`].
     container: gtk::Box,
     /// The directory tree.
     tree: gtk::TreeView,
@@ -162,23 +163,19 @@ pub struct WorkspacePanel {
     /// The workspace root, or `None` if none has been opened. Preserved
     /// across hide/show so re-toggling reopens the same folder.
     root: Option<PathBuf>,
-    /// Whether the panel is currently shown.
-    visible: bool,
-    /// Last known panel width, seeded from the session and updated from
-    /// the live paned position whenever the panel is visible.
-    width: i32,
-    /// Header title label, doubling as the "Expanding folders: N"
-    /// progress counter during an Unfold All walk.
-    title: gtk::Label,
+    /// The action bar's "Expanding folders: N" progress counter during
+    /// an Unfold All walk; empty at rest.
+    progress: gtk::Label,
     /// DFS queue of folder rows still to expand in the async Unfold All
     /// walk; non-empty iff a walk is in progress. `GtkTreeStore`
     /// iterators are persistent, so these stay valid across the ticks'
     /// model inserts — only placeholder rows, never a queued folder, are
     /// ever removed.
     unfold_pending: Vec<gtk::TreeIter>,
-    /// Folders expanded so far this walk — the counter shown in [`title`].
+    /// Folders expanded so far this walk — the counter shown in
+    /// [`progress`].
     ///
-    /// [`title`]: Self::title
+    /// [`progress`]: Self::progress
     unfold_count: usize,
     /// Rows this walk has inserted, capped by [`UNFOLD_MAX_ROWS`]. Counts
     /// only the walk's own inserts, not rows already in the model — see the
@@ -198,54 +195,29 @@ pub struct WorkspacePanel {
 }
 
 impl WorkspacePanel {
-    /// Build the panel and wrap `editor_column` in a horizontal paned.
-    ///
-    /// Returns the panel plus the new paned, which the caller packs where
-    /// `editor_column` used to sit.
-    pub fn build(editor_column: &gtk::Widget) -> Self {
-        let paned = gtk::Paned::new(gtk::Orientation::Horizontal);
-
+    /// Build the panel content. The caller hands the returned
+    /// [`Self::content`] to [`crate::dock::install`], which owns where
+    /// it is shown from then on.
+    pub fn build() -> Self {
         let container = gtk::Box::new(gtk::Orientation::Vertical, 0);
-        // A width floor so a drag can't collapse the tree to unusable.
-        container.set_size_request(MIN_WIDTH_PX, -1);
 
-        // Title row: the panel title and the close button, alone. The
-        // three tree-command buttons live on their own bar below, so this
-        // row is just "Folder as Workspace … ✕".
-        let title_row = gtk::Box::new(gtk::Orientation::Horizontal, 2);
-        title_row.set_margin_top(2);
-        title_row.set_margin_bottom(2);
-        title_row.set_margin_start(6);
-        title_row.set_margin_end(2);
-        let title = gtk::Label::new(Some(PANEL_TITLE));
-        title.set_xalign(0.0);
-        // The title is also the progress counter; a mid-walk ellipsis
-        // keeps "Expanding folders: N" from widening the pane.
-        title.set_ellipsize(gtk::pango::EllipsizeMode::End);
-        title_row.pack_start(&title, true, true, 0);
-        let close_btn = header_button("✕", "Close Workspace Panel");
-        close_btn.connect_clicked(|_| {
-            crate::at_callback_boundary("workspace:close_btn:clicked", (), || set_visible(false));
-        });
-        title_row.pack_end(&close_btn, false, false, 0);
-        container.pack_start(&title_row, false, false, 0);
-
-        // Separator between the title and the action bar.
-        container.pack_start(
-            &gtk::Separator::new(gtk::Orientation::Horizontal),
-            false,
-            false,
-            0,
-        );
-
-        // Action bar: expand-all / fold-all / locate, right-aligned and
-        // packed tight (spacing 0, no relief) so they don't hog width —
-        // Win32's action-button order, `pack_end` in reverse so left→right
-        // still reads ⊞ ⊟ ◎.
+        // Action bar: the progress counter on the left, then expand-all /
+        // fold-all / locate right-aligned and packed tight (spacing 0, no
+        // relief) so they don't hog width — Win32's action-button order,
+        // `pack_end` in reverse so left→right still reads ⊞ ⊟ ◎. The
+        // title and close ✕ that used to sit above this row are the dock
+        // group's caption now.
         let action_row = gtk::Box::new(gtk::Orientation::Horizontal, 0);
         action_row.set_margin_top(1);
         action_row.set_margin_bottom(1);
+        action_row.set_margin_start(6);
         action_row.set_margin_end(2);
+        let progress = gtk::Label::new(Some(PROGRESS_IDLE));
+        progress.set_xalign(0.0);
+        // A mid-walk ellipsis keeps "Expanding folders: N" from widening
+        // the band.
+        progress.set_ellipsize(gtk::pango::EllipsizeMode::End);
+        action_row.pack_start(&progress, true, true, 0);
         let expand_btn = header_button("⊞", "Expand All");
         expand_btn.connect_clicked(|_| {
             crate::at_callback_boundary("workspace:expand_btn:clicked", (), unfold_all);
@@ -293,29 +265,23 @@ impl WorkspacePanel {
         scroll.add(&tree);
         container.pack_start(&scroll, true, true, 0);
 
-        paned.pack1(&container, false, false);
-        paned.pack2(editor_column, true, true);
-
-        // Realize the panel's children, then keep the whole column
-        // collapsed until a workspace is opened — same opt-out of the
-        // toplevel `show_all` the FIF dock uses.
+        // Show the content's children once, then opt out of every later
+        // `show_all` (the toplevel's at startup, a group's on build) so
+        // visibility is the dock's to manage: hidden means parked, never
+        // a `hide()` on this widget.
         container.show_all();
-        container.hide();
         container.set_no_show_all(true);
 
         connect_tree_signals(&tree);
 
         Self {
-            paned,
             container,
             tree,
             store,
             paths: HashMap::new(),
             next_id: PLACEHOLDER_ID + 1,
             root: None,
-            visible: false,
-            width: DEFAULT_WIDTH_PX,
-            title,
+            progress,
             unfold_pending: Vec::new(),
             unfold_count: 0,
             unfold_rows: 0,
@@ -324,9 +290,9 @@ impl WorkspacePanel {
         }
     }
 
-    /// The horizontal paned, so the caller can pack it into the layout.
-    pub fn paned(&self) -> &gtk::Paned {
-        &self.paned
+    /// The panel content, for [`crate::dock::install`].
+    pub fn content(&self) -> &gtk::Widget {
+        self.container.upcast_ref()
     }
 
     /// Hand out a fresh row id.
@@ -334,33 +300,6 @@ impl WorkspacePanel {
         let id = self.next_id;
         self.next_id += 1;
         id
-    }
-
-    /// Show or hide the column, seeding the splitter position from the
-    /// remembered width on show and snapshotting it on hide.
-    fn set_shown(&mut self, visible: bool) {
-        if visible {
-            self.container.show();
-            self.paned.set_position(self.width.max(MIN_WIDTH_PX));
-        } else {
-            if self.visible {
-                self.width = self.current_width();
-            }
-            self.container.hide();
-        }
-        self.visible = visible;
-    }
-
-    /// The width to persist: the live splitter position while visible,
-    /// else the last remembered value.
-    fn current_width(&self) -> i32 {
-        if self.visible {
-            let pos = self.paned.position();
-            if pos > 0 {
-                return pos;
-            }
-        }
-        self.width
     }
 }
 
@@ -409,7 +348,8 @@ const COMPACT_BUTTON_CLASS: &str = "codepp-compact-header-btn";
 /// its theme minimum size, so the header's glyph buttons are tight. The
 /// provider is built once and reused; failing to parse the (static) CSS is
 /// cosmetic, so a parse error is logged and ignored rather than fatal.
-fn apply_compact_button_css(button: &gtk::Button) {
+/// Shared with the dock group captions' close ✕.
+pub(crate) fn apply_compact_button_css(button: &gtk::Button) {
     thread_local! {
         static PROVIDER: gtk::CssProvider = {
             let provider = gtk::CssProvider::new();
@@ -450,7 +390,9 @@ pub(crate) fn syncing() -> bool {
 }
 
 /// Drive both indicators to `visible` without re-firing their handlers.
-fn sync_indicators(visible: bool) {
+/// Also called by [`crate::dock`] after every reconcile, since a drag
+/// or a caption ✕ changes visibility without passing through here.
+pub(crate) fn sync_indicators(visible: bool) {
     let _syncing = crate::FlagGuard::set(&SYNCING);
     MENU_CHECK.with(|c| {
         if let Some(item) = &*c.borrow() {
@@ -516,7 +458,11 @@ pub(crate) fn set_visible(visible: bool) {
         // walk a pane the user just closed.
         cancel_unfold();
     }
-    with_state(|st| st.workspace.set_shown(visible));
+    crate::dock::set_panel_visible(DockPanel::Workspace, visible);
+    // The dock's reconcile syncs indicators and the session itself
+    // whenever the model changed; these repeat that work (idempotently)
+    // for the one case it does not run — hiding an already-hidden
+    // panel — so the mirrors never go stale. Deliberate overlap.
     sync_indicators(visible);
     sync_to_shell();
 }
@@ -560,51 +506,43 @@ fn show_at(root: &Path) {
     with_state(|st| {
         st.workspace.root = Some(root.to_path_buf());
         populate_root(&mut st.workspace, root);
-        st.workspace.set_shown(true);
     });
+    crate::dock::set_panel_visible(DockPanel::Workspace, true);
     sync_indicators(true);
     sync_to_shell();
 }
 
-/// Cold-start restore from the saved session. Seeds width and root, and
-/// shows the panel if it was visible last time.
+/// Cold-start half of the restore that is this panel's to do: seed the
+/// root the last session left open (the dock model, restored by
+/// [`crate::dock::apply_saved`], says whether and where the panel is
+/// shown) and, iff the panel is coming up visible, read the root
+/// directory so the first paint carries the tree.
 ///
-/// When the panel was closed-but-rooted at save (`root` remembered,
-/// `visible == false`), this seeds `root` only and leaves the model
-/// empty — [`set_visible`] populates it the first time the user re-shows
-/// the panel, so a hidden restored workspace costs no cold-start
-/// `read_dir`. Re-showing then finds content, not a blank pane.
-pub(crate) fn apply_saved() {
-    let Some(Some(saved)) = with_state(|st| st.shell.saved_workspace_session()) else {
-        return;
-    };
-    if let Some(width) = saved.width {
-        if width >= MIN_WIDTH_PX {
-            with_state(|st| st.workspace.width = width);
+/// When the panel was closed-but-rooted at save, this seeds `root` only
+/// and leaves the model empty — [`set_visible`] populates it the first
+/// time the user re-shows the panel, so a hidden restored workspace
+/// costs no cold-start `read_dir`. Re-showing then finds content, not a
+/// blank pane. The caller has already checked the root still exists.
+pub(crate) fn restore_root(root: &Path, populate: bool) {
+    with_state(|st| {
+        st.workspace.root = Some(root.to_path_buf());
+        if populate {
+            populate_root(&mut st.workspace, root);
         }
-    }
-    let Some(root) = saved.root else {
-        return;
-    };
-    // Only reopen a root that still exists; a deleted folder just leaves
-    // the panel closed rather than showing an empty tree.
-    if root.is_dir() {
-        with_state(|st| st.workspace.root = Some(root.clone()));
-        if saved.visible {
-            show_at(&root);
-        }
-    }
+    });
 }
 
 /// Snapshot the live panel state into the shell so the next
 /// `save_session` persists it. Called from the autosave / shutdown path.
+/// The dock layout itself persists separately (`dock::sync_to_shell`);
+/// this legacy mirror carries the **root path** — content state, not
+/// layout — plus visible/width for downgrade tolerance.
 pub(crate) fn sync_to_shell() {
     with_state(|st| {
-        let ws = &st.workspace;
         let session = codepp_core::session::WorkspaceSession {
-            root: ws.root.clone(),
-            visible: ws.visible,
-            width: Some(ws.current_width()),
+            root: st.workspace.root.clone(),
+            visible: crate::dock::is_visible(DockPanel::Workspace),
+            width: Some(crate::dock::legacy_band_width(DockPanel::Workspace)),
         };
         st.shell.set_workspace_session(Some(session));
     });
@@ -858,8 +796,8 @@ fn fold_all() {
 /// This mirrors the Win32 "Unfold All": an **async batched walk** rather
 /// than a synchronous recursion, so a workspace with thousands of folders
 /// stays responsive (DESIGN.md §8 — the UI thread must not block) and the
-/// user sees progress. The header title becomes an "Expanding folders: N"
-/// counter, and — because the walk populates the model under *collapsed*
+/// user sees progress. The action bar's progress label becomes an
+/// "Expanding folders: N" counter, and — because the walk populates the model under *collapsed*
 /// rows and only reveals ([`expand_populated`]) once at the end — there is
 /// no per-folder repaint flicker, only a single paint when the tree is
 /// finally revealed. A second click while a walk runs is a no-op.
@@ -992,10 +930,10 @@ fn tick_unfold(generation: u64) -> glib::ControlFlow {
                 ws.unfold_pending.clear();
             }
             ws.unfold_active = false;
-            ws.title.set_text(PANEL_TITLE);
+            ws.progress.set_text(PROGRESS_IDLE);
             TickOutcome::Done
         } else {
-            ws.title
+            ws.progress
                 .set_text(&format!("Expanding folders: {}", ws.unfold_count));
             TickOutcome::More
         }
@@ -1081,7 +1019,7 @@ fn collect_populated_dirs(
     }
 }
 
-/// Stop an in-flight Unfold All and restore the header title. A pending
+/// Stop an in-flight Unfold All and clear the progress label. A pending
 /// tick, if any, sees `unfold_active == false` and unschedules itself.
 /// Safe to call when no walk is running.
 fn cancel_unfold() {
@@ -1091,7 +1029,7 @@ fn cancel_unfold() {
             ws.unfold_active = false;
             ws.unfold_pending.clear();
             ws.unfold_count = 0;
-            ws.title.set_text(PANEL_TITLE);
+            ws.progress.set_text(PROGRESS_IDLE);
         }
     });
 }
@@ -1296,8 +1234,8 @@ fn remove_root() {
         ws.store.clear();
         ws.paths.clear();
         ws.root = None;
-        ws.set_shown(false);
     });
+    crate::dock::set_panel_visible(DockPanel::Workspace, false);
     sync_indicators(false);
     sync_to_shell();
 }

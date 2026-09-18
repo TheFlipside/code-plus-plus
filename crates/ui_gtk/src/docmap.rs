@@ -12,6 +12,14 @@
 //! what lets the single-view source invariant in `lib.rs` allow a second
 //! permanent view without dangling any `Copy` `EditorHandle`.
 //!
+//! The panel is a *dock panel* (`DockPanel::DocMap`): the content built
+//! here — the overlay holding the miniature — is hosted by
+//! [`crate::dock`] in a docked group, a tab, or a floating window, and
+//! parked hidden otherwise. That hosting **reparents** the content (and
+//! so unrealizes and re-realizes the miniature), which Scintilla's GTK
+//! backend is written to survive; what it never does is destroy it.
+//! The caption and splitter are the group's.
+//!
 //! # The orange box
 //!
 //! Rather than Win32's buffered `WM_PAINT` overlay, GTK stacks a
@@ -29,9 +37,7 @@
 //! the read-only miniature underneath never starts a selection drag, and
 //! a click/drag scrolls the *main* editor to the corresponding line.
 
-use std::cell::Cell;
-use std::rc::Rc;
-
+use codepp_core::dock::DockPanel;
 use codepp_editor::EditorHandle;
 use codepp_scintilla_sys::{
     CARETSTYLE_INVISIBLE, SCI_DOCLINEFROMVISIBLE, SCI_GETDOCPOINTER, SCI_GETFIRSTVISIBLELINE,
@@ -44,14 +50,6 @@ use gtk::prelude::*;
 
 use crate::state::with_state;
 
-/// Panel title, matching the Win32 header label.
-const PANEL_TITLE: &str = "Document Map";
-/// Initial panel width the first time the map is opened. Mirrors Win32's
-/// `DEFAULT_DOCMAP_WIDTH_PX`.
-const DEFAULT_WIDTH_PX: i32 = 160;
-/// Width floor — below this the miniature collapses into unreadable
-/// blocks. Mirrors Win32's `MIN_DOCMAP_WIDTH_PX`.
-const MIN_WIDTH_PX: i32 = 80;
 /// Miniature zoom: `-10` shrinks the font to the smallest legible
 /// block-shape that still hints at text density. Mirrors Win32's
 /// `SCI_SETZOOM(-10)` and Notepad++'s default map font size.
@@ -67,61 +65,21 @@ const VIEWPORT_ALPHA: f64 = 60.0 / 255.0;
 
 /// Everything the Document Map owns for the window's lifetime.
 pub struct DocMapPanel {
-    /// Horizontal splitter: the editor content is pack1, this panel pack2.
-    paned: gtk::Paned,
-    /// The panel column (header + overlay). Shown/hidden as a unit.
+    /// The panel content (the overlay holding the miniature) — the
+    /// widget the dock hosts. Created once; never destroyed, only
+    /// reparented by [`crate::dock`].
     container: gtk::Box,
     /// The transparent overlay that paints the orange box and catches the
     /// mouse. Held so [`update_indicator`] can `queue_draw` it.
     overlay_area: gtk::DrawingArea,
-    /// One-shot map-width to apply on the next paned `size-allocate`. The
-    /// map is the RIGHT (pack2) pane, so its width is `total - position`
-    /// and the total isn't known until the paned is allocated — which, on
-    /// a session restore, is after `set_shown` runs. The size-allocate
-    /// handler set up in [`Self::build`] reads this, sets the position
-    /// once, and clears it; a `None` leaves user drags untouched.
-    pending_map_width: Rc<Cell<Option<i32>>>,
-    /// Whether the panel is currently shown.
-    visible: bool,
-    /// Remembered panel width across show/hide cycles and sessions.
-    width: i32,
 }
 
 impl DocMapPanel {
-    /// Build the panel, wrapping `editor_content` in a horizontal paned
-    /// whose right pane is the map. `miniature` is the second Scintilla
+    /// Build the panel content. `miniature` is the second Scintilla
     /// widget (created in `run`); it becomes the overlay's base child.
-    pub fn build(editor_content: &gtk::Widget, miniature: &gtk::Widget) -> Self {
-        let paned = gtk::Paned::new(gtk::Orientation::Horizontal);
-
+    /// The caller hands [`Self::content`] to [`crate::dock::install`].
+    pub fn build(miniature: &gtk::Widget) -> Self {
         let container = gtk::Box::new(gtk::Orientation::Vertical, 0);
-        container.set_size_request(MIN_WIDTH_PX, -1);
-
-        // Title row: "Document Map … ✕", mirroring the workspace panel's
-        // header shape so the two docked panels read alike.
-        let title_row = gtk::Box::new(gtk::Orientation::Horizontal, 2);
-        title_row.set_margin_top(2);
-        title_row.set_margin_bottom(2);
-        title_row.set_margin_start(6);
-        title_row.set_margin_end(2);
-        let title = gtk::Label::new(Some(PANEL_TITLE));
-        title.set_xalign(0.0);
-        title_row.pack_start(&title, true, true, 0);
-        let close_btn = gtk::Button::with_label("✕");
-        close_btn.set_relief(gtk::ReliefStyle::None);
-        WidgetExt::set_tooltip_text(&close_btn, Some("Close Document Map"));
-        close_btn.connect_clicked(|_| {
-            crate::at_callback_boundary("docmap:close_btn:clicked", (), || set_visible(false));
-        });
-        title_row.pack_end(&close_btn, false, false, 0);
-        container.pack_start(&title_row, false, false, 0);
-
-        container.pack_start(
-            &gtk::Separator::new(gtk::Orientation::Horizontal),
-            false,
-            false,
-            0,
-        );
 
         // Exclude the miniature from all input. This is the *edit* guard,
         // not `SCI_SETREADONLY`: read-only is a document-level flag, so it
@@ -165,82 +123,21 @@ impl DocMapPanel {
         overlay.add_overlay(&overlay_area);
         container.pack_start(&overlay, true, true, 0);
 
-        paned.pack1(editor_content, true, true);
-        paned.pack2(&container, false, false);
-
-        // Seed the initial splitter position for a restored width, once
-        // the paned knows its total width. The map is the right pane, so
-        // position = total - width. One-shot: cleared after the first
-        // apply so subsequent user drags (which GTK preserves for a
-        // non-resize pack2 across window resizes) are never overridden.
-        let pending_map_width: Rc<Cell<Option<i32>>> = Rc::new(Cell::new(None));
-        let pending = pending_map_width.clone();
-        paned.connect_size_allocate(move |p, alloc| {
-            crate::at_callback_boundary("docmap:paned:size_allocate", (), || {
-                if let Some(target) = pending.get() {
-                    let pos = (alloc.width() - target.max(MIN_WIDTH_PX)).max(0);
-                    if p.position() != pos {
-                        p.set_position(pos);
-                    }
-                    pending.set(None);
-                }
-            });
-        });
-
-        // Realize the panel's children, then keep the column collapsed
-        // until the user opens the map — same opt-out of the toplevel
-        // `show_all` the workspace panel and FIF dock use.
+        // Show the content's children once, then opt out of every later
+        // `show_all` so visibility is the dock's to manage: hidden means
+        // parked, never a `hide()` on this widget.
         container.show_all();
-        container.hide();
         container.set_no_show_all(true);
 
         Self {
-            paned,
             container,
             overlay_area,
-            pending_map_width,
-            visible: false,
-            width: DEFAULT_WIDTH_PX,
         }
     }
 
-    /// The horizontal paned, so the caller can pack it into the layout.
-    pub fn paned(&self) -> &gtk::Paned {
-        &self.paned
-    }
-
-    /// Show or hide the column, snapshotting the width on hide and
-    /// requesting the remembered width on show (applied by the paned's
-    /// `size-allocate` handler once the total width is known).
-    fn set_shown(&mut self, visible: bool) {
-        if visible {
-            self.pending_map_width
-                .set(Some(self.width.max(MIN_WIDTH_PX)));
-            self.container.show();
-            // If the paned is already allocated (a mid-session toggle,
-            // not a cold-start restore), the handler won't fire on its
-            // own — nudge a re-allocation so the pending width applies.
-            self.paned.queue_resize();
-        } else {
-            if self.visible {
-                self.width = self.current_width();
-            }
-            self.container.hide();
-        }
-        self.visible = visible;
-    }
-
-    /// The width to persist: the live map width while visible, else the
-    /// last remembered value. The map is the right pane, so its live
-    /// width is its own container allocation.
-    fn current_width(&self) -> i32 {
-        if self.visible {
-            let w = self.container.allocated_width();
-            if w > 0 {
-                return w;
-            }
-        }
-        self.width
+    /// The panel content, for [`crate::dock::install`].
+    pub fn content(&self) -> &gtk::Widget {
+        self.container.upcast_ref()
     }
 }
 
@@ -331,7 +228,9 @@ pub(crate) fn syncing() -> bool {
 }
 
 /// Drive both indicators to `visible` without re-firing their handlers.
-fn sync_indicators(visible: bool) {
+/// Also called by [`crate::dock`] after every reconcile, since a drag
+/// or a caption ✕ changes visibility without passing through here.
+pub(crate) fn sync_indicators(visible: bool) {
     let _syncing = crate::FlagGuard::set(&SYNCING);
     MENU_CHECK.with(|c| {
         if let Some(item) = &*c.borrow() {
@@ -348,15 +247,14 @@ fn sync_indicators(visible: bool) {
 // --- Public entry points ----------------------------------------------
 
 /// Show or hide the panel. The single funnel behind the View toggle, the
-/// toolbar button and the header close button, so all three agree.
+/// toolbar button and the group caption's close button, so all three
+/// agree. The dock's reconcile binds the map to the active buffer and
+/// paints the box for the current viewport on show — the panel may
+/// have been hidden across several scrolls/tab switches.
 pub(crate) fn set_visible(visible: bool) {
-    with_state(|st| st.docmap.set_shown(visible));
-    if visible {
-        // Bind the map to the active buffer and paint the box for the
-        // current viewport — the panel may have been hidden across
-        // several scrolls/tab switches.
-        sync_to_active_tab();
-    }
+    crate::dock::set_panel_visible(DockPanel::DocMap, visible);
+    // Deliberate overlap with the dock's own post-reconcile sync — see
+    // the same note in `workspace::set_visible`.
     sync_indicators(visible);
     sync_to_shell();
 }
@@ -366,7 +264,7 @@ pub(crate) fn set_visible(visible: bool) {
 /// (nothing to paint) or the tab has no document yet.
 pub(crate) fn sync_to_active_tab() {
     with_state(|st| {
-        if !st.docmap.visible {
+        if !crate::dock::is_visible(DockPanel::DocMap) {
             return;
         }
         let doc = st.shell.active().map_or(0, |t| t.scintilla_doc);
@@ -388,36 +286,22 @@ pub(crate) fn sync_to_active_tab() {
 /// main editor's `sci-notify` handler (scroll/edit) and after tab switch.
 pub(crate) fn refresh() {
     with_state(|st| {
-        if st.docmap.visible {
+        if crate::dock::is_visible(DockPanel::DocMap) {
             update_indicator(st);
         }
     });
 }
 
-/// Apply the saved session: width, and open the panel if it was open.
-/// Mirrors `workspace::apply_saved`. Runs at cold start.
-pub(crate) fn apply_saved() {
-    let Some(Some(saved)) = with_state(|st| st.shell.saved_docmap_session()) else {
-        return;
-    };
-    if let Some(width) = saved.width {
-        if width >= MIN_WIDTH_PX {
-            with_state(|st| st.docmap.width = width);
-        }
-    }
-    if saved.visible {
-        set_visible(true);
-    }
-}
-
 /// Snapshot the live panel state into the shell so the next
 /// `save_session` persists it. Called from the autosave / shutdown path.
+/// The dock layout itself persists separately (`dock::sync_to_shell`);
+/// this legacy mirror carries visible/width for downgrade tolerance
+/// only — a dock-aware build restores from `<dock>` and never reads it.
 pub(crate) fn sync_to_shell() {
     with_state(|st| {
-        let dm = &st.docmap;
         let session = codepp_core::session::DocMapSession {
-            visible: dm.visible,
-            width: Some(dm.current_width()),
+            visible: crate::dock::is_visible(DockPanel::DocMap),
+            width: Some(crate::dock::legacy_band_width(DockPanel::DocMap)),
         };
         st.shell.set_docmap_session(Some(session));
     });
