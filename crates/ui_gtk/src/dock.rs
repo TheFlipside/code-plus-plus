@@ -906,6 +906,16 @@ fn rehost_group(d: &mut Ui, gi: usize, location: DockLocation) {
                     area.remove(&g.frame);
                 }
                 let win = pooled.unwrap_or_else(|| build_float_window(&main));
+                // Replace the size request the docked layout gave the
+                // frame: inside a toplevel that request becomes the
+                // window's *minimum*, so a float could be grown by its
+                // border but never shrunk below its last band size
+                // (reported by a user). The model's floor goes in its
+                // place rather than `-1` so the live window can never be
+                // dragged smaller than the rect `set_floating_rect` will
+                // persist — otherwise the two disagree until the next
+                // reconcile happens to resize it back.
+                g.frame.set_size_request(MIN_FLOAT_W, MIN_FLOAT_H);
                 set_float_margin(&g.frame, FLOAT_RESIZE_BORDER);
                 g.frame.style_context().add_class(CSS_FLOAT_FRAME);
                 win.add(&g.frame);
