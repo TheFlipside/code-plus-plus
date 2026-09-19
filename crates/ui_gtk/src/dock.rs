@@ -106,8 +106,7 @@ use std::io::Cursor;
 
 use codepp_core::dock::{
     compute_frame, resolve_drop, DockGroup, DockLayout, DockLocation, DockPanel, DockRect,
-    DockSide, DragSubject, DropTarget, DropZones, DEFAULT_FLOAT_H, DEFAULT_FLOAT_W, MIN_FLOAT_H,
-    MIN_FLOAT_W,
+    DockSide, DragSubject, DropTarget, DropZones, MIN_FLOAT_H, MIN_FLOAT_W,
 };
 use gtk::gdk;
 use gtk::gdk_pixbuf::Pixbuf;
@@ -313,6 +312,29 @@ fn side_drag_size(side: DockSide, size_at_start: i32, delta: (i32, i32)) -> i32 
         DockSide::Top => size_at_start + delta.1,
         DockSide::Bottom => size_at_start - delta.1,
     }
+}
+
+/// The size a panel or group opens at when it is torn off into a
+/// float: a third of the main window's current width and height,
+/// floored at the model's minimum. The docked size is *not* used —
+/// a full-height side band makes an awkward window nobody wants and
+/// has to resize anyway (a user's report); a third of the window is a
+/// working size on any display, and it scales with the window rather
+/// than being a fixed constant.
+#[must_use]
+fn tear_off_size(main: (i32, i32)) -> (i32, i32) {
+    ((main.0 / 3).max(MIN_FLOAT_W), (main.1 / 3).max(MIN_FLOAT_H))
+}
+
+/// Where the pointer sits inside a torn-off float's caption: the same
+/// *fraction* along the caption as it had along the source (so a grab
+/// near the right end stays near the right end), clamped inside the
+/// new width, and vertically mid-caption.
+#[must_use]
+fn tear_off_grab(cursor_dx: i32, source_w: i32, new_w: i32) -> (i32, i32) {
+    let fraction = f64::from(cursor_dx.clamp(0, source_w.max(1))) / f64::from(source_w.max(1));
+    let x = (fraction * f64::from(new_w)).round() as i32;
+    (x.clamp(0, new_w.max(0)), DOCK_CAPTION_H / 2)
 }
 
 /// Which window edge a press at `(x, y)` inside a `w`×`h` floating
@@ -1233,10 +1255,13 @@ fn close_active_panel(id: u32) {
 
 // --- gesture handlers ------------------------------------------------------------------
 
-/// Caption press: arm a whole-group drag. The grab offset keeps the
-/// pointer where the user pressed, relative to the frame's own origin,
-/// so a float lands "in hand". A press on a floating group also raises
-/// it above its floating siblings, without taking focus.
+/// Caption press: arm a whole-group drag. On an already-floating group
+/// the grab offset keeps the pointer where the user pressed, relative to
+/// the frame's own origin, so the window moves "in hand"; on a docked
+/// group the float opens at [`tear_off_size`] with the pointer at the
+/// same fraction along the caption ([`tear_off_grab`]). A press on a
+/// floating group also raises it above its floating siblings, without
+/// taking focus.
 fn on_caption_press(id: u32, ev: &gdk::EventButton) -> glib::Propagation {
     if ev.button() != 1 {
         return glib::Propagation::Proceed;
@@ -1251,12 +1276,24 @@ fn on_caption_press(id: u32, ev: &gdk::EventButton) -> glib::Propagation {
             window.raise();
         }
         let outer = root_rect(&g.frame).unwrap_or_default();
+        // An already-floating group is being *moved*: it keeps its size
+        // and the pointer stays where the user pressed. A docked group
+        // is being torn off: it opens at the tear-off size.
+        let (grab, float_size) = if g.float.is_some() {
+            (
+                (rx - outer.x, ry - outer.y),
+                (outer.w.max(MIN_FLOAT_W), outer.h.max(MIN_FLOAT_H)),
+            )
+        } else {
+            let size = tear_off_size(d.main_window.size());
+            (tear_off_grab(rx - outer.x, outer.w, size.0), size)
+        };
         d.drag = Some(Drag {
             subject: DragSubject::Group(id),
             group_id: id,
             start: (rx, ry),
-            grab: (rx - outer.x, ry - outer.y),
-            float_size: (outer.w.max(MIN_FLOAT_W), outer.h.max(MIN_FLOAT_H)),
+            grab,
+            float_size,
             armed_tab: None,
             started: false,
             cancelled: false,
@@ -1266,8 +1303,8 @@ fn on_caption_press(id: u32, ev: &gdk::EventButton) -> glib::Propagation {
 }
 
 /// Tab press: arm a tab switch that becomes a single-panel drag if the
-/// pointer travels. A torn-off tab floats at the default size with the
-/// grab point in its caption.
+/// pointer travels. A torn-off tab floats at the tear-off size with
+/// the grab point mid-caption.
 fn on_tab_press(
     id: u32,
     index: usize,
@@ -1279,12 +1316,13 @@ fn on_tab_press(
     }
     let (rx, ry) = root_i32(ev.root());
     with_dock(|d| {
+        let size = tear_off_size(d.main_window.size());
         d.drag = Some(Drag {
             subject: DragSubject::Panel(panel),
             group_id: id,
             start: (rx, ry),
-            grab: (DEFAULT_FLOAT_W / 2, DOCK_CAPTION_H / 2),
-            float_size: (DEFAULT_FLOAT_W, DEFAULT_FLOAT_H),
+            grab: (size.0 / 2, DOCK_CAPTION_H / 2),
+            float_size: size,
             armed_tab: Some(index),
             started: false,
             cancelled: false,
@@ -1613,8 +1651,8 @@ fn on_splitter_release(ev: &gdk::EventButton) -> glib::Propagation {
 
 #[cfg(test)]
 mod tests {
-    use super::{geometry_rect, resize_edge, side_drag_size};
-    use codepp_core::dock::{DockRect, DockSide};
+    use super::{geometry_rect, resize_edge, side_drag_size, tear_off_grab, tear_off_size};
+    use codepp_core::dock::{DockRect, DockSide, MIN_FLOAT_H, MIN_FLOAT_W};
     use gtk::gdk::WindowEdge;
 
     #[test]
@@ -1627,6 +1665,29 @@ mod tests {
         assert_eq!(side_drag_size(DockSide::Bottom, 200, (0, 30)), 170);
         // The off-axis component is ignored.
         assert_eq!(side_drag_size(DockSide::Left, 200, (0, 99)), 200);
+    }
+
+    #[test]
+    fn tear_off_size_is_a_third_of_the_window_floored_at_the_minimum() {
+        assert_eq!(tear_off_size((1200, 900)), (400, 300));
+        // A small window floors at the model minimum rather than a sliver.
+        assert_eq!(tear_off_size((300, 240)), (MIN_FLOAT_W, MIN_FLOAT_H));
+        assert_eq!(tear_off_size((0, 0)), (MIN_FLOAT_W, MIN_FLOAT_H));
+    }
+
+    #[test]
+    fn tear_off_grab_keeps_the_pointer_fraction_along_the_caption() {
+        // Pressed a quarter of the way along a 400-wide band → a quarter
+        // of the way along the 200-wide float.
+        assert_eq!(
+            tear_off_grab(100, 400, 200),
+            (50, super::DOCK_CAPTION_H / 2)
+        );
+        // Beyond either end clamps rather than leaving the float behind.
+        assert_eq!(tear_off_grab(-30, 400, 200).0, 0);
+        assert_eq!(tear_off_grab(900, 400, 200).0, 200);
+        // A degenerate source width does not divide by zero.
+        assert_eq!(tear_off_grab(10, 0, 200).0, 200);
     }
 
     #[test]
