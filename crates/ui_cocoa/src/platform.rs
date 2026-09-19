@@ -109,81 +109,56 @@ impl CocoaUi {
         } else {
             crate::toolbar::TOOLBAR_HEIGHT
         };
+        let status_h = crate::status::STATUS_BAR_HEIGHT;
+        // Bottom-up, in Cocoa's unflipped content coordinates: status
+        // bar, dock area, toolbar. The dock area absorbs what is left,
+        // floored at zero so a very short window cannot ask for a
+        // negative height.
+        let area_h = (size.height - status_h - toolbar_h).max(0.0);
+        self.status.container.setFrame(NSRect::new(
+            NSPoint::new(0.0, 0.0),
+            NSSize::new(size.width, status_h),
+        ));
+        self.dock_area.setFrame(NSRect::new(
+            NSPoint::new(0.0, status_h),
+            NSSize::new(size.width, area_h),
+        ));
+        self.toolbar.container.setFrame(NSRect::new(
+            NSPoint::new(0.0, status_h + area_h),
+            NSSize::new(size.width, toolbar_h),
+        ));
+        // Carve the area into side bands and the editor cell — the dock
+        // model's job (`core::dock::compute_frame`), applied by the
+        // Cocoa mechanism. Takes only the dock borrow, which is why it
+        // can run from inside this `with_state` borrow; it sets the
+        // editor cell's frame, which the rest of this method lays out
+        // inside of.
+        crate::dock::layout_area(size.width, area_h);
+        // Inside the cell, bottom-up: results dock, editor, tab strip.
+        // The status bar and toolbar are outside the cell now, so the
+        // dock's clamp is against the cell alone.
+        let cell = self.editor_cell.bounds().size;
         let tabs_h = if self.tabs.is_hidden() {
             0.0
         } else {
             crate::tabs::TAB_STRIP_HEIGHT
         };
         // Zero while the dock is closed, which is most of the time, and
-        // otherwise clamped to what this window size can give it — see
+        // otherwise clamped to what this cell can give it — see
         // `FifDock::height_for_layout`.
-        let dock_h = self
-            .fif_dock
-            .height_for_layout(size.height, tabs_h, toolbar_h);
-        // Bottom-up, in Cocoa's unflipped content coordinates: status bar,
-        // results dock, editor, tab strip, toolbar. The editor absorbs
-        // what is left, and is floored at zero so a very short window
-        // cannot ask for a negative height.
-        let status_h = crate::status::STATUS_BAR_HEIGHT;
-        let editor_h = (size.height - status_h - dock_h - tabs_h - toolbar_h).max(0.0);
-        // Zero while the map is closed, and otherwise clamped to what
-        // this window width can give it — see `DocMapPanel::width_for_layout`.
-        // Unlike the bottom dock this one splits the band *horizontally*,
-        // so it comes out of the editor's width rather than its height.
-        let map_w = crate::docmap::width_for_layout(size.width);
-        // The workspace tree takes the *left* of the same band the map
-        // takes the right of, so it is clamped against what is left after
-        // the map — the map is asked first and keeps its width, which
-        // makes the two deterministic rather than order-dependent.
-        let ws_w = crate::workspace::width_for_layout(size.width, map_w);
-        let editor_w = (size.width - map_w - ws_w).max(0.0);
-        self.status.container.setFrame(NSRect::new(
-            NSPoint::new(0.0, 0.0),
-            NSSize::new(size.width, status_h),
-        ));
+        let dock_h = self.fif_dock.height_for_layout(cell.height, tabs_h);
+        let editor_h = (cell.height - dock_h - tabs_h).max(0.0);
         self.fif_dock.container.setFrame(NSRect::new(
-            NSPoint::new(0.0, status_h),
-            NSSize::new(size.width, dock_h),
+            NSPoint::new(0.0, 0.0),
+            NSSize::new(cell.width, dock_h),
         ));
         self.sci_view.setFrame(NSRect::new(
-            NSPoint::new(ws_w, status_h + dock_h),
-            NSSize::new(editor_w, editor_h),
+            NSPoint::new(0.0, dock_h),
+            NSSize::new(cell.width, editor_h),
         ));
-        // Same guard as the map's below, for the same reason: a closed
-        // panel keeps its frame rather than being squashed to zero, which
-        // would collapse its width-sizable subviews irrecoverably.
-        if ws_w > 0.0 {
-            self.workspace.container.setFrame(NSRect::new(
-                NSPoint::new(0.0, status_h + dock_h),
-                NSSize::new(ws_w, editor_h),
-            ));
-        }
-        // The map shares the editor's band, pinned to the right edge. The
-        // status bar, the results dock and both top strips stay full
-        // width — the same arrangement Notepad++ and `ui_gtk` use, where
-        // the map splits only the editing area.
-        //
-        // **Only while it is open.** Giving a closed panel a zero-width
-        // frame reads as harmless — it is hidden — and is not: its
-        // subviews are width-sizable, so they collapse to zero too, and
-        // autoresizing cannot restore proportions from a zero-width
-        // superview. Measured before this guard: reopening the map came
-        // back with its header label 160 pt wide inside a 160 pt panel,
-        // running straight over the close button. A hidden view's frame
-        // is unobservable, so leaving it untouched costs nothing.
-        if map_w > 0.0 {
-            self.docmap.container.setFrame(NSRect::new(
-                NSPoint::new(ws_w + editor_w, status_h + dock_h),
-                NSSize::new(map_w, editor_h),
-            ));
-        }
         self.tabs.container.setFrame(NSRect::new(
-            NSPoint::new(0.0, status_h + dock_h + editor_h),
-            NSSize::new(size.width, tabs_h),
-        ));
-        self.toolbar.container.setFrame(NSRect::new(
-            NSPoint::new(0.0, status_h + dock_h + editor_h + tabs_h),
-            NSSize::new(size.width, toolbar_h),
+            NSPoint::new(0.0, dock_h + editor_h),
+            NSSize::new(cell.width, tabs_h),
         ));
     }
 

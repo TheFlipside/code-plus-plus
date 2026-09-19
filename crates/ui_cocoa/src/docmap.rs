@@ -26,6 +26,18 @@
 //! The colour is the one the other two backends use — `#FFA500`
 //! (Notepad++'s Document Map orange) at `60/255 ≈ 24 %` alpha.
 //!
+//! # A dock panel
+//!
+//! The panel is a *dock panel* (`DockPanel::DocMap`): the content built
+//! here — the container holding the miniature and its overlay — is
+//! hosted by [`crate::dock`] in a docked group, a tab of a shared group,
+//! or a floating window, and parked hidden otherwise. That hosting
+//! **reparents** the container (an ordinary `viewDidMoveToWindow` cycle
+//! for the Scintilla view inside it); what it never does is remove the
+//! miniature from the container or release it. The caption, the close ✕
+//! and the resize splitter are the group's, not this panel's, and so is
+//! the record of whether the map is open — [`is_visible`] asks the dock.
+//!
 //! # Why the overlay owns the mouse
 //!
 //! The miniature is bound to the *same, editable* document as the main
@@ -40,17 +52,15 @@
 //! same thing (no `WS_TABSTOP`, plus a subclass proc that eats the
 //! mouse).
 
-use std::cell::{Cell, RefCell};
+use std::cell::RefCell;
 
 use objc2::rc::Retained;
 use objc2::runtime::Bool;
-use objc2::{define_class, msg_send, sel, MainThreadOnly};
-use objc2_app_kit::{
-    NSAutoresizingMaskOptions, NSBezelStyle, NSButton, NSColor, NSCursor, NSEvent, NSFont,
-    NSLineBreakMode, NSRectFill, NSTextField, NSView,
-};
-use objc2_foundation::{MainThreadMarker, NSObjectProtocol, NSPoint, NSRect, NSSize, NSString};
+use objc2::{define_class, msg_send, MainThreadOnly};
+use objc2_app_kit::{NSAutoresizingMaskOptions, NSColor, NSEvent, NSRectFill, NSView};
+use objc2_foundation::{MainThreadMarker, NSObjectProtocol, NSPoint, NSRect, NSSize};
 
+use codepp_core::dock::DockPanel;
 use codepp_editor::EditorHandle;
 use codepp_scintilla_sys::{
     CARETSTYLE_INVISIBLE, SCI_DOCLINEFROMVISIBLE, SCI_GETDOCPOINTER, SCI_GETFIRSTVISIBLELINE,
@@ -59,27 +69,8 @@ use codepp_scintilla_sys::{
     SCI_SETMARGINWIDTHN, SCI_SETVSCROLLBAR, SCI_SETZOOM, SCI_TEXTHEIGHT, SCI_VISIBLEFROMDOCLINE,
 };
 
-use crate::menu::Actions;
 use crate::state::with_state;
 
-/// Panel title, matching the other two backends' header label.
-const PANEL_TITLE: &str = "Document Map";
-/// Width the first time the map is opened, in points. Mirrors Win32's
-/// `DEFAULT_DOCMAP_WIDTH_PX` and GTK's `DEFAULT_WIDTH_PX`.
-const DEFAULT_WIDTH: f64 = 160.0;
-/// Width floor — below this the miniature is unreadable blocks.
-const MIN_WIDTH: f64 = 80.0;
-/// The editor never shrinks below this, however far the divider is
-/// dragged. Same role as the FIF dock's `EDITOR_MIN_HEIGHT`.
-const EDITOR_MIN_WIDTH: f64 = 200.0;
-/// Ceiling on a width restored from `session.xml` — comfortably past the
-/// widest display this could run on, so it rejects only corruption and
-/// never a width a user actually dragged. See [`apply_saved`].
-const MAX_RESTORED_WIDTH: f64 = 10_000.0;
-/// The panel's own header row (title + close button).
-const HEADER_HEIGHT: f64 = 24.0;
-/// The drag handle down the panel's left edge.
-const DIVIDER_WIDTH: f64 = 5.0;
 /// Miniature zoom: `-10` shrinks the font to the smallest block shape
 /// that still hints at text density. Same value as the other backends.
 const MINIATURE_ZOOM: isize = -10;
@@ -93,21 +84,8 @@ const VIEWPORT_ALPHA: f64 = 60.0 / 255.0;
 
 /// Lines to scroll the MAIN editor per wheel notch over the map.
 const WHEEL_LINES: f64 = 3.0;
-/// Smallest divider movement worth acting on, in points. See
-/// [`drag_divider_to`].
-const DRAG_EPSILON: f64 = 0.5;
 
 thread_local! {
-    /// Whether the panel is open, and how wide it is.
-    ///
-    /// `thread_local`s rather than fields on [`DocMapPanel`] for the same
-    /// reason `FifDock`'s height is one: the panel is `Clone` and handed
-    /// out by `CocoaUiState::split` on every drain, so a plain field
-    /// would give each copy its own value and a divider drag would be
-    /// forgotten on the next wake.
-    static VISIBLE: Cell<bool> = const { Cell::new(false) };
-    static WIDTH: Cell<f64> = const { Cell::new(DEFAULT_WIDTH) };
-
     /// The panel's root view, so [`owns_view`] can answer without a
     /// `with_state` borrow. See it for why that matters — the borrow
     /// version failed open on exactly the path the guard protects.
@@ -223,8 +201,9 @@ impl Overlay {
 /// `CocoaUiState::split` on every drain, so it must stay cheap.
 #[derive(Clone)]
 pub struct DocMapPanel {
-    /// The panel's root. The caller positions it; see
-    /// `CocoaUi::relayout_chrome`.
+    /// The panel content (the miniature plus its overlay) — the view the
+    /// dock hosts. Created once; never destroyed, only reparented by
+    /// [`crate::dock`], which also sizes it.
     pub container: Retained<NSView>,
     /// The orange-box view, held so a refresh can invalidate it.
     overlay: Retained<Overlay>,
@@ -243,93 +222,15 @@ pub struct DocMapPanel {
 }
 
 impl DocMapPanel {
-    /// Build the panel around an already-created miniature view. Starts
-    /// hidden, so a session that never opens the map pays only this.
-    pub fn new(
-        miniature: Retained<NSView>,
-        editor: EditorHandle,
-        height: f64,
-        actions: &Actions,
-        mtm: MainThreadMarker,
-    ) -> Self {
-        let width = DEFAULT_WIDTH;
-        let container = NSView::initWithFrame(
-            NSView::alloc(mtm),
-            NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(width, height)),
-        );
-        // Keeps its width and its distance from the right edge as the
-        // window grows; the editor beside it absorbs the slack.
-        container.setAutoresizingMask(
-            NSAutoresizingMaskOptions::ViewHeightSizable
-                | NSAutoresizingMaskOptions::ViewMinXMargin,
-        );
-        container.setHidden(true);
+    /// Build the panel content around an already-created miniature view.
+    /// The caller hands [`Self::container`] to [`crate::dock::install`],
+    /// which owns where — and whether — it is shown from then on.
+    pub fn new(miniature: Retained<NSView>, editor: EditorHandle, mtm: MainThreadMarker) -> Self {
+        // A nominal size; the dock sizes the container to whatever slot
+        // hosts it, and the two children follow through their masks.
+        let body = NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(160.0, 400.0));
+        let container = NSView::initWithFrame(NSView::alloc(mtm), body);
 
-        // --- the drag handle, down the left edge --------------------
-        let divider = Divider::new(
-            NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(DIVIDER_WIDTH, height)),
-            mtm,
-        );
-        divider.setAutoresizingMask(
-            NSAutoresizingMaskOptions::ViewHeightSizable
-                | NSAutoresizingMaskOptions::ViewMaxXMargin,
-        );
-        container.addSubview(&divider);
-
-        // --- header: title + close ----------------------------------
-        //
-        // `ViewMinYMargin` on both is load-bearing rather than
-        // decoration: the header has to stay pinned to the panel's top
-        // edge as the window makes the panel taller. The FIF dock's own
-        // header shipped without it and buried itself under the results
-        // table the first time anyone dragged it.
-        let header_y = height - HEADER_HEIGHT;
-        let close = NSButton::initWithFrame(
-            NSButton::alloc(mtm),
-            NSRect::new(
-                NSPoint::new(width - 24.0, header_y),
-                NSSize::new(22.0, HEADER_HEIGHT),
-            ),
-        );
-        close.setTitle(&NSString::from_str("✕"));
-        close.setBezelStyle(NSBezelStyle::AccessoryBarAction);
-        close.setFont(Some(&NSFont::systemFontOfSize(
-            NSFont::smallSystemFontSize(),
-        )));
-        close.setAutoresizingMask(
-            NSAutoresizingMaskOptions::ViewMinXMargin | NSAutoresizingMaskOptions::ViewMinYMargin,
-        );
-        // SAFETY: the target is a weak reference to an object the window
-        // state owns for the process lifetime, and the selector is a
-        // compile-time `sel!` literal `Actions` implements.
-        unsafe {
-            close.setTarget(Some(&**actions));
-            close.setAction(Some(sel!(codeppDocMapClose:)));
-        }
-
-        let title = NSTextField::labelWithString(&NSString::from_str(PANEL_TITLE), mtm);
-        title.setFrame(NSRect::new(
-            NSPoint::new(DIVIDER_WIDTH + 4.0, header_y),
-            NSSize::new((width - DIVIDER_WIDTH - 32.0).max(0.0), HEADER_HEIGHT),
-        ));
-        title.setFont(Some(&NSFont::systemFontOfSize(
-            NSFont::smallSystemFontSize(),
-        )));
-        title.setLineBreakMode(NSLineBreakMode::ByTruncatingTail);
-        title.setAutoresizingMask(
-            NSAutoresizingMaskOptions::ViewWidthSizable | NSAutoresizingMaskOptions::ViewMinYMargin,
-        );
-        container.addSubview(&title);
-        container.addSubview(&close);
-
-        // --- the miniature, filling what is left, and its overlay ---
-        let body = NSRect::new(
-            NSPoint::new(DIVIDER_WIDTH, 0.0),
-            NSSize::new(
-                (width - DIVIDER_WIDTH).max(0.0),
-                (height - HEADER_HEIGHT).max(0.0),
-            ),
-        );
         let flexible = NSAutoresizingMaskOptions::ViewWidthSizable
             | NSAutoresizingMaskOptions::ViewHeightSizable;
         miniature.setFrame(body);
@@ -363,137 +264,19 @@ impl DocMapPanel {
     }
 }
 
-/// The width the layout should give the panel: zero while closed,
-/// otherwise clamped to what this window width can spare.
-///
-/// **The clamp belongs here, not only in the divider drag**, for the same
-/// reason the FIF dock's does: the persisted width outlives the window
-/// size that justified it, and a plain window resize is handled entirely
-/// by autoresizing masks — where the editor is the only flexible view and
-/// so absorbs the whole delta. Without a clamp on every layout,
-/// narrowing the window under an open map starves the editor to nothing
-/// while the map keeps its width.
-///
-/// A free function rather than a method on [`DocMapPanel`] because both
-/// values it reads live in this module's thread-locals; see them for why
-/// they are not fields.
-pub(crate) fn width_for_layout(content_width: f64) -> f64 {
-    if !VISIBLE.with(Cell::get) {
-        return 0.0;
-    }
-    clamp_map_width(WIDTH.with(Cell::get), content_width)
-}
-
-/// Clamp a wanted map width against what the window can spare.
-///
-/// Pure so the boundaries — which is what a divider drag gets wrong —
-/// are testable without a window server.
-fn clamp_map_width(wanted: f64, content_width: f64) -> f64 {
-    // A window too narrow to satisfy both floors: the editor wins, and
-    // the map takes whatever is left rather than pushing the editor
-    // off-screen. Never negative.
-    let ceiling = (content_width - EDITOR_MIN_WIDTH).max(0.0);
-    if ceiling <= MIN_WIDTH {
-        return ceiling;
-    }
-    wanted.clamp(MIN_WIDTH, ceiling)
-}
-
-// --- The divider ------------------------------------------------------
-
-define_class!(
-    // SAFETY: an `NSView` subclass overriding only drawing, cursor rects
-    // and mouse tracking. Main-thread-only for the usual reason.
-    #[unsafe(super(NSView))]
-    #[thread_kind = MainThreadOnly]
-    #[name = "CodeppDocMapDivider"]
-    pub struct Divider;
-
-    unsafe impl NSObjectProtocol for Divider {}
-
-    impl Divider {
-        #[unsafe(method(drawRect:))]
-        fn draw_rect(&self, _dirty: NSRect) {
-            crate::at_callback_boundary("docmap:dividerDrawRect", (), || {
-                NSColor::separatorColor().setFill();
-                NSRectFill(self.bounds());
-            });
-        }
-
-        #[unsafe(method(resetCursorRects))]
-        fn reset_cursor_rects(&self) {
-            crate::at_callback_boundary("docmap:resetCursorRects", (), || {
-                // `resizeLeftRightCursor` is deprecated in favour of
-                // `columnResizeCursorInDirections:`, which is macOS 15+.
-                // Code++ has no such deployment floor. Same call the FIF
-                // divider makes for its own axis.
-                #[allow(deprecated)]
-                let cursor = NSCursor::resizeLeftRightCursor();
-                self.addCursorRect_cursor(self.bounds(), &cursor);
-            });
-        }
-
-        #[unsafe(method(mouseDown:))]
-        fn mouse_down(&self, _event: &NSEvent) {
-            crate::at_callback_boundary("docmap:dividerMouseDown", (), || {});
-        }
-
-        #[unsafe(method(mouseDragged:))]
-        fn mouse_dragged(&self, event: &NSEvent) {
-            crate::at_callback_boundary("docmap:dividerMouseDragged", (), || {
-                drag_divider_to(event.locationInWindow().x);
-            });
-        }
-    }
-);
-
-impl Divider {
-    fn new(frame: NSRect, mtm: MainThreadMarker) -> Retained<Self> {
-        let this = Self::alloc(mtm);
-        // SAFETY: `initWithFrame:` is `NSView`'s designated initialiser
-        // and this subclass adds no ivars needing other initialisation.
-        unsafe { msg_send![this, initWithFrame: frame] }
-    }
-}
-
-/// Move the divider so the map's left edge sits at `window_x`.
-fn drag_divider_to(window_x: f64) {
-    let Some((wanted, content_w)) = with_state(|st| {
-        let (_, ui) = st.split();
-        let content_w = ui
-            .window
-            .contentView()
-            .map_or(0.0, |c| c.bounds().size.width);
-        (content_w - window_x, content_w)
-    }) else {
-        return;
-    };
-    let width = clamp_map_width(wanted, content_w);
-    // Half a point, matching the FIF dock's divider rather than a
-    // bit-exact compare: a drag delivers a `mouseDragged:` per pointer
-    // move, and sub-point deltas are invisible but would still relayout
-    // the whole chrome, repaint the map and touch the session on every
-    // one of them.
-    if (WIDTH.with(Cell::get) - width).abs() < DRAG_EPSILON {
-        return;
-    }
-    WIDTH.with(|w| w.set(width));
-    crate::relayout_chrome_bands();
-    refresh();
-    sync_to_shell();
-}
-
 // --- Public entry points ----------------------------------------------
 
-/// Whether the panel is open. Read by the View menu's check mark and the
-/// toolbar toggle's repaint, so both are painted from one truth.
+/// Whether the panel is open (docked, tabbed or floating). Read by the
+/// View menu's check mark and the toolbar toggle's repaint, so both are
+/// painted from one truth — the dock model's.
 pub(crate) fn is_visible() -> bool {
-    VISIBLE.with(Cell::get)
+    crate::dock::is_visible(DockPanel::DocMap)
 }
 
 /// Is `view` the miniature, or inside the panel that holds it?
 ///
 /// The predicate behind [`crate::window::MainWindow`]'s focus refusal —
+/// and the floating dock window's, which carries the same override —
 /// the keyboard half of the "no input reaches the miniature" guarantee
 /// this module's docs state.
 ///
@@ -517,25 +300,21 @@ pub(crate) fn owns_view(view: &NSView) -> bool {
 }
 
 /// Show or hide the panel. The single funnel behind the View toggle, the
-/// toolbar button and the header close button, so all three agree.
+/// toolbar button and the group caption's close button, so all three
+/// agree. The dock's reconcile binds the map to the active buffer and
+/// paints the box for the current viewport on show — the panel may have
+/// been hidden across several scrolls and tab switches — and repaints
+/// the toolbar toggle from the model, since that button is
+/// `PushOnPushOff` and only flips itself when *it* is the source.
+///
+/// Never called from inside a `with_state` closure: the dock's reconcile
+/// re-lays the chrome through one of its own.
 pub(crate) fn set_visible(visible: bool) {
-    VISIBLE.with(|v| v.set(visible));
-    with_state(|st| {
-        st.docmap.container.setHidden(!visible);
-        let (_, ui) = st.split();
-        ui.relayout_chrome();
-    });
-    if visible {
-        // The map may have been closed across several scrolls and tab
-        // switches, so rebind and repaint rather than waiting for the
-        // next notification.
-        sync_to_active_tab();
-    }
-    // The toolbar's toggle is a `PushOnPushOff` button whose state
-    // AppKit has already flipped when *it* is the source, but not when
-    // the menu or the close button is — so it is repainted from the
-    // model here, the same rule the three View toggles follow. The menu
-    // resolves its own mark in `validateMenuItem:` on open.
+    crate::dock::set_panel_visible(DockPanel::DocMap, visible);
+    // The dock's reconcile syncs the indicators and the session itself
+    // whenever the model changed; these repeat that work (idempotently)
+    // for the one case it does not run — hiding an already-hidden panel
+    // — so the mirrors never go stale. Deliberate overlap.
     with_state(|st| st.toolbar.refresh_docmap_toggle());
     sync_to_shell();
 }
@@ -543,7 +322,7 @@ pub(crate) fn set_visible(visible: bool) {
 /// Rebind the miniature to the active tab's document, then repaint. A
 /// no-op when the map is hidden or the tab has no document yet.
 pub(crate) fn sync_to_active_tab() {
-    if !VISIBLE.with(Cell::get) {
+    if !is_visible() {
         return;
     }
     with_state(|st| {
@@ -563,67 +342,29 @@ pub(crate) fn sync_to_active_tab() {
 
 /// Recompute the viewport range and repaint the box. A no-op when the map
 /// is hidden. Driven from the main editor's notification handler, so it
-/// is on the keystroke path — a handful of direct-calls plus one deferred
-/// redraw, well inside DESIGN.md §8's budget.
+/// is on the keystroke path — one dock-model read, a handful of
+/// direct-calls plus one deferred redraw, well inside DESIGN.md §8's
+/// budget.
 pub(crate) fn refresh() {
-    if !VISIBLE.with(Cell::get) {
+    if !is_visible() {
         return;
     }
     with_state(update_indicator);
 }
 
-/// Apply the saved session: width, and open the panel if it was open.
-/// Runs at cold start, after the session is in the shell.
-///
-/// **The restored width is bounded here, which is the one place it is
-/// not otherwise.** `session.xml` is a file on disk that a user can hand
-/// edit and that a crash can truncate, so this is the only path that
-/// writes [`WIDTH`] from a value the process did not compute. Nothing
-/// downstream is at risk — [`width_for_layout`] clamps against the live
-/// window before any rectangle is built, and `f64 as i32` saturates
-/// rather than wrapping — so this is hygiene, not a defence: without it
-/// a nonsense width sits in the thread-local and gets written straight
-/// back out on the next save, surviving every restart until someone
-/// drags the divider.
-///
-/// The bound is deliberately absolute rather than window-relative. The
-/// layout clamp is where the window has a say, and it is *not* written
-/// back on purpose: a map temporarily squeezed by a narrow window must
-/// come back to the width the user chose when the window grows again —
-/// the same call `ui_win32` makes for the results dock's height.
-pub(crate) fn apply_saved() {
-    let Some(Some(saved)) = with_state(|st| st.shell.saved_docmap_session()) else {
-        return;
-    };
-    if let Some(width) = saved.width.and_then(restorable_width) {
-        WIDTH.with(|w| w.set(width));
-    }
-    if saved.visible {
-        set_visible(true);
-    }
-}
-
-/// A persisted width, if it is one this process could have written.
-/// Pure so the boundaries are testable without a session file.
-fn restorable_width(saved: i32) -> Option<f64> {
-    let width = f64::from(saved);
-    (MIN_WIDTH..=MAX_RESTORED_WIDTH)
-        .contains(&width)
-        .then_some(width)
-}
-
 /// Snapshot the live panel state into the shell so the next
 /// `save_session` persists it. Called from the autosave / shutdown path.
+/// The dock layout itself persists separately (`dock::sync_to_shell`);
+/// this legacy mirror carries visible/width for downgrade tolerance
+/// only — a dock-aware build restores from `<dock>` and never reads it.
 pub(crate) fn sync_to_shell() {
-    let width = WIDTH.with(Cell::get);
+    let visible = is_visible();
+    let width = crate::dock::legacy_band_width(DockPanel::DocMap);
     with_state(|st| {
         st.shell
             .set_docmap_session(Some(codepp_core::session::DocMapSession {
-                visible: VISIBLE.with(Cell::get),
-                // Points, not pixels — the same unit every other geometry
-                // this backend persists uses, so a Retina display does not
-                // write a session a non-Retina one reads as twice as wide.
-                width: Some(width.round() as i32),
+                visible,
+                width: Some(width),
             }));
     });
 }
@@ -809,9 +550,10 @@ fn scroll_main_by_wheel(event: &NSEvent) {
 
 /// Selectors this module owns, for `Actions` to forward.
 ///
-/// Declared here rather than in `menu.rs` so the panel's three entry
-/// points (menu item, toolbar button, header close) stay next to what
-/// they do.
+/// Declared here rather than in `menu.rs` so the panel's two entry
+/// points (menu item, toolbar button) stay next to what they do; the
+/// group caption's ✕ is the dock's and routes through
+/// `dock::close_active_panel` to [`set_visible`].
 pub(crate) fn toggle_from_menu() {
     set_visible(!is_visible());
 }
@@ -825,51 +567,9 @@ pub(crate) fn set_from_toolbar(on: bool) {
     set_visible(on);
 }
 
-/// The header's own close button, and `NPPM`-style programmatic closes.
-pub(crate) fn close_from_header() {
-    set_visible(false);
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{
-        clamp_map_width, restorable_width, wheel_lines, EDITOR_MIN_WIDTH, MAX_RESTORED_WIDTH,
-        MIN_WIDTH,
-    };
-
-    #[test]
-    fn an_ordinary_width_passes_through() {
-        assert!((clamp_map_width(160.0, 1024.0) - 160.0).abs() < f64::EPSILON);
-    }
-
-    #[test]
-    fn a_too_narrow_map_is_lifted_to_the_floor() {
-        assert!((clamp_map_width(10.0, 1024.0) - MIN_WIDTH).abs() < f64::EPSILON);
-        assert!((clamp_map_width(-500.0, 1024.0) - MIN_WIDTH).abs() < f64::EPSILON);
-    }
-
-    #[test]
-    fn the_editor_keeps_its_floor_however_far_the_divider_is_dragged() {
-        let content = 900.0;
-        let width = clamp_map_width(10_000.0, content);
-        assert!(
-            content - width >= EDITOR_MIN_WIDTH,
-            "editor left with {} pt",
-            content - width
-        );
-    }
-
-    #[test]
-    fn a_window_too_narrow_for_both_floors_gives_the_editor_priority() {
-        // 250 pt window: the editor's 200 pt floor leaves 50, which is
-        // under the map's own 80 pt floor. The map yields rather than
-        // pushing the editor off-screen.
-        let width = clamp_map_width(160.0, 250.0);
-        assert!((width - 50.0).abs() < f64::EPSILON, "got {width}");
-        // And a window narrower than the editor floor gives it nothing at
-        // all rather than a negative width.
-        assert!(clamp_map_width(160.0, 100.0) >= 0.0);
-    }
+    use super::wheel_lines;
 
     #[test]
     fn an_upward_gesture_scrolls_towards_line_zero() {
@@ -891,29 +591,5 @@ mod tests {
         // Nothing degenerate reaches the `as isize` cast.
         assert_eq!(wheel_lines(f64::NAN), 0);
         assert_eq!(wheel_lines(f64::INFINITY), 0);
-    }
-
-    #[test]
-    fn a_hand_edited_session_width_is_refused_rather_than_persisted_again() {
-        // The one path that writes WIDTH from a value this process did
-        // not compute. A refusal leaves the default in place; accepting
-        // it would round-trip nonsense back into session.xml on the next
-        // save and survive every restart.
-        assert_eq!(restorable_width(160), Some(160.0));
-        assert_eq!(restorable_width(MIN_WIDTH as i32), Some(MIN_WIDTH));
-        assert_eq!(
-            restorable_width(MAX_RESTORED_WIDTH as i32),
-            Some(MAX_RESTORED_WIDTH)
-        );
-        for hostile in [0, -1, i32::MIN, i32::MAX, MIN_WIDTH as i32 - 1] {
-            assert_eq!(restorable_width(hostile), None, "accepted {hostile}");
-        }
-    }
-
-    #[test]
-    fn a_restored_width_survives_a_window_wide_enough_for_it() {
-        // The persisted width is only ever reduced by the clamp, never
-        // silently grown — a user who dragged the map narrow keeps it.
-        assert!((clamp_map_width(90.0, 1600.0) - 90.0).abs() < f64::EPSILON);
     }
 }

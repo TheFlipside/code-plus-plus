@@ -78,6 +78,26 @@ define_class!(
             });
         }
 
+        /// Re-order the floating dock panels front once the application
+        /// is active.
+        ///
+        /// They are `hidesOnDeactivate` panels, and on a cold start with
+        /// a floating group in `session.xml` they are ordered front
+        /// *before* the application has ever become active — the same
+        /// moment the main window's own `orderFront` used to be lost
+        /// (see `did_finish_launching` above). AppKit restores hidden
+        /// panels on the activate transition when it hid them itself;
+        /// this covers the case where it never had them to hide.
+        /// Idempotent for a float that is already on screen.
+        #[unsafe(method(applicationDidBecomeActive:))]
+        fn did_become_active(&self, _notification: &NSNotification) {
+            crate::at_callback_boundary(
+                "applicationDidBecomeActive:",
+                (),
+                crate::dock::order_floats_front,
+            );
+        }
+
         /// Persist and tear down before `exit()`.
         ///
         /// This is the *only* reliable shutdown hook on macOS: the Quit

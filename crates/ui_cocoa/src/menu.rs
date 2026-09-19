@@ -289,14 +289,21 @@ define_class!(
             });
         }
 
-        /// The ✕ in the Document Map's own header.
-        #[unsafe(method(codeppDocMapClose:))]
-        fn doc_map_close(&self, _sender: Option<&NSObject>) {
-            crate::at_callback_boundary(
-                "docmap:close",
-                (),
-                crate::docmap::close_from_header,
-            );
+        // ---- the docking subsystem -----------------------------------
+
+        /// The ✕ on a dock group's caption. The button's tag carries the
+        /// group id; the dock resolves that to the group's *active* panel
+        /// and routes through that panel's own hide path, so the ✕
+        /// behaves exactly like the View toggle's hide half.
+        #[unsafe(method(codeppDockClose:))]
+        fn dock_close(&self, sender: Option<&NSButton>) {
+            crate::at_callback_boundary("dock:close", (), || {
+                if let Some(sender) = sender {
+                    if let Ok(id) = u32::try_from(sender.tag()) {
+                        crate::dock::close_active_panel(id);
+                    }
+                }
+            });
         }
 
         // ---- m4d: the workspace tree -------------------------------
@@ -329,13 +336,6 @@ define_class!(
                 if let Some(sender) = sender {
                     crate::workspace::set_visible(sender.state() != 0);
                 }
-            });
-        }
-
-        #[unsafe(method(codeppWorkspaceClose:))]
-        fn workspace_close(&self, _sender: Option<&NSObject>) {
-            crate::at_callback_boundary("workspace:close", (), || {
-                crate::workspace::set_visible(false);
             });
         }
 

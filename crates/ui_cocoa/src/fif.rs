@@ -486,15 +486,16 @@ impl FifDock {
     }
 
     /// The dock's height for this layout pass: zero while hidden, and
-    /// otherwise the persisted height clamped to what the window can
-    /// currently give it.
+    /// otherwise the persisted height clamped to what the editor cell
+    /// can currently give it.
     ///
     /// **The clamp belongs here, not only in the divider drag.** The
-    /// persisted height outlives the window size that justified it, and
-    /// a plain window resize is handled entirely by autoresizing masks —
-    /// the editor is the only flexible view, so it absorbs the whole
-    /// delta and a window shrunk below the fixed strips starves it to
-    /// nothing while the dock keeps its old height. Clamping at every
+    /// persisted height outlives the cell size that justified it — a
+    /// window resize, or a panel docked to the Bottom side taking a band
+    /// off the cell — and a plain resize is handled entirely by
+    /// autoresizing masks, where the editor is the only flexible view,
+    /// so it absorbs the whole delta and a cell shrunk below the fixed
+    /// strips starves it to nothing while the dock keeps its old height. Clamping at every
     /// layout is what `ui_win32::layout_children` does with its own
     /// `clamp_dock_height`, and `ui_gtk` gets the equivalent for free
     /// because its dock lives in a `GtkPaned` that self-clamps on each
@@ -505,16 +506,15 @@ impl FifDock {
     /// again restores the height the user actually dragged rather than
     /// leaving it stuck at whatever the smallest intermediate size
     /// allowed.
-    pub fn height_for_layout(&self, content_height: f64, tabs_h: f64, toolbar_h: f64) -> f64 {
+    ///
+    /// `cell_height` is the editor cell's — the dock shares that cell
+    /// with the tab strip and the editor, and since the docking
+    /// subsystem landed the status bar and toolbar sit outside it.
+    pub fn height_for_layout(&self, cell_height: f64, tabs_h: f64) -> f64 {
         if self.is_hidden() {
             return 0.0;
         }
-        clamp_dock_height(
-            DOCK_HEIGHT.with(Cell::get),
-            content_height,
-            tabs_h,
-            toolbar_h,
-        )
+        clamp_dock_height(DOCK_HEIGHT.with(Cell::get), cell_height, tabs_h)
     }
 
     fn set_header(&self, text: &str) {
@@ -586,32 +586,31 @@ impl Divider {
 /// Move the divider so the dock's top edge sits at `window_y`.
 ///
 /// Called from the drag; the arithmetic is in [`clamp_dock_height`] so it
-/// can be tested without a mouse.
+/// can be tested without a mouse. The wanted height is measured from the
+/// **editor cell's** bottom edge, not the window's: with a panel docked
+/// to the Bottom side the cell no longer starts at the status bar, and
+/// `convertPoint:toView:` accounts for the flipped dock area in between.
 fn drag_divider_to(window_y: f64) {
-    let Some((wanted, content_h, tabs_h, toolbar_h)) = with_state(|st| {
+    let Some((wanted, cell_h, tabs_h)) = with_state(|st| {
         let (_, ui) = st.split();
-        let content_h = ui
-            .window
-            .contentView()
-            .map_or(0.0, |c| c.bounds().size.height);
+        let cell_h = ui.editor_cell.bounds().size.height;
+        let cell_bottom = ui
+            .editor_cell
+            .convertPoint_toView(NSPoint::new(0.0, 0.0), None)
+            .y;
         (
-            window_y - crate::status::STATUS_BAR_HEIGHT,
-            content_h,
+            window_y - cell_bottom,
+            cell_h,
             if ui.tabs.is_hidden() {
                 0.0
             } else {
                 crate::tabs::TAB_STRIP_HEIGHT
             },
-            if ui.toolbar.is_hidden() {
-                0.0
-            } else {
-                crate::toolbar::TOOLBAR_HEIGHT
-            },
         )
     }) else {
         return;
     };
-    let height = clamp_dock_height(wanted, content_h, tabs_h, toolbar_h);
+    let height = clamp_dock_height(wanted, cell_h, tabs_h);
     if (height - DOCK_HEIGHT.with(Cell::get)).abs() < 0.5 {
         return;
     }
@@ -626,13 +625,12 @@ fn drag_divider_to(window_y: f64) {
 ///
 /// Pure so the boundaries — which is what a divider drag gets wrong —
 /// are testable; dragging a real one is exactly the case a hands-on demo
-/// is worst at checking. The ceiling is "whatever is left after the
-/// status bar, the visible chrome strips and a minimum editor", and it is
-/// floored at [`DOCK_MIN_HEIGHT`] so a very short window still yields a
-/// usable dock rather than a negative one.
-fn clamp_dock_height(wanted: f64, content_height: f64, tabs_h: f64, toolbar_h: f64) -> f64 {
-    let ceiling =
-        content_height - crate::status::STATUS_BAR_HEIGHT - tabs_h - toolbar_h - EDITOR_MIN_HEIGHT;
+/// is worst at checking. The ceiling is "whatever is left of the editor
+/// cell after the tab strip and a minimum editor", and it is floored at
+/// [`DOCK_MIN_HEIGHT`] so a very short cell still yields a usable dock
+/// rather than a negative one.
+fn clamp_dock_height(wanted: f64, cell_height: f64, tabs_h: f64) -> f64 {
+    let ceiling = cell_height - tabs_h - EDITOR_MIN_HEIGHT;
     wanted.clamp(DOCK_MIN_HEIGHT, ceiling.max(DOCK_MIN_HEIGHT))
 }
 
@@ -1018,57 +1016,54 @@ mod tests {
     /// A roomy window gives the user exactly what they dragged.
     #[test]
     fn an_ordinary_drag_is_honoured() {
-        assert!((clamp_dock_height(300.0, 900.0, 26.0, 30.0) - 300.0).abs() < f64::EPSILON);
+        assert!((clamp_dock_height(300.0, 900.0, 26.0) - 300.0).abs() < f64::EPSILON);
     }
 
     /// Dragging down past the floor stops at it, rather than collapsing
     /// the dock to a sliver the header cannot fit in.
     #[test]
     fn dragging_below_the_floor_stops_at_it() {
-        assert!(
-            (clamp_dock_height(10.0, 900.0, 26.0, 30.0) - DOCK_MIN_HEIGHT).abs() < f64::EPSILON
-        );
-        assert!(
-            (clamp_dock_height(-500.0, 900.0, 26.0, 30.0) - DOCK_MIN_HEIGHT).abs() < f64::EPSILON
-        );
+        assert!((clamp_dock_height(10.0, 900.0, 26.0) - DOCK_MIN_HEIGHT).abs() < f64::EPSILON);
+        assert!((clamp_dock_height(-500.0, 900.0, 26.0) - DOCK_MIN_HEIGHT).abs() < f64::EPSILON);
     }
 
     /// Dragging up leaves the editor at least `EDITOR_MIN_HEIGHT`.
     #[test]
     fn dragging_up_leaves_the_editor_usable() {
-        let content = 900.0;
-        let (tabs, toolbar) = (26.0, 30.0);
-        let height = clamp_dock_height(10_000.0, content, tabs, toolbar);
-        let editor = content - crate::status::STATUS_BAR_HEIGHT - tabs - toolbar - height;
+        let cell = 900.0;
+        let tabs = 26.0;
+        let height = clamp_dock_height(10_000.0, cell, tabs);
+        let editor = cell - tabs - height;
         assert!(
             editor >= EDITOR_MIN_HEIGHT - 0.001,
             "editor would be {editor} pt, below the {EDITOR_MIN_HEIGHT} pt minimum"
         );
     }
 
-    /// A window too short to satisfy both minimums still yields a dock at
+    /// A cell too short to satisfy both minimums still yields a dock at
     /// its floor rather than a negative height, which would make
     /// `setFrame:` throw the layout out entirely.
     #[test]
-    fn a_window_too_short_for_both_still_yields_the_floor() {
-        for content in [0.0, 60.0, 150.0] {
-            let height = clamp_dock_height(400.0, content, 26.0, 30.0);
+    fn a_cell_too_short_for_both_still_yields_the_floor() {
+        for cell in [0.0, 60.0, 150.0] {
+            let height = clamp_dock_height(400.0, cell, 26.0);
             assert!(
                 (height - DOCK_MIN_HEIGHT).abs() < f64::EPSILON,
-                "content {content} gave {height}"
+                "cell {cell} gave {height}"
             );
         }
     }
 
-    /// Hidden chrome gives its space to the dock's ceiling — the drag
-    /// limit has to follow what is actually on screen, not a fixed guess.
+    /// A hidden tab strip gives its space to the dock's ceiling — the
+    /// drag limit has to follow what is actually on screen, not a fixed
+    /// guess.
     #[test]
-    fn hidden_chrome_raises_the_ceiling() {
-        let with_chrome = clamp_dock_height(10_000.0, 900.0, 26.0, 30.0);
-        let without = clamp_dock_height(10_000.0, 900.0, 0.0, 0.0);
+    fn a_hidden_tab_strip_raises_the_ceiling() {
+        let with_strip = clamp_dock_height(10_000.0, 900.0, 26.0);
+        let without = clamp_dock_height(10_000.0, 900.0, 0.0);
         assert!(
-            without > with_chrome,
-            "hiding 56 pt of chrome should raise the ceiling: {with_chrome} vs {without}"
+            without > with_strip,
+            "hiding 26 pt of chrome should raise the ceiling: {with_strip} vs {without}"
         );
     }
 }

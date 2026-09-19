@@ -1,6 +1,19 @@
-//! The "Folder as Workspace" side panel: a lazily-populated directory
-//! tree docked to the left of the editor. Port of `ui_gtk::workspace`,
-//! which is itself a port of `ui_win32`'s `SysTreeView32` panel.
+//! The "Folder as Workspace" panel: a lazily-populated directory tree.
+//! Port of `ui_gtk::workspace`, which is itself a port of `ui_win32`'s
+//! `SysTreeView32` panel.
+//!
+//! # A dock panel
+//!
+//! The panel is a *dock panel* (`DockPanel::Workspace`): its content
+//! view — the action row plus the tree — is built once here and then
+//! hosted by [`crate::dock`], which places it in a docked group, a tab
+//! of a shared group, or a floating window wherever the user last put
+//! it, and parks it hidden otherwise. The caption (title + close ✕) is
+//! the group's, not this panel's; so is the resize splitter, and so is
+//! the record of whether the panel is open. Every show/hide here funnels
+//! through `dock::set_panel_visible`, after the panel-specific
+//! preparation (populate before show, cancel a walk before hide) that
+//! the dock model cannot know about.
 //!
 //! # The value-vs-label split (security)
 //!
@@ -50,49 +63,35 @@ use objc2::rc::Retained;
 use objc2::{define_class, msg_send, sel, MainThreadOnly};
 use objc2_app_kit::{
     NSAutoresizingMaskOptions, NSBezelStyle, NSButton, NSColor, NSControlTextEditingDelegate,
-    NSCursor, NSEvent, NSFont, NSImage, NSImageView, NSLineBreakMode, NSMenu, NSMenuItem,
-    NSOutlineView, NSOutlineViewDataSource, NSOutlineViewDelegate, NSPasteboard,
-    NSPasteboardTypeString, NSRectFill, NSScrollView, NSTableColumn,
-    NSTableViewSelectionHighlightStyle, NSTextField, NSView, NSWorkspace,
+    NSEvent, NSFont, NSImage, NSImageView, NSLineBreakMode, NSMenu, NSMenuItem, NSOutlineView,
+    NSOutlineViewDataSource, NSOutlineViewDelegate, NSPasteboard, NSPasteboardTypeString,
+    NSScrollView, NSTableColumn, NSTableViewSelectionHighlightStyle, NSTextField, NSView,
+    NSWorkspace,
 };
 use objc2_foundation::{
     MainThreadMarker, NSIndexSet, NSNotification, NSNumber, NSObject, NSObjectProtocol, NSPoint,
     NSRect, NSSize, NSString, NSURL,
 };
 
+use codepp_core::dock::DockPanel;
 use codepp_shell::sanitize_filename_for_display;
 
 use crate::menu::Actions;
 use crate::state::with_state;
 
-/// The panel's resting header title, restored after an Unfold All walk.
-const PANEL_TITLE: &str = "Folder as Workspace";
+/// The action row's progress label at rest — empty; the panel title
+/// lives on the dock group's caption. Shows "Expanding folders: N"
+/// during an Unfold All walk.
+const PROGRESS_IDLE: &str = "";
 
-/// Default panel width in points, and the floor a drag cannot cross —
-/// the same figures the other two backends use.
-const DEFAULT_WIDTH: f64 = 240.0;
-const MIN_WIDTH: f64 = 120.0;
-/// The editor never shrinks below this, however far the divider is
-/// dragged. Same role as the Document Map's `EDITOR_MIN_WIDTH`.
-const EDITOR_MIN_WIDTH: f64 = 200.0;
-/// Ceiling on a width restored from `session.xml`. See
-/// [`crate::docmap::apply_saved`] for why a persisted geometry is bounded
-/// on the way in.
-const MAX_RESTORED_WIDTH: f64 = 10_000.0;
-/// Smallest divider movement worth acting on, in points.
-const DRAG_EPSILON: f64 = 0.5;
-
-/// The panel's title row.
-const HEADER_HEIGHT: f64 = 24.0;
-/// The action-button row beneath the title. A second row rather than
-/// sharing the title's — see [`build_header`].
+/// Nominal content size at construction. The dock sizes the container
+/// to whatever slot hosts it; these only seed the autoresizing.
+const NOMINAL_WIDTH: f64 = 240.0;
+const NOMINAL_HEIGHT: f64 = 400.0;
+/// The action-button row along the panel's top edge.
 const TOOLBAR_ROW_HEIGHT: f64 = 22.0;
-/// Both header rows together, which is what the tree body sits below.
-const HEADER_TOTAL: f64 = HEADER_HEIGHT + TOOLBAR_ROW_HEIGHT;
-/// Edge of one header action button.
+/// Edge of one action button.
 const BUTTON_EDGE: f64 = 20.0;
-/// The drag handle down the panel's right edge.
-const DIVIDER_WIDTH: f64 = 5.0;
 /// Row height in the tree.
 const ROW_HEIGHT: f64 = 18.0;
 
@@ -163,8 +162,6 @@ thread_local! {
     /// The workspace root path, preserved across hide/show so re-toggling
     /// reopens the same folder.
     static ROOT_PATH: RefCell<Option<PathBuf>> = const { RefCell::new(None) };
-    static VISIBLE: Cell<bool> = const { Cell::new(false) };
-    static WIDTH: Cell<f64> = const { Cell::new(DEFAULT_WIDTH) };
     /// Folder ids still to read in the in-flight Unfold All walk.
     static UNFOLD_QUEUE: RefCell<Vec<u64>> = const { RefCell::new(Vec::new()) };
     /// Folders read and rows inserted so far this walk, against the two
@@ -441,61 +438,6 @@ impl Tree {
     }
 }
 
-// --- The divider ------------------------------------------------------
-
-define_class!(
-    // SAFETY: an `NSView` subclass overriding only drawing, cursor rects
-    // and mouse tracking.
-    #[unsafe(super(NSView))]
-    #[thread_kind = MainThreadOnly]
-    #[name = "CodeppWorkspaceDivider"]
-    pub struct Divider;
-
-    unsafe impl NSObjectProtocol for Divider {}
-
-    impl Divider {
-        #[unsafe(method(drawRect:))]
-        fn draw_rect(&self, _dirty: NSRect) {
-            crate::at_callback_boundary("workspace:dividerDrawRect", (), || {
-                NSColor::separatorColor().setFill();
-                NSRectFill(self.bounds());
-            });
-        }
-
-        #[unsafe(method(resetCursorRects))]
-        fn reset_cursor_rects(&self) {
-            crate::at_callback_boundary("workspace:resetCursorRects", (), || {
-                // Deprecated in favour of `columnResizeCursorInDirections:`,
-                // which is macOS 15+; Code++ has no such deployment floor.
-                // Same call the other two dividers on this backend make.
-                #[allow(deprecated)]
-                let cursor = NSCursor::resizeLeftRightCursor();
-                self.addCursorRect_cursor(self.bounds(), &cursor);
-            });
-        }
-
-        #[unsafe(method(mouseDown:))]
-        fn mouse_down(&self, _event: &NSEvent) {
-            crate::at_callback_boundary("workspace:dividerMouseDown", (), || {});
-        }
-
-        #[unsafe(method(mouseDragged:))]
-        fn mouse_dragged(&self, event: &NSEvent) {
-            crate::at_callback_boundary("workspace:dividerMouseDragged", (), || {
-                drag_divider_to(event.locationInWindow().x);
-            });
-        }
-    }
-);
-
-impl Divider {
-    fn new(frame: NSRect, mtm: MainThreadMarker) -> Retained<Self> {
-        let this = Self::alloc(mtm);
-        // SAFETY: as above.
-        unsafe { msg_send![this, initWithFrame: frame] }
-    }
-}
-
 // --- The panel --------------------------------------------------------
 
 /// Everything the workspace panel owns for the window's lifetime.
@@ -504,13 +446,14 @@ impl Divider {
 /// `CocoaUiState::split` on every drain, so it must stay cheap.
 #[derive(Clone)]
 pub struct WorkspacePanel {
-    /// The panel's root. The caller positions it; see
-    /// `CocoaUi::relayout_chrome`.
+    /// The panel content (action row + tree) — the view the dock hosts.
+    /// Created once; never destroyed, only reparented and sized by
+    /// [`crate::dock`].
     pub container: Retained<NSView>,
     tree: Retained<Tree>,
-    /// Header title, doubling as the "Expanding folders: N" counter
-    /// during an Unfold All walk.
-    title: Retained<NSTextField>,
+    /// The action row's "Expanding folders: N" progress counter during
+    /// an Unfold All walk; empty at rest.
+    progress: Retained<NSTextField>,
     /// Held because `NSOutlineView`'s `dataSource` and `delegate` are both
     /// **weak** — nothing else keeps this alive, and a released data
     /// source is a dangling reference AppKit will message.
@@ -519,44 +462,22 @@ pub struct WorkspacePanel {
 }
 
 impl WorkspacePanel {
-    /// Build the panel, sized to `height`. Starts hidden.
-    pub fn new(height: f64, actions: &Actions, mtm: MainThreadMarker) -> Self {
-        let width = DEFAULT_WIDTH;
+    /// Build the panel content. The caller hands [`Self::container`] to
+    /// [`crate::dock::install`], which owns where it is shown from then
+    /// on.
+    pub fn new(actions: &Actions, mtm: MainThreadMarker) -> Self {
+        let (width, height) = (NOMINAL_WIDTH, NOMINAL_HEIGHT);
         let container = NSView::initWithFrame(
             NSView::alloc(mtm),
             NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(width, height)),
         );
-        // Keeps its width and its distance from the left edge as the
-        // window grows; the editor beside it absorbs the slack.
-        container.setAutoresizingMask(
-            NSAutoresizingMaskOptions::ViewHeightSizable
-                | NSAutoresizingMaskOptions::ViewMaxXMargin,
-        );
-        container.setHidden(true);
 
-        // --- the drag handle, down the right edge -------------------
-        let divider = Divider::new(
-            NSRect::new(
-                NSPoint::new(width - DIVIDER_WIDTH, 0.0),
-                NSSize::new(DIVIDER_WIDTH, height),
-            ),
-            mtm,
-        );
-        divider.setAutoresizingMask(
-            NSAutoresizingMaskOptions::ViewHeightSizable
-                | NSAutoresizingMaskOptions::ViewMinXMargin,
-        );
-        container.addSubview(&divider);
-
-        let title = build_header(&container, width, height, actions, mtm);
+        let progress = build_action_row(&container, width, height, actions, mtm);
 
         // --- the tree, filling what is left -------------------------
         let body = NSRect::new(
             NSPoint::new(0.0, 0.0),
-            NSSize::new(
-                (width - DIVIDER_WIDTH).max(0.0),
-                (height - HEADER_TOTAL).max(0.0),
-            ),
+            NSSize::new(width, (height - TOOLBAR_ROW_HEIGHT).max(0.0)),
         );
         let tree = Tree::new(body, mtm);
         tree.setRowHeight(ROW_HEIGHT);
@@ -596,7 +517,7 @@ impl WorkspacePanel {
         Self {
             container,
             tree,
-            title,
+            progress,
             source,
         }
     }
@@ -606,56 +527,37 @@ impl WorkspacePanel {
         self.tree.reloadData();
     }
 
-    /// Set the header text — the resting title, or the walk's counter.
-    fn set_title(&self, text: &str) {
-        self.title.setStringValue(&NSString::from_str(text));
+    /// Set the action row's progress text — the walk's counter, or
+    /// [`PROGRESS_IDLE`].
+    fn set_progress(&self, text: &str) {
+        self.progress.setStringValue(&NSString::from_str(text));
     }
 }
 
-/// Build the header — a title row with the panel's own close button, and
-/// a **second row beneath it** carrying the action buttons. Returns the
-/// title, which doubles as the Unfold All progress counter.
-///
-/// **Two rows, not one.** The panel is narrow by design, so a title and
-/// four buttons sharing a line leaves the title a few characters wide and
-/// the buttons crowding it. This is the layout `ui_gtk` was corrected to
-/// after the same report; the Cocoa port copied GTK's *original* single
-/// row and inherited the problem.
+/// Build the action row along the panel's top edge: the progress
+/// counter on the left, then Fold All / Unfold All / Locate right-aligned.
+/// Returns the progress label. The title and close ✕ that used to sit
+/// on a row above this one are the dock group's caption now.
 ///
 /// `ViewMinYMargin` on every one of these is load-bearing: they have to
-/// stay pinned to the panel's top edge as the window makes it taller. The
+/// stay pinned to the panel's top edge as the dock makes it taller. The
 /// FIF dock's header shipped without it and buried itself under the
 /// results table the first time anyone dragged it.
-fn build_header(
+fn build_action_row(
     container: &NSView,
     width: f64,
     height: f64,
     actions: &Actions,
     mtm: MainThreadMarker,
 ) -> Retained<NSTextField> {
-    let title_y = height - HEADER_HEIGHT;
-    let tools_y = height - HEADER_HEIGHT - TOOLBAR_ROW_HEIGHT;
-    // The action row is right-aligned under the close button, so both
-    // header rows end at the same edge rather than the actions hanging off
-    // the opposite one. Laid out right-to-left from the trailing edge and
-    // therefore *called* in reverse visual order — which is deliberate: it
-    // needs no button count, so adding a fourth extends the row leftward
-    // with nothing to keep in sync.
-    //
-    // `width` is `DEFAULT_WIDTH` at every call — every later width is
-    // reached by autoresizing, which preserves each button's distance
-    // from the trailing edge — so the leftmost button's left edge sits
-    // 71 pt in from that edge at any width, i.e. x = 49 at `MIN_WIDTH`.
-    // It goes negative below 71 pt, and `clamp_panel_width` does *not*
-    // rule that out: its early return hands back a ceiling below
-    // `MIN_WIDTH` when the window cannot spare one. Accepted rather than
-    // clamped here. The panel sits at the window's left edge, so the row
-    // slides off-window rather than over the editor, the tree and title
-    // have collapsed by then too, and a clamp would stack the buttons on
-    // top of each other — which is the worse failure, because overlapping
-    // buttons are clickable and wrong where absent ones are merely absent.
-    let mut x = width - DIVIDER_WIDTH - 2.0 - BUTTON_EDGE;
-    let mut header_button = |glyph: &str, tip: &str, action, row_y: f64| {
+    let row_y = height - TOOLBAR_ROW_HEIGHT;
+    // Laid out right-to-left from the trailing edge and therefore
+    // *called* in reverse visual order — deliberate: it needs no button
+    // count, so adding a fourth extends the row leftward with nothing to
+    // keep in sync. Every later width is reached by autoresizing, which
+    // preserves each button's distance from the trailing edge.
+    let mut x = width - 2.0 - BUTTON_EDGE;
+    let mut action_button = |glyph: &str, tip: &str, action| {
         let button = NSButton::initWithFrame(
             NSButton::alloc(mtm),
             NSRect::new(
@@ -669,8 +571,8 @@ fn build_header(
             NSFont::smallSystemFontSize(),
         )));
         button.setToolTip(Some(&NSString::from_str(tip)));
-        // `ViewMinXMargin` as well as the top pin, so the row stays against
-        // the trailing edge when the divider widens the panel.
+        // `ViewMinXMargin` as well as the top pin, so the row stays
+        // against the trailing edge when the band widens.
         button.setAutoresizingMask(
             NSAutoresizingMaskOptions::ViewMinXMargin | NSAutoresizingMaskOptions::ViewMinYMargin,
         );
@@ -685,114 +587,35 @@ fn build_header(
         x -= BUTTON_EDGE + 2.0;
     };
     // Reverse of the visual order — see the layout note above.
-    header_button(
-        "◎",
-        "Locate Current File",
-        sel!(codeppWorkspaceLocate:),
-        tools_y,
-    );
-    header_button("▾", "Unfold All", sel!(codeppWorkspaceUnfoldAll:), tools_y);
-    header_button("▸", "Fold All", sel!(codeppWorkspaceFoldAll:), tools_y);
+    action_button("◎", "Locate Current File", sel!(codeppWorkspaceLocate:));
+    action_button("▾", "Unfold All", sel!(codeppWorkspaceUnfoldAll:));
+    action_button("▸", "Fold All", sel!(codeppWorkspaceFoldAll:));
 
-    // The close button keeps the title row, pinned to the trailing edge.
-    let close = NSButton::initWithFrame(
-        NSButton::alloc(mtm),
-        NSRect::new(
-            NSPoint::new(width - DIVIDER_WIDTH - BUTTON_EDGE - 2.0, title_y),
-            NSSize::new(BUTTON_EDGE, HEADER_HEIGHT),
-        ),
-    );
-    close.setTitle(&NSString::from_str("✕"));
-    close.setBezelStyle(NSBezelStyle::AccessoryBarAction);
-    close.setFont(Some(&NSFont::systemFontOfSize(
-        NSFont::smallSystemFontSize(),
-    )));
-    close.setToolTip(Some(&NSString::from_str("Close")));
-    close.setAutoresizingMask(
-        NSAutoresizingMaskOptions::ViewMinXMargin | NSAutoresizingMaskOptions::ViewMinYMargin,
-    );
-    // SAFETY: as above.
-    unsafe {
-        close.setTarget(Some(&**actions));
-        close.setAction(Some(sel!(codeppWorkspaceClose:)));
-    }
-    container.addSubview(&close);
-
-    let title = NSTextField::labelWithString(&NSString::from_str(PANEL_TITLE), mtm);
-    title.setFrame(NSRect::new(
-        NSPoint::new(6.0, title_y),
-        NSSize::new(
-            (width - DIVIDER_WIDTH - BUTTON_EDGE - 12.0).max(0.0),
-            HEADER_HEIGHT,
-        ),
+    let progress = NSTextField::labelWithString(&NSString::from_str(PROGRESS_IDLE), mtm);
+    progress.setFrame(NSRect::new(
+        NSPoint::new(6.0, row_y),
+        NSSize::new((x + BUTTON_EDGE - 4.0).max(0.0), TOOLBAR_ROW_HEIGHT),
     ));
-    title.setFont(Some(&NSFont::systemFontOfSize(
+    progress.setFont(Some(&NSFont::systemFontOfSize(
         NSFont::smallSystemFontSize(),
     )));
-    title.setLineBreakMode(NSLineBreakMode::ByTruncatingTail);
-    title.setAutoresizingMask(
+    // A mid-walk ellipsis keeps "Expanding folders: N" from widening
+    // the band.
+    progress.setLineBreakMode(NSLineBreakMode::ByTruncatingTail);
+    progress.setAutoresizingMask(
         NSAutoresizingMaskOptions::ViewWidthSizable | NSAutoresizingMaskOptions::ViewMinYMargin,
     );
-    container.addSubview(&title);
-    title
-}
-
-/// The width the layout should give the panel: zero while closed,
-/// otherwise clamped to what this window width can spare.
-///
-/// The clamp belongs on every layout pass, not only in the divider drag:
-/// a persisted width outlives the window size that justified it, and a
-/// plain resize is handled entirely by autoresizing masks, where the
-/// editor is the only flexible view and absorbs the whole delta. See
-/// `crate::docmap::width_for_layout`, which carries the same note for the
-/// same reason.
-pub(crate) fn width_for_layout(content_width: f64, docmap_width: f64) -> f64 {
-    if !VISIBLE.with(Cell::get) {
-        return 0.0;
-    }
-    clamp_panel_width(WIDTH.with(Cell::get), content_width, docmap_width)
-}
-
-/// Clamp a wanted panel width against what the window can spare once the
-/// Document Map has taken its own column.
-///
-/// Pure so the boundaries — which is what a divider drag gets wrong —
-/// are testable without a window server.
-fn clamp_panel_width(wanted: f64, content_width: f64, docmap_width: f64) -> f64 {
-    let ceiling = (content_width - docmap_width - EDITOR_MIN_WIDTH).max(0.0);
-    if ceiling <= MIN_WIDTH {
-        return ceiling;
-    }
-    wanted.clamp(MIN_WIDTH, ceiling)
-}
-
-/// Move the divider so the panel's right edge sits at `window_x`.
-fn drag_divider_to(window_x: f64) {
-    let Some((content_w, map_w)) = with_state(|st| {
-        let (_, ui) = st.split();
-        let content_w = ui
-            .window
-            .contentView()
-            .map_or(0.0, |c| c.bounds().size.width);
-        (content_w, crate::docmap::width_for_layout(content_w))
-    }) else {
-        return;
-    };
-    let width = clamp_panel_width(window_x, content_w, map_w);
-    if (WIDTH.with(Cell::get) - width).abs() < DRAG_EPSILON {
-        return;
-    }
-    WIDTH.with(|w| w.set(width));
-    crate::relayout_chrome_bands();
-    sync_to_shell();
+    container.addSubview(&progress);
+    progress
 }
 
 // --- Public entry points ----------------------------------------------
 
-/// Whether the panel is open. Read by the View menu's mark and the
-/// toolbar toggle's repaint, so both are painted from one truth.
+/// Whether the panel is open (docked, tabbed or floating). Read by the
+/// View menu's mark and the toolbar toggle's repaint, so both are
+/// painted from one truth — the dock model's.
 pub(crate) fn is_visible() -> bool {
-    VISIBLE.with(Cell::get)
+    crate::dock::is_visible(DockPanel::Workspace)
 }
 
 /// What showing the panel should do, given whether a root is set and
@@ -820,7 +643,8 @@ fn resolve_show_action(has_root: bool, model_empty: bool) -> ShowAction {
 }
 
 /// Show or hide the panel. The single funnel behind the View toggle, the
-/// toolbar button and the header close button, so all three agree.
+/// toolbar button and the group caption's close button, so all three
+/// agree. Never called from inside a `with_state` closure.
 ///
 /// With no root yet, a request to show routes to the folder picker rather
 /// than opening an empty panel — matching the other two backends.
@@ -853,22 +677,23 @@ pub(crate) fn set_visible(visible: bool) {
         // directories for a pane the user just closed.
         cancel_unfold();
     }
-    VISIBLE.with(|v| v.set(visible));
-    with_state(|st| {
-        st.workspace.container.setHidden(!visible);
-        st.workspace.reload();
-        let (_, ui) = st.split();
-        ui.relayout_chrome();
-    });
+    with_state(|st| st.workspace.reload());
+    // Outside every `with_state` borrow: the reconcile re-lays the chrome
+    // through one of its own.
+    crate::dock::set_panel_visible(DockPanel::Workspace, visible);
+    // The dock's reconcile syncs indicators and the session itself
+    // whenever the model changed; these repeat that work (idempotently)
+    // for the one case it does not run — hiding an already-hidden
+    // panel — so the mirrors never go stale. Deliberate overlap.
     refresh_indicators();
     sync_to_shell();
 }
 
-/// Repaint the View-menu mark and the toolbar toggle from the model.
+/// Repaint the toolbar toggle from the model.
 ///
 /// The toolbar's button is `PushOnPushOff`, so AppKit has already flipped
-/// it when *it* is the source but not when the menu or the header close
-/// button is. The menu resolves its own mark on open.
+/// it when *it* is the source but not when the menu or the group's
+/// caption ✕ is. The menu resolves its own mark on open.
 fn refresh_indicators() {
     with_state(|st| st.toolbar.refresh_workspace_toggle());
 }
@@ -918,9 +743,15 @@ pub(crate) fn open_at(root: &Path) {
     cancel_unfold();
     ROOT_PATH.with(|r| *r.borrow_mut() = Some(root.to_path_buf()));
     populate_root(root);
-    VISIBLE.with(|v| v.set(true));
+    reload_and_expand_root();
+    crate::dock::set_panel_visible(DockPanel::Workspace, true);
+    refresh_indicators();
+    sync_to_shell();
+}
+
+/// Repaint the tree from a freshly populated model and open its root row.
+fn reload_and_expand_root() {
     with_state(|st| {
-        st.workspace.container.setHidden(false);
         st.workspace.reload();
         // SAFETY: expanding an item this model owns.
         unsafe {
@@ -928,56 +759,43 @@ pub(crate) fn open_at(root: &Path) {
                 .tree
                 .expandItem(Some(&item_for(ROOT_ID.with(Cell::get))));
         };
-        let (_, ui) = st.split();
-        ui.relayout_chrome();
     });
-    refresh_indicators();
-    sync_to_shell();
 }
 
-/// Cold-start restore. Seeds width and root, and shows the panel if it
-/// was visible last time.
-pub(crate) fn apply_saved() {
-    let Some(Some(saved)) = with_state(|st| st.shell.saved_workspace_session()) else {
-        return;
-    };
-    if let Some(width) = saved.width.and_then(restorable_width) {
-        WIDTH.with(|w| w.set(width));
+/// Cold-start half of the restore that is this panel's to do: seed the
+/// root the last session left open (the dock model, restored by
+/// [`crate::dock::apply_saved`], says whether and where the panel is
+/// shown) and, iff the panel is coming up visible, read the root
+/// directory so the first paint carries the tree.
+///
+/// When the panel was closed-but-rooted at save, this seeds `root` only
+/// and leaves the model empty — [`set_visible`] populates it the first
+/// time the user re-shows the panel, so a hidden restored workspace
+/// costs no cold-start `read_dir`. Re-showing then finds content, not a
+/// blank pane. The caller has already checked the root still exists.
+pub(crate) fn restore_root(root: &Path, populate: bool) {
+    ROOT_PATH.with(|r| *r.borrow_mut() = Some(root.to_path_buf()));
+    if populate {
+        populate_root(root);
+        reload_and_expand_root();
     }
-    let Some(root) = saved.root else {
-        return;
-    };
-    // Only reopen a root that still exists; a deleted folder leaves the
-    // panel closed rather than showing an empty tree.
-    if root.is_dir() {
-        ROOT_PATH.with(|r| *r.borrow_mut() = Some(root.clone()));
-        if saved.visible {
-            open_at(&root);
-        }
-    }
-}
-
-/// A persisted width, if it is one this process could have written. See
-/// [`crate::docmap`]'s equivalent for why a session geometry is bounded.
-fn restorable_width(saved: i32) -> Option<f64> {
-    let width = f64::from(saved);
-    (MIN_WIDTH..=MAX_RESTORED_WIDTH)
-        .contains(&width)
-        .then_some(width)
 }
 
 /// Snapshot the live panel state into the shell so the next
-/// `save_session` persists it.
+/// `save_session` persists it. The dock layout itself persists
+/// separately (`dock::sync_to_shell`); this legacy mirror carries the
+/// **root path** — content state, not layout — plus visible/width for
+/// downgrade tolerance.
 pub(crate) fn sync_to_shell() {
     let root = ROOT_PATH.with(|r| r.borrow().clone());
-    let visible = VISIBLE.with(Cell::get);
-    let width = WIDTH.with(Cell::get);
+    let visible = is_visible();
+    let width = crate::dock::legacy_band_width(DockPanel::Workspace);
     with_state(|st| {
         st.shell
             .set_workspace_session(Some(codepp_core::session::WorkspaceSession {
                 root: root.clone(),
                 visible,
-                width: Some(width.round() as i32),
+                width: Some(width),
             }));
     });
 }
@@ -1277,13 +1095,8 @@ fn remove_root() {
     NODES.with(|n| n.borrow_mut().clear());
     ROOT_ID.with(|r| r.set(NO_ID));
     ROOT_PATH.with(|r| *r.borrow_mut() = None);
-    VISIBLE.with(|v| v.set(false));
-    with_state(|st| {
-        st.workspace.container.setHidden(true);
-        st.workspace.reload();
-        let (_, ui) = st.split();
-        ui.relayout_chrome();
-    });
+    with_state(|st| st.workspace.reload());
+    crate::dock::set_panel_visible(DockPanel::Workspace, false);
     refresh_indicators();
     sync_to_shell();
 }
@@ -1400,7 +1213,7 @@ pub(crate) fn unfold_all() {
     schedule_unfold_tick(generation);
 }
 
-/// Stop an in-flight walk and restore the header title.
+/// Stop an in-flight walk and clear the progress label.
 fn cancel_unfold() {
     UNFOLD_QUEUE.with(|q| q.borrow_mut().clear());
     REVEAL_QUEUE.with(|q| q.borrow_mut().clear());
@@ -1408,7 +1221,7 @@ fn cancel_unfold() {
     // tick: it captured the old value and bails on mismatch. Clearing the
     // queue alone would not, because the tick could refill it.
     UNFOLD_GEN.with(|g| g.set(g.get().wrapping_add(1)));
-    with_state(|st| st.workspace.set_title(PANEL_TITLE));
+    with_state(|st| st.workspace.set_progress(PROGRESS_IDLE));
 }
 
 /// Reveal exactly what the walk read: expand every folder whose
@@ -1470,7 +1283,7 @@ fn tick_reveal(generation: u64) {
         return;
     }
     if REVEAL_QUEUE.with(|q| q.borrow().is_empty()) {
-        with_state(|st| st.workspace.set_title(PANEL_TITLE));
+        with_state(|st| st.workspace.set_progress(PROGRESS_IDLE));
         return;
     }
     with_state(|st| {
@@ -1497,7 +1310,7 @@ fn tick_reveal(generation: u64) {
     let left = REVEAL_QUEUE.with(|q| q.borrow().len());
     with_state(|st| {
         st.workspace
-            .set_title(&format!("Revealing folders: {left} left"));
+            .set_progress(&format!("Revealing folders: {left} left"));
     });
     schedule_reveal_tick(generation);
 }
@@ -1603,7 +1416,7 @@ fn tick_unfold(generation: u64) {
     }
     with_state(|st| {
         st.workspace
-            .set_title(&format!("Expanding folders: {folders}"));
+            .set_progress(&format!("Expanding folders: {folders}"));
     });
     schedule_unfold_tick(generation);
 }
@@ -1611,9 +1424,8 @@ fn tick_unfold(generation: u64) {
 #[cfg(test)]
 mod tests {
     use super::{
-        clamp_panel_width, expansion_order, resolve_show_action, restorable_width,
-        sort_dir_entries, unfold_should_stop, ShowAction, EDITOR_MIN_WIDTH, MAX_RESTORED_WIDTH,
-        MIN_WIDTH, UNFOLD_MAX_FOLDERS, UNFOLD_MAX_ROWS,
+        expansion_order, resolve_show_action, sort_dir_entries, unfold_should_stop, ShowAction,
+        UNFOLD_MAX_FOLDERS, UNFOLD_MAX_ROWS,
     };
     use std::path::PathBuf;
 
@@ -1745,49 +1557,5 @@ mod tests {
             unfold_should_stop(false, 0, UNFOLD_MAX_ROWS),
             "the row ceiling stops the walk"
         );
-    }
-
-    #[test]
-    fn the_editor_keeps_its_floor_beside_both_panels() {
-        // Both side panels open on a 900 pt window: the workspace yields
-        // so the editor keeps its floor.
-        let map = 160.0;
-        let ws = clamp_panel_width(10_000.0, 900.0, map);
-        assert!(
-            900.0 - map - ws >= EDITOR_MIN_WIDTH,
-            "editor left with {} pt",
-            900.0 - map - ws
-        );
-    }
-
-    #[test]
-    fn an_ordinary_width_passes_through_and_a_narrow_one_is_lifted() {
-        assert!((clamp_panel_width(240.0, 1400.0, 0.0) - 240.0).abs() < f64::EPSILON);
-        assert!((clamp_panel_width(10.0, 1400.0, 0.0) - MIN_WIDTH).abs() < f64::EPSILON);
-        assert!((clamp_panel_width(-5.0, 1400.0, 0.0) - MIN_WIDTH).abs() < f64::EPSILON);
-    }
-
-    #[test]
-    fn a_window_too_narrow_for_both_floors_gives_the_editor_priority() {
-        // 260 pt of usable width against a 200 pt editor floor leaves 60,
-        // under the panel's own 120 pt floor. The panel yields rather than
-        // pushing the editor off-screen, and never goes negative.
-        let width = clamp_panel_width(240.0, 260.0, 0.0);
-        assert!((width - 60.0).abs() < f64::EPSILON, "got {width}");
-        assert!(clamp_panel_width(240.0, 100.0, 0.0) >= 0.0);
-        assert!(clamp_panel_width(240.0, 300.0, 280.0) >= 0.0);
-    }
-
-    #[test]
-    fn a_hand_edited_session_width_is_refused() {
-        assert_eq!(restorable_width(240), Some(240.0));
-        assert_eq!(restorable_width(MIN_WIDTH as i32), Some(MIN_WIDTH));
-        assert_eq!(
-            restorable_width(MAX_RESTORED_WIDTH as i32),
-            Some(MAX_RESTORED_WIDTH)
-        );
-        for hostile in [0, -1, i32::MIN, i32::MAX, MIN_WIDTH as i32 - 1] {
-            assert_eq!(restorable_width(hostile), None, "accepted {hostile}");
-        }
     }
 }

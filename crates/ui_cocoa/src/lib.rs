@@ -42,6 +42,7 @@
 )]
 
 mod delegate;
+mod dock;
 mod docmap;
 mod dropview;
 mod fif;
@@ -76,6 +77,7 @@ use dispatch2::DispatchQueue;
 
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
+use objc2::MainThreadOnly as _;
 use objc2::Message as _;
 use objc2_app_kit::{
     NSAlert, NSAlertStyle, NSApplication, NSApplicationActivationPolicy, NSAutoresizingMaskOptions,
@@ -410,7 +412,7 @@ pub fn run(initial_path: Option<PathBuf>, perf: Perf) -> Result<(), CocoaUiError
 
     let (map_view, map_editor) = create_map_miniature()?;
 
-    let (status, tab_strip, toolbar, fif_dock, docmap, workspace) = build_content(
+    let views = build_content(
         &window,
         content_rect,
         &sci_view,
@@ -426,15 +428,17 @@ pub fn run(initial_path: Option<PathBuf>, perf: Perf) -> Result<(), CocoaUiError
         sci_view: sci_view.clone(),
         sci_ptr,
         editor,
-        status,
-        tabs: tab_strip,
-        toolbar,
+        status: views.status,
+        tabs: views.tab_strip,
+        toolbar: views.toolbar,
         actions: actions.clone(),
         menu,
-        fif_dock,
+        fif_dock: views.fif_dock,
         fif_job: fif::FifJob::default(),
-        docmap,
-        workspace,
+        docmap: views.docmap,
+        workspace: views.workspace,
+        dock_area: views.dock_area,
+        editor_cell: views.editor_cell,
         find_replace: None,
         shell,
     }));
@@ -456,14 +460,15 @@ pub fn run(initial_path: Option<PathBuf>, perf: Perf) -> Result<(), CocoaUiError
     // only become readable once session.xml is in the shell. See the
     // function.
     apply_saved_view_settings();
-    // And the same again for the Document Map's width and open state.
-    // After `apply_saved_view_settings` rather than before only because
-    // opening the map relayouts the chrome, and doing that once at the
-    // end is one fewer frame of the editor at the wrong width.
-    docmap::apply_saved();
-    // And the workspace panel's width, root and open state. After the
-    // map for the same reason: each one that opens relayouts the chrome.
-    workspace::apply_saved();
+    // Restore the dock arrangement — which panels are open and where
+    // (docked, tabbed, floating), band sizes — reopening the workspace
+    // folder the last session left open if it still exists. After
+    // `restore_session` so the Document Map's miniature binds to the
+    // restored active buffer, and after `restore_window_geometry` so
+    // floating groups clamp against the window's saved rect. Last of
+    // the startup layout work, so the one relayout it ends in is the
+    // one that paints.
+    dock::apply_saved();
 
     // Enumerate installed plugins. Records paths only — nothing is
     // `dlopen`ed here, which DESIGN.md §8 makes a hard constraint and
@@ -881,27 +886,33 @@ fn create_map_miniature() -> Result<(Retained<NSView>, EditorHandle), CocoaUiErr
     Ok((view, editor))
 }
 
+/// Everything [`build_content`] assembles, for `run` to move into the
+/// window state.
+struct ContentViews {
+    status: StatusBar,
+    tab_strip: TabStrip,
+    toolbar: Toolbar,
+    fif_dock: fif::FifDock,
+    docmap: docmap::DocMapPanel,
+    workspace: workspace::WorkspacePanel,
+    dock_area: Retained<dock::DockArea>,
+    editor_cell: Retained<NSView>,
+}
+
 fn build_content(
     window: &NSWindow,
     content_rect: NSRect,
     sci_view: &NSView,
     map_view: Retained<NSView>,
     map_editor: EditorHandle,
-    actions: &Actions,
+    actions: &Retained<Actions>,
     mtm: MainThreadMarker,
-) -> (
-    StatusBar,
-    TabStrip,
-    Toolbar,
-    fif::FifDock,
-    docmap::DocMapPanel,
-    workspace::WorkspacePanel,
-) {
-    // Content layout, bottom-up in Cocoa's flipped-origin coordinates:
-    // status bar, then the editor, then the tab strip at the top. The
-    // editor is the only flexible one. Springs-and-struts rather than
-    // Auto Layout — one flexible view between two fixed-height strips is
-    // exactly what autoresizing masks express.
+) -> ContentViews {
+    // Content layout, bottom-up in Cocoa's unflipped coordinates: status
+    // bar, then the dock area, then the toolbar at the top. The dock
+    // area is the only flexible one; springs-and-struts express that
+    // exactly, and `CocoaUi::relayout_chrome` re-derives every band on
+    // each resize anyway.
     //
     // The content view is a subclass so the whole window accepts dropped
     // files (see `crate::dropview`); Cocoa attaches drag destinations to
@@ -910,73 +921,107 @@ fn build_content(
     let status = StatusBar::new(DEFAULT_WIDTH, mtm);
     let tab_strip = TabStrip::new(DEFAULT_WIDTH, mtm);
     let toolbar = Toolbar::new(DEFAULT_WIDTH, actions, mtm);
-    // Starts hidden and contributes no height until a search opens it,
-    // so the initial layout is the same one m3 had.
+    // Starts hidden and contributes no height until a search opens it.
     let fif_dock = fif::FifDock::new(DEFAULT_WIDTH, actions, mtm);
+    // The two dockable panels' content — built once here, hosted by the
+    // dock from now on (docked, tabbed, floating, or parked hidden).
+    let docmap = docmap::DocMapPanel::new(map_view, map_editor, mtm);
+    let workspace = workspace::WorkspacePanel::new(actions, mtm);
 
-    let editor_height = DEFAULT_HEIGHT - STATUS_BAR_HEIGHT - TAB_STRIP_HEIGHT - TOOLBAR_HEIGHT;
-    // Also hidden at first, and likewise contributes no width — so a
-    // session that never opens the map lays out exactly as before.
-    let docmap = docmap::DocMapPanel::new(map_view, map_editor, editor_height, actions, mtm);
-    // Likewise hidden and contributing no width until a folder is opened.
-    let workspace = workspace::WorkspacePanel::new(editor_height, actions, mtm);
+    // The dock area between the toolbar and the status bar: the view
+    // `crate::dock` carves side bands out of. Flipped, so the model's
+    // top-down rects place its children verbatim — see the module docs.
+    let area_h = DEFAULT_HEIGHT - STATUS_BAR_HEIGHT - TOOLBAR_HEIGHT;
+    let dock_area = dock::DockArea::new(
+        NSRect::new(
+            NSPoint::new(0.0, STATUS_BAR_HEIGHT),
+            NSSize::new(DEFAULT_WIDTH, area_h),
+        ),
+        mtm,
+    );
+    dock_area.setAutoresizingMask(
+        NSAutoresizingMaskOptions::ViewWidthSizable | NSAutoresizingMaskOptions::ViewHeightSizable,
+    );
+
+    // The editor cell: tab strip over the editor over the FIF dock. This
+    // is the one view the dock area carves the side bands around, placed
+    // at `DockFrame::editor` on every layout pass and never reparented —
+    // so the Scintilla view inside it is never reparented either. An
+    // ordinary unflipped view: its children keep their own
+    // springs-and-struts in the cell's coordinates.
+    let editor_cell = NSView::initWithFrame(
+        NSView::alloc(mtm),
+        NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(DEFAULT_WIDTH, area_h)),
+    );
+    let editor_height = area_h - TAB_STRIP_HEIGHT;
     sci_view.setFrame(NSRect::new(
-        NSPoint::new(0.0, STATUS_BAR_HEIGHT),
+        NSPoint::new(0.0, 0.0),
         NSSize::new(DEFAULT_WIDTH, editor_height),
     ));
     sci_view.setAutoresizingMask(
         NSAutoresizingMaskOptions::ViewWidthSizable | NSAutoresizingMaskOptions::ViewHeightSizable,
     );
-    // The strip sits at the top and stays there as the window grows:
-    // width-sizable, with the flexible gap below it.
+    // The strip sits at the top of the cell and stays there as the cell
+    // grows: width-sizable, with the flexible gap below it.
     tab_strip.container.setFrame(NSRect::new(
-        NSPoint::new(0.0, STATUS_BAR_HEIGHT + editor_height),
+        NSPoint::new(0.0, editor_height),
         NSSize::new(DEFAULT_WIDTH, TAB_STRIP_HEIGHT),
     ));
     tab_strip.container.setAutoresizingMask(
         NSAutoresizingMaskOptions::ViewWidthSizable | NSAutoresizingMaskOptions::ViewMinYMargin,
     );
+    editor_cell.addSubview(sci_view);
+    editor_cell.addSubview(&fif_dock.container);
+    editor_cell.addSubview(&tab_strip.container);
+    dock_area.addSubview(&editor_cell);
 
     // The toolbar is the topmost strip, above the tabs — Notepad++'s
-    // order, and `ui_gtk`'s. Same springs-and-struts treatment as the tab
-    // strip: pinned to the top, width-sizable, flexible gap below.
+    // order, and `ui_gtk`'s: pinned to the top, width-sizable, flexible
+    // gap below.
     toolbar.container.setFrame(NSRect::new(
-        NSPoint::new(0.0, STATUS_BAR_HEIGHT + editor_height + TAB_STRIP_HEIGHT),
+        NSPoint::new(0.0, STATUS_BAR_HEIGHT + area_h),
         NSSize::new(DEFAULT_WIDTH, TOOLBAR_HEIGHT),
     ));
     toolbar.container.setAutoresizingMask(
         NSAutoresizingMaskOptions::ViewWidthSizable | NSAutoresizingMaskOptions::ViewMinYMargin,
     );
 
-    // Both side panels are parked off their own edge at their natural
-    // width rather than squashed to zero — see the note in
-    // `CocoaUi::relayout_chrome` for why zero is not the harmless choice
-    // it looks like.
-    docmap
-        .container
-        .setFrameOrigin(NSPoint::new(DEFAULT_WIDTH, STATUS_BAR_HEIGHT));
-    workspace.container.setFrameOrigin(NSPoint::new(
-        -workspace.container.frame().size.width,
-        STATUS_BAR_HEIGHT,
-    ));
-
-    // **Every panel built above must be added here.** A view that is
-    // never parented is not an error anyone notices: it keeps its frame,
-    // reports `isHidden == false`, hands out its subviews, and answers
-    // every question a probe thinks to ask — it simply never draws.
-    // `workspace.container` shipped missing from this list and the panel
-    // was a blank rectangle; the source scan
-    // `every_panel_is_added_to_the_content_view` exists because of it.
-    content.addSubview(sci_view);
-    content.addSubview(&docmap.container);
-    content.addSubview(&workspace.container);
+    content.addSubview(&dock_area);
     content.addSubview(&status.container);
-    content.addSubview(&fif_dock.container);
-    content.addSubview(&tab_strip.container);
     content.addSubview(&toolbar.container);
+    // **Every dockable panel built above must be handed over here.** A
+    // view that is never parented is not an error anyone notices: it
+    // keeps its frame, reports `isHidden == false`, hands out its
+    // subviews, and answers every question a probe thinks to ask — it
+    // simply never draws. `workspace.container` once shipped missing
+    // from the content view and the panel was a blank rectangle; the
+    // source scan `every_panel_is_handed_to_the_dock` exists because of
+    // it. `dock::install` parks both panels under the content view and
+    // hosts them from there on.
+    dock::install(
+        window,
+        &content,
+        dock::DockHosts {
+            area: dock_area.clone(),
+            editor_cell: editor_cell.clone(),
+            workspace: workspace.container.clone(),
+            docmap: docmap.container.clone(),
+        },
+        actions,
+        mtm,
+    );
     window.setContentView(Some(&content));
 
-    (status, tab_strip, toolbar, fif_dock, docmap, workspace)
+    ContentViews {
+        status,
+        tab_strip,
+        toolbar,
+        fif_dock,
+        docmap,
+        workspace,
+        dock_area,
+        editor_cell,
+    }
 }
 
 /// Observe key presses so `--perf` can measure keystroke latency.
@@ -2808,10 +2853,13 @@ fn sync_window_geometry_to_shell() {
 /// Persist the session now. Idempotent; safe to call repeatedly.
 pub(crate) fn save_session_now() {
     sync_window_geometry_to_shell();
-    // The map's own visibility and width live in `docmap`'s
-    // thread-locals, not in the shell, so they have to be pushed across
-    // before the save reads the session. Same shape as the geometry sync
-    // above and as `ui_gtk`'s `docmap::sync_to_shell`.
+    // The dock arrangement lives in the dock module's thread-local, not
+    // in the shell, so it is pushed across before the save reads the
+    // session; the two legacy per-panel mirrors read the same live model
+    // (visibility and band width) and carry it for downgrade tolerance.
+    // Same "sync right before every save" discipline the geometry sync
+    // above and `ui_gtk` follow.
+    dock::sync_to_shell();
     docmap::sync_to_shell();
     workspace::sync_to_shell();
     with_state(|st| {
@@ -3979,6 +4027,21 @@ let msg = \"found scintilla_cocoa_new() calls\";
              declined read reads as `false` — which *allows* the focus. Keep it on \
              the `PANEL_VIEW` thread-local."
         );
+
+        // A floating dock group is a second window, and the main
+        // window's override does not reach it — so the float window
+        // class carries the same refusal.
+        let dock = include_str!("dock.rs");
+        let dock = match dock.find("#[cfg(test)]") {
+            Some(i) => &dock[..i],
+            None => dock,
+        };
+        assert!(
+            fn_body(dock, "make_first_responder").contains("docmap::owns_view("),
+            "the floating dock window no longer consults `docmap::owns_view`, so a \
+             floated Document Map is a second route to typing into the shared \
+             document with no visible caret."
+        );
     }
 
     /// The workspace tree must sanitize what it *renders* and must never
@@ -4051,55 +4114,47 @@ let msg = \"found scintilla_cocoa_new() calls\";
         );
     }
 
-    /// Every panel `build_content` builds must be parented to the content
-    /// view.
+    /// Every dockable panel `build_content` builds must be handed to the
+    /// dock, which is what parents it.
     ///
-    /// This shipped broken: `workspace.container` was constructed, stored
-    /// on the state, laid out by `relayout_chrome` — and never added as a
-    /// subview. The panel was a blank rectangle, reported by a user.
+    /// A view that is never parented is not an error anyone notices: it
+    /// keeps its frame, reports `isHidden == false`, hands out its
+    /// subviews, and answers every question a probe thinks to ask — it
+    /// simply never draws. The workspace panel shipped exactly that way
+    /// once (m4d), and only a screenshot would have caught it.
     ///
-    /// **Nothing else could have caught it, which is the point.** The
-    /// build succeeds; clippy sees the panel used; a diff cannot show a
-    /// line that was never written, so both reviewers passed over it. And
-    /// a detached `NSView` answers every question a probe thinks to ask —
-    /// it keeps its frame, reports `isHidden == false`, hands out its
-    /// subviews, and even lets AppKit make cell views for it. My own
-    /// verification checked all of those and cleared it. The one question
-    /// that distinguishes attached from detached is `superview()`, and
-    /// nothing asked it.
-    ///
-    /// The list is derived from the function's **return tuple** rather
-    /// than hard-coded, so a future panel is covered the moment it is
-    /// returned — a hard-coded list would need updating by exactly the
-    /// person who just forgot the `addSubview`.
+    /// The compiler covers the other half: `dock::DockHosts` carries one
+    /// field per `DockPanel`, resolved by an exhaustive `match`, so a new
+    /// panel variant that is not hosted fails to build. What the
+    /// compiler cannot see is that `build_content` passes the *right
+    /// views* into those fields, which is what this pins.
     #[test]
-    fn every_panel_is_added_to_the_content_view() {
+    fn every_panel_is_handed_to_the_dock() {
         let body = fn_body(production_src(), "build_content");
-        // The last tuple expression in the body is the return.
-        let start = body.rfind("\n    (").expect("no return tuple") + 6;
-        let end = body[start..].find(')').expect("unterminated tuple") + start;
-        let returned: Vec<&str> = body[start..end]
-            .split(',')
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-            .collect();
-        assert!(
-            returned.len() >= 5,
-            "parsed only {returned:?} from the return tuple; the scan is broken, \
-             so a clean result proves nothing"
-        );
-        for member in returned {
-            let call = format!("content.addSubview(&{member}.container)");
+        let start = body
+            .find("dock::DockHosts {")
+            .expect("build_content no longer installs the dock");
+        let end = body[start..].find('}').expect("unterminated DockHosts") + start;
+        let hosts = &body[start..end];
+        for (field, view) in [
+            ("workspace", "workspace.container"),
+            ("docmap", "docmap.container"),
+            ("editor_cell", "editor_cell"),
+            ("area", "dock_area"),
+        ] {
+            let expected = format!("{field}: {view}");
             assert!(
-                body.contains(&call),
-                "`build_content` returns `{member}` but never calls `{call}` — so \
-                 that panel is built, stored and laid out, and never drawn. A \
-                 detached view still reports its frame, its subviews and \
-                 `isHidden == false`, so nothing at runtime notices."
+                hosts.contains(&expected),
+                "`build_content` no longer hands `{view}` to the dock as `{field}` — that \
+                 panel is built, stored and never drawn. A detached view still reports its \
+                 frame, its subviews and `isHidden == false`, so nothing at runtime notices."
             );
         }
-        // The editor is not a panel and is added by its own name.
-        assert!(body.contains("content.addSubview(sci_view)"));
+        // The editor cell is what the dock carves around, and the
+        // permanent Scintilla view lives inside it — never reparented.
+        assert!(body.contains("editor_cell.addSubview(sci_view)"));
+        assert!(body.contains("dock_area.addSubview(&editor_cell)"));
+        assert!(body.contains("content.addSubview(&dock_area)"));
     }
 
     /// Unfold All's ceilings must not be defeated by the final reveal.
@@ -4159,19 +4214,18 @@ let msg = \"found scintilla_cocoa_new() calls\";
         );
     }
 
-    /// The map's column must be recomputed on every layout, and a closed
-    /// panel must never be resized to zero.
+    /// The chrome layout must carve the dock area through the dock model
+    /// on every pass, and must not position either dockable panel
+    /// itself.
     ///
-    /// Both halves are regressions waiting to happen. Dropping the
-    /// `width_for_layout` call would leave the editor full-width with the
-    /// map painted over it; dropping the `map_w > 0.0` guard reintroduces
-    /// the bug this milestone hit — a hidden panel's width-sizable
-    /// subviews collapse with it, and autoresizing cannot restore
-    /// proportions from a zero-width superview, so reopening came back
-    /// with the header label stretched over the close button. The FIF
-    /// dock carries the same pair of guards for the same reason.
+    /// The first half is what re-clamps a persisted band size against
+    /// the live window — dropping it leaves the editor cell wherever the
+    /// last carve put it while the window shrinks around it. The second
+    /// is the ownership boundary: a `setFrame:` on a panel container
+    /// from here would fight the group slot that hosts it, and would be
+    /// wrong the moment the panel floats.
     #[test]
-    fn the_layout_clamps_the_map_and_never_collapses_it() {
+    fn the_layout_carves_the_dock_area_and_leaves_the_panels_to_it() {
         let src = include_str!("platform.rs");
         let src = match src.find("#[cfg(test)]") {
             Some(i) => &src[..i],
@@ -4179,17 +4233,135 @@ let msg = \"found scintilla_cocoa_new() calls\";
         };
         let body = fn_body(src, "relayout_chrome");
         assert!(
-            body.contains("docmap::width_for_layout(")
-                && body.contains("workspace::width_for_layout("),
-            "`relayout_chrome` no longer clamps the Document Map's width against \
-             the live window, so a persisted width can starve the editor"
+            body.contains("dock::layout_area("),
+            "`relayout_chrome` no longer carves the dock area through \
+             `dock::layout_area`, so a persisted band size is never re-clamped \
+             against the live window and the editor cell can be starved on resize"
+        );
+        for forbidden in ["docmap.container", "workspace.container"] {
+            assert!(
+                !body.contains(forbidden),
+                "`relayout_chrome` positions `{forbidden}` itself; the dock group that \
+                 hosts the panel owns its frame, docked or floating"
+            );
+        }
+        // And the editor cell's children are laid out against the
+        // *cell*, not the window — a Bottom band sits between the two.
+        assert!(
+            body.contains("self.editor_cell.bounds()"),
+            "`relayout_chrome` no longer lays the tab strip, editor and FIF dock out \
+             inside the editor cell's bounds"
+        );
+    }
+
+    /// The dock mechanism must never touch the two permanent Scintilla
+    /// views, and must position floating windows outside its own borrow.
+    ///
+    /// The first is the reparenting carve-out to the single-view rule:
+    /// the dock moves the Document Map's *container* between hosts and
+    /// never the miniature inside it, so the module has no business
+    /// naming either view. The second is the borrow discipline its docs
+    /// state: `setFrame:display:` on a floating panel posts
+    /// `windowDidResize:` synchronously, and that delegate mirrors the
+    /// rect through `with_dock` — inside the borrow it would be declined
+    /// on every reconcile, silently, and the model would hold the last
+    /// rect the *user* dragged rather than the one just applied.
+    #[test]
+    fn the_dock_never_names_the_permanent_views_and_moves_floats_outside_its_borrow() {
+        let src = include_str!("dock.rs");
+        let src = match src.find("#[cfg(test)]") {
+            Some(i) => &src[..i],
+            None => src,
+        };
+        let code = code_only(src);
+        assert!(code.len() > 10_000, "scanned only {} bytes", code.len());
+        for forbidden in ["sci_view", "miniature", "scintilla_cocoa_new"] {
+            assert!(
+                !code.contains(forbidden),
+                "dock.rs mentions `{forbidden}`: the dock hosts panel *containers* and must \
+                 never reach the Scintilla views inside them"
+            );
+        }
+        let body = fn_body(&code, "sync_floats");
+        let borrow_ends = body
+            .find(".unwrap_or_default()")
+            .expect("sync_floats no longer snapshots the floats under the borrow");
+        let applies = body
+            .find("setFrame_display(")
+            .expect("sync_floats no longer positions the floats");
+        assert!(
+            applies > borrow_ends,
+            "sync_floats calls `setFrame:display:` inside the `with_dock` borrow; the \
+             float delegate's mirror of that rect is then declined re-entrantly"
         );
         assert!(
-            body.contains("if map_w > 0.0") && body.contains("if ws_w > 0.0"),
-            "`relayout_chrome` no longer guards the map's frame update. Resizing a \
-             hidden panel to zero collapses its width-sizable subviews, and they do \
-             not come back proportionally when it reopens."
+            !fn_body(&code, "reconcile").contains("setFrame_display("),
+            "reconcile positions a floating window under the dock borrow"
         );
+    }
+
+    /// A dock tab and a group caption must hold an owned reference to
+    /// themselves for the span of their gesture.
+    ///
+    /// The reconcile a tab click or a caption drag triggers rebuilds the
+    /// tab bar (or dismantles the whole group frame), sending
+    /// `removeFromSuperview` to the very view whose `mouseDown:` is on
+    /// the stack — and Objective-C dispatch does not retain the
+    /// receiver. The tab strip records this as a use-after-free and
+    /// keeps both guarantees, the owned reference and the act-after
+    /// ordering; the dock must too. Found by the security audit of this
+    /// module before it shipped.
+    #[test]
+    fn dock_gestures_retain_their_receiver() {
+        let src = include_str!("dock.rs");
+        let src = match src.find("#[cfg(test)]") {
+            Some(i) => &src[..i],
+            None => src,
+        };
+        for class in ["CaptionView", "TabView"] {
+            let at = src
+                .find(&format!("pub struct {class};"))
+                .unwrap_or_else(|| panic!("no {class}"));
+            let block_end = src[at..].find("\n);").expect("unterminated class block") + at;
+            let body = fn_body(&src[at..block_end], "mouse_down");
+            assert!(
+                body.contains("let me = self.retain();"),
+                "`{class}::mouseDown:` no longer retains its receiver for the gesture; the \
+                 reconcile it triggers can free the view while this frame is still live"
+            );
+        }
+    }
+
+    /// A dock tab and a group caption must claim every point of
+    /// themselves in `hitTest:`.
+    ///
+    /// Found by driving the app: a synthetic click at a tab's centre
+    /// switched nothing, because the centre of an inactive tab is its
+    /// `NSImageView`, which takes the mouse-down for its own drag-out
+    /// behaviour and does nothing with it — so the tab's `mouseDown:`
+    /// never ran. The caption's title label is the same hazard for the
+    /// drag bar. A source scan because the failure is a dead click: no
+    /// error, no wrong value, just a press that does nothing.
+    #[test]
+    fn dock_tabs_and_captions_claim_their_whole_area() {
+        let src = include_str!("dock.rs");
+        let src = match src.find("#[cfg(test)]") {
+            Some(i) => &src[..i],
+            None => src,
+        };
+        for class in ["CaptionView", "TabView"] {
+            let at = src
+                .find(&format!("pub struct {class};"))
+                .unwrap_or_else(|| panic!("no {class}"));
+            let block_end = src[at..].find("\n);").expect("unterminated class block") + at;
+            let block = &src[at..block_end];
+            assert!(
+                block.contains("method_id(hitTest:)") && block.contains("claim_hit(self, point"),
+                "`{class}` no longer overrides `hitTest:` through `claim_hit`, so a press \
+                 on its image or label child is swallowed there and never reaches the \
+                 gesture"
+            );
+        }
     }
 
     #[test]
@@ -4203,6 +4375,15 @@ let msg = \"found scintilla_cocoa_new() calls\";
         assert!(
             src.contains("activate_main_window"),
             "applicationDidFinishLaunching: no longer activates the window"
+        );
+        // And the floating dock groups: they are `hidesOnDeactivate`
+        // panels, so one ordered front at restore — before the app has
+        // ever been active — needs the activation to bring it back.
+        assert!(
+            fn_body(src, "did_become_active").contains("dock::order_floats_front"),
+            "applicationDidBecomeActive: no longer re-orders the floating dock groups \
+             front, so a float restored from session.xml stays hidden until something \
+             else raises it"
         );
     }
 

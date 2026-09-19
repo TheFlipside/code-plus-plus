@@ -111,13 +111,20 @@ pub struct CocoaUiState {
     /// queued jump. Separate from [`Self::fif_dock`] because that one is
     /// `Clone` and handed out on every split; this is single-owner state.
     pub fif_job: FifJob,
-    /// The Document Map, along the right edge of the editor band. Built
-    /// at startup — it owns the second permanent Scintilla view — and
-    /// hidden until the user opens it.
+    /// The Document Map's content. Built at startup — it owns the
+    /// second permanent Scintilla view — and hosted by the dock
+    /// (`crate::dock`) in a docked group, a tab, a floating window, or
+    /// parked hidden. Reached only through [`with_state`].
     pub docmap: DocMapPanel,
-    /// The "Folder as Workspace" tree, along the left edge of the editor
-    /// band. Built at startup and hidden until a folder is opened.
+    /// The "Folder as Workspace" tree's content, hosted by the dock the
+    /// same way. Reached only through [`with_state`].
     pub workspace: WorkspacePanel,
+    /// The dock area between the toolbar and the status bar — the view
+    /// `crate::dock` carves side bands out of. See [`CocoaUi::dock_area`].
+    pub dock_area: Retained<crate::dock::DockArea>,
+    /// Tab strip + editor + FIF dock, the one cell the dock area carves
+    /// around. See [`CocoaUi::editor_cell`].
+    pub editor_cell: Retained<NSView>,
     /// The modeless Find/Replace panel, built on first use and then kept
     /// for the session — its controls are read by every search command,
     /// so they have to outlive the click that opened it. `None` until
@@ -151,12 +158,16 @@ pub struct CocoaUi {
     /// The results dock, so [`CocoaUi::relayout_chrome`] can give it its
     /// band and take it back when it is closed.
     pub fif_dock: FifDock,
-    /// The Document Map, for the same reason: `relayout_chrome` has to
-    /// take its column out of the editor's width while it is open.
-    pub docmap: DocMapPanel,
-    /// The workspace tree, for the same reason — it takes the *other*
-    /// side of the same band.
-    pub workspace: WorkspacePanel,
+    /// The dock area, so [`CocoaUi::relayout_chrome`] can hand it the
+    /// band between the toolbar and the status bar and then ask
+    /// `crate::dock` to carve it. The two dockable panels are *not*
+    /// here: where they sit is the dock model's business, and the
+    /// layout method reaches it through the dock's own thread-local
+    /// rather than through this struct.
+    pub dock_area: Retained<crate::dock::DockArea>,
+    /// The editor cell the dock places at `DockFrame::editor`; the
+    /// tab strip, editor and FIF dock are laid out inside its bounds.
+    pub editor_cell: Retained<NSView>,
     /// Read-only pointer to `Shell.udl_registry` for the UDL
     /// container-lexer path. `apply_lang` runs inside a `drain` (the
     /// split `&mut Shell` borrow is live), so it cannot reach the
@@ -197,8 +208,8 @@ impl CocoaUiState {
             tabs: self.tabs.clone(),
             toolbar: self.toolbar.clone(),
             fif_dock: self.fif_dock.clone(),
-            docmap: self.docmap.clone(),
-            workspace: self.workspace.clone(),
+            dock_area: self.dock_area.clone(),
+            editor_cell: self.editor_cell.clone(),
             udl_registry,
         };
         (&mut self.shell, ui)
