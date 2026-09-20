@@ -44,7 +44,7 @@
 
 use codepp_core::dock::{
     compute_frame, resolve_drop, DockLayout, DockLocation, DockPanel, DockRect, DockSide,
-    DragSubject, DropTarget, DropZones, DEFAULT_FLOAT_H, DEFAULT_FLOAT_W, MIN_FLOAT_H, MIN_FLOAT_W,
+    DragSubject, DropTarget, DropZones, MIN_FLOAT_H, MIN_FLOAT_W,
 };
 use std::ffi::c_void;
 use windows::core::{w, PCWSTR};
@@ -596,6 +596,27 @@ pub(crate) unsafe fn sync_dock_indicators(main_hwnd: HWND) {
 
 // --- drag machinery -------------------------------------------------------------
 
+/// The size a panel or group opens at when it is torn off into a
+/// float: a third of the main window's current width and height,
+/// floored at the model's minimum — the GTK choice, for the reason it
+/// records (a full-height side band makes an awkward window nobody
+/// wants and has to resize anyway).
+#[must_use]
+fn tear_off_size(main: (i32, i32)) -> (i32, i32) {
+    ((main.0 / 3).max(MIN_FLOAT_W), (main.1 / 3).max(MIN_FLOAT_H))
+}
+
+/// Where the pointer sits inside a torn-off float's caption: the same
+/// *fraction* along the caption as it had along the source (so a grab
+/// near the right end stays near the right end), clamped inside the
+/// new width, and vertically mid-caption.
+#[must_use]
+fn tear_off_grab(cursor_dx: i32, source_w: i32, new_w: i32) -> (i32, i32) {
+    let fraction = f64::from(cursor_dx.clamp(0, source_w.max(1))) / f64::from(source_w.max(1));
+    let x = (fraction * f64::from(new_w)).round() as i32;
+    (x.clamp(0, new_w.max(0)), DOCK_CAPTION_H / 2)
+}
+
 /// The dock area (between toolbar-bottom and status-bar-top) in
 /// screen coordinates — the coordinate space every drag computation
 /// uses, because floating groups and the hint are screen-positioned
@@ -1037,16 +1058,24 @@ unsafe fn on_group_button_down(ghwnd: HWND, lparam: LPARAM) {
         let (subject, armed_tab, armed_close, grab, float_size) = if y < DOCK_CAPTION_H {
             let close = caption_close_rect(rc.right);
             let armed_close = close.contains(x, y);
-            // Caption drag = whole group. Grab offset keeps the
-            // cursor where the user pressed, relative to the
-            // window's own origin, so a float lands "in hand".
-            (
-                DragSubject::Group(id),
-                None,
-                armed_close,
-                (cursor.x - outer.x, cursor.y - outer.y),
-                (outer.w.max(MIN_FLOAT_W), outer.h.max(MIN_FLOAT_H)),
-            )
+            // Caption drag = whole group. An already-floating group
+            // is being *moved*: it keeps its size, and the grab
+            // offset keeps the cursor where the user pressed,
+            // relative to the window's own origin, so the window
+            // moves "in hand". A docked group is being torn off: it
+            // opens at [`tear_off_size`] with the pointer at the
+            // same fraction along the caption ([`tear_off_grab`]).
+            let (grab, float_size) = if snap.floating {
+                (
+                    (cursor.x - outer.x, cursor.y - outer.y),
+                    (outer.w.max(MIN_FLOAT_W), outer.h.max(MIN_FLOAT_H)),
+                )
+            } else {
+                let main_rect = rect_of(main);
+                let size = tear_off_size((main_rect.w, main_rect.h));
+                (tear_off_grab(cursor.x - outer.x, outer.w, size.0), size)
+            };
+            (DragSubject::Group(id), None, armed_close, grab, float_size)
         } else if snap.panels.len() > 1 && y >= rc.bottom - DOCK_TAB_BAR_H {
             let labels = measure_tab_labels(ghwnd, &snap.panels);
             let extents = tab_extents(&labels, snap.active);
@@ -1056,14 +1085,16 @@ unsafe fn on_group_button_down(ghwnd: HWND, lparam: LPARAM) {
             let Some(panel) = snap.panels.get(tab).copied() else {
                 return;
             };
+            let main_rect = rect_of(main);
+            let size = tear_off_size((main_rect.w, main_rect.h));
             (
                 DragSubject::Panel(panel),
                 Some(tab),
                 false,
-                // A torn-off tab floats at the default size with
-                // the grab point in its caption.
-                (DEFAULT_FLOAT_W / 2, DOCK_CAPTION_H / 2),
-                (DEFAULT_FLOAT_W, DEFAULT_FLOAT_H),
+                // A torn-off tab floats at the tear-off size with
+                // the grab point mid-caption.
+                (size.0 / 2, DOCK_CAPTION_H / 2),
+                size,
             )
         } else {
             return;
@@ -1491,6 +1522,26 @@ mod tests {
             flipped[1].1,
             DOCK_TAB_PAD + DOCK_TAB_ICON_PX + DOCK_TAB_ICON_GAP + 120 + DOCK_TAB_PAD
         );
+    }
+
+    #[test]
+    fn tear_off_size_is_a_third_of_the_window_floored_at_the_minimum() {
+        assert_eq!(tear_off_size((1200, 900)), (400, 300));
+        // A small window floors at the model minimum rather than a sliver.
+        assert_eq!(tear_off_size((300, 240)), (MIN_FLOAT_W, MIN_FLOAT_H));
+        assert_eq!(tear_off_size((0, 0)), (MIN_FLOAT_W, MIN_FLOAT_H));
+    }
+
+    #[test]
+    fn tear_off_grab_keeps_the_pointer_fraction_along_the_caption() {
+        // Pressed a quarter of the way along a 400-wide band → a quarter
+        // of the way along the 200-wide float.
+        assert_eq!(tear_off_grab(100, 400, 200), (50, DOCK_CAPTION_H / 2));
+        // Beyond either end clamps rather than leaving the float behind.
+        assert_eq!(tear_off_grab(-30, 400, 200).0, 0);
+        assert_eq!(tear_off_grab(900, 400, 200).0, 200);
+        // A degenerate source width does not divide by zero.
+        assert_eq!(tear_off_grab(10, 0, 200).0, 200);
     }
 
     #[test]
