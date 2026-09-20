@@ -61,6 +61,12 @@ mod udl;
 mod window;
 mod workspace;
 
+/// Test-only surface for `tests/cocoa_smoke.rs`; see `plugin::smoke_support`
+/// for why it is compiled out of release builds.
+#[cfg(debug_assertions)]
+#[doc(hidden)]
+pub use plugin::smoke_support;
+
 use std::cell::{Cell, RefCell};
 use std::fmt;
 use std::path::PathBuf;
@@ -4796,22 +4802,119 @@ let msg = \"found scintilla_cocoa_new() calls\";
             "scanned only {} bytes of plugin.rs; a clean result proves nothing",
             src.len()
         );
+        // Exactly two sends: the same-thread one in `plugin_dispatch`
+        // and the marshaled one in `send_sci_on_main`, which is only
+        // ever reached *from* `plugin_dispatch` after the same check.
+        let dispatch = fn_body(&src, "plugin_dispatch");
+        let marshal = fn_body(&src, "send_sci_on_main");
         assert_eq!(
             src.matches("scintilla_cocoa_send_message(").count(),
-            1,
-            "plugin.rs sends to Scintilla from more than one place; every send must \
-             sit behind the `is_valid_scintilla` identity check"
+            2,
+            "plugin.rs sends to Scintilla from somewhere other than `plugin_dispatch` \
+             and `send_sci_on_main`; every send must sit behind the \
+             `is_valid_scintilla` identity check"
         );
-        let body = fn_body(&src, "plugin_dispatch");
-        let check = body
+        assert_eq!(dispatch.matches("scintilla_cocoa_send_message(").count(), 1);
+        assert_eq!(marshal.matches("scintilla_cocoa_send_message(").count(), 1);
+        assert_eq!(
+            src.matches("send_sci_on_main(").count(),
+            2,
+            "`send_sci_on_main` is called from somewhere other than `plugin_dispatch`"
+        );
+        let check = dispatch
             .find("is_valid_scintilla(hwnd)")
             .expect("`plugin_dispatch` no longer identity-checks the handle it was given");
-        let send = body
+        let send = dispatch
             .find("scintilla_cocoa_send_message(")
             .expect("`plugin_dispatch` no longer forwards to Scintilla at all");
+        let hop = dispatch
+            .find("send_sci_on_main(")
+            .expect("`plugin_dispatch` no longer marshals a cross-thread SCI_*");
         assert!(
-            check < send,
+            check < send && check < hop,
             "`plugin_dispatch` forwards to Scintilla before checking the handle"
+        );
+    }
+
+    /// A plugin's `SCI_*` reaches the `ScintillaView` on the main thread
+    /// whichever thread it was sent from — and *only* from a worker does
+    /// it take the `dispatch_sync` hop.
+    ///
+    /// Both halves are one-sided hazards. Dropping the affinity check
+    /// sends `objc_msgSend` to an `NSView` from a plugin's worker thread
+    /// (undefined, and usually a crash in someone else's process with
+    /// someone else's plugin). Inverting it, or letting the marshal be
+    /// reached from the main thread, is a `dispatch_sync` onto the queue
+    /// the caller is standing on — which libdispatch detects and answers
+    /// by aborting the process (measured: `SIGTRAP`, "`dispatch_sync`
+    /// called on queue already owned by current thread"). The runtime
+    /// half is the `cocoa_smoke` scenario, which needs a window server;
+    /// this pins the shape on every runner.
+    #[test]
+    fn a_cross_thread_sci_message_is_marshaled_onto_the_main_queue() {
+        let src = plugin_src();
+        let dispatch = fn_body(&src, "plugin_dispatch");
+        let direct = dispatch
+            .find("scintilla_cocoa_send_message(")
+            .expect("`plugin_dispatch` no longer sends to Scintilla directly");
+        let gate = dispatch
+            .find("if on_main_thread() {")
+            .expect("`plugin_dispatch` no longer gates the direct send on `on_main_thread()`");
+        let hop = dispatch
+            .find("send_sci_on_main(")
+            .expect("`plugin_dispatch` no longer marshals");
+        assert!(
+            gate < direct && direct < hop,
+            "`plugin_dispatch` must send directly *inside* `if on_main_thread()` and \
+             marshal in its `else`; found gate@{gate} direct@{direct} hop@{hop}"
+        );
+        let marshal = fn_body(&src, "send_sci_on_main");
+        assert!(
+            marshal.contains("DispatchQueue::main().exec_sync("),
+            "`send_sci_on_main` no longer hops through `dispatch_sync` on the main queue"
+        );
+        assert!(
+            !marshal.contains("with_state("),
+            "`send_sci_on_main` takes the state borrow; a plugin sending SCI_* from \
+             inside a `beNotified` that holds it would then be declined"
+        );
+        assert!(
+            marshal.contains("assert!(") && marshal.contains("!on_main_thread()"),
+            "`send_sci_on_main` no longer refuses to be called from the main thread"
+        );
+        assert!(
+            !marshal.contains("debug_assert!("),
+            "`send_sci_on_main`'s main-thread refusal is debug-only again; the misuse \
+             it guards aborts a release build just the same, so the assert must be \
+             unconditional to name the call site"
+        );
+        // The smoke-test surface rewrites the trust anchor the identity
+        // check reads, so it must be `unsafe` to call and absent from a
+        // release build. The attributes directly above the module are
+        // what say so.
+        let support = src
+            .find("pub mod smoke_support")
+            .expect("the smoke-test surface `smoke_support` is gone; cocoa_smoke needs it");
+        let attrs: Vec<&str> = src[..support]
+            .lines()
+            .rev()
+            .take_while(|l| l.trim_start().starts_with("#["))
+            .collect();
+        assert!(
+            attrs.iter().any(|l| l.trim() == "#[cfg(debug_assertions)]"),
+            "`smoke_support` is no longer compiled out of release builds; it rewrites \
+             the handle-identity trust anchor and must not ship"
+        );
+        assert!(
+            src.contains("pub unsafe fn arm_scintilla("),
+            "`arm_scintilla` is a safe fn again; it rewrites `VALID_SCI` and must carry \
+             an unsafe contract"
+        );
+        let affinity = fn_body(&src, "on_main_thread");
+        assert!(
+            affinity.contains("MainThreadMarker::new()") && !affinity.contains("with_state("),
+            "`on_main_thread` must be `pthread_main_np` (via `MainThreadMarker`), not a \
+             `with_state` read that a live borrow would decline"
         );
     }
 

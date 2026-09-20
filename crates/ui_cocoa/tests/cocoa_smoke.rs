@@ -82,7 +82,7 @@ mod smoke {
             return;
         }
 
-        println!("\nrunning 1 test");
+        println!("\nrunning 3 tests");
 
         // Hard failure rather than a skip: with `harness = false` this *is*
         // the main thread, so `None` here would mean cargo changed how it
@@ -99,7 +99,29 @@ mod smoke {
         notifications_are_delivered();
         println!("test cocoa_smoke::notifications_are_delivered ... ok");
 
-        println!("\ntest result: ok. 2 passed; 0 failed; 0 ignored\n");
+        // The third scenario needs `codepp_ui_cocoa::smoke_support`,
+        // which is compiled out of release builds because it can rewrite
+        // the plugin dispatcher's trust anchor. A `--release` test build
+        // therefore reports it ignored rather than silently dropping it.
+        #[cfg(debug_assertions)]
+        {
+            marshal::a_plugins_worker_thread_reaches_scintilla_through_the_main_queue();
+            println!(
+                "test cocoa_smoke::a_plugins_worker_thread_reaches_scintilla_through_the_main_queue ... ok"
+            );
+            println!("\ntest result: ok. 3 passed; 0 failed; 0 ignored\n");
+        }
+        #[cfg(not(debug_assertions))]
+        {
+            println!(
+                "test cocoa_smoke::a_plugins_worker_thread_reaches_scintilla_through_the_main_queue ... ignored"
+            );
+            println!(
+                "\ntest result: ok. 2 passed; 0 failed; 1 ignored\n\n\
+                 note: the marshal scenario needs a debug build (`smoke_support` is \
+                 compiled out of release).\n"
+            );
+        }
     }
 
     /// Drive a real Scintilla view through the captured direct-call pair.
@@ -254,6 +276,136 @@ mod smoke {
         // should not depend on paint timing. This test cannot observe
         // that arm firing (no run loop), so it asserts the wiring and
         // the synchronous edge instead of pretending otherwise.
+    }
+
+    /// The cross-thread `SCI_*` marshal scenario, in its own module so
+    /// its imports — and its dependency on the crate's debug-only
+    /// `smoke_support` surface — are gated with it.
+    #[cfg(debug_assertions)]
+    mod marshal {
+        use codepp_editor::EditorHandle;
+        use codepp_scintilla_sys::{scintilla_cocoa_new, sptr_t, SCI_GETLENGTH, SCI_SETTEXT};
+        use codepp_ui_cocoa::smoke_support;
+        use objc2_foundation::{NSDate, NSDefaultRunLoopMode, NSRunLoop};
+        use std::ffi::{c_void, CString};
+        use std::time::Duration;
+
+        /// A raw view pointer handed to a worker thread.
+        struct WorkerPtr(*mut c_void);
+        // SAFETY: the test's own leaked, permanently-live Scintilla view. The
+        // worker only hands it to `plugin_dispatch`, which is the code under
+        // test and is precisely what must not dereference it off the main
+        // thread.
+        unsafe impl Send for WorkerPtr {}
+
+        /// Pump the main run loop once, briefly, in the default mode.
+        ///
+        /// GCD's main queue is drained by the main thread's run loop, so
+        /// this is what lets a `dispatch_sync` block a worker enqueued
+        /// actually execute. The mode matters: the main queue is serviced
+        /// only in a *common* mode, of which the default mode is one.
+        fn pump_main_queue_once() {
+            let deadline = NSDate::dateWithTimeIntervalSinceNow(0.01);
+            // SAFETY: main thread (the harness guarantees it) and a live
+            // mode constant.
+            let _ = unsafe {
+                NSRunLoop::mainRunLoop().runMode_beforeDate(NSDefaultRunLoopMode, &deadline)
+            };
+        }
+
+        /// The DESIGN.md §7.4 cross-thread `SCI_*` marshal, driven for real.
+        ///
+        /// The Cocoa counterpart of `ui_gtk`'s
+        /// `a_plugins_worker_thread_reaches_scintilla_through_the_main_loop`,
+        /// and it lives *here* rather than in the crate's own test module
+        /// because it needs the process main thread — which only this
+        /// `harness = false` binary owns.
+        ///
+        /// Three claims, each of which has a way to pass vacuously that the
+        /// test is shaped to exclude:
+        ///
+        ///   1. **Same thread → answered directly.** The control. It also
+        ///      proves the affinity check is armed, so the cross-thread
+        ///      assertion cannot pass by classifying *everything* as remote.
+        ///      On this backend it is more than a control: a fast path that
+        ///      wrongly marshals from the main thread is a `dispatch_sync`
+        ///      onto the queue the caller is standing on, which libdispatch
+        ///      answers by aborting the process — so that mutation shows up
+        ///      as a `SIGTRAP` (exit 133) with "`dispatch_sync` called on
+        ///      queue already owned by current thread" in the crash report,
+        ///      rather than as a failed assertion. Measured.
+        ///   2. **Other thread → parked until the main queue drains.** The
+        ///      call must still be outstanding after 200 ms of *not* pumping
+        ///      the run loop; a regressed direct call finishes in
+        ///      microseconds, so a starved runner can only lengthen the
+        ///      wait, never turn a real failure into a pass.
+        ///   3. **Other thread → the real answer once it does.** Five bytes
+        ///      are seeded so a correct round trip has a distinctive value —
+        ///      `0` is what every failure mode returns.
+        ///
+        /// And the identity check still runs *before* the affinity check: a
+        /// bogus handle from a worker is refused, not marshaled.
+        pub(super) fn a_plugins_worker_thread_reaches_scintilla_through_the_main_queue() {
+            // SAFETY: `NSApplication` exists and this is the main thread.
+            let sci_ptr = unsafe { scintilla_cocoa_new() };
+            assert!(!sci_ptr.is_null(), "scintilla_cocoa_new() returned null");
+            // SAFETY: a view from `scintilla_cocoa_new` that this test
+            // never releases — the same leak-by-design as the other two
+            // scenarios — so it stays live for the rest of the process.
+            unsafe { smoke_support::arm_scintilla(sci_ptr) };
+
+            // SAFETY: `sci_ptr` is the live view just constructed.
+            let editor = unsafe { EditorHandle::from_cocoa_view(sci_ptr) }
+                .expect("Scintilla did not surrender its direct-call pair");
+            let text = CString::new("hello").expect("no interior NUL");
+            editor.send(SCI_SETTEXT, 0, text.as_ptr() as sptr_t);
+
+            // 1. The control.
+            assert_eq!(
+                smoke_support::dispatch(sci_ptr, SCI_GETLENGTH, 0, 0),
+                5,
+                "same-thread SCI_* must answer directly"
+            );
+
+            // 2. The real case.
+            let handle = WorkerPtr(sci_ptr);
+            let worker = std::thread::spawn(move || {
+                let handle = handle;
+                smoke_support::dispatch(handle.0, SCI_GETLENGTH, 0, 0)
+            });
+            std::thread::sleep(Duration::from_millis(200));
+            assert!(
+                !worker.is_finished(),
+                "a cross-thread SCI_* answered without the main queue being drained — \
+                 it was executed on the calling thread, which is the bug"
+            );
+
+            // 3. ...and answered once the main thread gets to it.
+            let mut spins = 0;
+            while !worker.is_finished() {
+                pump_main_queue_once();
+                spins += 1;
+                assert!(spins < 10_000, "marshaled SCI_* never completed");
+            }
+            assert_eq!(
+                worker.join().expect("worker panicked"),
+                5,
+                "the marshaled call must return Scintilla's real answer"
+            );
+
+            // An unrecognised handle is refused rather than marshaled, from
+            // a worker just as from the main thread.
+            let bogus = WorkerPtr(std::ptr::dangling_mut::<u8>().cast::<c_void>());
+            let refused = std::thread::spawn(move || {
+                let bogus = bogus;
+                smoke_support::dispatch(bogus.0, SCI_GETLENGTH, 0, 0)
+            });
+            assert_eq!(
+                refused.join().expect("worker panicked"),
+                0,
+                "an unknown handle must be refused without dereferencing it"
+            );
+        }
     }
 }
 

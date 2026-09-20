@@ -292,6 +292,25 @@ A plain `cargo test` reports it as ignored in the summary line rather
 than skipping it silently, so a runner without a window session cannot
 drop the coverage while still looking green.
 
+It runs three scenarios from one `main` — the direct-call round trip,
+notification delivery, and the cross-thread `SCI_*` marshal (a plugin
+worker thread's message hopping onto the main queue). A new
+display-gated scenario belongs in `smoke::run` beside them, for the
+same reason the GTK scenarios share one `#[test]` (§3.3); the private
+items it needs are reached through the crate's `#[doc(hidden)]`
+`smoke_support` re-export rather than by moving the scenario in-crate,
+where libtest could never hand it the main thread. That surface exists
+only in debug builds, so a `--release` run of the smoke binary reports
+the marshal scenario as ignored.
+
+Launched from a **non-interactive** shell (an agent session, `ssh`,
+a CI runner with no GUI login), `NSApplication::sharedApplication`
+can block for minutes before the first scenario starts — measured at
+four minutes here, with the three scenarios then completing in about
+a second. The stall precedes every line of test code, so it is not a
+hang in the scenarios; run it from a terminal inside the GUI session
+if the wait matters.
+
 Note it is a `harness = false` test. That is load-bearing: AppKit is
 main-thread-only and **libtest never yields the main thread** — it runs
 every `#[test]` on a spawned worker even at `--test-threads=1`

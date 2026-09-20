@@ -48,29 +48,35 @@
 //!
 //! # Threading, and where this differs from Windows
 //!
-//! Every entry point here assumes it is on the main thread, and nothing
-//! enforces it. On Windows that assumption is free: a plugin calling
-//! `SendMessage` from its own worker thread is marshaled by the OS onto
-//! the thread that owns the window. There is no such marshaling here.
-//! A plugin that sends `NPPM_*` off-thread degrades safely — the state
-//! lives in a `thread_local`, so [`dispatch_nppm`] finds nothing and
-//! returns "declined" — but a plugin that sends `SCI_*` off-thread
-//! reaches `objc_msgSend` on a `ScintillaView` from the wrong thread,
-//! which both AppKit and Scintilla document as undefined. That branch
-//! deliberately bypasses `with_state` (see the re-entrancy note above),
-//! so it has no equivalent backstop.
+//! On Windows a plugin calling `SendMessage` from its own worker thread
+//! is marshaled by the OS onto the thread that owns the window, so a
+//! plugin written against that semantics is safe by construction. Off
+//! Windows the SDK forwards straight to [`plugin_dispatch`] on whatever
+//! thread called it, and this module restores the affinity the missing
+//! pump would have provided:
 //!
-//! `ui_gtk` has the identical characteristic and DESIGN.md §6.5 already
-//! accepts that an in-process plugin can crash the app, so this is
-//! recorded rather than guarded: refusing a cross-thread `SCI_*` would
-//! diverge from the Win32 semantics a ported plugin was written
-//! against, and marshaling it properly is a decision both non-Windows
-//! backends have to make together. Tracked in §7.4.
+//!   * `NPPM_*` off-thread degrades safely on its own — the state lives
+//!     in a `thread_local`, so [`dispatch_nppm`] finds nothing and
+//!     returns "declined".
+//!   * `SCI_*` off-thread would reach `objc_msgSend` on a
+//!     `ScintillaView` from the wrong thread, which both AppKit and
+//!     Scintilla document as undefined — and that branch deliberately
+//!     bypasses `with_state` (see above), so nothing else would catch
+//!     it. [`plugin_dispatch`] therefore checks [`on_main_thread`] and
+//!     hops through [`send_sci_on_main`] when the caller is not, exactly
+//!     as `ui_gtk::plugin` does with `MainContext::invoke`. The same
+//!     answer on both non-Windows backends, decided in DESIGN.md §7.4.
+//!
+//! The same-thread fast path is **load-bearing here, not an
+//! optimisation**: `dispatch_sync` onto the main queue *from* the main
+//! thread is a libdispatch client bug that aborts the process, where
+//! GTK's `invoke` merely dispatches inline. See [`send_sci_on_main`].
 
 use std::ffi::c_void;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::atomic::{AtomicPtr, Ordering};
 
+use dispatch2::DispatchQueue;
 use objc2::rc::Retained;
 use objc2::runtime::{NSObject, NSObjectProtocol, ProtocolObject};
 use objc2::{define_class, sel, MainThreadMarker, MainThreadOnly};
@@ -125,6 +131,137 @@ fn is_valid_scintilla(hwnd: *mut c_void) -> bool {
     !valid.is_null() && std::ptr::eq(hwnd, valid)
 }
 
+/// Whether the caller is on the process main thread — the one AppKit
+/// owns, the one every `ScintillaView` message must be sent from, and
+/// the one the main dispatch queue drains on.
+///
+/// `MainThreadMarker::new` is `pthread_main_np`, so this needs no
+/// arming step: unlike `ui_gtk`, whose "UI thread" is whichever thread
+/// called `gtk::init` and so has to be *recorded*, macOS fixes the main
+/// thread at process start. Deliberately not derived from `with_state`'s
+/// thread-local either: [`plugin_dispatch`]'s `SCI_*` branch must not
+/// take the borrow (a plugin can send `SCI_*` from inside a `beNotified`
+/// that already holds it), and a declined read there would read as "not
+/// our thread" and marshal a call that is already on the right one —
+/// which on this backend is a **process abort**, not a detour. See
+/// [`send_sci_on_main`].
+fn on_main_thread() -> bool {
+    MainThreadMarker::new().is_some()
+}
+
+/// A raw pointer carried onto the main thread by [`send_sci_on_main`].
+///
+/// `DispatchQueue::exec_sync` requires a `Send` closure and a raw
+/// pointer is not `Send`, so the crossing has to be made explicit.
+struct MainThreadPtr(*mut c_void);
+
+// SAFETY: the only pointer ever wrapped is one that has already passed
+// [`is_valid_scintilla`], i.e. the host's own `ScintillaView*`. That view
+// is created once at startup and never destroyed, removed from its
+// superview or reassigned (the discipline `CocoaUiState::sci_view`
+// documents and a source-scan guard enforces), so the address stays live
+// for the whole process. It is *dereferenced only on the main thread*,
+// which is the entire point of the marshal — the value crosses threads,
+// the dereference does not.
+unsafe impl Send for MainThreadPtr {}
+
+/// Run one `SCI_*` message against Scintilla on the main thread and
+/// block until it returns, for a plugin that called from its own thread.
+///
+/// # Why marshal rather than refuse
+///
+/// The reasoning is `ui_gtk::plugin::send_sci_on_main`'s, and is
+/// recorded in full in DESIGN.md §7.4; the short form: refusing (return
+/// 0) hands a query a *plausible* wrong answer and turns a mutation into
+/// a silent no-op, so the plugin appears to work while its edits vanish.
+/// Marshaling reproduces what the plugin was written against — a
+/// cross-thread `SendMessage` also blocks until the window's thread
+/// next pumps, and also deadlocks if that thread is meanwhile waiting
+/// on the sender — so it inherits Win32's hazard rather than adding one.
+///
+/// # `dispatch_sync`, and why the caller must not be the main thread
+///
+/// `exec_sync` is `dispatch_sync` onto the main queue: it enqueues the
+/// block and parks the caller until the main thread drains it, which
+/// happens from the main run loop — the ordinary one, and also the
+/// nested ones a modal, a menu-tracking loop or a tab drag pump, the
+/// same premise `DrainFreeze` rests on. Calling it **from** the main
+/// thread would park the only thread that could ever run the block;
+/// libdispatch detects that and **aborts the process** rather than
+/// letting it deadlock — measured, not assumed: with [`on_main_thread`]
+/// hard-wired to `false` the smoke scenario's same-thread control dies
+/// with `SIGTRAP` and a crash report reading *"BUG IN CLIENT OF
+/// LIBDISPATCH: `dispatch_sync` called on queue already owned by current
+/// thread"*. [`plugin_dispatch`] therefore consults [`on_main_thread`]
+/// first and only reaches here from another thread. That is a
+/// difference from GTK worth knowing: there the fast path avoids a
+/// channel allocation, here it avoids a crash.
+///
+/// # No timeout, deliberately
+///
+/// A bounded wait would have to invent a return value on expiry, and
+/// the only one available is 0 — it would convert a visible stall into
+/// the silent wrong answer the first section rejects. `SendMessage` has
+/// no timeout either. The unbounded wait blocks the *plugin's* worker
+/// thread only; the main thread is never a participant.
+///
+/// # What that costs at shutdown
+///
+/// `-[NSApplication terminate:]` calls `exit()` without joining anything,
+/// so a worker parked here at quit is a leaked thread, not a hang. It
+/// becomes a hang the moment host code waits for plugin threads to
+/// quiesce during teardown — nothing does today, and any future path
+/// that does must not block on plugin threads. Same accepted risk as
+/// GTK's, recorded per DESIGN.md §7.4.
+///
+/// # A panic in the hop
+///
+/// The block runs inside libdispatch's own C frames, which
+/// [`plugin_dispatch`]'s `catch_unwind` on the *calling* thread cannot
+/// cover, so the hop carries its own boundary. A panic there is logged,
+/// the slot stays unset, and the caller gets 0 — the same answer the
+/// unknown-handle branch gives, and a logged one.
+fn send_sci_on_main(hwnd: *mut c_void, msg: u32, wparam: usize, lparam: isize) -> isize {
+    // Unconditional, not `debug_assert!`: the misuse it guards against
+    // ends the process either way, and a panic names the call site where
+    // libdispatch's crash report names only the queue. Cheap — one
+    // `pthread_main_np` on a path that is already a cross-thread hop.
+    assert!(
+        !on_main_thread(),
+        "send_sci_on_main called from the main thread: dispatch_sync would abort the process",
+    );
+    let ptr = MainThreadPtr(hwnd);
+    let mut answer: Option<isize> = None;
+    // `exec_sync` needs `Send` but not `'static`, so the result comes
+    // back through a borrowed slot rather than a channel: the caller is
+    // parked for the block's whole lifetime by construction.
+    let slot = &mut answer;
+    DispatchQueue::main().exec_sync(move || {
+        crate::at_callback_boundary("plugin:sci_marshal", (), || {
+            // Load-bearing, not a leftover: edition-2021 closures capture
+            // disjoint fields, so without this rebind the outer `move`
+            // closure would capture only `ptr.0` — a bare `*mut c_void`,
+            // which is not `Send` — and `exec_sync`'s bound fails to
+            // compile. Naming the whole `MainThreadPtr` captures the
+            // wrapper that carries the `unsafe impl Send`.
+            let ptr = ptr;
+            // SAFETY: `ptr.0` passed `is_valid_scintilla` on the calling
+            // thread and addresses the host's own permanently-live
+            // `ScintillaView*` (see `MainThreadPtr`). This block runs on
+            // the main thread, which is the affinity AppKit requires and
+            // the reason the message was marshaled here at all.
+            *slot = Some(unsafe { scintilla_cocoa_send_message(ptr.0, msg, wparam, lparam) });
+        });
+    });
+    answer.unwrap_or_else(|| {
+        tracing::warn!(
+            msg,
+            "cross-thread SCI_* dropped: the main-thread hop panicked (see the error above)"
+        );
+        0
+    })
+}
+
 /// The routing callback the SDK forwards a plugin's `SendMessageW` to.
 ///
 /// Wrapped in `catch_unwind`: it is entered from plugin code across an
@@ -137,17 +274,29 @@ extern "C" fn plugin_dispatch(hwnd: *mut c_void, msg: u32, wparam: usize, lparam
         if std::ptr::eq(hwnd, npp_sentinel()) {
             dispatch_nppm(msg, wparam, lparam)
         } else if is_valid_scintilla(hwnd) {
-            // SAFETY: `hwnd` is identity-checked to be the host's own
-            // live `ScintillaView*`, which is created once at startup and
-            // never destroyed (see `CocoaUiState::sci_view`), and
-            // `scintilla_cocoa_send_message` is its documented entry
-            // point. The message-argument contract is the plugin's
-            // responsibility, exactly as it is on Win32.
-            //
-            // `with_state` is deliberately not taken: this is a direct
-            // Scintilla call, and the plugin may well issue it from
-            // inside an NPPM dispatch that already holds the borrow.
-            unsafe { scintilla_cocoa_send_message(hwnd, msg, wparam, lparam) }
+            // SCI_* addressed to *our* Scintilla view. `with_state` is
+            // deliberately not taken: this is a direct Scintilla call,
+            // and the plugin may well issue it from inside an NPPM
+            // dispatch that already holds the borrow. The identity check
+            // above is an atomic read for the same reason, and it runs
+            // *before* the affinity check so an unknown handle is refused
+            // rather than marshaled.
+            if on_main_thread() {
+                // SAFETY: `hwnd` is identity-checked to be the host's own
+                // live `ScintillaView*`, which is created once at startup
+                // and never destroyed (see `CocoaUiState::sci_view`), this
+                // is the thread that owns it, and
+                // `scintilla_cocoa_send_message` is its documented entry
+                // point. The message-argument contract is the plugin's
+                // responsibility, exactly as it is on Win32.
+                unsafe { scintilla_cocoa_send_message(hwnd, msg, wparam, lparam) }
+            } else {
+                // A plugin calling from its own thread: hop to the main
+                // queue and block, restoring the affinity the Win32 pump
+                // would have provided. See `send_sci_on_main` and
+                // DESIGN.md §7.4.
+                send_sci_on_main(hwnd, msg, wparam, lparam)
+            }
         } else {
             // Any other pointer: refuse rather than message an
             // unvalidated address. See the module docs.
@@ -187,6 +336,56 @@ fn dispatch_nppm(msg: u32, wparam: usize, lparam: isize) -> isize {
         unsafe { shell.dispatch_plugin_message(&mut ui, handles, msg, wparam, lparam) }.unwrap_or(0)
     })
     .unwrap_or(0)
+}
+
+/// Entry points for `tests/cocoa_smoke.rs`, and nothing else.
+///
+/// The cross-thread `SCI_*` scenario has to drive the real
+/// [`plugin_dispatch`] against a real `ScintillaView` from a real
+/// spawned thread, and it has to own the process main thread to do it —
+/// which only the `harness = false` smoke binary can (see its module
+/// docs). An integration test cannot see private items, so the two it
+/// needs are re-exported here. `ui_gtk` keeps the equivalent scenario
+/// in-crate because GTK needs only *one* thread, not the first.
+///
+/// Hidden rather than `pub(crate)` because the consumer is a separate
+/// crate; hidden rather than a public API because the store
+/// [`arm_scintilla`] performs has exactly one legitimate non-test home,
+/// [`discover`] — which does it inline, since this module does not
+/// exist in the builds `discover` ships in.
+///
+/// **Compiled out of release builds.** [`arm_scintilla`] rewrites the
+/// one trust anchor `plugin_dispatch` checks before it messages a
+/// pointer, so it must not exist in a shipped binary at all — "nothing
+/// calls it" is a fact about today's tree, not a guarantee. It is gated
+/// on `debug_assertions` rather than a Cargo feature so the documented
+/// smoke-test command (`cargo test … --ignored`, a dev-profile build)
+/// keeps working unchanged; a `--release` test build reports the
+/// scenario as ignored instead (see the smoke binary).
+#[cfg(debug_assertions)]
+#[doc(hidden)]
+pub mod smoke_support {
+    use std::ffi::c_void;
+    use std::sync::atomic::Ordering;
+
+    /// Stand in for [`super::discover`]: make `sci` the one handle
+    /// [`super::plugin_dispatch`] will forward `SCI_*` to.
+    ///
+    /// # Safety
+    ///
+    /// `sci` must be a live `ScintillaView*` from `scintilla_cocoa_new`
+    /// that stays live — never released, removed or reassigned — for
+    /// the rest of the process. Every `SCI_*` a caller of [`dispatch`]
+    /// addresses to it is then messaged to that object, from the main
+    /// thread, exactly as `discover` arranges for the host's own view.
+    pub unsafe fn arm_scintilla(sci: *mut c_void) {
+        super::VALID_SCI.store(sci, Ordering::Release);
+    }
+
+    /// The routing callback itself, exactly as the SDK would call it.
+    pub fn dispatch(hwnd: *mut c_void, msg: u32, wparam: usize, lparam: isize) -> isize {
+        super::plugin_dispatch(hwnd, msg, wparam, lparam)
+    }
 }
 
 /// The `NppData` handed to each plugin's `setInfo`.

@@ -119,6 +119,10 @@ lto = "thin"
 codegen-units = 1
 panic = "abort"
 strip = "symbols"
+# `debug-assertions` must stay at its default (off): `ui_cocoa` compiles
+# its smoke-test surface (`plugin::smoke_support`, which can rewrite the
+# plugin dispatcher's handle-identity trust anchor) under
+# `cfg(debug_assertions)`, so enabling them here would ship it.
 
 [profile.dev]
 # Faster incremental builds during development; release profile carries the perf budget.
