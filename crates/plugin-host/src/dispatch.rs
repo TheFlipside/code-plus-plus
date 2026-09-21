@@ -732,7 +732,13 @@ pub trait HostServices {
 
     fn set_status_bar(&mut self, section: usize, text: String);
     fn open_file(&mut self, path: PathBuf);
-    fn reload_file(&mut self, path: Option<PathBuf>);
+    /// Reload `path` (or the current buffer when `None`) from disk.
+    /// Drives [`NPPM_RELOADFILE`]. `with_alert` is the message's
+    /// `wParam`: `true` asks the user before discarding unsaved work —
+    /// the same prompt [`Self::reload_buffer_id`] queues — and `false`
+    /// reloads without asking, which the host honours only for a
+    /// buffer holding nothing unsaved (see that method).
+    fn reload_file(&mut self, path: Option<PathBuf>, with_alert: bool);
     fn save_current_file(&mut self);
     fn switch_to_file(&mut self, path: PathBuf) -> bool;
     fn menu_command(&mut self, cmd_id: i32);
@@ -1602,9 +1608,13 @@ pub unsafe fn dispatch_nppm<S: HostServices>(
         }
 
         NPPM_RELOADFILE => {
-            // wParam is a BOOL: TRUE = alert user before reload (we
-            // route through the normal reload path, which prompts).
-            // lParam: optional TCHAR* path. NULL = current buffer.
+            // wParam is a BOOL: TRUE = alert the user before the
+            // reload discards anything, FALSE = reload silently.
+            // Passed through rather than assumed: a silent request is
+            // no licence to discard unsaved work, and only the user's
+            // answer to the alert is. lParam: optional TCHAR* path.
+            // NULL = current buffer.
+            let with_alert = wparam != 0;
             let path = if lparam == 0 {
                 None
             } else {
@@ -1619,7 +1629,7 @@ pub unsafe fn dispatch_nppm<S: HostServices>(
                     Some(PathBuf::from(decoded))
                 }
             };
-            services.reload_file(path);
+            services.reload_file(path, with_alert);
             1
         }
 
@@ -3313,10 +3323,11 @@ mod tests {
         fn open_file(&mut self, path: PathBuf) {
             self.record(format!("open={}", path.display()));
         }
-        fn reload_file(&mut self, path: Option<PathBuf>) {
+        fn reload_file(&mut self, path: Option<PathBuf>, with_alert: bool) {
             self.record(format!(
-                "reload={}",
-                path.map_or_else(|| "<current>".into(), |p| p.display().to_string())
+                "reload={}{}",
+                path.map_or_else(|| "<current>".into(), |p| p.display().to_string()),
+                if with_alert { " alert" } else { " silent" }
             ));
         }
         fn save_current_file(&mut self) {
@@ -4133,8 +4144,13 @@ mod tests {
         let mut s = MockServices::default();
         unsafe { dispatch_nppm(&mut s, NPPM_RELOADFILE, 1, 0) };
         let p = make_wide("C:/x.txt");
-        unsafe { dispatch_nppm(&mut s, NPPM_RELOADFILE, 1, p.as_ptr() as isize) };
-        assert_eq!(s.calls(), vec!["reload=<current>", "reload=C:/x.txt"]);
+        unsafe { dispatch_nppm(&mut s, NPPM_RELOADFILE, 0, p.as_ptr() as isize) };
+        // The alert flag reaches the host as sent — it decides whether
+        // unsaved work may be discarded, so it cannot be assumed.
+        assert_eq!(
+            s.calls(),
+            vec!["reload=<current> alert", "reload=C:/x.txt silent"]
+        );
     }
 
     #[test]

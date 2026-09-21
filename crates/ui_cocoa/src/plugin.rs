@@ -331,6 +331,7 @@ fn dispatch_nppm(msg: u32, wparam: usize, lparam: isize) -> isize {
         let editor = st.editor;
         let dirty_before = editor.send(SCI_GETMODIFY, 0, 0) != 0;
         let cached_before: Vec<bool> = st.shell.tabs.iter().map(|t| t.dirty).collect();
+        let pre_active = st.shell.active_tab;
         let (shell, mut ui) = st.split();
         // SAFETY: called synchronously on the UI thread from plugin
         // code, with `(msg, wparam, lparam)` exactly as the plugin
@@ -345,11 +346,34 @@ fn dispatch_nppm(msg: u32, wparam: usize, lparam: isize) -> isize {
             .iter()
             .enumerate()
             .any(|(i, t)| cached_before.get(i) != Some(&t.dirty));
-        (routed, dirty_before != dirty_after || cached_moved)
+        let needs_rebind = shell.active_tab != pre_active
+            && shell
+                .active_tab
+                .and_then(|i| shell.tabs.get(i))
+                .is_some_and(|t| t.pending_load.is_none());
+        (
+            routed,
+            dirty_before != dirty_after || cached_moved,
+            needs_rebind,
+        )
     });
-    let Some((routed, dirty_edge)) = routed else {
+    let Some((routed, dirty_edge, needs_rebind)) = routed else {
         return 0;
     };
+    // A dispatch can move `active_tab` without a rebind —
+    // `NPPM_SWITCHTOFILE`, `NPPM_ACTIVATEDOC`, an `NPPM_DOOPEN` that
+    // dedupes onto an open tab — leaving the single view on the previous
+    // tab's document while `Shell` believes another is active. That is
+    // the split DESIGN.md calls the most damaging this crate can
+    // produce: a save takes its path from the active tab and its bytes
+    // from the bound document. Win32's NPPM arm has rebound on this
+    // edge since Phase 4; this backend did not, so a plugin's switch
+    // followed by `NPPM_SAVECURRENTFILE` wrote the wrong buffer to the
+    // new tab's path. A tab whose load is still in flight is left to
+    // `apply_load_result`, which binds on landing.
+    if needs_rebind {
+        crate::rebind_active_view();
+    }
     // A dispatch can move a document off or onto its save point —
     // `NPPM_SETBUFFERFORMAT`'s `SCI_CONVERTEOLS`,
     // `NPPM_MAKECURRENTBUFFERDIRTY`, `NPPM_SAVECURRENTFILE` — and the
