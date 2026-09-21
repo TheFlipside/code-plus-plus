@@ -128,8 +128,9 @@ pub(crate) struct DockDrag {
     /// Cursor offset into the float preview, so the grab point
     /// stays under the cursor while floating.
     pub grab: (i32, i32),
-    /// Size of the float preview (the group's current outer size,
-    /// so "tear off" keeps the panel the size the user knows).
+    /// Size of the float preview: [`tear_off_size`] when a docked
+    /// group or tab is being torn off, the group's own outer size
+    /// when an already-floating group is being moved.
     pub float_size: (i32, i32),
     /// Armed tab index — a press on a tab that ends without
     /// crossing the drag threshold is a tab *switch*.
@@ -528,9 +529,20 @@ pub(crate) unsafe fn apply_dock_layout(main_hwnd: HWND) {
             } else {
                 let _ = ShowWindow(ghwnd, SW_SHOW);
             }
-            // Caption title / tab set may have changed even when
-            // the frame didn't move.
-            let _ = InvalidateRect(Some(ghwnd), None, true);
+            // Position the content and repaint the chrome
+            // explicitly rather than relying on WM_SIZE reaching
+            // this group: a torn-off float is *created* at its
+            // final rect, so the SetWindowPos above is a same-size
+            // no-op that emits no WM_SIZE, and the creation-time
+            // WM_SIZE fired before the group id was set and the
+            // content was parented in — without this the content
+            // keeps its docked extent until the user happens to
+            // resize the float. Same story when a panel joins or
+            // leaves a group whose frame does not move: the tab
+            // bar appears or disappears, the content rect changes,
+            // and no WM_SIZE fires. (`on_group_size` also
+            // invalidates, covering caption/tab chrome changes.)
+            on_group_size(ghwnd);
         }
         // Hidden panels go back under the (invisible) care of the
         // main window so a dying group can never take them along.
