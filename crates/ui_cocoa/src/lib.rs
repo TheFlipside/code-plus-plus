@@ -1716,10 +1716,11 @@ pub(crate) fn drain_shell() {
     // `NSAlert` runs a modal session that spins its own run loop, and
     // presenting one while the borrow was still live would make every
     // wake behind it a silent no-op (`with_state`'s re-entrancy guard
-    // would decline it).
-    for dialog in dialogs.unwrap_or_default() {
-        present_dialog(dialog);
-    }
+    // would decline it). Queued and pumped, never presented inline, so
+    // this path and `present_deferred_dialogs` share one single-flight
+    // rule — see `pump_dialogs`.
+    DIALOG_QUEUE.with(|q| q.borrow_mut().extend(dialogs.unwrap_or_default()));
+    pump_dialogs();
     // After `Shell::drain`, which is what consumes the in-open-buffer
     // replacements before the dock's own drain can see them.
     fif::drain_into_dock();
@@ -1729,6 +1730,73 @@ pub(crate) fn drain_shell() {
     // above has been dropped, so a plugin's `beNotified` can call back
     // into `NPPM_*` and get a fresh borrow rather than a decline.
     plugin::deliver_notifications();
+}
+
+/// Present every dialog a plugin call queued on `Shell::deferred_dialogs`
+/// — the export Save-As, the `NPPM_RELOADBUFFERID` reload prompt — now,
+/// rather than at the next worker wake. A plugin call posts no wake, so
+/// without this a prompt queued from a plugin command, a `beNotified`
+/// handler or a plugin's own thread-hopped call would sit unpresented
+/// until some unrelated load or file change drained the shell. Main
+/// thread only, with no `with_state` borrow held: each dialog runs a
+/// modal session. A call with the state borrowed takes nothing and
+/// presents nothing.
+pub(crate) fn present_deferred_dialogs() {
+    let dialogs = with_state(|st| st.shell.take_deferred_dialogs()).unwrap_or_default();
+    if dialogs.is_empty() {
+        return;
+    }
+    DIALOG_QUEUE.with(|q| q.borrow_mut().extend(dialogs));
+    pump_dialogs();
+}
+
+thread_local! {
+    /// Dialogs awaiting presentation, from both sources — the drain's
+    /// own and a plugin call's deferred ones. See [`pump_dialogs`].
+    static DIALOG_QUEUE: RefCell<std::collections::VecDeque<PendingDialog>> =
+        const { RefCell::new(std::collections::VecDeque::new()) };
+    /// True while [`pump_dialogs`] owns the queue.
+    static PRESENTING: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Present queued dialogs one at a time, never nesting — the port of
+/// `ui_gtk::pump_dialogs`, and for the same reason.
+///
+/// An alert's modal session still services GCD's main queue, so a
+/// plugin's own timer can fire inside it and send another
+/// `NPPM_RELOADBUFFERID`, or a worker's wake can land; either reaches a
+/// presenter again. A re-entrant call returns at once: the outer pump
+/// still owns the queue and picks up whatever was added while it was
+/// blocked in `runModal`. That bounds native-alert nesting at one
+/// whatever the source, which is why **every** dialog goes through this
+/// queue — a second inline presentation path would sit outside the
+/// rule and stack an alert on top of the one it interrupts.
+fn pump_dialogs() {
+    if PRESENTING.with(Cell::get) {
+        return;
+    }
+    let _presenting = PresentingGuard::enter();
+    while let Some(dialog) = DIALOG_QUEUE.with(|q| q.borrow_mut().pop_front()) {
+        present_dialog(dialog);
+    }
+}
+
+/// RAII flip of [`PRESENTING`], cleared on every exit path so a panic
+/// caught at a callback boundary cannot leave dialogs permanently
+/// suppressed.
+struct PresentingGuard;
+
+impl PresentingGuard {
+    fn enter() -> Self {
+        PRESENTING.with(|p| p.set(true));
+        Self
+    }
+}
+
+impl Drop for PresentingGuard {
+    fn drop(&mut self) {
+        PRESENTING.with(|p| p.set(false));
+    }
 }
 
 /// Present one deferred dialog.
@@ -3125,12 +3193,46 @@ fn confirm_discard_active() -> bool {
 pub(crate) fn action_close_tab() -> bool {
     let closed = confirm_discard_active();
     if closed {
-        // Release the closed buffer's Scintilla document. `ClosedTab`
-        // hands back the doc pointer precisely so the UI can do this —
-        // dropping the tab without `SCI_RELEASEDOCUMENT` leaks the whole
-        // buffer for the rest of the process, because the single view no
-        // longer references it and Scintilla refcounts documents.
-        let closed_doc = with_state(|st| st.shell.close_active_tab().map(|c| c.scintilla_doc));
+        // Announce the close to plugins first. `NPPN_FILEBEFORECLOSE` is
+        // delivered here, with no `with_state` borrow held and the tab
+        // still in `shell.tabs`, so a plugin's `beNotified` can resolve
+        // `NPPM_GETFULLPATHFROMBUFFERID(id)` — the contract Notepad++
+        // plugins are written against, and one the deferred queue cannot
+        // honour because by the time it drains the tab is gone. After
+        // the save prompt, where N++ fires it: a Cancel above means
+        // nothing closes and nothing is announced. The close then closes
+        // exactly the announced tab — its id travels in the value, not in
+        // shell state, because a plugin can run a complete nested close
+        // from inside its handler — or nothing if that tab is no longer
+        // the active one.
+        //
+        // Frozen for the span of announce-and-close, as `ui_gtk`'s close
+        // is for its whole body: the delivery can now reach a modal (a
+        // plugin's `NPPM_RELOADBUFFERID` with the alert flag presents
+        // its prompt before returning), and a wake dispatched into that
+        // modal's run loop must not drain the shell and move the tab
+        // out from under the close. `present_dialog` holds its own
+        // freeze for the alert; this one covers the gap either side.
+        //
+        // `closed_doc` is the closed tab's Scintilla document, released
+        // below. `ClosedTab` hands back the doc pointer precisely so the
+        // UI can do this — dropping the tab without
+        // `SCI_RELEASEDOCUMENT` leaks the whole buffer for the rest of
+        // the process, because the single view no longer references it
+        // and Scintilla refcounts documents.
+        let closed_doc = {
+            let _freeze = DrainFreeze::new();
+            with_state(|st| st.shell.begin_close_active_tab())
+                .flatten()
+                .and_then(|announced| {
+                    plugin::deliver_sync(&announced);
+                    with_state(|st| {
+                        st.shell
+                            .close_announced_tab(announced.buffer_id())
+                            .map(|c| c.scintilla_doc)
+                    })
+                })
+        };
         if let Some(Some(doc)) = closed_doc {
             if doc != 0 {
                 with_state(|st| {

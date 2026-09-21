@@ -4189,52 +4189,90 @@ unsafe fn apply_window_transparency(hwnd: HWND, t: &codepp_core::styles::Transpa
     }
 }
 
-/// Fire every queued NPPN_* notification through `Shell::notify_plugins`,
-/// each call wrapped in `PluginCallGuard` (re-entrance guard) and
-/// `catch_unwind` (host-internal panics must not unwind across the
-/// `extern "system"` `wnd_proc` frame).
+/// Deliver every queued NPPN_* notification to the loaded plugins,
+/// **with no `WindowState` borrow held and no `PluginCallGuard` armed**.
 ///
-/// Each notification grabs a fresh `&mut WindowState` borrow, calls
-/// `notify_plugins` (which iterates plugins through `&Shell`), then
-/// drops the borrow before the next iteration. A plugin's beNotified
-/// that `SendMessage(NPPM_*)`s back hits `state_from_hwnd → None`
-/// while the guard is set; the inner `wnd_proc` returns 0 and the
-/// outer borrow stays sound.
+/// The queue and the plugins' `beNotified` entry points are taken under
+/// one brief borrow (`Shell::notify_targets` is a snapshot of function
+/// pointers, valid for as long as the DLLs stay mapped — which is until
+/// `Shell` drops), and every plugin call happens after that borrow has
+/// ended. So when a plugin's `beNotified` calls `SendMessage(NPPM_*)`
+/// back into this `wnd_proc`, the nested `state_from_hwnd` materialises
+/// a *fresh* `&mut WindowState` from the raw pointer with no outer one
+/// alive — exactly as for any two sequential `wnd_proc` invocations —
+/// and the message is answered. That is the contract every N++ plugin
+/// is written against (`NPPM_GETFULLPATHFROMBUFFERID` from
+/// `NPPN_FILEBEFORECLOSE`, `NPPM_GETNPPVERSION` from `NPPN_READY`, …).
+///
+/// Until Phase 5 this loop called `notify_plugins` *through* the
+/// borrow under a `PluginCallGuard`, which made the guard load-bearing
+/// for soundness — and made every re-entrant `NPPM_*` from any
+/// `beNotified` answer 0 / -1, silently. The guard is not merely
+/// unnecessary here now; arming it would reintroduce that.
+///
+/// Each plugin call is wrapped in `catch_unwind` by the plugin host, so
+/// a host-internal or Rust-plugin panic cannot unwind across the
+/// `extern "system"` `wnd_proc` frame. Any dialog a plugin queued from
+/// its handler (a `NPPM_RELOADBUFFERID` with the alert flag) is
+/// presented afterwards by [`present_deferred_dialogs`].
 ///
 /// # Safety
 ///
 /// Caller must invoke from the UI thread that owns `hwnd`.
 unsafe fn fire_queued_notifications(hwnd: HWND) {
-    // Drain the queue under one borrow, then release before
-    // calling into plugin code — `take_notifications` only needs
-    // `&mut Shell` for the swap, no plugin code runs inside it.
+    unsafe { deliver_queued_notifications(hwnd) };
+    // A plugin that pushed onto the deferred-dialog queue from inside
+    // its handler posts no worker wake, so nothing else would present
+    // it until the next unrelated drain.
+    unsafe { present_deferred_dialogs(hwnd) };
+}
+
+/// The delivery half of [`fire_queued_notifications`], without the
+/// dialog flush. Only `WM_DESTROY` calls this directly: it drains the
+/// last notifications between the session save and `NPPN_SHUTDOWN`,
+/// where a modal would run a nested pump on a window that is being
+/// torn down.
+///
+/// # Safety
+///
+/// Caller must invoke from the UI thread that owns `hwnd`, with no
+/// `WindowState` borrow held.
+unsafe fn deliver_queued_notifications(hwnd: HWND) {
     // SAFETY: caller's contract requires UI-thread invocation;
     // state_from_hwnd's own contract is satisfied there.
-    let notifications = if let Some(state) = unsafe { state_from_hwnd(hwnd) } {
-        state.shell.take_notifications()
-    } else {
-        Vec::new()
+    let Some((targets, notifications)) = (unsafe { state_from_hwnd(hwnd) }).map(|state| {
+        let notifications = state.shell.take_notifications();
+        (state.shell.notify_targets(), notifications)
+    }) else {
+        return;
     };
-    if notifications.is_empty() {
+    // No borrow held below this point.
+    if notifications.is_empty() || targets.is_empty() {
         return;
     }
-    for notification in notifications {
-        // SAFETY: same as above; UI-thread call.
-        if let Some(state) = unsafe { state_from_hwnd(hwnd) } {
-            // The guard is created INSIDE the catch_unwind closure
-            // so that a panic from `PluginCallGuard::enter()` (the
-            // nesting-detection assert) is caught here rather than
-            // unwinding across the extern "system" wnd_proc frame.
-            // The guard's Drop runs when the closure exits (panic
-            // or normal return), tightly scoping
-            // PLUGIN_CALL_ACTIVE to the plugin call.
-            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                let _guard = PluginCallGuard::enter();
-                state.shell.notify_plugins(notification, hwnd.0);
-            }));
-        }
-        // Borrow on `state` ends at the end of each iteration so
-        // the next iteration acquires fresh.
+    for notification in &notifications {
+        targets.deliver(notification, hwnd.0);
+    }
+}
+
+/// Present every dialog a plugin call queued on `Shell::deferred_dialogs`
+/// — the export Save-As, the `NPPM_RELOADBUFFERID` reload prompt — now,
+/// rather than at the next worker wake. Plugin calls post no wake, so
+/// without this a prompt queued from a plugin command, a `beNotified`
+/// handler or a plugin's own window would sit unpresented until some
+/// unrelated load or file change happened to drain the shell.
+///
+/// # Safety
+///
+/// Caller must invoke from the UI thread that owns `hwnd`, with no
+/// `WindowState` borrow held: each dialog runs a nested message pump.
+unsafe fn present_deferred_dialogs(hwnd: HWND) {
+    // SAFETY: caller's contract.
+    let deferred = (unsafe { state_from_hwnd(hwnd) })
+        .map(|s| s.shell.take_deferred_dialogs())
+        .unwrap_or_default();
+    for dialog in deferred {
+        present_pending_dialog(hwnd, dialog);
     }
 }
 
@@ -4582,12 +4620,37 @@ unsafe fn handle_close_active_tab_inner(hwnd: HWND) -> CloseOutcome {
         }
     }
 
-    // Phase 1: ask the shell to do its half. We hold a brief
+    // Phase 1a: announce the close. `NPPN_FILEBEFORECLOSE` is the one
+    // lifecycle notification Notepad++ delivers *before* the buffer
+    // leaves its data structures, so a plugin's `beNotified` can
+    // resolve `NPPM_GETFULLPATHFROMBUFFERID(id)` and learn which file
+    // is closing. The announcement is taken under a brief borrow and
+    // delivered with none — the plugin's `SendMessage(NPPM_*)`
+    // re-enters this `wnd_proc` and takes a fresh borrow, which is
+    // why no `PluginCallGuard` is armed here (see
+    // `fire_queued_notifications`). Placed after the save prompt,
+    // where N++ fires it: a Cancel above means no close, and no
+    // announcement of one.
+    let announced = if let Some(state) = unsafe { state_from_hwnd(hwnd) } {
+        state.shell.begin_close_active_tab()
+    } else {
+        return CloseOutcome::NothingToClose;
+    };
+    let Some(announced) = announced else {
+        return CloseOutcome::NothingToClose;
+    };
+    announced.deliver(hwnd.0);
+
+    // Phase 1b: ask the shell to do its half. We hold a brief
     // `&mut WindowState` borrow only for the duration of this
-    // call — `close_active_tab` is pure data-model work plus an
-    // unwatch, no plugin code runs inside it.
+    // call — `close_announced_tab` is pure data-model work plus an
+    // unwatch, no plugin code runs inside it. It closes exactly the
+    // tab announced above — the id travels in `announced`, not in
+    // shell state, because a plugin can run a complete nested close
+    // from inside its handler — or nothing if that tab is no longer
+    // the active one (it never passed the gate above).
     let closed = if let Some(state) = unsafe { state_from_hwnd(hwnd) } {
-        state.shell.close_active_tab()
+        state.shell.close_announced_tab(announced.buffer_id())
     } else {
         return CloseOutcome::NothingToClose;
     };
@@ -24275,7 +24338,9 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                 // Fire any NPPN_* notifications queued by the drain
                 // (NPPN_FILEOPENED on a successful load). Done AFTER
                 // dialogs so a plugin that might block in beNotified
-                // doesn't delay the user-visible reload prompt.
+                // doesn't delay the user-visible reload prompt. It
+                // presents whatever the plugins' handlers queued in
+                // turn.
                 fire_queued_notifications(hwnd);
                 // Bring the tab strip into sync after any new tabs
                 // were pushed during the drain. Done after the
@@ -25729,36 +25794,36 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                                 // long as Shell holds it; the pointer
                                 // is valid. catch_unwind so a Rust-
                                 // authored plugin's panic doesn't
-                                // unwind across the C ABI. The
-                                // PluginCallGuard arms the re-entrance
-                                // flag in case the plugin
-                                // SendMessages NPPM_* back; defense
-                                // in depth even though NLL has
-                                // already dropped the lookup borrow.
-                                // Guard inside the catch_unwind
-                                // closure so nested-guard assert is
-                                // caught here. Same pattern as
-                                // `fire_queued_notifications`.
+                                // unwind across the C ABI.
+                                //
+                                // **No `PluginCallGuard` here**, and
+                                // that is deliberate. The lookup borrow
+                                // is already gone, so a re-entrant
+                                // `SendMessage(NPPM_*)` from the command
+                                // takes a fresh `&mut WindowState` with
+                                // nothing to alias — the same shape as
+                                // `fire_queued_notifications`. Arming
+                                // the guard "for depth" here used to
+                                // make `state_from_hwnd` refuse every
+                                // one of those calls, so a plugin
+                                // command's `NPPM_GETCURRENTSCINTILLA`,
+                                // `NPPM_GETNPPDIRECTORY` or
+                                // `CODEPPM_SETCLIPBOARD` was answered
+                                // with 0 — the in-tree plugins only
+                                // survived by falling back to the
+                                // handles `setInfo` gave them.
                                 let _ =
-                                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                                        let _guard = PluginCallGuard::enter();
-                                        f();
-                                    }));
+                                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f()));
                                 // A plugin command can queue a deferred
                                 // dialog (e.g. cppexport's
                                 // CODEPPM_EXPORTSAVEDIALOG →
                                 // PendingDialog::SaveExport). Unlike a
                                 // file load it posts no worker wake, so
                                 // the WM_APP_WAKE drain wouldn't fire —
-                                // surface them here, after the
-                                // PluginCallGuard is dropped so the
-                                // Save-As modal's nested pump is safe.
-                                let deferred = state_from_hwnd(hwnd)
-                                    .map(|s| s.shell.take_deferred_dialogs())
-                                    .unwrap_or_default();
-                                for dialog in deferred {
-                                    present_pending_dialog(hwnd, dialog);
-                                }
+                                // surface them here. Usually already
+                                // empty: the NPPM arm presents what a
+                                // dispatch queued before it returns.
+                                present_deferred_dialogs(hwnd);
                             }
                         }
                     }
@@ -26177,9 +26242,18 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                 // before the user closes the app would otherwise be
                 // silently dropped, breaking plugins that audit-log
                 // file activity. Safe to call here: no borrow is
-                // held, and `fire_queued_notifications` arms its
-                // own PluginCallGuard around each plugin call.
-                fire_queued_notifications(hwnd);
+                // held, so a plugin's re-entrant NPPM_* takes a
+                // fresh one. The delivery-only variant: a dialog a
+                // plugin queues from here would run a nested pump
+                // on a window mid-teardown, so any such request is
+                // dropped rather than presented.
+                deliver_queued_notifications(hwnd);
+                if let Some(state) = state_from_hwnd(hwnd) {
+                    let dropped = state.shell.take_deferred_dialogs().len();
+                    if dropped != 0 {
+                        tracing::debug!(dropped, "plugin dialogs dropped at shutdown");
+                    }
+                }
 
                 // Fire NPPN_SHUTDOWN to every loaded plugin while the
                 // WindowState (and the PluginHost it owns) still
@@ -26331,17 +26405,18 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                     // NPPM_LAUNCHFINDINFILESDLG and open the dialog
                     // with the directory / filters pre-filled.
                     //
-                    // **PLUGIN_CALL_ACTIVE invariant:** if a plugin
-                    // re-entered this arm from inside its own
-                    // `beNotified` (PluginCallGuard active), the
-                    // outer `state_from_hwnd` above would have
-                    // returned `None` and we'd never reach here —
-                    // so a re-entrant `NPPM_LAUNCHFINDINFILESDLG`
-                    // never reaches the dispatcher and never
-                    // writes a stale prefill. The drain below
-                    // therefore only sees prefills produced from a
-                    // non-re-entrant plugin call, and consumes
-                    // them on the same wnd_proc tick.
+                    // **Re-entrancy:** this arm is reached only when
+                    // `state_from_hwnd` handed out a borrow, i.e.
+                    // when no `PluginCallGuard` is armed and no outer
+                    // borrow is live. A plugin calling from inside
+                    // `beNotified` or a menu command qualifies —
+                    // both run with no borrow held, precisely so
+                    // that they can — and its prefill is consumed
+                    // on this same wnd_proc tick, below. A plugin
+                    // calling from `setInfo` / `NPPN_READY` (the
+                    // load runs under the guard, inside a borrow)
+                    // never reaches here, so no stale prefill can
+                    // be written from there either.
                     //
                     // The dialog HWND is stashed on `WindowState`
                     // BEFORE `apply_fif_prefill` so any
@@ -26409,6 +26484,13 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                         refresh_tab_chrome(hwnd);
                         handle_tab_selchange(hwnd);
                     }
+                    // Present anything the dispatch queued — the
+                    // export Save-As, or `NPPM_RELOADBUFFERID`'s
+                    // reload prompt — before the plugin's
+                    // `SendMessage` returns, which is when
+                    // Notepad++ shows the same prompts. No borrow is
+                    // live here, so the nested pump is safe.
+                    present_deferred_dialogs(hwnd);
                     match routed {
                         Some(lr) => LRESULT(lr),
                         None => DefWindowProcW(hwnd, msg, wparam, lparam),
@@ -26853,18 +26935,31 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
     }
 }
 
-/// Set while a plugin entry-point call is in flight from this UI
-/// thread. The flag protects [`state_from_hwnd`] against Win32's
-/// re-entrant `SendMessage`: a plugin's `setInfo` (or any synchronous
-/// plugin callback) can `SendMessage(npp_handle, NPPM_*, ...)` back
+/// Set while a plugin entry point is being called **through a live
+/// `&mut WindowState` borrow** from this UI thread. The flag protects
+/// [`state_from_hwnd`] against Win32's re-entrant `SendMessage`: a
+/// plugin's `setInfo` can `SendMessage(npp_handle, NPPM_*, ...)` back
 /// into our `wnd_proc` on the same call stack. Without the flag, the
 /// re-entrant `wnd_proc` would materialize a second `&mut WindowState`
 /// from the same raw pointer while the outer borrow was still live —
 /// aliasing UB. With the flag, the inner `state_from_hwnd` returns
 /// `None` and the inner `wnd_proc` handles the message with no host
 /// state (the dispatcher returns 0, which plugins read as "feature
-/// unavailable" — same fallback Notepad++ produces when its own
-/// state is mid-mutation).
+/// unavailable").
+///
+/// That refusal is the cost of the guard, not a side effect, so it is
+/// armed **only** where a plugin runs inside a borrow that cannot be
+/// dropped first: the lazy load (`setInfo` / `getFuncsArray` and the
+/// per-plugin `NPPN_READY` it fires), the `WM_DESTROY` shutdown pair,
+/// the system dark-mode re-broadcast, and the Replace-in-Files
+/// document cycle (which uses it against `SCN_MODIFIED` rather than a
+/// plugin). Queued notifications, the close path's synchronous
+/// `NPPN_FILEBEFORECLOSE` announcement and plugin menu commands run
+/// with **no** borrow held and **no** guard — they snapshot what they
+/// need under a borrow and call the plugin after it ends — so a
+/// re-entrant `NPPM_*` from `beNotified` or from a command takes a
+/// fresh borrow and is answered. See `fire_queued_notifications` and
+/// `handle_close_active_tab_inner`.
 ///
 /// Win32 dispatches messages serially on the owning thread, so a
 /// process-wide static is sufficient — there's no second thread that
@@ -28721,6 +28816,131 @@ mod begin_end_select_step_tests {
                 anchor: DOC_LEN,
                 column: true
             }
+        );
+    }
+}
+
+#[cfg(test)]
+mod plugin_reentry_guards {
+    //! Source-level guards for the rule that a plugin entry point
+    //! which may call back into `NPPM_*` runs with **no** `WindowState`
+    //! borrow live and **no** `PluginCallGuard` armed.
+    //!
+    //! Both placements compile and both look right in a diff; the
+    //! difference is whether every re-entrant `SendMessage(NPPM_*)` a
+    //! plugin makes from `beNotified` or from a menu command is
+    //! answered or silently declined with 0. That property is
+    //! unobservable to a headless test — it needs a real plugin DLL
+    //! sending a real window message — so it is pinned in the source,
+    //! the same tool `ui_gtk` and `ui_cocoa` use for the same rule.
+
+    /// The crate source cut at its first test module, so a pattern
+    /// quoted in an assertion message cannot count as a call site.
+    fn production_src() -> &'static str {
+        let src = include_str!("lib.rs");
+        match src.find("#[cfg(test)]") {
+            Some(i) => &src[..i],
+            None => src,
+        }
+    }
+
+    /// The body of `fn name`, by brace matching from its signature.
+    fn fn_body(src: &str, name: &str) -> String {
+        let sig = format!("fn {name}(");
+        let start = src.find(&sig).unwrap_or_else(|| panic!("no fn {name}"));
+        let open = src[start..].find('{').expect("no body") + start;
+        let mut depth = 0usize;
+        for (i, c) in src[open..].char_indices() {
+            match c {
+                '{' => depth += 1,
+                '}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return src[open..=open + i].to_string();
+                    }
+                }
+                _ => {}
+            }
+        }
+        panic!("unterminated body for {name}");
+    }
+
+    /// Queued notifications are delivered from a `notify_targets`
+    /// snapshot, not through `notify_plugins` under a borrow, and with
+    /// no guard: a plugin's `NPPM_GETFULLPATHFROMBUFFERID` from
+    /// `NPPN_FILEBEFORECLOSE` must be answered.
+    #[test]
+    fn queued_notifications_are_delivered_outside_any_borrow_and_guard() {
+        let body = code_only(&fn_body(production_src(), "deliver_queued_notifications"));
+        assert!(
+            body.contains("notify_targets()"),
+            "`deliver_queued_notifications` no longer snapshots the plugins' entry points"
+        );
+        assert!(
+            !body.contains("notify_plugins("),
+            "`deliver_queued_notifications` delivers through `&Shell` again; every \
+             re-entrant NPPM_* from beNotified is declined while that borrow is live"
+        );
+        assert!(
+            !body.contains("PluginCallGuard::enter"),
+            "`deliver_queued_notifications` arms the guard; `state_from_hwnd` then refuses \
+             every NPPM_* a plugin sends from beNotified"
+        );
+    }
+
+    /// `body` with every `//` line comment removed, so a guard matches
+    /// the construct and not a mention of it in a comment — the pitfall
+    /// DESIGN.md §7.2 records for the m3c and m4d guards.
+    fn code_only(body: &str) -> String {
+        body.lines()
+            .map(|l| l.split("//").next().unwrap_or(""))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    /// The close announces `NPPN_FILEBEFORECLOSE`, delivers it with no
+    /// borrow held, and only then removes the tab — in that order.
+    #[test]
+    fn the_close_is_announced_and_delivered_before_the_tab_is_removed() {
+        let body = code_only(&fn_body(production_src(), "handle_close_active_tab_inner"));
+        let begin = body
+            .find("begin_close_active_tab()")
+            .expect("the close no longer announces itself to plugins");
+        let deliver = body
+            .find("announced.deliver(hwnd.0);")
+            .expect("the announced FILEBEFORECLOSE is never delivered");
+        let close = body
+            .find(".close_announced_tab(announced.buffer_id())")
+            .expect("the close no longer closes the announced tab by its own id");
+        assert!(
+            begin < deliver && deliver < close,
+            "FILEBEFORECLOSE must be announced, delivered, then the tab closed — \
+             delivered after the close, the plugin's path lookup answers -1"
+        );
+        assert!(
+            !body.contains("PluginCallGuard::enter"),
+            "the close arms the guard around the announcement; the plugin's \
+             NPPM_GETFULLPATHFROMBUFFERID is then refused"
+        );
+    }
+
+    /// A plugin menu command runs after the lookup borrow has ended and
+    /// without the guard, so its `NPPM_*` calls are answered.
+    #[test]
+    fn a_plugin_command_runs_without_the_guard() {
+        let src = production_src();
+        let start = src
+            .find("state.shell.lookup_plugin_command(cmd_i32)")
+            .expect("the WM_COMMAND plugin arm no longer looks the command up");
+        let end = src[start..]
+            .find("present_deferred_dialogs(hwnd);")
+            .expect("the WM_COMMAND plugin arm no longer presents deferred dialogs")
+            + start;
+        let arm = &src[start..end];
+        assert!(
+            !arm.contains("PluginCallGuard::enter"),
+            "the plugin command arm arms the guard; every NPPM_* the command sends is \
+             then refused"
         );
     }
 }

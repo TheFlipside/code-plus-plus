@@ -73,11 +73,32 @@ pub extern "C" fn getFuncsArray(nb: *mut i32) -> *mut FuncItem {
     FUNCS.get().cast::<FuncItem>()
 }
 
+/// `beNotified`: dispatch on `nmhdr.code`.
+///
+/// The one event example-hello handles is `NPPN_FILEBEFORECLOSE`,
+/// and it handles it the way real Notepad++ plugins do — by calling
+/// **back into the host from inside the notification** to resolve
+/// the closing buffer's path, then reporting it on the status bar
+/// (`Closing: C:\…\file.txt`). That round trip is the point: the
+/// host has to deliver FILEBEFORECLOSE while the tab is still open
+/// *and* answer `NPPM_*` from inside `beNotified`, or the lookup
+/// comes back empty. It is the demo for DESIGN.md §7.4's
+/// synchronous-notification item, observable in the running app.
 #[no_mangle]
-pub extern "C" fn beNotified(_notification: *const SCNotification) {
-    // No-op for example-hello. A real plugin would inspect
-    // `(*notification).nmhdr.code` to dispatch on `NPPN_*` /
-    // `SCN_*` events.
+pub extern "C" fn beNotified(notification: *const SCNotification) {
+    if notification.is_null() {
+        return;
+    }
+    // SAFETY: per the ABI the host hands a valid `SCNotification`
+    // that stays live for the duration of this synchronous call.
+    let header = unsafe { &(*notification).nmhdr };
+    if header.code != sdk::NPPN_FILEBEFORECLOSE {
+        return;
+    }
+    match sdk::buffer_path(header.id_from) {
+        Some(path) => sdk::set_status(&format!("Closing: {path}")),
+        None => sdk::set_status("Closing: (untitled)"),
+    }
 }
 
 #[no_mangle]

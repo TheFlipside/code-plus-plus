@@ -578,48 +578,107 @@ impl Notification {
 /// every loaded plugin via `beNotified`. `npp_hwnd` is set as
 /// `nmhdr.hwndFrom` so plugins can identify the host window.
 ///
-/// Each plugin call is wrapped in `catch_unwind`; a panic logs a
-/// warning but does not abort the iteration — one misbehaving plugin
-/// must not block notifications to its peers (parity with Notepad++).
+/// Convenience over [`NotifyTargets::snapshot`] + [`NotifyTargets::deliver`]
+/// for callers that hold no borrow a plugin could need to re-enter —
+/// or that deliberately keep one (the Win32 shutdown sequence). Every
+/// ordinary delivery path should take the snapshot under its borrow
+/// and deliver after dropping it; see [`NotifyTargets`] for why.
 pub fn notify_all(host: &PluginHost, notification: &Notification, npp_hwnd: Hwnd) {
-    let sci = SCNotification {
-        nmhdr: crate::ffi::SciNotifyHeader {
-            // Default `hwndFrom = npp_hwnd` lets plugins identify
-            // the host. A few variants override this to carry a
-            // typed pointer (NULL for the SHORTCUTREMAPPED
-            // removal contract — see `Notification::hwnd_from`).
-            hwnd_from: notification.hwnd_from(npp_hwnd),
-            // `id_from` is `uintptr_t` upstream; we carry the buffer id
-            // as `isize` and reinterpret the bits — plugins read it
-            // back as a buffer id without sign concerns.
-            id_from: notification.buffer_id() as usize,
-            code: notification.code(),
-        },
-        ..SCNotification::default()
-    };
+    NotifyTargets::snapshot(host).deliver(notification, npp_hwnd);
+}
 
-    for plugin in host.iter() {
-        let Some(be_notified) = plugin.be_notified_fn() else {
-            continue;
+/// The loaded plugins' `beNotified` entry points, snapshotted so a
+/// notification can be delivered **after** the borrow that produced
+/// the snapshot has been dropped.
+///
+/// A plugin's `beNotified` routinely calls back into `NPPM_*`: it reads
+/// the closing buffer's path from `NPPN_FILEBEFORECLOSE`, queries the
+/// host's version and config directory from `NPPN_READY`, refreshes its
+/// own state from `NPPN_BUFFERACTIVATED`. Every one of those callbacks
+/// needs the host's state, and it cannot have it while the code that is
+/// delivering the notification still holds a borrow on that state — the
+/// re-entrant call is declined, and the plugin reads a plausible-looking
+/// 0 or -1. So the delivery loop must own no host borrow, and the only
+/// thing it needs from the host is this list.
+///
+/// The function pointers stay valid for as long as their DLL is mapped,
+/// and [`PluginHost`] never unloads a plugin before it is itself dropped
+/// (there is no unload path — `set_disabled` only marks). A snapshot
+/// must therefore not outlive the `PluginHost` it was taken from; every
+/// backend takes one and consumes it within a single UI-thread turn.
+#[derive(Clone, Default)]
+pub struct NotifyTargets {
+    /// `(display label, beNotified)` per loaded plugin, in registry
+    /// order — the same order [`PluginHost::iter`] walks.
+    targets: Vec<(String, crate::ffi::BeNotifiedFn)>,
+}
+
+impl NotifyTargets {
+    /// Snapshot every loaded plugin's `beNotified` entry point.
+    #[must_use]
+    pub fn snapshot(host: &PluginHost) -> Self {
+        let targets = host
+            .iter()
+            .filter_map(|p| p.be_notified_fn().map(|f| (p.display_label(), f)))
+            .collect();
+        Self { targets }
+    }
+
+    /// Number of plugins a delivery will reach.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.targets.len()
+    }
+
+    /// True when no plugin is loaded, so a delivery calls nothing.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.targets.is_empty()
+    }
+
+    /// Synthesize an `SCNotification` for `notification` and deliver it
+    /// to every snapshotted plugin. `npp_hwnd` is set as `nmhdr.hwndFrom`
+    /// so plugins can identify the host window.
+    ///
+    /// Each plugin call is wrapped in `catch_unwind`; a panic logs a
+    /// warning but does not abort the iteration — one misbehaving
+    /// plugin must not block notifications to its peers (parity with
+    /// Notepad++).
+    pub fn deliver(&self, notification: &Notification, npp_hwnd: Hwnd) {
+        let sci = SCNotification {
+            nmhdr: crate::ffi::SciNotifyHeader {
+                // Default `hwndFrom = npp_hwnd` lets plugins identify
+                // the host. A few variants override this to carry a
+                // typed pointer (NULL for the SHORTCUTREMAPPED
+                // removal contract — see `Notification::hwnd_from`).
+                hwnd_from: notification.hwnd_from(npp_hwnd),
+                // `id_from` is `uintptr_t` upstream; we carry the buffer
+                // id as `isize` and reinterpret the bits — plugins read
+                // it back as a buffer id without sign concerns.
+                id_from: notification.buffer_id() as usize,
+                code: notification.code(),
+            },
+            ..SCNotification::default()
         };
-        let _span = tracing::trace_span!(
-            "plugin_notify",
-            plugin = ?plugin.display_label(),
-            code = notification.code(),
-        )
-        .entered();
-        let result = catch_unwind(AssertUnwindSafe(|| {
-            // SAFETY: `be_notified` has the C ABI declared in
-            // PluginInterface.h; `&sci` points to a valid #[repr(C)]
-            // SCNotification and stays live for the duration of the
-            // call (no thread spawning, no async).
-            unsafe { be_notified(&raw const sci) }
-        }));
-        if result.is_err() {
-            tracing::warn!(
-                plugin = ?plugin.display_label(),
-                "plugin panicked in beNotified",
-            );
+
+        for (label, be_notified) in &self.targets {
+            let _span = tracing::trace_span!(
+                "plugin_notify",
+                plugin = ?label,
+                code = notification.code(),
+            )
+            .entered();
+            let result = catch_unwind(AssertUnwindSafe(|| {
+                // SAFETY: `be_notified` has the C ABI declared in
+                // PluginInterface.h and its DLL is still mapped (see
+                // the type docs); `&sci` points to a valid #[repr(C)]
+                // SCNotification and stays live for the duration of
+                // the call (no thread spawning, no async).
+                unsafe { be_notified(&raw const sci) }
+            }));
+            if result.is_err() {
+                tracing::warn!(plugin = ?label, "plugin panicked in beNotified");
+            }
         }
     }
 }
@@ -731,18 +790,19 @@ pub trait HostServices {
     /// any in-memory edits that have not been saved.
     ///
     /// `with_alert == true` means the plugin asked for the
-    /// "modified externally — reload?" confirmation prompt to
-    /// surface; `false` means a silent reload. **Phase 4
-    /// limitation:** Code++ silently reloads in both cases. The
-    /// confirmation-prompt path requires routing through the
-    /// per-window pending-dialog queue, which the dispatcher
-    /// doesn't currently access. Tracked as a follow-up; plugins
-    /// passing `with_alert == true` get a `tracing::warn!` so the
-    /// gap is visible in the log.
+    /// "reload and discard unsaved edits?" confirmation prompt to
+    /// surface; `false` means a silent reload. The shell's
+    /// implementation cannot run a modal from inside a synchronous
+    /// plugin call, so on the alert path it queues the same
+    /// reload prompt the file watcher uses and the backend presents
+    /// it as soon as the dispatch returns — the reload then happens
+    /// on the user's Yes, or not at all.
     ///
-    /// Returns `true` if the reload was issued (the buffer id was
-    /// known and had an associated path), `false` otherwise. Same
-    /// "ok / unknown" shape as [`Self::set_buffer_lang_type`].
+    /// Returns `true` if the reload was issued or the prompt was
+    /// queued (the buffer id was known and had an associated
+    /// path), `false` otherwise. Same "ok / unknown" shape as
+    /// [`Self::set_buffer_lang_type`]. Never "reloaded": the reload
+    /// itself is asynchronous on both paths.
     fn reload_buffer_id(&mut self, id: isize, with_alert: bool) -> bool;
 
     /// Set the save-time encoding of the buffer with id `id` from a
@@ -4302,6 +4362,22 @@ mod tests {
         // must not panic or attempt to call any function.
         let host = PluginHost::new();
         notify_all(&host, &Notification::Ready, core::ptr::null_mut());
+    }
+
+    #[test]
+    fn notify_targets_snapshot_of_an_empty_host_delivers_to_nobody() {
+        let host = PluginHost::new();
+        let targets = NotifyTargets::snapshot(&host);
+        assert!(targets.is_empty());
+        assert_eq!(targets.len(), 0);
+        // The snapshot owns no borrow on `host`, which is the property
+        // the UI relies on: `host` can be mutated between the snapshot
+        // and the delivery.
+        drop(host);
+        targets.deliver(
+            &Notification::FileBeforeClose { buffer_id: 7 },
+            core::ptr::null_mut(),
+        );
     }
 
     #[test]

@@ -82,8 +82,8 @@ use codepp_core::{
 };
 use codepp_platform::watch::{FileChange, FileWatcher};
 use codepp_plugin_host::{
-    dispatch_nppm, notify_all, FuncItem, HostDispatchFn, HostServices, Hwnd, Notification, NppData,
-    PluginCmd, PluginHost, NPPMAINMENU, NPPPLUGINMENU,
+    dispatch_nppm, notify_all, FuncItem, HostDispatchFn, HostServices, Hwnd, Notification,
+    NotifyTargets, NppData, PluginCmd, PluginHost, NPPMAINMENU, NPPPLUGINMENU,
 };
 
 pub mod fif;
@@ -1443,9 +1443,12 @@ pub fn close_multi_enabled(tabs: &[Tab], active_idx: Option<usize>, kind: CloseM
 /// platform-side cleanup the UI must perform. Shell has already
 /// removed the tab from `Shell.tabs`, updated `Shell.active_tab`,
 /// queued the `NPPN_FILECLOSED` / `NPPN_BUFFERACTIVATED`
-/// notifications, and unregistered the file watcher; what's left
-/// is the things only the UI knows about — the tab control and
-/// the Scintilla document.
+/// notifications (`NPPN_FILEBEFORECLOSE` went out synchronously
+/// before the removal when the close was announced through
+/// [`Shell::begin_close_active_tab`], and is queued after it
+/// otherwise), and unregistered the file watcher; what's left is
+/// the things only the UI knows about — the tab control and the
+/// Scintilla document.
 #[derive(Debug, Clone)]
 pub struct ClosedTab {
     /// Index the tab occupied in `Shell.tabs` at the moment of
@@ -1472,6 +1475,88 @@ pub struct ClosedTab {
     /// document hasn't been materialized yet — `handle_tab_selchange`
     /// will lazily create one on the next user click.
     pub new_active_doc: isize,
+}
+
+/// A notification the host must deliver to plugins **synchronously**,
+/// before the shell operation that announces it — rather than through
+/// the deferred [`Shell::take_notifications`] queue.
+///
+/// Notepad++ delivers the `NPPN_*BEFORE*` family while the thing being
+/// acted on is still in its data structures, so a plugin's `beNotified`
+/// can call back into `NPPM_*` and see it: `NPPN_FILEBEFORECLOSE` is the
+/// canonical case, where the plugin resolves
+/// `NPPM_GETFULLPATHFROMBUFFERID(id)` to learn *which* file is closing.
+/// The deferred queue cannot honour that — by the time the UI drains it
+/// the tab is gone and the lookup answers -1 — so these are handed to
+/// the UI as a value, produced under its borrow and delivered after the
+/// borrow drops, between the announcement and the mutation:
+///
+/// ```text
+/// borrow  →  shell.begin_close_active_tab()  →  drop borrow
+///                     ↓
+///           announced.deliver(npp_hwnd)      (plugins re-enter NPPM_* freely)
+///                     ↓
+/// borrow  →  shell.close_active_tab()        →  drop borrow
+/// ```
+///
+/// The shell cannot make the plugin call itself: the UI's `&mut Shell`
+/// is on the stack for the whole of any shell method, and a plugin's
+/// re-entrant `NPPM_*` needs a fresh one. Every backend's host-state
+/// accessor declines that re-entry rather than aliasing, which is
+/// correct — and is exactly why the delivery has to happen with no
+/// borrow held at all.
+///
+/// Produced by [`Shell::begin_close_active_tab`]; consumed by
+/// [`SyncNotification::deliver`]. The `must_use` is the point: an
+/// announced notification that is never delivered leaves every plugin
+/// one lifecycle event short, silently.
+///
+/// The announced buffer's id travels *with the value*, and the
+/// operation that follows takes it as an explicit argument
+/// ([`Shell::close_announced_tab`]) rather than reading it back from
+/// shell state. That is not a style choice: a plugin's handler can
+/// re-enter the same operation — `WM_COMMAND(ID_FILE_CLOSE)` sent
+/// straight to the host window from inside `FILEBEFORECLOSE` runs a
+/// complete nested close — and a marker kept on the shell would be
+/// consumed by the nested close, leaving the outer one to fall back
+/// to "not announced" and remove whichever tab was in front by then,
+/// with no prompt. An id the caller holds cannot be taken from it.
+/// The nested close itself is honoured as N++ would: that plugin's
+/// tab is announced twice and prompted twice, and the outer close then
+/// finds it gone and refuses — no data is at risk, only a repeated
+/// question.
+#[must_use = "deliver it with no shell borrow held, then perform the announced operation"]
+#[derive(Clone)]
+pub struct SyncNotification {
+    targets: NotifyTargets,
+    notification: Notification,
+    buffer_id: i32,
+}
+
+impl SyncNotification {
+    /// The notification that will be delivered.
+    #[must_use]
+    pub fn notification(&self) -> &Notification {
+        &self.notification
+    }
+
+    /// The buffer the announced operation targets — what the caller
+    /// hands back to the shell to perform it.
+    #[must_use]
+    pub fn buffer_id(&self) -> i32 {
+        self.buffer_id
+    }
+
+    /// Deliver to every plugin that was loaded when the announcement was
+    /// made. `npp_hwnd` becomes `nmhdr.hwndFrom`.
+    ///
+    /// Call this with **no** `Shell` borrow held — on Win32 additionally
+    /// with no `PluginCallGuard` armed — so a plugin's `beNotified` can
+    /// `SendMessage(NPPM_*)` back into the host and be answered. Each
+    /// plugin call is wrapped in `catch_unwind` by the plugin host.
+    pub fn deliver(&self, npp_hwnd: Hwnd) {
+        self.targets.deliver(&self.notification, npp_hwnd);
+    }
 }
 
 /// The active tab's live caret/scroll, snapshotted by the UI (it owns the
@@ -1578,7 +1663,11 @@ pub struct Shell {
     /// [`Self::take_notifications`] drain. The UI fires each one
     /// **after** dropping any `&mut Shell` borrow, since `beNotified`
     /// runs synchronous plugin code that may `SendMessage(NPPM_*)`
-    /// back into the host dispatcher.
+    /// back into the host dispatcher — and that callback is only
+    /// answered if no borrow is live, which is why the UI delivers
+    /// from a [`Self::notify_targets`] snapshot rather than through
+    /// `&Shell`. The `NPPN_*BEFORE*` family that must precede its
+    /// operation bypasses this queue: see [`SyncNotification`].
     pending_notifications: Vec<Notification>,
     loader: Loader,
     _loader_shutdown: LoaderShutdown,
@@ -2647,6 +2736,14 @@ impl Shell {
     /// `NPPN_BUFFERACTIVATED` is queued for it. Returns `None`
     /// when there's nothing to close.
     ///
+    /// This is the **unannounced** close: `NPPN_FILEBEFORECLOSE` goes
+    /// out through the deferred queue, after the tab is gone, so a
+    /// plugin's path lookup from its handler answers -1. Every UI close
+    /// path uses the two-phase protocol instead —
+    /// [`Self::begin_close_active_tab`], deliver with no borrow held,
+    /// then [`Self::close_announced_tab`] — and this stays as the
+    /// fallback that guarantees no caller can lose the event.
+    ///
     /// New-active-tab selection follows the standard editor UX:
     /// prefer the right-neighbour (the tab that slid into the
     /// closed slot's index), fall back to the previous tab if
@@ -2658,9 +2755,48 @@ impl Shell {
     /// a failed `unwatch` is logged at debug level (the watcher
     /// silently ignores already-unregistered paths).
     pub fn close_active_tab(&mut self) -> Option<ClosedTab> {
+        self.close_active_tab_impl(None)
+    }
+
+    /// Phase 2 of the close protocol: close the tab that
+    /// [`Self::begin_close_active_tab`] announced, whose
+    /// `NPPN_FILEBEFORECLOSE` the UI has just delivered.
+    /// `announced_id` is [`SyncNotification::buffer_id`], held by the
+    /// caller across the delivery — deliberately not read back from
+    /// shell state, see [`SyncNotification`].
+    ///
+    /// Returns `None` without closing anything when the active tab is
+    /// no longer the announced one. That happens when the plugin that
+    /// heard the notification moved the active tab (`NPPM_SWITCHTOFILE`,
+    /// `NPPM_ACTIVATEDOC`, an open that landed on a new tab) — or ran a
+    /// complete nested close of its own, after which a different tab is
+    /// in front. Either way the tab now active was never announced and
+    /// never passed the UI's Save / Don't Save / Cancel gate, and
+    /// closing it here could discard unsaved work with no prompt. No
+    /// second `FILEBEFORECLOSE` is queued: the synchronous one already
+    /// went out.
+    pub fn close_announced_tab(&mut self, announced_id: i32) -> Option<ClosedTab> {
+        self.close_active_tab_impl(Some(announced_id))
+    }
+
+    /// Shared body of [`Self::close_active_tab`] (`announced == None`,
+    /// which queues the deferred `FILEBEFORECLOSE`) and
+    /// [`Self::close_announced_tab`] (which checks the id and queues
+    /// none).
+    fn close_active_tab_impl(&mut self, announced: Option<i32>) -> Option<ClosedTab> {
         let idx = self.active_tab?;
         if idx >= self.tabs.len() {
             return None;
+        }
+        if let Some(announced_id) = announced {
+            if self.tabs[idx].id != announced_id {
+                tracing::warn!(
+                    announced = announced_id,
+                    active = self.tabs[idx].id,
+                    "close refused: the active tab changed during NPPN_FILEBEFORECLOSE",
+                );
+                return None;
+            }
         }
         let removed = self.tabs.remove(idx);
 
@@ -2690,45 +2826,35 @@ impl Shell {
             .and_then(|i| self.tabs.get(i))
             .map_or(0, |t| t.scintilla_doc);
 
-        // Queue notifications in the same order N++ delivers them:
-        //   1. NPPN_FILEBEFORECLOSE
+        // Notifications, in the order N++ delivers them:
+        //   1. NPPN_FILEBEFORECLOSE — delivered *synchronously* by the
+        //      UI, between `begin_close_active_tab` and
+        //      `close_announced_tab`, while the tab was still in
+        //      `self.tabs`; that is what lets a plugin's `beNotified`
+        //      resolve `NPPM_GETFULLPATHFROMBUFFERID(id)` to a real
+        //      path, as it can in N++. Queued here only on the
+        //      unannounced path, at which point it is delivered after
+        //      the tab is gone (Phase 4's timing) rather than not at
+        //      all.
         //   2. NPPN_FILECLOSED
         //   3. NPPN_BUFFERACTIVATED (only if there's a new active tab)
-        //
-        // **Known timing divergence vs N++ (tracked as Phase 5 polish):**
-        // these notifications are pushed onto `pending_notifications`
-        // and delivered to plugins by the UI *after* `take_notifications`
-        // drains them — i.e., after `close_active_tab` returns and
-        // after the tab has been removed from `self.tabs`. N++
-        // delivers FILEBEFORECLOSE synchronously while the buffer is
-        // still in its data structures, so a plugin's
-        // `beNotified(NPPN_FILEBEFORECLOSE)` can call back into
-        // `NPPM_GETFULLPATHFROMBUFFERID(id)` and get a real path.
-        // Code++'s queue-deferred dispatch model means that callback
-        // returns -1 (unknown id) instead. Plugins that need the path
-        // at close time should cache it from the prior
-        // BUFFERACTIVATED notification rather than relying on the
-        // path lookup here.
-        //
-        // The fix needs synchronous-delivery plumbing for specific
-        // notifications (Shell calling back into the plugin host
-        // mid-operation, currently not part of the architecture);
-        // the change is bigger than this batch should carry.
         let closing_id = removed.id as isize;
-        {
+        if announced.is_none() {
+            tracing::debug!(
+                buffer_id = closing_id,
+                "unannounced close: FILEBEFORECLOSE deferred",
+            );
             self.pending_notifications
                 .push(Notification::FileBeforeClose {
                     buffer_id: closing_id,
                 });
-            self.pending_notifications.push(Notification::FileClosed {
-                buffer_id: closing_id,
-            });
-            if new_active.is_some() {
-                self.queue_buffer_activated();
-            }
         }
-        // Suppress "unused" on non-Windows builds where the notification
-        // queue isn't fed.
+        self.pending_notifications.push(Notification::FileClosed {
+            buffer_id: closing_id,
+        });
+        if new_active.is_some() {
+            self.queue_buffer_activated();
+        }
 
         // Record the closed file in the recent-files history if
         // the feature is active and the closed tab was bound to
@@ -2841,12 +2967,63 @@ impl Shell {
         changed
     }
 
-    /// Broadcast `notification` to every loaded plugin's `beNotified`.
-    /// `npp_hwnd` is reported in `SCNotification.nmhdr.hwndFrom`.
-    /// Synchronous on the UI thread (parity with Notepad++); plugins
-    /// that block here block the host.
+    /// Broadcast `notification` to every loaded plugin's `beNotified`
+    /// **while holding `&Shell`**. `npp_hwnd` is reported in
+    /// `SCNotification.nmhdr.hwndFrom`. Synchronous on the UI thread
+    /// (parity with Notepad++); plugins that block here block the host.
+    ///
+    /// Because the caller's borrow is live for the whole broadcast, a
+    /// plugin's re-entrant `NPPM_*` is declined for its duration. Win32
+    /// accepts that for the `NPPN_BEFORESHUTDOWN` / `NPPN_SHUTDOWN` pair
+    /// (mid-teardown) and for the `NPPN_DARKMODECHANGED` re-broadcast
+    /// (a handler there repaints its own chrome; nothing it would ask
+    /// the host needs a borrow). Every other delivery goes through
+    /// [`Self::notify_targets`] — snapshot under the borrow, deliver
+    /// after it drops — so the plugin can call back.
     pub fn notify_plugins(&self, notification: Notification, npp_hwnd: Hwnd) {
         notify_all(&self.plugins, &notification, npp_hwnd);
+    }
+
+    /// Snapshot the loaded plugins' `beNotified` entry points so the UI
+    /// can deliver notifications **after** dropping its `Shell` borrow.
+    ///
+    /// The whole point of the snapshot is what a plugin does *inside*
+    /// `beNotified`: call back into `NPPM_*`. On every backend that
+    /// callback re-enters the host's state accessor, which declines a
+    /// nested borrow rather than aliasing one — so a delivery made from
+    /// inside a borrow leaves every such callback answering 0 / -1,
+    /// silently. The snapshot needs no borrow to deliver from; see
+    /// [`NotifyTargets`]. Take it in the same UI-thread turn it is used
+    /// in — plugins are never unloaded while the `Shell` lives, but the
+    /// snapshot must not outlive the `Shell` itself.
+    #[must_use]
+    pub fn notify_targets(&self) -> NotifyTargets {
+        NotifyTargets::snapshot(&self.plugins)
+    }
+
+    /// Phase 1 of closing the active tab: announce it to plugins.
+    ///
+    /// Returns the `NPPN_FILEBEFORECLOSE` the UI must deliver **with no
+    /// `Shell` borrow held**, then follow with
+    /// [`Self::close_announced_tab`] passing the value's
+    /// [`SyncNotification::buffer_id`] — see [`SyncNotification`] for
+    /// the protocol and why the delivery cannot live inside the shell.
+    /// `None` when there is nothing to close. Nothing is recorded on
+    /// the shell: the announcement lives entirely in the returned value.
+    ///
+    /// Call this after the UI's own data-loss gate (Save / Don't Save /
+    /// Cancel), not before: N++ fires FILEBEFORECLOSE from `doClose`,
+    /// after the save prompt, so a Cancel there means the plugin never
+    /// hears about a close that did not happen.
+    pub fn begin_close_active_tab(&self) -> Option<SyncNotification> {
+        let buffer_id = self.active()?.id;
+        Some(SyncNotification {
+            targets: self.notify_targets(),
+            notification: Notification::FileBeforeClose {
+                buffer_id: buffer_id as isize,
+            },
+            buffer_id,
+        })
     }
 
     /// Load every plugin currently in the `Pending` state. Called by
@@ -7090,6 +7267,11 @@ impl<U: UiPlatform> HostServices for HostBridge<'_, U> {
         // call site — closes the follow-up recorded in DESIGN.md
         // §7.4.
         let sanitized = sanitize_str_for_display(&text);
+        // A plugin-driven status change is the one host-visible side
+        // effect many `beNotified` handlers have, so it is worth a
+        // trail: it is how a re-entrant `NPPM_*` that was answered
+        // (or declined) shows up in a log.
+        tracing::debug!(section, text = ?sanitized, "plugin set status bar");
         self.ui.set_plugin_status(section, &sanitized);
     }
 
@@ -7396,19 +7578,30 @@ impl<U: UiPlatform> HostServices for HostBridge<'_, U> {
             return false;
         };
         if with_alert {
-            // Phase 4 limitation: the dispatcher cannot push into
-            // the per-window pending-dialog queue from inside a
-            // synchronous plugin call without re-engineering the
-            // borrow plumbing on `Shell::drain`. Silently reloading
-            // matches `with_alert == false` — which is what most
-            // plugins pass in practice. The trace makes the gap
-            // observable; the wiring is tracked as a follow-up.
-            tracing::warn!(
-                buffer_id = id,
-                path = ?path,
-                "NPPM_RELOADBUFFERID with_alert=true: silent reload until \
-                 dialog-queue wiring lands (Phase 5 polish)",
-            );
+            // N++ asks before discarding the buffer's in-memory edits.
+            // A modal cannot run here — this is a synchronous plugin
+            // call and the host borrow is live — so the prompt is the
+            // same `ConfirmReload` the file watcher and File → Reload
+            // use, queued on `deferred_dialogs` and presented by the
+            // backend as soon as this dispatch returns; its Yes arm
+            // runs `confirm_reload`, its No arm leaves the buffer as
+            // it is. The return value therefore means "request
+            // accepted", not "reloaded": the reload is asynchronous
+            // even on the silent path, so a plugin could never read
+            // the new text on return anyway. One prompt per path: a
+            // plugin that asks twice before the first is answered gets
+            // one question, not a stack of identical ones.
+            let already_queued = self
+                .shell
+                .deferred_dialogs
+                .iter()
+                .any(|d| matches!(d, PendingDialog::ConfirmReload(p) if *p == path));
+            if !already_queued {
+                self.shell
+                    .deferred_dialogs
+                    .push(PendingDialog::ConfirmReload(path));
+            }
+            return true;
         }
         // `confirm_reload` is the same code path the file watcher's
         // post-prompt "Yes" arm uses — re-runs the loader for `path`.
@@ -13114,6 +13307,227 @@ mod tests {
             shell.active_tab, active_before,
             "de-dupe at cap must still flip the active tab",
         );
+    }
+
+    /// The two-phase close: `begin_close_active_tab` hands the UI the
+    /// `NPPN_FILEBEFORECLOSE` for synchronous delivery, and the close
+    /// that follows must **not** queue a second copy through the
+    /// deferred path — a plugin would otherwise hear the event twice,
+    /// once with the tab alive and once with it gone.
+    #[test]
+    fn announced_close_delivers_file_before_close_once_and_before_removal() {
+        let mut shell = shell_with_synthetic_tabs(2, Some(1));
+        let closing_id = shell.tabs[1].id;
+        let survivor_id = shell.tabs[0].id;
+        let _ = shell.take_notifications();
+
+        let announced = shell
+            .begin_close_active_tab()
+            .expect("an active tab is announced");
+        assert!(
+            matches!(
+                announced.notification(),
+                Notification::FileBeforeClose { buffer_id } if *buffer_id == closing_id as isize
+            ),
+            "announcement names the closing buffer: {:?}",
+            announced.notification()
+        );
+        // The announcement is made while the tab is still in the
+        // list — that is the whole contract: a plugin's
+        // NPPM_GETFULLPATHFROMBUFFERID from inside its handler
+        // resolves.
+        assert_eq!(shell.tabs.len(), 2);
+        assert!(shell.tabs.iter().any(|t| t.id == closing_id));
+        assert!(
+            shell.pending_notifications.is_empty(),
+            "the announcement is handed to the UI, not queued"
+        );
+        // No plugins are loaded in a headless shell, so delivery
+        // reaches nobody — but it must be a no-op, not a panic. The
+        // round trip a real plugin makes from inside this delivery is
+        // pinned by `crates/plugin-host/tests/example_hello_e2e.rs`
+        // (`example_hello_resolves_the_closing_path_from_inside_file_before_close`);
+        // this test pins the shell's half — the precondition for it.
+        announced.deliver(core::ptr::null_mut());
+
+        let closed = shell
+            .close_announced_tab(announced.buffer_id())
+            .expect("the announced tab closes");
+        assert_eq!(closed.buffer_id, closing_id);
+        let queued = shell.take_notifications();
+        assert_eq!(queued.len(), 2, "no deferred FILEBEFORECLOSE: {queued:?}");
+        assert!(matches!(
+            queued[0],
+            Notification::FileClosed { buffer_id } if buffer_id == closing_id as isize
+        ));
+        assert!(matches!(
+            queued[1],
+            Notification::BufferActivated { buffer_id } if buffer_id == survivor_id as isize
+        ));
+    }
+
+    /// A caller that skips the announcement still delivers every
+    /// event: the close falls back to queueing `FILEBEFORECLOSE`, at
+    /// the pre-protocol timing. Portable twin of the Windows-gated
+    /// `close_active_tab_queues_file_closed_then_buffer_activated`.
+    #[test]
+    fn unannounced_close_falls_back_to_the_deferred_file_before_close() {
+        let mut shell = shell_with_synthetic_tabs(2, Some(1));
+        let closing_id = shell.tabs[1].id as isize;
+        let _ = shell.take_notifications();
+
+        shell.close_active_tab().expect("close");
+        let queued = shell.take_notifications();
+        assert_eq!(queued.len(), 3, "{queued:?}");
+        assert!(matches!(
+            queued[0],
+            Notification::FileBeforeClose { buffer_id } if buffer_id == closing_id
+        ));
+        assert!(matches!(
+            queued[1],
+            Notification::FileClosed { buffer_id } if buffer_id == closing_id
+        ));
+    }
+
+    /// A plugin that moves the active tab from inside its
+    /// `FILEBEFORECLOSE` handler must not get an unrelated tab closed
+    /// under it: the tab now in front never passed the UI's save
+    /// prompt. The close is refused and nothing is queued; a later,
+    /// separately announced close of the new front tab works normally.
+    #[test]
+    fn close_is_refused_when_a_plugin_moved_the_active_tab_during_the_announcement() {
+        let mut shell = shell_with_synthetic_tabs(3, Some(2));
+        let _ = shell.take_notifications();
+
+        let announced = shell.begin_close_active_tab().expect("announced");
+        announced.deliver(core::ptr::null_mut());
+        // What NPPM_SWITCHTOFILE / NPPM_ACTIVATEDOC do from inside the
+        // handler.
+        shell.active_tab = Some(0);
+
+        assert!(
+            shell.close_announced_tab(announced.buffer_id()).is_none(),
+            "closing a tab that was never announced must be refused"
+        );
+        assert_eq!(shell.tabs.len(), 3, "nothing was removed");
+        assert!(
+            shell.take_notifications().is_empty(),
+            "a refused close queues no lifecycle event"
+        );
+
+        // A fresh announcement of the now-front tab closes it.
+        let front_id = shell.tabs[0].id;
+        let again = shell.begin_close_active_tab().expect("announced");
+        assert_eq!(again.buffer_id(), front_id);
+        again.deliver(core::ptr::null_mut());
+        shell
+            .close_announced_tab(again.buffer_id())
+            .expect("a fresh announced close proceeds");
+        assert_eq!(shell.tabs.len(), 2);
+    }
+
+    /// The scenario the shared-marker design failed: a plugin runs a
+    /// complete nested close from inside the outer close's
+    /// `FILEBEFORECLOSE` (a `WM_COMMAND(ID_FILE_CLOSE)` sent straight
+    /// to the host window does exactly that). The outer close must then
+    /// refuse rather than remove whichever tab the nested close left in
+    /// front — that tab never passed the outer close's save prompt.
+    #[test]
+    fn a_nested_close_from_inside_the_announcement_does_not_close_a_second_tab() {
+        let mut shell = shell_with_synthetic_tabs(3, Some(2));
+        let _ = shell.take_notifications();
+
+        let outer = shell.begin_close_active_tab().expect("outer announced");
+        outer.deliver(core::ptr::null_mut());
+        // The plugin's nested close, in full, while the outer is
+        // between its delivery and its close.
+        let nested = shell.begin_close_active_tab().expect("nested announced");
+        assert_eq!(nested.buffer_id(), outer.buffer_id());
+        nested.deliver(core::ptr::null_mut());
+        shell
+            .close_announced_tab(nested.buffer_id())
+            .expect("the nested close closes the announced tab");
+        assert_eq!(shell.tabs.len(), 2);
+
+        // The outer resumes. Its tab is gone and another is in front.
+        assert!(
+            shell.close_announced_tab(outer.buffer_id()).is_none(),
+            "the outer close must not remove the tab the nested close left active"
+        );
+        assert_eq!(shell.tabs.len(), 2, "exactly one tab was closed in total");
+    }
+
+    #[test]
+    fn begin_close_with_no_active_tab_announces_nothing() {
+        let mut shell = shell_with_synthetic_tabs(0, None);
+        assert!(shell.begin_close_active_tab().is_none());
+        assert!(shell.close_active_tab().is_none());
+        assert!(shell.close_announced_tab(1).is_none());
+    }
+
+    /// `NPPM_RELOADBUFFERID` with the alert flag asks first: the
+    /// dispatcher queues the file watcher's reload prompt instead of
+    /// reloading, and issues no load until the user says yes. The
+    /// silent path still reloads immediately.
+    #[test]
+    fn reload_buffer_id_with_alert_queues_the_reload_prompt_instead_of_reloading() {
+        use codepp_plugin_host::dispatch::NPPM_RELOADBUFFERID;
+        let mut shell = shell_with_synthetic_tabs(1, Some(0));
+        let mut ui = FakeUi::default();
+        let id = shell.tabs[0].id as usize;
+        let path = shell.tabs[0]
+            .path
+            .clone()
+            .expect("synthetic tabs have paths");
+
+        // SAFETY: a real dispatch shape — id in wparam, BOOL in
+        // lparam — with no pointer arguments to dereference.
+        let r = unsafe {
+            shell.dispatch_plugin_message(&mut ui, HostHandles::null(), NPPM_RELOADBUFFERID, id, 1)
+        };
+        assert_eq!(r, Some(1), "the request is accepted");
+        assert!(
+            shell.tabs[0].pending_load.is_none(),
+            "with the alert requested, nothing reloads until the user confirms"
+        );
+        let dialogs = shell.take_deferred_dialogs();
+        assert!(
+            matches!(dialogs.as_slice(), [PendingDialog::ConfirmReload(p)] if *p == path),
+            "the same prompt the file watcher uses is queued: {dialogs:?}"
+        );
+
+        // Asking twice before the user answers yields one prompt, not
+        // a stack of identical ones.
+        for _ in 0..2 {
+            // SAFETY: as above.
+            let r = unsafe {
+                shell.dispatch_plugin_message(
+                    &mut ui,
+                    HostHandles::null(),
+                    NPPM_RELOADBUFFERID,
+                    id,
+                    1,
+                )
+            };
+            assert_eq!(r, Some(1));
+        }
+        assert_eq!(
+            shell.take_deferred_dialogs().len(),
+            1,
+            "a repeated alert-reload request must not queue a second prompt"
+        );
+
+        // Silent path: the reload is issued on the spot.
+        // SAFETY: as above.
+        let r = unsafe {
+            shell.dispatch_plugin_message(&mut ui, HostHandles::null(), NPPM_RELOADBUFFERID, id, 0)
+        };
+        assert_eq!(r, Some(1));
+        assert!(
+            shell.tabs[0].pending_load.is_some(),
+            "the silent path reloads without asking"
+        );
+        assert!(shell.take_deferred_dialogs().is_empty());
     }
 
     #[test]

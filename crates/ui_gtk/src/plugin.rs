@@ -279,7 +279,7 @@ extern "C" fn plugin_dispatch(hwnd: *mut c_void, msg: u32, wparam: usize, lparam
 /// (re-entrant borrow, or after teardown) — the same "message declined"
 /// outcome Win32 produces when a plugin re-enters during a guarded call.
 fn dispatch_nppm(msg: u32, wparam: usize, lparam: isize) -> isize {
-    with_state(|st| {
+    let routed = with_state(|st| {
         let handles = HostHandles {
             npp_hwnd: npp_sentinel(),
             scintilla_main: st.sci_ptr,
@@ -297,8 +297,17 @@ fn dispatch_nppm(msg: u32, wparam: usize, lparam: isize) -> isize {
         // with `(msg, wparam, lparam)` the plugin passed to `SendMessage`;
         // every `handles` field belongs to this one window.
         unsafe { shell.dispatch_plugin_message(&mut ui, handles, msg, wparam, lparam) }.unwrap_or(0)
-    })
-    .unwrap_or(0)
+    });
+    let Some(routed) = routed else {
+        return 0;
+    };
+    // `Some` means the dispatch ran on the main thread with the borrow
+    // now dropped, so a prompt it queued — the export Save-As, or
+    // `NPPM_RELOADBUFFERID`'s reload confirmation — can be presented
+    // before the plugin's `SendMessage` returns, which is when
+    // Notepad++ shows the same prompts.
+    crate::present_deferred_dialogs();
+    routed
 }
 
 /// The `NppData` handed to each plugin's `setInfo`: the npp sentinel plus
@@ -848,15 +857,40 @@ fn fire_plugin_chord(ctrl: bool, alt: bool, shift: bool, key: u8) -> bool {
 }
 
 /// Deliver every queued `NPPN_*` notification to the loaded plugins.
-/// Called after each drain. Each `beNotified` runs with no `with_state`
-/// borrow held by us beyond the immutable one `notify_plugins` needs, so
-/// the plugin's `beNotified`-time `NPPM_*` calls are declined the same
-/// way Win32 declines them during its guarded notify (documented parity).
+/// Called after each drain.
+///
+/// The queue and the plugins' `beNotified` entry points are taken in
+/// one `with_state` borrow and every plugin call happens **after** it
+/// has returned. That is what lets a plugin's `beNotified` call back
+/// into `NPPM_*`: `plugin_dispatch` routes that through `with_state`,
+/// which declines a nested borrow — so a delivery made from *inside*
+/// the borrow (as this once did, calling `notify_plugins` through
+/// `&Shell`) answered every such callback with 0, silently. The Win32
+/// and Cocoa backends deliver from the same snapshot for the same
+/// reason. Any dialog a handler queued is presented afterwards.
 pub(crate) fn deliver_notifications() {
-    let notes = with_state(|st| st.shell.take_notifications()).unwrap_or_default();
-    for note in notes {
-        with_state(|st| st.shell.notify_plugins(note, npp_sentinel()));
+    let Some((targets, notes)) = with_state(|st| {
+        let notes = st.shell.take_notifications();
+        (st.shell.notify_targets(), notes)
+    }) else {
+        return;
+    };
+    if notes.is_empty() || targets.is_empty() {
+        return;
     }
+    for note in &notes {
+        targets.deliver(note, npp_sentinel());
+    }
+    crate::present_deferred_dialogs();
+}
+
+/// Deliver one [`codepp_shell::SyncNotification`] — the `NPPN_*BEFORE*`
+/// family the shell hands out for delivery *ahead* of the operation it
+/// announces — with no `with_state` borrow held, then present anything
+/// the handlers queued.
+pub(crate) fn deliver_sync(announced: &codepp_shell::SyncNotification) {
+    announced.deliver(npp_sentinel());
+    crate::present_deferred_dialogs();
 }
 
 /// The cross-thread `SCI_*` marshal (DESIGN.md §7.4).

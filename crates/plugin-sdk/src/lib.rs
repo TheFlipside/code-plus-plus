@@ -227,6 +227,26 @@ pub const NPPM_SETSTATUSBAR: u32 = NPPMSG + 24;
 /// here.
 pub const STATUSBAR_DOC_TYPE: usize = 0;
 
+/// `NPPM_GETFULLPATHFROMBUFFERID(id, *wchar)` — write the on-disk
+/// path of buffer `id` through the lparam buffer. Returns the number
+/// of UTF-16 units written including the NUL, or -1 for an unknown
+/// id. Used by [`buffer_path`].
+pub const NPPM_GETFULLPATHFROMBUFFERID: u32 = NPPMSG + 58;
+
+/// Base of the `NPPN_*` notification codes a plugin receives in
+/// `SCNotification.nmhdr.code` through `beNotified`.
+pub const NPPN_FIRST: u32 = 1000;
+
+/// `NPPN_FILEBEFORECLOSE` — a buffer is about to close;
+/// `nmhdr.idFrom` carries its id. Delivered while the buffer is
+/// still open, so [`buffer_path`] resolves it.
+pub const NPPN_FILEBEFORECLOSE: u32 = NPPN_FIRST + 3;
+
+/// Upper bound on the wide buffer [`buffer_path`] offers the host.
+/// Matches the `MAX_PATH_TCHARS` the host caps its write at, so the
+/// host can never write past what is allocated here.
+const PATH_BUFFER_UNITS: usize = 260;
+
 /// `SCI_GETSELTEXT` — copy the selection (and, in Scintilla 5,
 /// return the byte length without the trailing NUL).
 pub const SCI_GETSELTEXT: u32 = 2161;
@@ -438,6 +458,45 @@ pub fn replace_selection(sci: Hwnd, bytes: &[u8]) {
 
 // ---- Status bar -------------------------------------------------
 
+/// Resolve buffer `id` (as carried in an `NPPN_*` notification's
+/// `nmhdr.idFrom`) to its on-disk path via
+/// `NPPM_GETFULLPATHFROMBUFFERID`. `None` when the host does not
+/// know the id, the buffer has no path (untitled), or `setInfo`
+/// hasn't run yet.
+///
+/// The interesting caller is a `beNotified` handler: Notepad++
+/// delivers `NPPN_FILEBEFORECLOSE` while the buffer is still open,
+/// and Code++ does the same, so this resolves from inside that
+/// handler — which is the only moment a plugin can learn *which*
+/// file is closing.
+#[must_use]
+pub fn buffer_path(id: usize) -> Option<String> {
+    let npp = NPP_HANDLE.load(Ordering::Acquire);
+    if npp.is_null() {
+        return None;
+    }
+    let mut buf = [0u16; PATH_BUFFER_UNITS];
+    // SAFETY: `buf` is a live, writable wide buffer of the size the
+    // message's contract requires (MAX_PATH), and the host caps its
+    // write at that size; `id` is passed by value.
+    let written = unsafe {
+        SendMessageW(
+            npp,
+            NPPM_GETFULLPATHFROMBUFFERID,
+            id,
+            buf.as_mut_ptr() as isize,
+        )
+    };
+    if written <= 0 {
+        return None;
+    }
+    let end = buf.iter().position(|&u| u == 0).unwrap_or(buf.len());
+    if end == 0 {
+        return None;
+    }
+    Some(String::from_utf16_lossy(&buf[..end]))
+}
+
 /// Set the host status bar's "doc-type" pane (slot 0) to the given
 /// text. Plugins drive this for transient feedback ("no selection",
 /// "wrote /path/foo.html", etc.); the host's own status update
@@ -549,4 +608,30 @@ pub fn set_clipboard(payloads: &[(u32, &[u8])]) -> bool {
         )
     };
     r != 0
+}
+
+#[cfg(test)]
+mod abi_lock {
+    //! The `NPPM_*` / `NPPN_*` values above are hand-copied from the
+    //! host rather than re-exported, so a plugin depends only on the
+    //! SDK's small surface. That makes silent drift possible; these
+    //! pin each copy to the host's definition, which is itself pinned
+    //! to the public header by `nppmsg_constants_match_header`.
+    use codepp_plugin_host::dispatch as host;
+
+    #[test]
+    fn sdk_message_constants_match_the_host() {
+        assert_eq!(super::NPPMSG, host::NPPMSG);
+        assert_eq!(
+            super::NPPM_GETCURRENTSCINTILLA,
+            host::NPPM_GETCURRENTSCINTILLA
+        );
+        assert_eq!(super::NPPM_SETSTATUSBAR, host::NPPM_SETSTATUSBAR);
+        assert_eq!(
+            super::NPPM_GETFULLPATHFROMBUFFERID,
+            host::NPPM_GETFULLPATHFROMBUFFERID
+        );
+        assert_eq!(super::NPPN_FIRST, host::NPPN_FIRST);
+        assert_eq!(super::NPPN_FILEBEFORECLOSE, host::NPPN_FILEBEFORECLOSE);
+    }
 }

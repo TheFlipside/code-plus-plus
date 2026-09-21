@@ -271,6 +271,13 @@ pub const PLUGIN_ALLOC_MARKER_LIMIT: i32 = 32;
 /// Top-level plugin registry. Owned by the shell; UI crates poke it
 /// through `Shell` to enumerate, load, dispatch.
 pub struct PluginHost {
+    /// Every discovered plugin. **Entries are never removed and a
+    /// loaded plugin is never unloaded** while the host lives — only
+    /// `PluginHost`'s own drop releases the DLLs. The UI relies on
+    /// that: `crate::dispatch::NotifyTargets` snapshots the loaded
+    /// plugins' `beNotified` pointers and calls them after the borrow
+    /// on this host has been dropped. A future unload / hot-reload
+    /// path must invalidate those snapshots first.
     plugins: Vec<PluginInfo>,
     /// Next menu-command id to hand out at the next successful load.
     /// Monotonically increasing; never reused so that a plugin which

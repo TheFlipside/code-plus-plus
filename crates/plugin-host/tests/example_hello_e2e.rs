@@ -25,13 +25,22 @@ use std::ffi::c_void;
 use std::path::PathBuf;
 use std::sync::Mutex;
 
-use codepp_plugin_host::{NppData, PluginHost, NPPMSG};
+use codepp_plugin_host::{notify_all, Notification, NppData, PluginHost, NPPMSG};
 
 /// `NPPM_GETCURRENTSCINTILLA` — writes the active view index (0/1)
 /// through its `lparam` `int*` and returns 0.
 const NPPM_GETCURRENTSCINTILLA: u32 = NPPMSG + 4;
+/// `NPPM_SETSTATUSBAR(section, *wchar)`.
+const NPPM_SETSTATUSBAR: u32 = NPPMSG + 24;
+/// `NPPM_GETFULLPATHFROMBUFFERID(id, *wchar)` — writes the path and
+/// returns the unit count including the NUL, or -1 for an unknown id.
+const NPPM_GETFULLPATHFROMBUFFERID: u32 = NPPMSG + 58;
 /// `SCI_INSERTTEXT(pos, *utf8)`.
 const SCI_INSERTTEXT: u32 = 2003;
+
+/// The buffer id the mock host "knows", and the path it answers with.
+const CLOSING_ID: usize = 7;
+const CLOSING_PATH: &str = "/tmp/closing.txt";
 
 // Sentinels the mock recognises. Their *addresses* are the handles the
 // plugin sees in `NppData` and routes messages back to.
@@ -39,14 +48,41 @@ static NPP_SENTINEL: u8 = 0;
 static SCI_SENTINEL: u8 = 0;
 
 /// Everything the mock dispatch recorded, so the test can assert on it.
+/// Shared by both tests in this binary, which run in parallel: each
+/// test asserts only on the fields its own plugin call writes
+/// (`got_getcurrentscintilla` / `inserted` for the command,
+/// `path_queried_for` / `status` for the notification), so keep any
+/// new test's fields disjoint too.
 static RECORDED: Mutex<Recorded> = Mutex::new(Recorded {
     got_getcurrentscintilla: false,
     inserted: None,
+    path_queried_for: None,
+    status: None,
 });
 
 struct Recorded {
     got_getcurrentscintilla: bool,
     inserted: Option<String>,
+    /// The buffer id of the last `NPPM_GETFULLPATHFROMBUFFERID`.
+    path_queried_for: Option<usize>,
+    /// The text of the last `NPPM_SETSTATUSBAR`.
+    status: Option<String>,
+}
+
+/// Decode a NUL-terminated wide string a plugin passed as `lparam`.
+///
+/// # Safety
+///
+/// `ptr` must point at a NUL-terminated UTF-16 buffer that stays live
+/// for the call.
+unsafe fn wide_to_string(ptr: *const u16) -> String {
+    let mut len = 0usize;
+    // SAFETY: caller's contract — reads stop at the NUL.
+    while unsafe { *ptr.add(len) } != 0 {
+        len += 1;
+    }
+    // SAFETY: `len` units were just read through `ptr`.
+    String::from_utf16_lossy(unsafe { std::slice::from_raw_parts(ptr, len) })
 }
 
 fn npp_ptr() -> *mut c_void {
@@ -59,7 +95,7 @@ fn sci_ptr() -> *mut c_void {
 /// The stand-in for the GTK routing function: routes by handle identity,
 /// answering `NPPM_GETCURRENTSCINTILLA` (view 0) and recording the text
 /// of any `SCI_INSERTTEXT` sent to the Scintilla sentinel.
-extern "C" fn mock_dispatch(hwnd: *mut c_void, msg: u32, _wparam: usize, lparam: isize) -> isize {
+extern "C" fn mock_dispatch(hwnd: *mut c_void, msg: u32, wparam: usize, lparam: isize) -> isize {
     if std::ptr::eq(hwnd, npp_ptr()) {
         if msg == NPPM_GETCURRENTSCINTILLA {
             // Write the active view index (0 = main) through the plugin's
@@ -71,6 +107,32 @@ extern "C" fn mock_dispatch(hwnd: *mut c_void, msg: u32, _wparam: usize, lparam:
                 }
             }
             RECORDED.lock().unwrap().got_getcurrentscintilla = true;
+        }
+        if msg == NPPM_GETFULLPATHFROMBUFFERID {
+            RECORDED.lock().unwrap().path_queried_for = Some(wparam);
+            if wparam != CLOSING_ID {
+                return -1;
+            }
+            if lparam == 0 {
+                return 260;
+            }
+            let wide: Vec<u16> = CLOSING_PATH.encode_utf16().chain(Some(0)).collect();
+            assert!(
+                wide.len() <= 260,
+                "the mock must respect the MAX_PATH contract"
+            );
+            // SAFETY: the plugin passed a MAX_PATH-unit wide buffer, per
+            // the message's contract; the path is far shorter (asserted).
+            unsafe {
+                std::ptr::copy_nonoverlapping(wide.as_ptr(), lparam as *mut u16, wide.len());
+            }
+            return wide.len().cast_signed();
+        }
+        if msg == NPPM_SETSTATUSBAR && lparam != 0 {
+            // SAFETY: `NPPM_SETSTATUSBAR`'s lparam is a NUL-terminated
+            // wide string the plugin keeps alive across the call.
+            let text = unsafe { wide_to_string(lparam as *const u16) };
+            RECORDED.lock().unwrap().status = Some(text);
         }
         return 0;
     }
@@ -157,5 +219,60 @@ fn example_hello_inserts_via_the_dispatch_pipeline() {
         recorded.inserted.as_deref(),
         Some("Hello from plugin"),
         "plugin should have inserted its text via SCI_INSERTTEXT"
+    );
+}
+
+/// The other half of the pipeline, in the other direction: the host
+/// delivers `NPPN_FILEBEFORECLOSE` and the plugin, **from inside its
+/// `beNotified`**, calls back with `NPPM_GETFULLPATHFROMBUFFERID` to
+/// learn which file is closing, then reports it on the status bar.
+///
+/// This is the round trip DESIGN.md §7.4's synchronous-notification
+/// item exists for. What it pins here is the plugin's side — that the
+/// callback is made from the notification and the answer is used —
+/// through the same SDK transport the host installs. The host's side
+/// (delivering before the tab is removed, and answering a re-entrant
+/// `NPPM_*` from `beNotified`) is pinned by `codepp-shell`'s
+/// `announced_close_*` tests and each backend's source-scan guards.
+#[test]
+#[ignore = "needs `cargo build --workspace` to produce libexample_hello.so first"]
+fn example_hello_resolves_the_closing_path_from_inside_file_before_close() {
+    let Some(so) = built_plugin() else {
+        eprintln!("skipping: libexample_hello.so not built (run `cargo build --workspace`)");
+        return;
+    };
+    let tmp = tempfile::tempdir().unwrap();
+    let plugin_dir = tmp.path().join("example_hello");
+    std::fs::create_dir_all(&plugin_dir).unwrap();
+    std::fs::copy(&so, plugin_dir.join("example_hello.so")).unwrap();
+
+    let mut host = PluginHost::new();
+    assert_eq!(host.discover(tmp.path()).unwrap(), 1);
+    let npp_data = NppData {
+        npp_handle: npp_ptr(),
+        scintilla_main_handle: sci_ptr(),
+        scintilla_second_handle: std::ptr::null_mut(),
+    };
+    host.load(0, npp_data, Some(mock_dispatch))
+        .expect("example-hello should load");
+
+    notify_all(
+        &host,
+        &Notification::FileBeforeClose {
+            buffer_id: CLOSING_ID.cast_signed(),
+        },
+        npp_ptr(),
+    );
+
+    let recorded = RECORDED.lock().unwrap();
+    assert_eq!(
+        recorded.path_queried_for,
+        Some(CLOSING_ID),
+        "the plugin should resolve the closing buffer's path from inside beNotified"
+    );
+    assert_eq!(
+        recorded.status.as_deref(),
+        Some("Closing: /tmp/closing.txt"),
+        "the plugin should report the resolved path on the status bar"
     );
 }

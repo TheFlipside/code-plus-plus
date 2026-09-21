@@ -1200,6 +1200,24 @@ impl Drop for DrainFreeze {
     }
 }
 
+/// Present every dialog a plugin call queued on `Shell::deferred_dialogs`
+/// — the export Save-As, the `NPPM_RELOADBUFFERID` reload prompt — now,
+/// rather than at the next worker wake. A plugin call posts no wake, so
+/// without this a prompt queued from a plugin command, a `beNotified`
+/// handler or a plugin's own thread-hopped call would sit unpresented
+/// until some unrelated load or file change drained the shell. Goes
+/// through the same queue and pump as the drain's own dialogs, so it
+/// inherits their never-nest guarantee. Main thread only; a call with
+/// the state borrowed takes nothing and presents nothing.
+pub(crate) fn present_deferred_dialogs() {
+    let dialogs = with_state(|st| st.shell.take_deferred_dialogs()).unwrap_or_default();
+    if dialogs.is_empty() {
+        return;
+    }
+    DIALOG_QUEUE.with(|q| q.borrow_mut().extend(dialogs));
+    pump_dialogs();
+}
+
 /// Present queued dialogs one at a time, never nesting.
 ///
 /// Re-entrant calls return immediately: the outer pump still owns the
@@ -1922,7 +1940,28 @@ pub(crate) fn close_active_tab() -> bool {
         // (or a failed save) aborts the close entirely.
         proceed = confirm_discard_active();
         if proceed {
-            let closed_doc = with_state(|st| st.shell.close_active_tab().map(|c| c.scintilla_doc));
+            // Announce the close to plugins first. `NPPN_FILEBEFORECLOSE`
+            // is delivered here, with no `with_state` borrow held and the
+            // tab still in `shell.tabs`, so a plugin's `beNotified` can
+            // resolve `NPPM_GETFULLPATHFROMBUFFERID(id)` — the contract
+            // Notepad++ plugins are written against, and one the deferred
+            // queue cannot honour because by the time it drains the tab
+            // is gone. After the save prompt, where N++ fires it: a Cancel
+            // above means nothing closes and nothing is announced. The
+            // close below then closes exactly the announced tab — its id
+            // travels in the value, not in shell state, because a plugin
+            // can run a complete nested close from inside its handler —
+            // or nothing if that tab is no longer the active one.
+            let closed_doc = with_state(|st| st.shell.begin_close_active_tab())
+                .flatten()
+                .and_then(|announced| {
+                    plugin::deliver_sync(&announced);
+                    with_state(|st| {
+                        st.shell
+                            .close_announced_tab(announced.buffer_id())
+                            .map(|c| c.scintilla_doc)
+                    })
+                });
             if let Some(Some(doc)) = closed_doc {
                 if doc != 0 {
                     with_state(|st| {
