@@ -134,18 +134,18 @@ use codepp_plugin_host::{
 };
 use codepp_scintilla_sys::{
     ScintillaDirectFunction, Scintilla_RegisterClasses, CARETSTYLE_INVISIBLE, SCI_ADDUNDOACTION,
-    SCI_BEGINUNDOACTION, SCI_CLEAR, SCI_COLOURISE, SCI_COPY, SCI_CREATEDOCUMENT, SCI_CUT,
-    SCI_DOCLINEFROMVISIBLE, SCI_EMPTYUNDOBUFFER, SCI_ENDUNDOACTION, SCI_GETANCHOR, SCI_GETCOLUMN,
-    SCI_GETCURRENTPOS, SCI_GETDIRECTFUNCTION, SCI_GETDIRECTPOINTER, SCI_GETDOCPOINTER,
-    SCI_GETFIRSTVISIBLELINE, SCI_GETINDENTATIONGUIDES, SCI_GETLENGTH, SCI_GETLINECOUNT,
-    SCI_GETMODIFY, SCI_GETOVERTYPE, SCI_GETSELECTIONEND, SCI_GETSELECTIONSTART, SCI_GETSELTEXT,
-    SCI_GETTEXT, SCI_GETVIEWEOL, SCI_GETVIEWWS, SCI_GETWRAPMODE, SCI_GETXOFFSET, SCI_GETZOOM,
-    SCI_GOTOLINE, SCI_GOTOPOS, SCI_LINEFROMPOSITION, SCI_LINESCROLL, SCI_LINESONSCREEN, SCI_PASTE,
-    SCI_POINTYFROMPOSITION, SCI_POSITIONAFTER, SCI_POSITIONFROMLINE, SCI_POSITIONFROMPOINTCLOSE,
-    SCI_REDO, SCI_RELEASEDOCUMENT, SCI_REPLACETARGET, SCI_SELECTALL, SCI_SETCARETSTYLE,
-    SCI_SETCODEPAGE, SCI_SETDOCPOINTER, SCI_SETEMPTYSELECTION, SCI_SETEOLMODE, SCI_SETFONTQUALITY,
-    SCI_SETHSCROLLBAR, SCI_SETINDENTATIONGUIDES, SCI_SETMARGINWIDTHN, SCI_SETREADONLY,
-    SCI_SETSAVEPOINT, SCI_SETSCROLLWIDTH, SCI_SETSCROLLWIDTHTRACKING, SCI_SETSEL,
+    SCI_BEGINUNDOACTION, SCI_CLEAR, SCI_COLOURISE, SCI_CONVERTEOLS, SCI_COPY, SCI_CREATEDOCUMENT,
+    SCI_CUT, SCI_DOCLINEFROMVISIBLE, SCI_EMPTYUNDOBUFFER, SCI_ENDUNDOACTION, SCI_GETANCHOR,
+    SCI_GETCOLUMN, SCI_GETCURRENTPOS, SCI_GETDIRECTFUNCTION, SCI_GETDIRECTPOINTER,
+    SCI_GETDOCPOINTER, SCI_GETFIRSTVISIBLELINE, SCI_GETINDENTATIONGUIDES, SCI_GETLENGTH,
+    SCI_GETLINECOUNT, SCI_GETMODIFY, SCI_GETOVERTYPE, SCI_GETSELECTIONEND, SCI_GETSELECTIONSTART,
+    SCI_GETSELTEXT, SCI_GETTEXT, SCI_GETVIEWEOL, SCI_GETVIEWWS, SCI_GETWRAPMODE, SCI_GETXOFFSET,
+    SCI_GETZOOM, SCI_GOTOLINE, SCI_GOTOPOS, SCI_LINEFROMPOSITION, SCI_LINESCROLL,
+    SCI_LINESONSCREEN, SCI_PASTE, SCI_POINTYFROMPOSITION, SCI_POSITIONAFTER, SCI_POSITIONFROMLINE,
+    SCI_POSITIONFROMPOINTCLOSE, SCI_REDO, SCI_RELEASEDOCUMENT, SCI_REPLACETARGET, SCI_SELECTALL,
+    SCI_SETCARETSTYLE, SCI_SETCODEPAGE, SCI_SETDOCPOINTER, SCI_SETEMPTYSELECTION, SCI_SETEOLMODE,
+    SCI_SETFONTQUALITY, SCI_SETHSCROLLBAR, SCI_SETINDENTATIONGUIDES, SCI_SETMARGINWIDTHN,
+    SCI_SETREADONLY, SCI_SETSAVEPOINT, SCI_SETSCROLLWIDTH, SCI_SETSCROLLWIDTHTRACKING, SCI_SETSEL,
     SCI_SETSELECTIONEND, SCI_SETSELECTIONMODE, SCI_SETSELECTIONSTART, SCI_SETTABWIDTH,
     SCI_SETTARGETEND, SCI_SETTARGETSTART, SCI_SETTEXT, SCI_SETVIEWEOL, SCI_SETVIEWWS,
     SCI_SETVSCROLLBAR, SCI_SETWRAPMODE, SCI_SETXOFFSET, SCI_SETZOOM, SCI_STYLEGETBACK,
@@ -2087,12 +2087,9 @@ impl UiPlatform for Win32Ui {
         //     Scintilla doc materialised — the deeper bug there
         //     is that `save_all` would then save an empty file,
         //     so the EOL slice is subsumed.
-        //   - `Shell::set_buffer_format` (the NPPM_SETBUFFERFORMAT
-        //     dispatcher) flips `tab.eol` metadata but doesn't
-        //     call `SCI_CONVERTEOLS` or `update_status` on the
-        //     active tab. Full fix requires the doc-pointer-swap
-        //     dance already tracked as Phase 5 polish work in
-        //     DESIGN.md §7.4.
+        //   - (closed) `NPPM_SETBUFFERFORMAT` now converts the
+        //     addressed document through `convert_doc_eols` and
+        //     refreshes this status for the active tab.
         apply_eol_mode(&self.editor, eol);
         // Multi-part status bar (see `setup_status_parts` for the
         // 7-slot layout). This call writes the metadata-driven
@@ -3460,6 +3457,47 @@ impl UiPlatform for Win32Ui {
         self.editor.send(SCI_RELEASEDOCUMENT, 0, doc);
     }
 
+    fn convert_doc_eols(&mut self, doc: isize, eol: Eol) -> bool {
+        if doc == 0 {
+            return false;
+        }
+        // `SCI_CONVERTEOLS` is an edit, so Scintilla reports it through
+        // a synchronous `SendMessage(parent, WM_NOTIFY, …)` that
+        // re-enters `main_wnd_proc` while the plugin-dispatch arm that
+        // reached us still holds `shell`/`ui` out of `state.split()`.
+        // Without the guard the nested `SCN_SAVEPOINT*` / `SCN_MODIFIED`
+        // arms would take a second `&mut WindowState` from the raw
+        // pointer — the aliasing the FIF in-buffer replace loop already
+        // guards its `SCI_REPLACETARGET` against, and for the same
+        // reason. Armed only when not already armed: the lazy-load path
+        // runs plugins under a guard of its own, and `enter` asserts
+        // against nesting because a nested Drop would clear the flag
+        // early. The cost is that the notification-driven `Tab.dirty`
+        // update is declined here; the shell re-reads the cached bit
+        // from the live state after every conversion instead.
+        let _call_guard =
+            (!PLUGIN_CALL_ACTIVE.load(Ordering::Acquire)).then(PluginCallGuard::enter);
+        let prior_doc = self.editor.send(SCI_GETDOCPOINTER, 0, 0);
+        if prior_doc == doc {
+            // Already bound — no swap and no view snapshot: Scintilla
+            // moves the caret and selection with the bytes it rewrites,
+            // which is what the user expects of an in-place conversion.
+            convert_eols(&self.editor, eol);
+            return true;
+        }
+        // Same view-snapshot dance as `capture_text_from_doc`: every
+        // `SCI_SETDOCPOINTER` clears the selection, including the swap
+        // back, so the active tab's caret and scroll must be restored.
+        let view = self.snapshot_active_view();
+        self.editor.send(SCI_SETDOCPOINTER, 0, doc);
+        convert_eols(&self.editor, eol);
+        if prior_doc != 0 {
+            self.editor.send(SCI_SETDOCPOINTER, 0, prior_doc);
+            self.restore_active_view(view);
+        }
+        true
+    }
+
     #[cfg(target_os = "windows")]
     fn dispatch_npp_menu_command(&mut self, idm: i32) -> bool {
         // Resolve the built-in mapping first. Plugin-allocated cmd
@@ -3887,15 +3925,39 @@ const FOLD_MARGIN_PX: i32 = 14;
 /// otherwise LF file, breaking the EOL-preservation contract
 /// documented in DESIGN.md §5.2.
 fn apply_eol_mode(editor: &EditorHandle, eol: Eol) {
-    let sc_eol = match eol {
+    editor.send(SCI_SETEOLMODE, sc_eol_for(eol), 0);
+}
+
+/// Rewrite every line ending in the currently-bound document to
+/// `eol`, and make it the ending Enter inserts from now on — the
+/// pair Notepad++ issues when a buffer's format changes. Backs
+/// [`UiPlatform::convert_doc_eols`], which does the doc-pointer
+/// swap to reach a non-active document before calling this.
+///
+/// `SCI_CONVERTEOLS` is one undo group and does not touch the save
+/// point (`Document::ConvertLineEnds`), so the conversion is
+/// reversible with a single Ctrl+Z and a document whose bytes
+/// changed reads as modified afterwards — both required by the
+/// trait contract. The mode is set first so that a document with
+/// no endings to convert still ends up inserting the requested one.
+fn convert_eols(editor: &EditorHandle, eol: Eol) {
+    let sc_eol = sc_eol_for(eol);
+    editor.send(SCI_SETEOLMODE, sc_eol, 0);
+    editor.send(SCI_CONVERTEOLS, sc_eol, 0);
+}
+
+/// Map [`Eol`] to Scintilla's `SC_EOL_*` code. Shared by
+/// [`apply_eol_mode`] and [`convert_eols`] so the two cannot
+/// disagree on where `Mixed` lands.
+fn sc_eol_for(eol: Eol) -> usize {
+    match eol {
         Eol::CrLf => SC_EOL_CRLF,
         Eol::Cr => SC_EOL_CR,
         // Mixed collapses to LF, matching `Eol::bytes()`'s own
         // convention for "preserve on re-write, but if we must
         // pick one here, use LF."
         Eol::Lf | Eol::Mixed => SC_EOL_LF,
-    };
-    editor.send(SCI_SETEOLMODE, sc_eol, 0);
+    }
 }
 
 /// Set the visible TAB-character width to [`TAB_WIDTH_DEFAULT`]
@@ -26389,6 +26451,15 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                     // active tab's path, silently corrupting an
                     // unrelated file on disk.
                     let pre_active = state.shell.active_tab;
+                    // And every tab's cached dirty bit, so a dispatch
+                    // that moves one — `NPPM_SETBUFFERFORMAT`'s
+                    // conversion re-reads it from the live state, on
+                    // the addressed tab, active or not — repaints that
+                    // cell. The `SCN_SAVEPOINT*` arm cannot do it: the
+                    // conversion runs under `PluginCallGuard`, where
+                    // the nested notification is declined.
+                    let dirty_before: Vec<bool> =
+                        state.shell.tabs.iter().map(|t| t.dirty).collect();
                     let handles = state.host_handles(hwnd);
                     let (shell, mut ui) = state.split();
                     // SAFETY: `(msg, wparam, lparam)` are forwarded
@@ -26483,6 +26554,20 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                     if needs_rebind {
                         refresh_tab_chrome(hwnd);
                         handle_tab_selchange(hwnd);
+                    }
+                    if let Some(state) = state_from_hwnd(hwnd) {
+                        let tab_hwnd = state.tab_hwnd;
+                        let moved: Vec<usize> = state
+                            .shell
+                            .tabs
+                            .iter()
+                            .enumerate()
+                            .filter(|(i, t)| dirty_before.get(*i) != Some(&t.dirty))
+                            .map(|(i, _)| i)
+                            .collect();
+                        for idx in moved {
+                            invalidate_tab(tab_hwnd, idx);
+                        }
                     }
                     // Present anything the dispatch queued — the
                     // export Save-As, or `NPPM_RELOADBUFFERID`'s
@@ -26762,10 +26847,35 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                         // in sync. Filter on `hwndFrom` so a
                         // plugin-owned Scintilla can't write into
                         // our active tab's dirty bit.
+                        //
+                        // Attributed to the tab that **owns the
+                        // bound document**, not to the active tab.
+                        // `replace_doc_text` and `convert_doc_eols`
+                        // swap a background document in for the
+                        // span of one call, and an edge raised
+                        // while it is bound belongs to that tab —
+                        // a Replace-in-Files or an
+                        // `NPPM_SETBUFFERFORMAT` addressed to tab B
+                        // must not paint tab A's glyph. The active
+                        // tab is the fallback for a document no tab
+                        // claims (the implicit startup document
+                        // before the first tab binds it); a zero
+                        // pointer is never matched, since every
+                        // unmaterialised tab carries zero.
                         let dirty = nmhdr.code == SCN_SAVEPOINTLEFT;
                         let (active, tab_hwnd) = if let Some(state) = state_from_hwnd(hwnd) {
                             if nmhdr.hwndFrom == state.scintilla_hwnd {
-                                (state.shell.active_tab, state.tab_hwnd)
+                                let bound = state.editor.send(SCI_GETDOCPOINTER, 0, 0);
+                                let owner = (bound != 0)
+                                    .then(|| {
+                                        state
+                                            .shell
+                                            .tabs
+                                            .iter()
+                                            .position(|t| t.scintilla_doc == bound)
+                                    })
+                                    .flatten();
+                                (owner.or(state.shell.active_tab), state.tab_hwnd)
                             } else {
                                 (None, state.tab_hwnd)
                             }

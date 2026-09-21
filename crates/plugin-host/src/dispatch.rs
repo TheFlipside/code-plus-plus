@@ -824,19 +824,14 @@ pub trait HostServices {
     fn set_buffer_encoding(&mut self, id: isize, unimode: i32) -> bool;
 
     /// Set the EOL format of the buffer with id `id` from a
-    /// [`WIN_FORMAT`] / [`MAC_FORMAT`] / [`UNIX_FORMAT`] numeric.
-    ///
-    /// **Phase 4 limitation:** the change is metadata-only — the
-    /// existing line-ending bytes inside the Scintilla document are
-    /// NOT rewritten. The next save still encodes the buffer text
-    /// through `tab.encoding`, so the file's bytes are correct
-    /// only if the buffer's in-memory line endings already match
-    /// the new format (which is true for empty buffers and any
-    /// buffer the user reloads after the metadata change). N++
-    /// additionally issues `SCI_CONVERTEOLS` to rewrite the bytes
-    /// in place — that needs a UI-side hook (the doc-pointer-swap
-    /// dance to reach a non-active buffer) tracked in DESIGN.md
-    /// §7.4.
+    /// [`WIN_FORMAT`] / [`MAC_FORMAT`] / [`UNIX_FORMAT`] numeric,
+    /// and rewrite the buffer's existing line endings to match —
+    /// the `SCI_CONVERTEOLS` Notepad++ issues on a format change,
+    /// so "set the EOL then save" writes a file whose endings are
+    /// uniform throughout. The host reaches a non-active buffer's
+    /// document through its doc-pointer-swap hook
+    /// (`UiPlatform::convert_doc_eols`), and refreshes the status
+    /// bar when the addressed buffer is the active one.
     ///
     /// Returns `false` for unknown buffer id or unknown `EolType`.
     fn set_buffer_format(&mut self, id: isize, eoltype: i32) -> bool;
@@ -1112,7 +1107,7 @@ pub trait HostServices {
     /// write itself failed. **Phase 4 limitation:** only the
     /// active tab can be saved through this path — saving a
     /// background tab needs the doc-pointer-swap dance tracked in
-    /// DESIGN.md §7.4 alongside the `SCI_CONVERTEOLS` deferral.
+    /// DESIGN.md §7.4.
     fn save_file(&mut self, path: PathBuf) -> bool;
 
     /// `true` when the doc-switcher panel is currently shown.
@@ -1954,8 +1949,9 @@ pub unsafe fn dispatch_nppm<S: HostServices>(
             // wparam: buffer id. lparam: EolType numeric. Returns
             // 1 on success (same "is in the requested state"
             // semantics as SETBUFFERENCODING), 0 on unknown id or
-            // unknown EolType. Phase 4 metadata-only — see the
-            // trait doc-comment for the SCI_CONVERTEOLS deferral.
+            // unknown EolType. The host converts the buffer's
+            // bytes as well as flipping the label — see the trait
+            // doc-comment.
             isize::from(services.set_buffer_format(wparam as isize, lparam as i32))
         }
 

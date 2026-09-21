@@ -89,7 +89,7 @@ use objc2_app_kit::{
 use objc2_foundation::{NSPoint, NSRect, NSSize, NSString, NSURL};
 
 use codepp_plugin_host::{HostDispatchFn, NppData};
-use codepp_scintilla_sys::scintilla_cocoa_send_message;
+use codepp_scintilla_sys::{scintilla_cocoa_send_message, SCI_GETMODIFY};
 use codepp_shell::{sanitize_str_for_display, HostHandles};
 
 use crate::menu::Actions;
@@ -328,16 +328,48 @@ fn dispatch_nppm(msg: u32, wparam: usize, lparam: isize) -> isize {
             plugin_menu: std::ptr::null_mut(),
             main_menu: std::ptr::null_mut(),
         };
+        let editor = st.editor;
+        let dirty_before = editor.send(SCI_GETMODIFY, 0, 0) != 0;
+        let cached_before: Vec<bool> = st.shell.tabs.iter().map(|t| t.dirty).collect();
         let (shell, mut ui) = st.split();
         // SAFETY: called synchronously on the UI thread from plugin
         // code, with `(msg, wparam, lparam)` exactly as the plugin
         // passed them to `SendMessageW`; every `handles` field belongs
         // to this one window.
-        unsafe { shell.dispatch_plugin_message(&mut ui, handles, msg, wparam, lparam) }.unwrap_or(0)
+        let routed =
+            unsafe { shell.dispatch_plugin_message(&mut ui, handles, msg, wparam, lparam) }
+                .unwrap_or(0);
+        let dirty_after = editor.send(SCI_GETMODIFY, 0, 0) != 0;
+        let cached_moved = shell
+            .tabs
+            .iter()
+            .enumerate()
+            .any(|(i, t)| cached_before.get(i) != Some(&t.dirty));
+        (routed, dirty_before != dirty_after || cached_moved)
     });
-    let Some(routed) = routed else {
+    let Some((routed, dirty_edge)) = routed else {
         return 0;
     };
+    // A dispatch can move a document off or onto its save point —
+    // `NPPM_SETBUFFERFORMAT`'s `SCI_CONVERTEOLS`,
+    // `NPPM_MAKECURRENTBUFFERDIRTY`, `NPPM_SAVECURRENTFILE` — and the
+    // `SCN_SAVEPOINT*` / `SCN_MODIFIED` Scintilla emits for it arrives
+    // synchronously, inside the borrow above, where the notification
+    // handler is declined. So the tab strip's dirty marker would sit
+    // stale until an unrelated event repainted it: the same gap the
+    // Find/Replace commands close with their own post-borrow refresh
+    // (DESIGN.md §7.4). Two readings decide whether to refresh: the
+    // bound document's live modify bit, for the active tab, and every
+    // tab's cached `Tab.dirty`, which is what the strip paints for the
+    // others and what the shell re-reads from the live state when it
+    // converts a background document — that one is swapped in and out
+    // inside the dispatch, so the bound bit never sees it. Refresh only
+    // on a change, so the ~dozen `NPPM_*` queries a plugin command
+    // typically makes cost two direct calls and a short `Vec` each
+    // rather than a strip rebuild.
+    if dirty_edge {
+        crate::refresh_tab_chrome();
+    }
     // `Some` means the dispatch ran on the main thread with the borrow
     // now dropped, so a prompt it queued — the export Save-As, or
     // `NPPM_RELOADBUFFERID`'s reload confirmation — can be presented

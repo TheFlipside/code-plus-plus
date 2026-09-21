@@ -522,6 +522,17 @@ pub const STYLE_INDENTGUIDE: usize = 37;
 /// discipline as `SCI_SETTABWIDTH`. Verified against
 /// `vendor/scintilla/include/Scintilla.h:95` (2031).
 pub const SCI_SETEOLMODE: u32 = 2031;
+/// `SCI_CONVERTEOLS(int eolMode)` — rewrite every line ending in
+/// the bound document to the `SC_EOL_*` sequence given, in place,
+/// as one undoable action (`Document::ConvertLineEnds` wraps the
+/// walk in an `UndoGroup`). Leaves the save point alone, so a
+/// document whose endings actually changed reads as modified
+/// afterwards and one that was already uniform does not. Does
+/// **not** change `SCI_SETEOLMODE`'s insert sequence — callers
+/// that want Enter to keep producing the converted ending send
+/// both. Verified against `vendor/scintilla/include/Scintilla.h:93`
+/// (2029).
+pub const SCI_CONVERTEOLS: u32 = 2029;
 /// `SC_EOL_CRLF = 0` — Windows / DOS / HTTP two-byte `\r\n`.
 /// Scintilla's built-in default (see `vendor/scintilla/src/
 /// Document.cxx` constructor).

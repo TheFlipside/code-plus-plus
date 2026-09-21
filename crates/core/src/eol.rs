@@ -154,9 +154,91 @@ pub fn detect(bytes: &[u8]) -> Eol {
     }
 }
 
+/// Rewrite every line ending in `text` to `eol`'s byte sequence.
+///
+/// The headless twin of Scintilla's `SCI_CONVERTEOLS`, for a buffer
+/// whose document has not been materialised yet — a tab loaded in the
+/// background holds its content only in `Tab::text` until it is first
+/// activated, so a conversion requested before then has to rewrite the
+/// string the document will later be filled from. Walks the text once:
+/// a `\r\n` pair counts as one ending, never as a CR followed by an LF,
+/// matching [`detect`]'s own counting.
+///
+/// [`Eol::Mixed`] returns the text unchanged. It names "keep each
+/// line's original ending", which is a request to convert nothing, and
+/// the caller (`Shell::set_buffer_eol_by_id`) refuses it before
+/// reaching here.
+#[must_use]
+pub fn convert(text: &str, eol: Eol) -> String {
+    if eol == Eol::Mixed {
+        return text.to_owned();
+    }
+    let ending = match eol {
+        Eol::CrLf => "\r\n",
+        Eol::Cr => "\r",
+        Eol::Lf | Eol::Mixed => "\n",
+    };
+    let bytes = text.as_bytes();
+    let mut out = String::with_capacity(bytes.len() + bytes.len() / 16);
+    // Copy runs of ordinary text as `&str` slices rather than byte by
+    // byte, so the result is built from valid UTF-8 pieces throughout —
+    // `\r` and `\n` are ASCII, so a slice boundary at either never
+    // splits a multi-byte sequence.
+    let mut run_start = 0;
+    let mut i = 0;
+    while i < bytes.len() {
+        let b = bytes[i];
+        if b != b'\r' && b != b'\n' {
+            i += 1;
+            continue;
+        }
+        out.push_str(&text[run_start..i]);
+        out.push_str(ending);
+        if b == b'\r' && bytes.get(i + 1) == Some(&b'\n') {
+            i += 1;
+        }
+        i += 1;
+        run_start = i;
+    }
+    out.push_str(&text[run_start..]);
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn convert_normalises_mixed_endings_to_each_target() {
+        let mixed = "a\r\nb\nc\rd";
+        assert_eq!(convert(mixed, Eol::Lf), "a\nb\nc\nd");
+        assert_eq!(convert(mixed, Eol::CrLf), "a\r\nb\r\nc\r\nd");
+        assert_eq!(convert(mixed, Eol::Cr), "a\rb\rc\rd");
+    }
+
+    #[test]
+    fn convert_treats_crlf_as_one_ending() {
+        // The trap: a CRLF pair rewritten as two endings would double
+        // every Windows line on a CR or LF conversion.
+        assert_eq!(convert("x\r\ny\r\n", Eol::Lf), "x\ny\n");
+        assert_eq!(convert("x\r\ny\r\n", Eol::Cr), "x\ry\r");
+    }
+
+    #[test]
+    fn convert_is_identity_on_uniform_text_and_on_mixed_target() {
+        assert_eq!(convert("a\nb\n", Eol::Lf), "a\nb\n");
+        assert_eq!(convert("a\r\nb\r\n", Eol::CrLf), "a\r\nb\r\n");
+        assert_eq!(convert("no endings", Eol::CrLf), "no endings");
+        assert_eq!(convert("", Eol::Cr), "");
+        assert_eq!(convert("a\r\nb\nc", Eol::Mixed), "a\r\nb\nc");
+    }
+
+    #[test]
+    fn convert_keeps_multibyte_text_intact() {
+        // A trailing CR at the end of input, and non-ASCII on both
+        // sides of an ending.
+        assert_eq!(convert("héllo\rwörld\r", Eol::CrLf), "héllo\r\nwörld\r\n");
+    }
 
     #[test]
     fn empty_defaults_to_lf() {

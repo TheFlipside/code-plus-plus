@@ -626,6 +626,36 @@ pub trait UiPlatform {
     /// three backends could land it together.
     fn release_doc(&mut self, doc: isize);
 
+    /// Rewrite every line ending in the document at `doc` to `eol`, in
+    /// place, and make it the ending Enter inserts from now on — the
+    /// `SCI_SETEOLMODE` + `SCI_CONVERTEOLS` pair Notepad++ issues when a
+    /// buffer's format changes. `doc` need not be the active document;
+    /// implementations bind it, convert, and restore the previous
+    /// binding, the same dance [`Self::capture_text_from_doc`] performs.
+    ///
+    /// Drives `NPPM_SETBUFFERFORMAT` through
+    /// [`Shell::set_buffer_eol_by_id`]. Before this existed that message
+    /// flipped `Tab::eol` alone, and since a save writes the buffer's
+    /// bytes verbatim, "set the EOL then save" produced a file whose
+    /// status-bar label and actual line endings disagreed — the
+    /// DESIGN.md §7.4 entry this method closes.
+    ///
+    /// **Must leave the undo history and the save point alone**, for the
+    /// same reason [`Self::replace_doc_text`] must: the user has to be
+    /// able to undo a plugin's conversion, and a buffer whose bytes
+    /// changed has to read as modified so the change is not silently
+    /// dropped at close. `SCI_CONVERTEOLS` already does both (one undo
+    /// group, no save-point write), so an implementation is a plain
+    /// send, not a `set_buffer_text`-style reinstall.
+    ///
+    /// [`Eol::Mixed`] has no Scintilla equivalent and the shell refuses
+    /// it before reaching here; an implementation that receives it maps
+    /// it to LF like every other `SCI_SETEOLMODE` site does.
+    ///
+    /// Returns `false` when `doc` is zero, so the caller can tell
+    /// "nothing was converted" from "converted, changing nothing".
+    fn convert_doc_eols(&mut self, doc: isize, eol: Eol) -> bool;
+
     /// Dispatch a Notepad++-ABI `IDM_*` command id. Drives
     /// `NPPM_MENUCOMMAND`. The implementation maps the N++
     /// command id to whichever internal command routes to the
@@ -954,6 +984,11 @@ pub enum OpenFileOutcome {
 /// Scintilla view between them with `SCI_SETDOCPOINTER` on tab
 /// click. Milestone 6a leaves it `None` — the existing single-tab
 /// UI shares one implicit document.
+// Four independent bools — `dirty`, `doc_needs_text`, `shadow_unsaved`,
+// `pinned` — each answering a different question about a different
+// piece of state; an enum would have to encode their product, which is
+// the wrong shape (a pinned tab can be stale and unsaved at once).
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Debug, Clone)]
 pub struct Tab {
     /// Stable buffer id assigned at tab-creation time. Zero is
@@ -1003,6 +1038,24 @@ pub struct Tab {
     /// binding there overwrites the real file with the wrong bytes
     /// rather than merely showing them.
     pub doc_needs_text: bool,
+    /// The shadow `text` was rewritten in memory and no longer matches
+    /// disk, and it has not been installed into a document yet — a
+    /// Replace-in-Files or a plugin's `NPPM_SETBUFFERFORMAT` addressed
+    /// to a tab with no document (or a stale one, see `doc_needs_text`).
+    ///
+    /// Kept apart from [`Shell::unsaved_restore_ids`] on purpose, even
+    /// though the two mean "not on disk although the document reads
+    /// clean": the id set feeds [`Shell::has_unsaved_work`], which is
+    /// what [`Shell::bind_and_fill`] reads to decide whether installing
+    /// the shadow would clobber the user's edits — and an unsaved shadow
+    /// is an argument *for* installing it, not against. So this flag is
+    /// promoted into the set at the moment the shadow is installed (by
+    /// `bind_and_fill`, whose `set_buffer_text` sets the save point and
+    /// so is exactly when the set's meaning starts to hold), and simply
+    /// dropped when the install is skipped or a fresh load replaces the
+    /// shadow. Until then it is what makes [`Shell::tab_needs_backup`]
+    /// write the shadow to a recovery backup.
+    pub shadow_unsaved: bool,
     /// N++-compatible `LangType` for this buffer. Phase 4 m1 derives
     /// it from the path extension on first load; later milestones
     /// expose `NPPM_SETBUFFERLANGTYPE` so plugins can override. New
@@ -1066,6 +1119,7 @@ impl Default for Tab {
             pending_load: None,
             scintilla_doc: 0,
             doc_needs_text: false,
+            shadow_unsaved: false,
             lang: L_TEXT,
             untitled_seq: None,
             dirty: false,
@@ -1741,16 +1795,23 @@ pub struct Shell {
     /// UI's existing dialog-presentation path picks them up
     /// without a new code path.
     deferred_dialogs: Vec<PendingDialog>,
-    /// Buffer ids of tabs restored from a recovery backup that have
-    /// **not yet been saved to a real path**. These are "unsaved" even
-    /// though their Scintilla document sits at its save point (the backup
-    /// text was seeded via `set_buffer_text`, which sets the save point):
+    /// Buffer ids of tabs whose content is **not on disk** even though
+    /// their Scintilla document sits — or will sit — at its save point.
+    /// Two ways in: a tab restored from a recovery backup (the backup
+    /// text was seeded via `set_buffer_text`, which sets the save point;
     /// an untitled buffer has no on-disk file, and a `DirtyFromBackup`
-    /// tab's edits were never written to its real path. Kept as a set
-    /// decoupled from `SCI_GETMODIFY` because there is no public Scintilla
-    /// API for a durable modified-with-intact-text state — a phantom undo
-    /// action would let a single Ctrl+Z reach the save point and report
-    /// clean, which would then prune the recovery backup (data loss).
+    /// tab's edits were never written to its real path), and a tab whose
+    /// shadow `Tab::text` was rewritten in memory — a Replace-in-Files or
+    /// a plugin's `NPPM_SETBUFFERFORMAT` on a background tab — once
+    /// `bind_and_fill` has installed it through that same
+    /// save-point-setting call (until then [`Tab::shadow_unsaved`]
+    /// carries it; see [`Self::mark_shadow_unsaved`] for why the two are
+    /// not one).
+    /// Kept as a set decoupled from `SCI_GETMODIFY` because there is no
+    /// public Scintilla API for a durable modified-with-intact-text state
+    /// — a phantom undo action would let a single Ctrl+Z reach the save
+    /// point and report clean, which would then prune the recovery backup
+    /// (data loss).
     ///
     /// Membership forces the tab to count as dirty in
     /// [`Self::save_session`]'s backup-write decision and in the UI's
@@ -4306,10 +4367,14 @@ impl Shell {
         // edit — its content is still the text the loader produced,
         // which by definition matches disk. Update the shadow directly;
         // whenever the tab is first activated, `bind_active_view`
-        // installs this text.
+        // installs this text. Marked unsaved *durably*: the cached
+        // `dirty` alone was wiped by the save point that install sets,
+        // so the replacement closed without a prompt and was never
+        // backed up (`capture_text_from_doc(0)` is empty) — the same
+        // hole the EOL-conversion audit found one function over.
         if doc == 0 {
             self.tabs[idx].text = new_text.to_string();
-            self.tabs[idx].dirty = true;
+            self.mark_shadow_unsaved(idx);
             return FifEvent::ReplacedInOpenBuffer {
                 job,
                 path,
@@ -4481,7 +4546,8 @@ impl Shell {
         let (existing_doc, text, stale) = (tab.scintilla_doc, tab.text.clone(), tab.doc_needs_text);
         let bound = ui.activate_tab(idx, existing_doc);
         let clobbers_edits = stale && existing_doc != 0 && self.has_unsaved_work(ui, idx);
-        if existing_doc == 0 || (stale && !clobbers_edits) {
+        let installs = existing_doc == 0 || (stale && !clobbers_edits);
+        if installs {
             // Caret to 0: a tab reached this way was never displayed,
             // so there is no caret position to preserve. The session's
             // stored cursor is applied by the `Ok` arm of
@@ -4489,11 +4555,21 @@ impl Shell {
             // tab, which is a different path.
             ui.set_buffer_text(&text, 0);
         }
-        if let Some(tab) = self.tabs.get_mut(idx) {
-            if existing_doc == 0 {
-                tab.scintilla_doc = bound;
-            }
-            tab.doc_needs_text = false;
+        let Some(tab) = self.tabs.get_mut(idx) else {
+            return bound;
+        };
+        if existing_doc == 0 {
+            tab.scintilla_doc = bound;
+        }
+        tab.doc_needs_text = false;
+        // An unsaved shadow just became an unsaved *document* sitting at
+        // the save point `set_buffer_text` set — from here the id set is
+        // the record (see `Tab::shadow_unsaved` for why not before). A
+        // skipped install discards the shadow, and its flag with it; the
+        // document's own modify bit speaks for what was kept.
+        if std::mem::take(&mut tab.shadow_unsaved) && installs {
+            let id = tab.id;
+            self.unsaved_restore_ids.insert(id);
         }
         bound
     }
@@ -4633,6 +4709,9 @@ impl Shell {
                 tab.eol = loaded.eol;
                 tab.byte_len = loaded.byte_len;
                 tab.text.clone_from(&loaded.text);
+                // The shadow is now what the loader read from disk, so
+                // any in-memory rewrite of the previous one is moot.
+                tab.shadow_unsaved = false;
                 // Lang resolution: persisted Language-menu override
                 // wins; extension-based auto-detection (built-in lexers
                 // plus UDL `ext=` associations) is the fallback. Plugins
@@ -5338,31 +5417,121 @@ impl Shell {
         true
     }
 
-    /// Set the EOL format on the buffer with id `id`. Mirrors
-    /// [`Self::set_buffer_encoding_by_id`] for line endings — same
-    /// "TRUE = buffer is in the requested state" return convention,
-    /// `false` only for unknown id.
+    /// Set the EOL format on the buffer with id `id` and rewrite its
+    /// line endings to match. Mirrors [`Self::set_buffer_encoding_by_id`]
+    /// for the metadata half — same "TRUE = buffer is in the requested
+    /// state" return convention — and then does what Notepad++ does on
+    /// a format change: converts the bytes, through
+    /// [`UiPlatform::convert_doc_eols`].
     ///
-    /// **Phase 4 metadata-only:** existing line-ending bytes inside
-    /// the Scintilla document are not rewritten — `SCI_CONVERTEOLS`
-    /// needs UI-side cooperation (the doc-pointer-swap dance to
-    /// reach a non-active buffer's document), tracked in DESIGN.md
-    /// §7.4.
-    pub fn set_buffer_eol_by_id(&mut self, id: isize, eol: codepp_core::Eol) -> bool {
-        let Some(tab) = self.tabs.iter_mut().find(|t| t.id as isize == id) else {
+    /// **Converts unconditionally**, even when `Tab::eol` already reads
+    /// `eol`. The label is detection's verdict on the first 64 KiB at
+    /// load time and nothing keeps it true afterwards — a paste from
+    /// another file, or a plugin's own `SCI_INSERTTEXT`, can leave an
+    /// "LF" buffer holding CRLF lines — so a plugin asking for LF wants
+    /// the *bytes* normalised, not a check of the label. A same-value
+    /// short-circuit would answer TRUE and change nothing, which is the
+    /// silently-half-working shape this project keeps recording. The
+    /// cost is one linear walk of a document the plugin explicitly
+    /// asked to have walked.
+    ///
+    /// **Where the bytes live decides what is converted.** A tab with a
+    /// materialised document is converted in the document, and its
+    /// cached `dirty` is re-read from the live state so every backend's
+    /// tab strip repaints from the truth. One without
+    /// (`scintilla_doc == 0`: loaded in the background and never yet
+    /// activated) holds its content only in `Tab::text`, which
+    /// [`Self::bind_and_fill`] will later install, so that string is
+    /// converted instead and the tab is marked unsaved durably
+    /// ([`Self::mark_shadow_unsaved`] — the install sets the save point,
+    /// so nothing else would ever say the conversion is not on disk).
+    /// A tab flagged `doc_needs_text` holds pre-reload content in its
+    /// document and the reload in `Tab::text`; the next activation
+    /// installs the latter unless the former has unsaved work, decided
+    /// only then — so the copy that will survive is converted. Converting
+    /// the document in the other case is not harmless: the modify bit it
+    /// flips is exactly what that decision reads, and would make it keep
+    /// the stale document and drop the reload. A load still in flight has
+    /// an empty `Tab::text`; its completion overwrites `Tab::eol` with the
+    /// detected value, as it did before this method converted anything.
+    ///
+    /// Returns `false` for an unknown id, and for [`Eol::Mixed`]: that
+    /// variant means "keep each line's own ending", so there is no
+    /// sequence to convert to, and the plugin ABI cannot ask for it
+    /// (`NPPM_SETBUFFERFORMAT` maps only WIN/MAC/UNIX).
+    ///
+    /// Refreshing the chrome is the caller's job — the plugin bridge
+    /// refreshes the status bar for the active tab, the same way
+    /// `set_buffer_lang_type` does, and each backend repaints the tab
+    /// strip when a cached `dirty` moved — because this runs on
+    /// background tabs too.
+    pub fn set_buffer_eol_by_id<U: UiPlatform>(
+        &mut self,
+        ui: &mut U,
+        id: isize,
+        eol: codepp_core::Eol,
+    ) -> bool {
+        if eol == codepp_core::Eol::Mixed {
+            return false;
+        }
+        let Some(idx) = self.tabs.iter().position(|t| t.id as isize == id) else {
             return false;
         };
-        if tab.eol == eol {
+        let (doc, stale) = {
+            let tab = &mut self.tabs[idx];
+            tracing::debug!(
+                buffer_id = id,
+                from = ?tab.eol.label(),
+                to = ?eol.label(),
+                doc = tab.scintilla_doc,
+                stale = tab.doc_needs_text,
+                "set_buffer_eol_by_id"
+            );
+            tab.eol = eol;
+            (tab.scintilla_doc, tab.doc_needs_text)
+        };
+        if doc == 0 || (stale && !self.has_unsaved_work(ui, idx)) {
+            self.convert_shadow_text(idx, eol);
             return true;
         }
-        tracing::debug!(
-            buffer_id = id,
-            from = ?tab.eol.label(),
-            to = ?eol.label(),
-            "set_buffer_eol_by_id"
-        );
-        tab.eol = eol;
+        ui.convert_doc_eols(doc, eol);
+        self.tabs[idx].dirty = self.has_unsaved_work(ui, idx);
         true
+    }
+
+    /// Convert the line endings of `idx`'s shadow `Tab::text` — the
+    /// content a not-yet-materialised (or stale, see `doc_needs_text`)
+    /// tab will be filled from — and, when that changed anything, mark
+    /// the tab unsaved through [`Self::mark_shadow_unsaved`]. A shadow
+    /// already in the requested format is left exactly as it was, so a
+    /// same-format request on a clean tab does not dirty it.
+    fn convert_shadow_text(&mut self, idx: usize, eol: codepp_core::Eol) {
+        let converted = codepp_core::eol::convert(&self.tabs[idx].text, eol);
+        if converted == self.tabs[idx].text {
+            return;
+        }
+        self.tabs[idx].text = converted;
+        self.mark_shadow_unsaved(idx);
+    }
+
+    /// Record that `idx`'s shadow `Tab::text` no longer matches disk.
+    ///
+    /// Setting the cached `dirty` alone is not enough, and the reason is
+    /// the same one [`Self::unsaved_restore_ids`] exists for: the shadow
+    /// is installed by [`Self::bind_and_fill`] through
+    /// [`UiPlatform::set_buffer_text`], which empties the undo buffer and
+    /// **sets the save point**, so from that moment `SCI_GETMODIFY` reads
+    /// clean, every backend's dirty poll overwrites the cached bit with
+    /// that answer, and the close gate — live bit OR cached bit — lets
+    /// the tab go without a prompt. The in-memory change is then simply
+    /// gone, with no undo to recover it. [`Tab::shadow_unsaved`] carries
+    /// the fact until the install, which promotes it into the id set;
+    /// until then it is what makes [`Self::tab_needs_backup`] back the
+    /// shadow up. Not the id set directly — that would read as unsaved
+    /// *document* work and stop the very install that is meant to happen.
+    fn mark_shadow_unsaved(&mut self, idx: usize) {
+        self.tabs[idx].dirty = true;
+        self.tabs[idx].shadow_unsaved = true;
     }
 
     /// Search the active editor forward for `query` under `flags`
@@ -5572,8 +5741,26 @@ impl Shell {
     /// document reads clean (`unsaved_restore_ids`).
     fn tab_needs_backup<U: UiPlatform>(&self, tab: &Tab, ui: &mut U) -> bool {
         tab.path.is_none()
+            || tab.shadow_unsaved
             || ui.is_doc_dirty(tab.scintilla_doc)
             || self.unsaved_restore_ids.contains(&tab.id)
+    }
+
+    /// The text a recovery backup of `tab` must hold: the shadow
+    /// `Tab::text` when that is the authoritative content — no document
+    /// yet, or an unsaved shadow waiting to be installed — and the
+    /// document's otherwise. A tab that never materialised a document
+    /// (loaded in the background and never activated) has its content
+    /// only in the shadow, and `capture_text_from_doc(0)` answers an
+    /// empty string by contract; backing that up would restore an
+    /// *empty* buffer over the file on the next launch, which is worse
+    /// than no backup.
+    fn backup_text_for<U: UiPlatform>(tab: &Tab, ui: &mut U) -> String {
+        if tab.scintilla_doc == 0 || tab.shadow_unsaved {
+            tab.text.clone()
+        } else {
+            ui.capture_text_from_doc(tab.scintilla_doc)
+        }
     }
 
     /// Persist the open-tab list to `session.xml` at the configured
@@ -5898,7 +6085,7 @@ impl Shell {
                     };
                     let filename = format!("{display}@{timestamp}");
                     let abs_path = dir.join(&filename);
-                    let text = ui.capture_text_from_doc(tab.scintilla_doc);
+                    let text = Self::backup_text_for(tab, ui);
                     match write_backup_file(&abs_path, text.as_bytes()) {
                         Ok(()) => {
                             backup_filename = Some(filename.clone());
@@ -6224,6 +6411,7 @@ impl Shell {
             pending_load: None,
             scintilla_doc: 0,
             doc_needs_text: false,
+            shadow_unsaved: false,
             lang: resolved_lang,
             untitled_seq,
             // A restored untitled buffer has never been written to a
@@ -6351,6 +6539,7 @@ impl Shell {
             pending_load: None,
             scintilla_doc: 0,
             doc_needs_text: false,
+            shadow_unsaved: false,
             lang,
             untitled_seq: None,
             // Backup-restored buffers carry edits the user never
@@ -7652,7 +7841,27 @@ impl<U: UiPlatform> HostServices for HostBridge<'_, U> {
             codepp_plugin_host::UNIX_FORMAT => codepp_core::Eol::Lf,
             _ => return false,
         };
-        self.shell.set_buffer_eol_by_id(id, eol)
+        if !self.shell.set_buffer_eol_by_id(self.ui, id, eol) {
+            return false;
+        }
+        // The status bar's EOL slot reads from `Tab::eol`, and the
+        // conversion just changed the length it also shows — so
+        // refresh the chrome for the active tab, the same way
+        // `set_buffer_lang_type` does for its language slot. A
+        // background tab has no chrome to refresh; its next activation
+        // repaints from the tab's metadata anyway. `update_status`
+        // also re-issues `SCI_SETEOLMODE` on the bound document, which
+        // `convert_doc_eols` already did; the second send is idempotent.
+        let active = self
+            .shell
+            .active_tab
+            .and_then(|idx| self.shell.tabs.get(idx))
+            .filter(|tab| tab.id as isize == id);
+        if let Some(tab) = active {
+            let (lang, encoding, byte_len) = (tab.lang, tab.encoding.clone(), tab.byte_len);
+            self.ui.update_status(lang, &encoding, eol, byte_len);
+        }
+        true
     }
 
     fn encode_sci(&mut self, view: i32) -> i32 {
@@ -9167,6 +9376,9 @@ mod tests {
         /// tests assert a removed tab's document reached the release
         /// channel, and that a kept tab's never does.
         released_docs: Vec<isize>,
+        /// Every `convert_doc_eols` call as `(doc, eol)`, for the
+        /// `NPPM_SETBUFFERFORMAT` tests.
+        converted_docs: Vec<(isize, codepp_core::Eol)>,
         status_calls: Vec<(LangType, String, String, u64)>,
         plugin_status_calls: Vec<(usize, String)>,
         /// Every `set_clipboard` call's payload set, so a test can assert
@@ -9582,6 +9794,34 @@ mod tests {
             // rebind depends on the binding state, which is exactly the
             // refcount subtlety the trait docs pin on the backends.
             self.released_docs.push(doc);
+        }
+        fn convert_doc_eols(&mut self, doc: isize, eol: codepp_core::Eol) -> bool {
+            if doc == 0 {
+                return false;
+            }
+            // Model the conversion on the per-document text so a test
+            // can read the converted buffer back, the way the shell's
+            // save path would — and model `SCI_CONVERTEOLS` leaving the
+            // save point alone: a document whose bytes changed reads
+            // modified afterwards, one already uniform does not. The
+            // shell's stale-document arm turns on exactly that, so a
+            // fixture that converted silently could not catch it.
+            let mut changed = false;
+            if let Some(text) = self.doc_text.get_mut(&doc) {
+                let converted = codepp_core::eol::convert(text, eol);
+                changed |= converted != *text;
+                *text = converted;
+            }
+            if doc == self.current_doc {
+                let converted = codepp_core::eol::convert(&self.buffer_text, eol);
+                changed |= converted != self.buffer_text;
+                self.buffer_text = converted;
+            }
+            if changed {
+                self.doc_dirty.insert(doc, true);
+            }
+            self.converted_docs.push((doc, eol));
+            true
         }
         #[cfg(target_os = "windows")]
         fn dispatch_npp_menu_command(&mut self, idm: i32) -> bool {
@@ -10022,10 +10262,10 @@ mod tests {
     }
 
     #[test]
-    fn set_buffer_eol_by_id_targets_specific_tab() {
+    fn set_buffer_eol_by_id_converts_the_bound_document() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("eol.txt");
-        std::fs::write(&path, "line\n").unwrap();
+        std::fs::write(&path, "one\ntwo\nthree\n").unwrap();
         let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
         let mut shell = Shell::new(wake).unwrap();
         let mut ui = FakeUi::default();
@@ -10038,19 +10278,266 @@ mod tests {
         );
 
         let id = shell.tabs[0].id as isize;
-        // Detection of "line\n" produces Eol::Lf.
+        let doc = shell.tabs[0].scintilla_doc;
+        assert_ne!(doc, 0, "the active tab's document is materialised");
+        // Detection of "one\ntwo\n..." produces Eol::Lf.
         assert_eq!(shell.tabs[0].eol, codepp_core::Eol::Lf);
 
-        // Flip to CRLF.
-        assert!(shell.set_buffer_eol_by_id(id, codepp_core::Eol::CrLf));
+        // Flip to CRLF: the label moves *and* the document is converted
+        // through the UI hook — the half that used to be missing.
+        assert!(!shell.tabs[0].dirty, "precondition: clean");
+        assert!(shell.set_buffer_eol_by_id(&mut ui, id, codepp_core::Eol::CrLf));
         assert_eq!(shell.tabs[0].eol, codepp_core::Eol::CrLf);
+        assert_eq!(ui.converted_docs, vec![(doc, codepp_core::Eol::CrLf)]);
+        assert_eq!(
+            ui.get_buffer_text(),
+            "one\r\ntwo\r\nthree\r\n",
+            "the bytes a save would write must carry the new endings",
+        );
+        assert!(
+            shell.tabs[0].dirty,
+            "the cached dirty bit follows the live one, so the strip repaints from the truth"
+        );
+        assert!(
+            !shell.is_unsaved_restore(id as i32),
+            "a materialised document carries its own modify bit; no durable marker needed"
+        );
 
-        // Same-value reports success — the buffer is already in
-        // the requested state.
-        assert!(shell.set_buffer_eol_by_id(id, codepp_core::Eol::CrLf));
+        // Same-value still converts: the label is only detection's
+        // verdict at load time, and a plugin asking for the format the
+        // label already shows wants the bytes checked, not the label.
+        assert!(shell.set_buffer_eol_by_id(&mut ui, id, codepp_core::Eol::CrLf));
+        assert_eq!(ui.converted_docs.len(), 2);
 
-        // Unknown id rejected.
-        assert!(!shell.set_buffer_eol_by_id(9999, codepp_core::Eol::Lf));
+        // Unknown id rejected, and nothing converted for it.
+        assert!(!shell.set_buffer_eol_by_id(&mut ui, 9999, codepp_core::Eol::Lf));
+        // `Mixed` has no target sequence and is refused before the
+        // label is touched.
+        assert!(!shell.set_buffer_eol_by_id(&mut ui, id, codepp_core::Eol::Mixed));
+        assert_eq!(shell.tabs[0].eol, codepp_core::Eol::CrLf);
+        assert_eq!(ui.converted_docs.len(), 2);
+    }
+
+    #[test]
+    #[cfg(target_os = "windows")]
+    fn plugin_dispatch_set_buffer_format_converts_and_refreshes_status() {
+        // The end-to-end shape of the DESIGN.md section 7.4 entry: a plugin
+        // sends NPPM_SETBUFFERFORMAT for the active buffer and both
+        // halves happen — the document's bytes are converted through
+        // the UI hook, and the status bar repaints with the new EOL
+        // without waiting for a tab switch.
+        use codepp_plugin_host::dispatch::NPPM_SETBUFFERFORMAT;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("fmt.txt");
+        std::fs::write(&path, "a\nb\n").unwrap();
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+        shell.open_file(path);
+        drain_until(
+            &mut shell,
+            &mut ui,
+            |u, _| !u.set_text_calls.is_empty(),
+            Duration::from_secs(2),
+        );
+        let id = shell.tabs[0].id as usize;
+        let doc = shell.tabs[0].scintilla_doc;
+        let status_before = ui.status_calls.len();
+
+        let r = unsafe {
+            shell.dispatch_plugin_message(
+                &mut ui,
+                HostHandles::null(),
+                NPPM_SETBUFFERFORMAT,
+                id,
+                codepp_plugin_host::WIN_FORMAT as isize,
+            )
+        };
+        assert_eq!(r, Some(1));
+        assert_eq!(shell.tabs[0].eol, codepp_core::Eol::CrLf);
+        assert_eq!(ui.converted_docs, vec![(doc, codepp_core::Eol::CrLf)]);
+        assert_eq!(ui.get_buffer_text(), "a\r\nb\r\n");
+        assert_eq!(
+            ui.status_calls.len(),
+            status_before + 1,
+            "NPPM_SETBUFFERFORMAT on the active tab must refresh the status bar",
+        );
+        assert_eq!(
+            ui.status_calls.last().unwrap().2,
+            codepp_core::Eol::CrLf.label(),
+            "status bar must repaint with the new EOL, not the old one",
+        );
+
+        // Unknown EolType and unknown id are refused with nothing
+        // converted and nothing repainted.
+        for (wparam, lparam) in [
+            (id, 99isize),
+            (9999usize, codepp_plugin_host::UNIX_FORMAT as isize),
+        ] {
+            let r = unsafe {
+                shell.dispatch_plugin_message(
+                    &mut ui,
+                    HostHandles::null(),
+                    NPPM_SETBUFFERFORMAT,
+                    wparam,
+                    lparam,
+                )
+            };
+            assert_eq!(r, Some(0));
+        }
+        assert_eq!(ui.converted_docs.len(), 1);
+        assert_eq!(ui.status_calls.len(), status_before + 1);
+    }
+
+    #[test]
+    fn set_buffer_eol_by_id_converts_the_text_of_an_unmaterialised_tab() {
+        // A tab loaded in the background never activated has no
+        // document — its content sits in `Tab::text` until
+        // `bind_and_fill` installs it. Converting must reach that
+        // string, or the first activation would install the old
+        // endings under a label claiming the new ones.
+        let dir = tempfile::tempdir().unwrap();
+        let first = dir.path().join("first.txt");
+        let second = dir.path().join("second.txt");
+        std::fs::write(&first, "a\r\nb\r\n").unwrap();
+        std::fs::write(&second, "x\r\ny\r\n").unwrap();
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+        shell.open_file(first);
+        shell.open_file(second);
+        // `drain_until`'s predicate cannot see the shell, and the
+        // condition here is "both loads landed", so drain by hand.
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while shell.tabs.iter().any(|t| t.pending_load.is_some()) {
+            assert!(Instant::now() < deadline, "loads did not complete in time");
+            let _ = shell.drain(&mut ui);
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        // The second open moved `active_tab` before the first load
+        // landed, so the first tab's document was never created.
+        let (bg_idx, bg_id) = (0usize, shell.tabs[0].id as isize);
+        assert_eq!(shell.active_tab, Some(1));
+        assert_eq!(
+            shell.tabs[bg_idx].scintilla_doc, 0,
+            "precondition: unmaterialised"
+        );
+        assert_eq!(shell.tabs[bg_idx].text, "a\r\nb\r\n");
+        assert_eq!(shell.tabs[bg_idx].eol, codepp_core::Eol::CrLf);
+
+        assert!(
+            !shell.is_unsaved_restore(bg_id as i32),
+            "precondition: clean"
+        );
+
+        assert!(shell.set_buffer_eol_by_id(&mut ui, bg_id, codepp_core::Eol::Lf));
+        assert_eq!(shell.tabs[bg_idx].eol, codepp_core::Eol::Lf);
+        assert_eq!(shell.tabs[bg_idx].text, "a\nb\n");
+        assert!(
+            ui.converted_docs.is_empty(),
+            "no document exists yet, so nothing is sent to the UI"
+        );
+        // The shadow no longer matches disk, and the install below
+        // sets the save point — so the fact is carried on the tab, and
+        // a backup written before then has to carry the shadow.
+        assert!(shell.tabs[bg_idx].dirty);
+        assert!(shell.tabs[bg_idx].shadow_unsaved);
+        assert!(shell.tab_needs_backup(&shell.tabs[bg_idx], &mut ui));
+        assert_eq!(
+            Shell::backup_text_for(&shell.tabs[bg_idx], &mut ui),
+            "a\nb\n"
+        );
+
+        // Activating it now installs the converted text, so what the
+        // user sees — and what a save writes — matches the label; the
+        // document reads clean (save point) and the tab still counts
+        // as unsaved, which is what stops a close discarding it.
+        shell.active_tab = Some(bg_idx);
+        shell.bind_active_view(&mut ui);
+        assert_eq!(ui.get_buffer_text(), "a\nb\n");
+        assert!(!ui.is_doc_dirty(shell.tabs[bg_idx].scintilla_doc));
+        assert!(!shell.tabs[bg_idx].shadow_unsaved);
+        assert!(shell.is_unsaved_restore(bg_id as i32));
+        assert!(shell.has_unsaved_work(&mut ui, bg_idx));
+
+        // A same-format request on a shadow already in that format
+        // changes nothing and marks nothing.
+        let (other_idx, other_id) = (1usize, shell.tabs[1].id);
+        shell.tabs[other_idx].scintilla_doc = 0;
+        shell.tabs[other_idx].text = "x\r\ny\r\n".to_string();
+        assert!(shell.set_buffer_eol_by_id(&mut ui, other_id as isize, codepp_core::Eol::CrLf));
+        assert!(!shell.tabs[other_idx].dirty);
+        assert!(!shell.tabs[other_idx].shadow_unsaved);
+    }
+
+    #[test]
+    fn set_buffer_eol_by_id_converts_the_copy_that_survives_a_stale_document() {
+        // `doc_needs_text` marks a document holding pre-reload content
+        // that the next activation replaces from `Tab::text` — unless
+        // the document has unsaved work, decided only then. Convert the
+        // copy that will survive, and *only* that one: converting a
+        // clean stale document would flip the modify bit that decision
+        // reads, so the activation would keep the stale document and
+        // silently drop the reload.
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+        shell.new_untitled(&mut ui);
+        let idx = shell.active_tab.expect("new_untitled activates its tab");
+        let id = shell.tabs[idx].id;
+        let doc = shell.tabs[idx].scintilla_doc;
+        assert_ne!(doc, 0);
+        ui.replace_doc_text(doc, "old\r\n");
+        shell.tabs[idx].text = "reloaded\r\n".to_string();
+        shell.tabs[idx].doc_needs_text = true;
+
+        // Clean stale document: the shadow is converted, the document
+        // is left alone, and the reload lands on activation.
+        assert!(shell.set_buffer_eol_by_id(&mut ui, id as isize, codepp_core::Eol::Lf));
+        assert_eq!(shell.tabs[idx].text, "reloaded\n");
+        assert!(
+            ui.converted_docs.is_empty(),
+            "a clean stale document must not be touched"
+        );
+        assert!(shell.tabs[idx].shadow_unsaved);
+        assert_eq!(
+            Shell::backup_text_for(&shell.tabs[idx], &mut ui),
+            "reloaded\n"
+        );
+        shell.bind_active_view(&mut ui);
+        assert_eq!(
+            ui.get_buffer_text(),
+            "reloaded\n",
+            "the reload must still land"
+        );
+        assert!(
+            shell.is_unsaved_restore(id),
+            "and the conversion on it counts as unsaved"
+        );
+
+        // Stale document with unsaved work: that document survives the
+        // activation, so it is the copy converted; the shadow, which
+        // will be discarded, is not marked or touched.
+        shell.unsaved_restore_ids.clear();
+        shell.tabs[idx].dirty = false;
+        ui.replace_doc_text(doc, "edited\r\n");
+        ui.doc_dirty.insert(doc, true);
+        shell.tabs[idx].text = "reloaded\r\n".to_string();
+        shell.tabs[idx].doc_needs_text = true;
+        assert!(shell.set_buffer_eol_by_id(&mut ui, id as isize, codepp_core::Eol::Lf));
+        assert_eq!(ui.converted_docs, vec![(doc, codepp_core::Eol::Lf)]);
+        assert_eq!(ui.get_buffer_text(), "edited\n");
+        assert_eq!(shell.tabs[idx].text, "reloaded\r\n");
+        assert!(
+            shell.tabs[idx].dirty,
+            "cached bit re-read from the live state"
+        );
+        assert!(!shell.tabs[idx].shadow_unsaved);
+        // The skipped install drops the shadow and its flag; the
+        // document's own modify bit is the record.
+        shell.bind_active_view(&mut ui);
+        assert_eq!(ui.get_buffer_text(), "edited\n");
+        assert!(!shell.is_unsaved_restore(id));
     }
 
     #[test]
@@ -15300,6 +15787,23 @@ mod tests {
             ui.replaced_docs.is_empty(),
             "no document exists, so Scintilla must not be asked to edit one"
         );
+        // Unsaved beyond the cached bit: the install that follows sets
+        // the save point, so the fact has to be carried past it. Until
+        // then a recovery backup carries the shadow, not document 0's
+        // empty answer.
+        assert!(shell.tabs[0].shadow_unsaved);
+        assert!(shell.tab_needs_backup(&shell.tabs[0], &mut ui));
+        assert_eq!(Shell::backup_text_for(&shell.tabs[0], &mut ui), "after");
+        // Activating installs the shadow at a save point — the very
+        // reason the cached bit alone was not enough — and promotes the
+        // flag into the durable set, so the tab still counts as unsaved.
+        shell.active_tab = Some(0);
+        shell.bind_active_view(&mut ui);
+        assert_eq!(ui.get_buffer_text(), "after");
+        assert!(!ui.is_doc_dirty(shell.tabs[0].scintilla_doc));
+        assert!(!shell.tabs[0].shadow_unsaved);
+        assert!(shell.is_unsaved_restore(1));
+        assert!(shell.has_unsaved_work(&mut ui, 0));
     }
 
     /// The tab can close between the walker snapshotting open paths
