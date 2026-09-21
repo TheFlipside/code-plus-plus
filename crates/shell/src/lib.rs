@@ -3796,12 +3796,16 @@ impl Shell {
                     self.pending_notifications
                         .push(Notification::FileSaved { buffer_id });
                 }
-                ui.mark_saved();
                 // Save As writes to a real path, so the buffer is no
-                // longer unsaved-from-restore.
+                // longer unsaved-from-restore. Released *before*
+                // `mark_saved`: its `SCI_SETSAVEPOINT` reaches Win32's
+                // savepoint handler synchronously, and that handler now
+                // ORs this set into the cached dirty bit — released after,
+                // the glyph would stay red until the next notification.
                 if let Some(id) = self.active().map(|t| t.id) {
                     self.unsaved_restore_ids.remove(&id);
                 }
+                ui.mark_saved();
                 // Push the new lang through the UI so the lexer
                 // re-attaches and the chrome refreshes.
                 if let Some(tab) = self.active() {
@@ -4566,9 +4570,14 @@ impl Shell {
         // the save point `set_buffer_text` set — from here the id set is
         // the record (see `Tab::shadow_unsaved` for why not before). A
         // skipped install discards the shadow, and its flag with it; the
-        // document's own modify bit speaks for what was kept.
+        // document's own modify bit speaks for what was kept. The cached
+        // bit is re-asserted with the promotion because the install's
+        // `SCN_SAVEPOINTREACHED` just cleared it on a backend that keeps
+        // the cache from notifications (Win32), before the id was in the
+        // set for that handler to consult.
         if std::mem::take(&mut tab.shadow_unsaved) && installs {
             let id = tab.id;
+            tab.dirty = true;
             self.unsaved_restore_ids.insert(id);
         }
         bound
@@ -4618,6 +4627,51 @@ impl Shell {
             (tab.lang, tab.encoding.clone(), tab.eol, tab.byte_len);
         ui.apply_lang(lang);
         ui.update_status(lang, &encoding, eol, byte_len);
+    }
+
+    /// First half of the unsaved-marker bookkeeping around an active-tab
+    /// install in [`Self::apply_load_result`]. The visible buffer is about
+    /// to hold either the kept shadow or exactly what is on disk, and
+    /// `unsaved_restore_ids` has to say which. Freshly loaded disk content
+    /// means a tab that was unsaved-from-restore no longer is: the
+    /// restored content the marker stood for is being replaced by the
+    /// file — at the user's say-so through the reload prompt, or a
+    /// plugin's through `NPPM_RELOADBUFFERID`. Left in the set, the tab
+    /// would keep a red glyph, keep its recovery backup and prompt on
+    /// close for content it no longer holds. Released *before* the
+    /// install: `set_buffer_text`'s `SCI_SETSAVEPOINT` reaches Win32's
+    /// savepoint handler synchronously, and that handler ORs this set
+    /// into the cached dirty bit — the same ordering the save paths keep.
+    /// Only here: the background arm keeps unsaved work and its marker.
+    fn release_marker_before_install(&mut self, idx: usize, keeps_shadow: bool) {
+        if keeps_shadow {
+            return;
+        }
+        if let Some(id) = self.tabs.get(idx).map(|t| t.id) {
+            self.unsaved_restore_ids.remove(&id);
+        }
+    }
+
+    /// Second half, after `set_buffer_text` has set the save point. A
+    /// kept shadow just became an unsaved document at that save point —
+    /// the same promotion [`Self::bind_and_fill`] makes, for the same
+    /// reason, with the cached bit re-asserted because the save point
+    /// just cleared it. Freshly loaded content clears the cached bit
+    /// explicitly rather than leaving it to the notification, so it
+    /// cannot outlive the marker on a backend whose handler ran before
+    /// the shell's bookkeeping — the mirror of the promotion.
+    fn settle_marker_after_install(&mut self, idx: usize, keeps_shadow: bool) {
+        let Some(tab) = self.tabs.get_mut(idx) else {
+            return;
+        };
+        if keeps_shadow {
+            tab.shadow_unsaved = false;
+            tab.dirty = true;
+            let id = tab.id;
+            self.unsaved_restore_ids.insert(id);
+        } else {
+            tab.dirty = false;
+        }
     }
 
     fn apply_load_result<U: UiPlatform>(
@@ -4837,32 +4891,9 @@ impl Shell {
                     if let Some(tab) = self.tabs.get_mut(target_idx) {
                         tab.scintilla_doc = bound_doc;
                     }
+                    self.release_marker_before_install(target_idx, keeps_shadow);
                     ui.set_buffer_text(&text, cursor);
-                    // The visible buffer now holds either the kept shadow
-                    // or exactly what is on disk, and `unsaved_restore_ids`
-                    // has to say which. A kept shadow just became an
-                    // unsaved document at the save point `set_buffer_text`
-                    // set — the same promotion `bind_and_fill` makes, for
-                    // the same reason. Freshly loaded disk content is the
-                    // opposite case: a tab that was unsaved-from-restore
-                    // no longer is, because the restored content the
-                    // marker stood for has just been replaced by the file
-                    // — at the user's say-so through the reload prompt, or
-                    // a plugin's through `NPPM_RELOADBUFFERID`. Left in
-                    // the set, the tab would keep a red glyph, keep its
-                    // recovery backup and prompt on close for content it
-                    // no longer holds. Only here: the background arm keeps
-                    // unsaved work and its marker with it.
-                    if let Ok(id) = i32::try_from(buffer_id) {
-                        if keeps_shadow {
-                            if let Some(tab) = self.tabs.get_mut(target_idx) {
-                                tab.shadow_unsaved = false;
-                            }
-                            self.unsaved_restore_ids.insert(id);
-                        } else {
-                            self.unsaved_restore_ids.remove(&id);
-                        }
-                    }
+                    self.settle_marker_after_install(target_idx, keeps_shadow);
                     // apply_lang AFTER set_buffer_text — Scintilla
                     // re-styles the visible region on lexer attach,
                     // so the lexer needs to see the document already
@@ -5252,6 +5283,18 @@ impl Shell {
         self.pending_notifications
             .push(Notification::FileSaved { buffer_id });
 
+        // Written to a real path now, so it is no longer
+        // unsaved-from-restore (no-op for a tab that never was). Reuse the
+        // id bound once at the top rather than a second `self.active()`
+        // read, honouring that binding's own single-read discipline; the
+        // `try_from` always succeeds since `buffer_id` is a widened `i32`.
+        // Released *before* `mark_saved`: its `SCI_SETSAVEPOINT` reaches
+        // Win32's savepoint handler synchronously, and that handler ORs
+        // this set into the cached dirty bit — released after, the glyph
+        // would stay red until the next notification.
+        if let Ok(id) = i32::try_from(buffer_id) {
+            self.unsaved_restore_ids.remove(&id);
+        }
         // Clear Scintilla's dirty glyph for the just-saved buffer.
         // Done here so every save path (single Save, Save As, the
         // per-tab loop in Save All) gets the dirty-state reset
@@ -5259,14 +5302,6 @@ impl Shell {
         // the glyph when *every* tab succeeded, since the UI
         // handler folds save-points only on a fully-clean batch.
         ui.mark_saved();
-        // Written to a real path now, so it is no longer
-        // unsaved-from-restore (no-op for a tab that never was). Reuse the
-        // id bound once at the top rather than a second `self.active()`
-        // read, honouring that binding's own single-read discipline; the
-        // `try_from` always succeeds since `buffer_id` is a widened `i32`.
-        if let Ok(id) = i32::try_from(buffer_id) {
-            self.unsaved_restore_ids.remove(&id);
-        }
 
         Ok(())
     }
@@ -10574,6 +10609,10 @@ mod tests {
         assert!(!shell.is_unsaved_restore(id));
         assert!(!shell.has_unsaved_work(&mut ui, 0));
         assert!(!shell.tab_needs_backup(&shell.tabs[0], &mut ui));
+        assert!(
+            !shell.tabs[0].dirty,
+            "the cached bit is cleared with the marker"
+        );
     }
 
     #[test]

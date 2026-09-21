@@ -4581,7 +4581,13 @@ unsafe fn handle_close_active_tab_inner(hwnd: HWND) -> CloseOutcome {
             let name = tab_display_name(tab);
             let has_path = tab.path.is_some();
             let has_pending_load = tab.pending_load.is_some();
-            let cached_dirty = tab.dirty;
+            // …and against the shell's durable record of content that
+            // is not on disk although the document sits at its save
+            // point (a crash-restored buffer, a promoted shadow). The
+            // savepoint handler keeps `Tab.dirty` in step with the set
+            // now, so this is defence in depth against an ordering
+            // where the set gained the id after the last notification.
+            let cached_dirty = tab.dirty || state.shell.is_unsaved_restore(tab.id);
             let dirty = state.editor.send(SCI_GETMODIFY, 0, 0) != 0 || cached_dirty;
             let length = state.editor.send(SCI_GETLENGTH, 0, 0);
             (name, has_path, has_pending_load, dirty, length)
@@ -5106,77 +5112,31 @@ unsafe fn handle_tab_selchange(hwnd: HWND) {
     // Copy and matches the fresh-state default.
     state.select_mark = SelectMarkMode::None;
 
-    // Snapshot what we need from the tab, then drop the borrow
-    // before reaching for `state.editor` (a Copy field) so we can
-    // call into Scintilla without a live `&mut Tab` borrow.
-    let (mut doc, text_to_populate, encoding, eol, byte_len, lang) = {
-        let tab = &state.shell.tabs[new_idx];
-        (
-            tab.scintilla_doc,
-            if tab.scintilla_doc == 0 {
-                Some(tab.text.clone())
-            } else {
-                None
-            },
-            tab.encoding.clone(),
-            tab.eol,
-            tab.byte_len,
-            tab.lang,
-        )
-    };
-
-    // Lazily populate the doc on first activation of a background-
-    // loaded tab. Create the doc, bind it, push the saved text.
-    if let Some(text) = text_to_populate {
-        doc = state
-            .editor
-            .send(SCI_CREATEDOCUMENT, 0, SC_DOCUMENTOPTION_DEFAULT);
-        state.editor.send(SCI_SETDOCPOINTER, 0, doc);
-        // Per-doc state — every fresh document needs change-history
-        // enabled AND tab width re-applied (`SCI_SETTABWIDTH` is
-        // per-document; see the `apply_tab_width` doc). Margin
-        // configuration was applied once at editor creation and
-        // lives on the view, so it carries through every doc swap.
-        // Critical to call `enable_change_history` BEFORE
-        // `SCI_SETTEXT` so the initial text-insert is treated as
-        // the document's starting state (not as edits to track).
-        state.editor.enable_change_history();
-        apply_tab_width(&state.editor);
-        let mut bytes = Vec::with_capacity(text.len() + 1);
-        bytes.extend_from_slice(text.as_bytes());
-        bytes.push(0);
-        state.editor.send(SCI_SETTEXT, 0, bytes.as_ptr() as isize);
-        state.editor.send(SCI_EMPTYUNDOBUFFER, 0, 0);
-        state.editor.send(SCI_SETSAVEPOINT, 0, 0);
-        state.shell.tabs[new_idx].scintilla_doc = doc;
-    } else {
-        // Doc already exists — just rebind the view.
-        state.editor.send(SCI_SETDOCPOINTER, 0, doc);
+    // Bind the view to the new tab's document through the shell —
+    // `Shell::bind_active_view` — rather than materialising it by hand
+    // here, as this function did until Phase 5. The hand-rolled path
+    // created and filled a document only when `scintilla_doc == 0`,
+    // which is a correct proxy for "never populated" only while every
+    // background load lands on a fresh tab; the shell's `bind_and_fill`
+    // is the one place that also knows about a document holding
+    // pre-reload text (`Tab::doc_needs_text`) and a shadow rewritten
+    // in memory that must count as unsaved once installed
+    // (`Tab::shadow_unsaved`). With the hand-rolled path a background
+    // reload left the document stale on this backend, and a plugin's
+    // `NPPM_SETBUFFERFORMAT` on a background tab installed clean at
+    // the save point — closable without a prompt, never backed up.
+    // `ui_gtk` and `ui_cocoa` have always gone through the shell here;
+    // this was the DESIGN.md §7.4 "Win32 is not covered by the
+    // `bind_and_fill` half" entry. `activate_tab` creates the document
+    // with change history and tab width applied (and re-measures the
+    // line-number margin, which the hand-rolled path never did),
+    // `set_buffer_text` installs the text at a save point, and the
+    // shell follows with `apply_lang` and `update_status` — the same
+    // three calls this function made by hand, in the same order.
+    {
+        let (shell, mut win32_ui) = state.split();
+        shell.bind_active_view(&mut win32_ui);
     }
-
-    // Refresh the status bar so encoding/EOL/size match the
-    // newly-active tab. Without this, the user sees the old tab's
-    // stats until the next `WM_APP_WAKE` drain (which has no
-    // reason to fire on a click-only switch).
-    let mut win32_ui = Win32Ui {
-        status_hwnd: state.status_hwnd,
-        tab_hwnd: state.tab_hwnd,
-        toolbar_hwnd: state.toolbar_hwnd,
-        main_menu: state.main_menu,
-        accel_handle: &raw mut state.accel_handle,
-        plugin_modeless_dialogs: &raw mut state.plugin_modeless_dialogs,
-        dock_dialogs: &raw mut state.dock_dialogs,
-        udl_registry: &raw const state.shell.udl_registry,
-        editor: state.editor,
-        docmap_editor: state.docmap_editor,
-    };
-    // Re-apply the new tab's lexer/theme. Each tab carries its own
-    // LangType; without this call the previous tab's lexer stays
-    // bound to the single Scintilla view and colours the new
-    // buffer with the wrong rules (or, if the previous tab was
-    // L_TEXT, leaves a coloured buffer un-styled).
-    <Win32Ui as UiPlatform>::apply_lang(&mut win32_ui, lang);
-    <Win32Ui as UiPlatform>::update_status(&mut win32_ui, lang, &encoding, eol, byte_len);
 
     // Refresh toolbar state for the newly-bound buffer. Same
     // rationale as the status-bar update above: `SCI_SETDOCPOINTER`
@@ -26884,8 +26844,20 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                         };
                         if let Some(idx) = active {
                             if let Some(state) = state_from_hwnd(hwnd) {
-                                if idx < state.shell.tabs.len() {
-                                    state.shell.tabs[idx].dirty = dirty;
+                                if let Some(tab) = state.shell.tabs.get(idx) {
+                                    // REACHED does not mean "on disk":
+                                    // a crash-restored buffer and a
+                                    // promoted shadow sit at a save
+                                    // point with content that exists
+                                    // nowhere else, and the shell's id
+                                    // set is the durable record of
+                                    // that. OR it in, as `ui_gtk`'s
+                                    // `refresh_active_dirty` and
+                                    // `ui_cocoa`'s `active_dirty` do —
+                                    // the DESIGN.md §7.4 glyph entry.
+                                    let id = tab.id;
+                                    let unsaved = dirty || state.shell.is_unsaved_restore(id);
+                                    state.shell.tabs[idx].dirty = unsaved;
                                 }
                             }
                             invalidate_tab(tab_hwnd, idx);
