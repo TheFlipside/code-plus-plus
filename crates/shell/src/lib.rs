@@ -4680,6 +4680,7 @@ impl Shell {
                 // Write the tab fields first so any UI calls below
                 // observe a tab in its post-load state. The borrow
                 // ends at the end of the if-let-else.
+                let is_active = self.active_tab == Some(target_idx);
                 let Some(tab) = self.tabs.get_mut(target_idx) else {
                     return;
                 };
@@ -4705,13 +4706,41 @@ impl Shell {
                     tab.untitled_seq = None;
                     tab.custom_name = None;
                 }
-                tab.encoding.clone_from(&loaded.encoding);
-                tab.eol = loaded.eol;
-                tab.byte_len = loaded.byte_len;
-                tab.text.clone_from(&loaded.text);
-                // The shadow is now what the loader read from disk, so
-                // any in-memory rewrite of the previous one is moot.
-                tab.shadow_unsaved = false;
+                // **Never over an unsaved shadow.** A tab whose shadow was
+                // rewritten in memory (a Replace-in-Files or a plugin's
+                // `NPPM_SETBUFFERFORMAT`, not yet installed) keeps it and
+                // drops the loaded text — the same answer the document
+                // branch below gives a background buffer with unsaved
+                // edits, and for the same reason: the reload is reached
+                // from the file watcher and from a plugin's
+                // `NPPM_RELOADBUFFERID` with no prompt, and the shadow's
+                // change is the only copy of that work. The tab's
+                // metadata stays with the shadow it describes.
+                //
+                // Not gated on `is_active`, deliberately. An activated tab
+                // has normally had its shadow installed and promoted by
+                // `bind_and_fill`, so the flag is clear — but `active_tab`
+                // can move without a rebind (`NPPM_SWITCHTOFILE` /
+                // `NPPM_ACTIVATEDOC` defer it to the backend, and Win32
+                // skips it while a load is pending, i.e. exactly now), and
+                // a gate on `is_active` would then overwrite the shadow
+                // it exists to protect. The active branch below installs
+                // whatever `tab.text` holds after this decision, and
+                // promotes a kept shadow itself.
+                let keeps_shadow = tab.shadow_unsaved;
+                if keeps_shadow {
+                    // `warn`, not `debug`: a reload the user or a plugin asked
+                    // for was declined, and the log is the only record.
+                    tracing::warn!(
+                        path = ?loaded.path,
+                        "load onto a tab with an unsaved shadow; keeping the shadow"
+                    );
+                } else {
+                    tab.encoding.clone_from(&loaded.encoding);
+                    tab.eol = loaded.eol;
+                    tab.byte_len = loaded.byte_len;
+                    tab.text.clone_from(&loaded.text);
+                }
                 // Lang resolution: persisted Language-menu override
                 // wins; extension-based auto-detection (built-in lexers
                 // plus UDL `ext=` associations) is the fallback. Plugins
@@ -4729,6 +4758,15 @@ impl Shell {
                 let stored_doc = tab.scintilla_doc;
                 let lang = tab.lang;
                 let buffer_id = tab.id as isize;
+                // What the active branch installs: the kept shadow, or
+                // the loaded text it was just replaced with. Cloned once
+                // here rather than borrowing `tab` across the UI calls.
+                let text_to_install = if is_active {
+                    Some(tab.text.clone())
+                } else {
+                    None
+                };
+                let (encoding, eol, byte_len) = (tab.encoding.clone(), tab.eol, tab.byte_len);
 
                 // Apply UI updates only when this load targets the
                 // **active** tab. `activate_tab` rebinds the single
@@ -4762,7 +4800,6 @@ impl Shell {
                 self.pending_notifications
                     .push(Notification::FileOpened { buffer_id });
 
-                let is_active = self.active_tab == Some(target_idx);
                 if !is_active && stored_doc != 0 {
                     // The load landed on a background tab that already
                     // owns a document, so that document now holds the
@@ -4787,7 +4824,7 @@ impl Shell {
                     // `has_unsaved_work`, not `is_doc_dirty` — see its
                     // docs. A crash-recovered buffer reads *clean*.
                     if self.has_unsaved_work(ui, target_idx) {
-                        tracing::debug!(
+                        tracing::warn!(
                             path = ?loaded.path,
                             "background load onto a buffer with unsaved work; keeping it"
                         );
@@ -4795,18 +4832,29 @@ impl Shell {
                         tab.doc_needs_text = true;
                     }
                 }
-                if is_active {
+                if let Some(text) = text_to_install {
                     let bound_doc = ui.activate_tab(target_idx, stored_doc);
                     if let Some(tab) = self.tabs.get_mut(target_idx) {
                         tab.scintilla_doc = bound_doc;
                     }
-                    ui.set_buffer_text(&loaded.text, cursor);
+                    ui.set_buffer_text(&text, cursor);
+                    // A kept shadow just became an unsaved document at the
+                    // save point `set_buffer_text` set — the same promotion
+                    // `bind_and_fill` makes, for the same reason.
+                    if keeps_shadow {
+                        if let Some(tab) = self.tabs.get_mut(target_idx) {
+                            tab.shadow_unsaved = false;
+                        }
+                        if let Ok(id) = i32::try_from(buffer_id) {
+                            self.unsaved_restore_ids.insert(id);
+                        }
+                    }
                     // apply_lang AFTER set_buffer_text — Scintilla
                     // re-styles the visible region on lexer attach,
                     // so the lexer needs to see the document already
                     // populated to colour it on the first paint.
                     ui.apply_lang(lang);
-                    ui.update_status(lang, &loaded.encoding, loaded.eol, loaded.byte_len);
+                    ui.update_status(lang, &encoding, eol, byte_len);
 
                     // The just-loaded tab is now the user-visible
                     // buffer — fire NPPN_BUFFERACTIVATED so plugins
@@ -10468,6 +10516,116 @@ mod tests {
         assert!(shell.set_buffer_eol_by_id(&mut ui, other_id as isize, codepp_core::Eol::CrLf));
         assert!(!shell.tabs[other_idx].dirty);
         assert!(!shell.tabs[other_idx].shadow_unsaved);
+    }
+
+    #[test]
+    fn background_reload_keeps_an_unsaved_shadow() {
+        // The document branch of `apply_load_result` keeps a background
+        // buffer's unsaved edits over a reload; the shadow must get the
+        // same answer, or a file-watcher or `NPPM_RELOADBUFFERID` reload
+        // silently discards a conversion (or a Replace-in-Files) that
+        // exists nowhere else.
+        let dir = tempfile::tempdir().unwrap();
+        let first = dir.path().join("first.txt");
+        let second = dir.path().join("second.txt");
+        std::fs::write(&first, "a\r\nb\r\n").unwrap();
+        std::fs::write(&second, "x\r\ny\r\n").unwrap();
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+        shell.open_file(first.clone());
+        shell.open_file(second);
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while shell.tabs.iter().any(|t| t.pending_load.is_some()) {
+            assert!(Instant::now() < deadline, "loads did not complete in time");
+            let _ = shell.drain(&mut ui);
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let bg_id = shell.tabs[0].id as isize;
+        assert_eq!(shell.active_tab, Some(1));
+        assert_eq!(
+            shell.tabs[0].scintilla_doc, 0,
+            "precondition: unmaterialised"
+        );
+        assert!(shell.set_buffer_eol_by_id(&mut ui, bg_id, codepp_core::Eol::Lf));
+        assert!(shell.tabs[0].shadow_unsaved, "precondition: shadow unsaved");
+
+        // A reload lands on the background tab.
+        shell.confirm_reload(first);
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while shell.tabs[0].pending_load.is_some() {
+            assert!(Instant::now() < deadline, "reload did not complete in time");
+            let _ = shell.drain(&mut ui);
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert_eq!(
+            shell.tabs[0].text, "a\nb\n",
+            "the shadow must survive the reload"
+        );
+        assert_eq!(shell.tabs[0].eol, codepp_core::Eol::Lf);
+        assert!(shell.tabs[0].shadow_unsaved);
+        // And it is what the first activation installs.
+        shell.active_tab = Some(0);
+        shell.bind_active_view(&mut ui);
+        assert_eq!(ui.get_buffer_text(), "a\nb\n");
+        assert!(shell.is_unsaved_restore(bg_id as i32));
+    }
+
+    #[test]
+    fn reload_onto_an_active_tab_with_an_unsaved_shadow_installs_the_shadow() {
+        // `active_tab` can move onto a tab without a rebind —
+        // `NPPM_SWITCHTOFILE` / `NPPM_ACTIVATEDOC` defer it to the
+        // backend, and Win32 skips it while a load is pending — so a
+        // reload can land on an *active* tab whose shadow is still
+        // uninstalled. It must install the shadow, not the file, and
+        // promote it, exactly as `bind_and_fill` would have.
+        let dir = tempfile::tempdir().unwrap();
+        let first = dir.path().join("first.txt");
+        let second = dir.path().join("second.txt");
+        std::fs::write(&first, "a\r\nb\r\n").unwrap();
+        std::fs::write(&second, "x\r\ny\r\n").unwrap();
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+        shell.open_file(first.clone());
+        shell.open_file(second);
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while shell.tabs.iter().any(|t| t.pending_load.is_some()) {
+            assert!(Instant::now() < deadline, "loads did not complete in time");
+            let _ = shell.drain(&mut ui);
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let bg_id = shell.tabs[0].id;
+        assert_eq!(
+            shell.tabs[0].scintilla_doc, 0,
+            "precondition: unmaterialised"
+        );
+        assert!(shell.set_buffer_eol_by_id(&mut ui, bg_id as isize, codepp_core::Eol::Lf));
+        assert!(shell.tabs[0].shadow_unsaved, "precondition");
+        let status_before = ui.status_calls.len();
+
+        // Reload requested, then the active tab moves with no rebind.
+        shell.confirm_reload(first);
+        shell.active_tab = Some(0);
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while shell.tabs[0].pending_load.is_some() {
+            assert!(Instant::now() < deadline, "reload did not complete in time");
+            let _ = shell.drain(&mut ui);
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert_eq!(
+            ui.get_buffer_text(),
+            "a\nb\n",
+            "the shadow, not the file, is installed"
+        );
+        assert_eq!(shell.tabs[0].text, "a\nb\n");
+        assert_eq!(shell.tabs[0].eol, codepp_core::Eol::Lf);
+        assert!(!shell.tabs[0].shadow_unsaved, "promoted, not left set");
+        assert!(shell.is_unsaved_restore(bg_id));
+        assert!(shell.has_unsaved_work(&mut ui, 0));
+        // The status bar describes what was installed, not the file.
+        assert!(ui.status_calls.len() > status_before);
+        assert_eq!(ui.status_calls.last().unwrap().2, "LF");
     }
 
     #[test]
