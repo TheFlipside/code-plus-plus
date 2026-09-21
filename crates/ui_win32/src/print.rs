@@ -39,6 +39,7 @@ use core::ffi::c_void;
 use std::ptr;
 use std::time::SystemTime;
 
+use crate::dialog_text::DialogText;
 use codepp_editor::EditorHandle;
 use codepp_scintilla_sys::{
     Sci_CharacterRangeFull, Sci_RangeToFormatFull, Sci_Rectangle, SCI_FORMATRANGEFULL,
@@ -107,7 +108,9 @@ pub(crate) fn print_active_document_now(owner: HWND, doc_display_name: &str, edi
         crate::show_error_dialog(
             owner,
             "Print Now",
-            "No printer is installed, or the default printer could not be opened.",
+            &DialogText::sanitized(
+                "No printer is installed, or the default printer could not be opened.",
+            ),
         );
         return;
     };
@@ -187,7 +190,11 @@ fn execute_print_job(owner: HWND, doc_display_name: &str, editor: &EditorHandle,
                  The rest of the document will not be printed."
             ),
         };
-        crate::show_error_dialog(owner, "Print — document truncated", &body);
+        crate::show_error_dialog(
+            owner,
+            "Print — document truncated",
+            &DialogText::sanitized(&body),
+        );
     }
 
     // Clamp the user's page-range choice against reality. `PrintDlgW`

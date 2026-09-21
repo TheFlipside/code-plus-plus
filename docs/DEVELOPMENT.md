@@ -485,6 +485,19 @@ of writing) and works even if the process took a moment to register
 its class. Quit with a `PostMessageW WM_CLOSE`, not `Stop-Process` —
 the distribution is emitted at pump-exit and is lost on a kill.
 
+To drive a Win32 *dialog* from a script rather than the editor,
+three things make it deterministic. Launch the binary with `APPDATA`
+pointed at a scratch directory (the child process's environment
+only), so the run restores a `session.xml` you wrote and never
+touches the real one. Post `WM_COMMAND` with the menu id to
+`MainWindowHandle` instead of sending keystrokes — no focus games,
+and it works from a non-interactive session. Read a `MessageBoxW`'s
+body through `GetDlgItem(hwnd, 0xFFFF)` and `GetWindowTextW` (declared
+`CharSet.Unicode`; the ANSI marshal truncates at the first NUL) and
+dump it as code points, since a bidi override is invisible in a
+console. This is how the `show_error_dialog` sanitization was checked
+against a pre-change build (DESIGN.md §7.4).
+
 ### Run a single phase's demo
 
 Each phase in DESIGN.md §7.2 has a Demo column. The current phase's demo is always reachable via:

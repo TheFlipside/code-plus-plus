@@ -84,6 +84,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     WS_SYSMENU, WS_TABSTOP, WS_THICKFRAME, WS_VISIBLE,
 };
 
+use crate::dialog_text::DialogText;
 use crate::print::{
     configure_scintilla_for_print, default_printer_dc, draw_page_header, format_today,
     measure_page_breaks, release_format_cache, render_one_page, PaperMetrics,
@@ -224,7 +225,9 @@ pub(crate) fn show_print_preview(owner: HWND, doc_display_name: &str, editor: Ed
         show_error_dialog(
             owner,
             "Print Preview",
-            "No printer is installed, or the default printer could not be opened.",
+            &DialogText::sanitized(
+                "No printer is installed, or the default printer could not be opened.",
+            ),
         );
         return;
     };

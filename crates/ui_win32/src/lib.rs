@@ -92,6 +92,7 @@
     clippy::trivially_copy_pass_by_ref
 )]
 
+mod dialog_text;
 mod dlgtemplate;
 mod dock_panels;
 mod preferences;
@@ -105,6 +106,9 @@ mod udl_editor;
 // lexer-theme table made. Aliased so the existing `udl_paint::` call sites
 // resolve unchanged.
 use codepp_editor::udl_paint;
+// The only body type `show_error_dialog` accepts; see the module docs
+// for why a type rather than a sanitize call at each site.
+use dialog_text::DialogText;
 
 use core::ffi::c_void;
 use std::collections::HashMap;
@@ -4551,7 +4555,7 @@ unsafe fn handle_close_active_tab_inner(hwnd: HWND) -> CloseOutcome {
                         return CloseOutcome::Aborted;
                     };
                     if let Some(msg) = save_error {
-                        show_error_dialog(hwnd, "Save failed", &msg);
+                        show_error_dialog(hwnd, "Save failed", &DialogText::sanitized(&msg));
                         return CloseOutcome::Aborted;
                     }
                 } else {
@@ -5203,7 +5207,7 @@ unsafe fn run_save_as_flow(hwnd: HWND) {
         None
     };
     if let Some(msg) = save_error {
-        show_error_dialog(hwnd, "Save As failed", &msg);
+        show_error_dialog(hwnd, "Save As failed", &DialogText::sanitized(&msg));
     }
     // save_buffer_as updates the tab's path on success — refresh
     // the strip so the label switches from "new N" (or the old
@@ -7715,9 +7719,18 @@ fn show_save_confirm_dialog(main_hwnd: HWND, display_name: &str) -> SaveConfirmR
 
 /// Show a non-fatal error dialog. Standalone for the same reason as
 /// `show_reload_dialog`.
-pub(crate) fn show_error_dialog(main_hwnd: HWND, title: &str, message: &str) {
-    let title_w = HSTRING::from(title);
-    let msg_w = HSTRING::from(message);
+///
+/// The body is a [`DialogText`], which can only be built through
+/// constructors that run `codepp_shell::sanitize_str_for_display` —
+/// so an error string carrying a bidi override, a control character
+/// or an embedded newline is substituted before it can reach
+/// `MessageBoxW`, whichever caller composed it. The title is
+/// sanitized here instead: it is a single line with no structure to
+/// preserve, and one caller (`PendingDialog::Error`) receives it from
+/// the shell rather than writing a literal.
+pub(crate) fn show_error_dialog(main_hwnd: HWND, title: &str, message: &DialogText) {
+    let title_w = HSTRING::from(sanitize_str_for_display(title));
+    let msg_w = HSTRING::from(message.as_str());
     unsafe {
         MessageBoxW(Some(main_hwnd), &msg_w, &title_w, MB_OK | MB_ICONWARNING);
     }
@@ -7740,7 +7753,13 @@ fn present_pending_dialog(hwnd: HWND, dialog: PendingDialog) {
             }
         }
         PendingDialog::Error { title, message } => {
-            show_error_dialog(hwnd, &title, &message);
+            // Shell-composed, and the shell sanitizes every part it
+            // interpolates — but this wrap is not redundant: it is what
+            // makes the guarantee hold here whatever a future shell
+            // message does. None of those messages carries line
+            // structure, so the single-paragraph constructor is right,
+            // and a second pass over substituted text is a no-op.
+            show_error_dialog(hwnd, &title, &DialogText::sanitized(&message));
         }
         PendingDialog::SaveExport {
             data,
@@ -7885,8 +7904,10 @@ fn prompt_open_paths(owner: HWND) -> Vec<PathBuf> {
             show_error_dialog(
                 owner,
                 "Open — too many files",
-                "The dialog can't return this many files in one selection. \
-                 Please open fewer files at once (or open the folder as a workspace).",
+                &DialogText::sanitized(
+                    "The dialog can't return this many files in one selection. \
+                     Please open fewer files at once (or open the folder as a workspace).",
+                ),
             );
         } else if err.0 != 0 {
             tracing::warn!(
@@ -8176,11 +8197,11 @@ fn handle_save_session(hwnd: HWND) {
         show_error_dialog(
             hwnd,
             "Save Session failed",
-            &format!(
-                "Could not write the session file:\n\n{}\n\n{}",
-                sanitize_path_for_display(&save_path),
-                codepp_shell::sanitize_str_for_display(&e.to_string()),
-            ),
+            &DialogText::paragraphs([
+                "Could not write the session file:",
+                sanitize_path_for_display(&save_path).as_str(),
+                e.to_string().as_str(),
+            ]),
         );
     }
 }
@@ -8224,11 +8245,11 @@ fn handle_load_session(hwnd: HWND) {
             show_error_dialog(
                 hwnd,
                 "Load Session failed",
-                &format!(
-                    "Could not read the session file:\n\n{}\n\n{}",
-                    sanitize_path_for_display(&load_path),
-                    codepp_shell::sanitize_str_for_display(&e.to_string()),
-                ),
+                &DialogText::paragraphs([
+                    "Could not read the session file:",
+                    sanitize_path_for_display(&load_path).as_str(),
+                    e.to_string().as_str(),
+                ]),
             );
             // Step 2 already discarded the sole scratch buffer; a parse
             // failure means nothing replaced it, so restore the one-tab
@@ -8245,15 +8266,15 @@ fn handle_load_session(hwnd: HWND) {
     //    explanatory dialog so it doesn't vanish silently; the over-cap
     //    truncation is logged for the post-mortem.
     if report.opened == 0 && report.rejected_nonlocal > 0 {
+        let rejected = format!(
+            "This session file contained {} network / UNC path(s), \
+             which Code++ does not open from session files for security reasons.",
+            report.rejected_nonlocal
+        );
         show_error_dialog(
             hwnd,
             "Load Session",
-            &format!(
-                "This session file contained {} network / UNC path(s), \
-                 which Code++ does not open from session files for security reasons.\n\n\
-                 No local files were opened.",
-                report.rejected_nonlocal
-            ),
+            &DialogText::paragraphs([rejected.as_str(), "No local files were opened."]),
         );
     }
     if report.dropped_over_cap > 0 {
@@ -24401,7 +24422,11 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                             SaveOutcome::Ok => {}
                             SaveOutcome::RedirectSaveAs => run_save_as_flow(hwnd),
                             SaveOutcome::Failed(msg) => {
-                                show_error_dialog(hwnd, "Save failed", &msg);
+                                show_error_dialog(
+                                    hwnd,
+                                    "Save failed",
+                                    &DialogText::sanitized(&msg),
+                                );
                             }
                         }
                         // On a successful save, save_current_to_disk
@@ -24922,11 +24947,12 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                                 Vec::new()
                             };
                         if !errors.is_empty() {
-                            let summary = errors
-                                .iter()
-                                .map(|(id, e)| format!("buffer {id}: {e}"))
-                                .collect::<Vec<_>>()
-                                .join("\n");
+                            // One line per failed buffer; `lines` sanitizes
+                            // each before joining, so a `ShellError` naming
+                            // a hostile path cannot forge a line of its own.
+                            let summary = DialogText::lines(
+                                errors.iter().map(|(id, e)| format!("buffer {id}: {e}")),
+                            );
                             show_error_dialog(hwnd, "Save All — some files failed", &summary);
                         }
                         // Save All flips the active tab during the
@@ -25146,11 +25172,11 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                             show_error_dialog(
                                 hwnd,
                                 "Delete failed",
-                                &format!(
-                                    "The file could not be moved to the Recycle Bin.\n\n{}\n\n{}",
-                                    sanitize_path_for_display(&path),
-                                    e
-                                ),
+                                &DialogText::paragraphs([
+                                    "The file could not be moved to the Recycle Bin.",
+                                    sanitize_path_for_display(&path).as_str(),
+                                    e.as_str(),
+                                ]),
                             );
                         }
                         fire_queued_notifications(hwnd);

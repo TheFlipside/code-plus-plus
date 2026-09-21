@@ -4705,9 +4705,18 @@ impl Shell {
                 self.tabs[idx].pending_load = None;
             }
         }
+        // Both halves sanitized here, because `ui_gtk` and `ui_cocoa`
+        // present this message with no pass of their own: the error's
+        // `Display` carries no attacker-influenced text today (an OS
+        // message, a fixed codec label, or byte counts), but the shell
+        // is the one place all three backends inherit from.
         pending.push(PendingDialog::Error {
             title: "Open failed".to_string(),
-            message: format!("{}: {}", sanitize_path_for_display(&err.path), err.error),
+            message: format!(
+                "{}: {}",
+                sanitize_path_for_display(&err.path),
+                sanitize_str_for_display(&err.error.to_string())
+            ),
         });
         // Pair every `FileBeforeOpen` issued by `open_file`
         // with one of `FileOpened` / `FileLoadFailed`.
