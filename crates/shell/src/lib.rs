@@ -4838,15 +4838,29 @@ impl Shell {
                         tab.scintilla_doc = bound_doc;
                     }
                     ui.set_buffer_text(&text, cursor);
-                    // A kept shadow just became an unsaved document at the
-                    // save point `set_buffer_text` set — the same promotion
-                    // `bind_and_fill` makes, for the same reason.
-                    if keeps_shadow {
-                        if let Some(tab) = self.tabs.get_mut(target_idx) {
-                            tab.shadow_unsaved = false;
-                        }
-                        if let Ok(id) = i32::try_from(buffer_id) {
+                    // The visible buffer now holds either the kept shadow
+                    // or exactly what is on disk, and `unsaved_restore_ids`
+                    // has to say which. A kept shadow just became an
+                    // unsaved document at the save point `set_buffer_text`
+                    // set — the same promotion `bind_and_fill` makes, for
+                    // the same reason. Freshly loaded disk content is the
+                    // opposite case: a tab that was unsaved-from-restore
+                    // no longer is, because the restored content the
+                    // marker stood for has just been replaced by the file
+                    // — at the user's say-so through the reload prompt, or
+                    // a plugin's through `NPPM_RELOADBUFFERID`. Left in
+                    // the set, the tab would keep a red glyph, keep its
+                    // recovery backup and prompt on close for content it
+                    // no longer holds. Only here: the background arm keeps
+                    // unsaved work and its marker with it.
+                    if let Ok(id) = i32::try_from(buffer_id) {
+                        if keeps_shadow {
+                            if let Some(tab) = self.tabs.get_mut(target_idx) {
+                                tab.shadow_unsaved = false;
+                            }
                             self.unsaved_restore_ids.insert(id);
+                        } else {
+                            self.unsaved_restore_ids.remove(&id);
                         }
                     }
                     // apply_lang AFTER set_buffer_text — Scintilla
@@ -10516,6 +10530,50 @@ mod tests {
         assert!(shell.set_buffer_eol_by_id(&mut ui, other_id as isize, codepp_core::Eol::CrLf));
         assert!(!shell.tabs[other_idx].dirty);
         assert!(!shell.tabs[other_idx].shadow_unsaved);
+    }
+
+    #[test]
+    fn active_reload_releases_the_unsaved_restore_marker() {
+        // A `DirtyFromBackup` tab sits at its save point with the
+        // recovered text and its id in `unsaved_restore_ids`. A reload
+        // of the *active* tab replaces that text with the file, so the
+        // marker has to go — or the tab keeps a red glyph, a backup and
+        // a close prompt for content it no longer holds.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("restored.txt");
+        std::fs::write(&path, "on disk\n").unwrap();
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+        shell.open_file(path.clone());
+        drain_until(
+            &mut shell,
+            &mut ui,
+            |u, _| !u.set_text_calls.is_empty(),
+            Duration::from_secs(2),
+        );
+        let id = shell.tabs[0].id;
+        // Stand in for the restore path: recovered text at a save point,
+        // marked unsaved durably.
+        ui.set_buffer_text("recovered\n", 0);
+        shell.unsaved_restore_ids.insert(id);
+        assert!(shell.has_unsaved_work(&mut ui, 0), "precondition");
+        assert!(
+            shell.tab_needs_backup(&shell.tabs[0], &mut ui),
+            "precondition"
+        );
+
+        shell.confirm_reload(path);
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while shell.tabs[0].pending_load.is_some() {
+            assert!(Instant::now() < deadline, "reload did not complete in time");
+            let _ = shell.drain(&mut ui);
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert_eq!(ui.get_buffer_text(), "on disk\n");
+        assert!(!shell.is_unsaved_restore(id));
+        assert!(!shell.has_unsaved_work(&mut ui, 0));
+        assert!(!shell.tab_needs_backup(&shell.tabs[0], &mut ui));
     }
 
     #[test]
