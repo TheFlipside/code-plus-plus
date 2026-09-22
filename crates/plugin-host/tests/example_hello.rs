@@ -62,7 +62,7 @@ fn example_hello_loads_and_publishes_its_func_items() {
     let count = host.discover(staging.path()).unwrap();
     assert_eq!(count, 1, "discovery should find exactly the staged DLL");
 
-    host.load(0, npp_data_with_bogus_handles(), None)
+    host.load_blocking(0, npp_data_with_bogus_handles(), None)
         .expect("load example_hello.dll");
 
     let info = host.iter().next().expect("one plugin");

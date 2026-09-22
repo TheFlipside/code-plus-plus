@@ -7313,10 +7313,11 @@ unsafe fn refresh_window_menu(window_menu: HMENU, shell: &Shell) {
 /// # Safety
 ///
 /// UI thread only; the same re-entrance discipline as the
-/// `WM_INITMENUPOPUP` lazy-load — the load runs under a
-/// `PluginCallGuard` + `catch_unwind`, and the real command is
+/// `WM_INITMENUPOPUP` lazy-load — the load holds no `WindowState`
+/// borrow and arms no `PluginCallGuard` while the plugin's own entry
+/// points run (see `load_pending_plugins`), and the real command is
 /// **posted** (not called inline) so it re-enters the ordinary
-/// plugin `WM_COMMAND` arm with no borrow held.
+/// plugin `WM_COMMAND` arm with no borrow held either.
 unsafe fn handle_plugin_shortcut_shim(hwnd: HWND, shim_id: u16) {
     // Resolve the shim identity under a brief borrow, then drop it.
     let Some((module_key, internal_id)) = (unsafe { state_from_hwnd(hwnd) })
@@ -7334,16 +7335,10 @@ unsafe fn handle_plugin_shortcut_shim(hwnd: HWND, shim_id: u16) {
     }) else {
         return;
     };
-    // Lazy-load every pending plugin. Guard + catch_unwind so a
-    // re-entrant NPPM_* from setInfo can't alias, and a plugin
-    // panic can't unwind across extern "system". Same shape as the
-    // WM_INITMENUPOPUP load.
-    if let Some(state) = unsafe { state_from_hwnd(hwnd) } {
-        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let _guard = PluginCallGuard::enter();
-            state.shell.ensure_plugins_loaded(npp_data, None);
-        }));
-    }
+    // Lazy-load every pending plugin, with no state borrow held
+    // across the plugin's own entry points — see
+    // `load_pending_plugins`.
+    unsafe { load_pending_plugins(hwnd, npp_data) };
     // Rebuild the accelerator table: the chord that fired under a
     // shim id now binds to the plugin's real cmd id (and leaves the
     // shim map), so a second press dispatches directly and
@@ -19780,6 +19775,77 @@ unsafe fn register_dock_frame_class() {
     });
 }
 
+/// Lazy-load every pending plugin, **holding no `WindowState` borrow
+/// while plugin code runs**.
+///
+/// This used to be one `ensure_plugins_loaded` call inside a live
+/// `&mut WindowState`, with `PluginCallGuard` armed so that a
+/// re-entrant `NPPM_*` from the plugin's `setInfo` was declined
+/// rather than aliasing that borrow. Declining was the correct
+/// response to the borrow; the bug was holding the borrow at all.
+/// Real plugins interrogate the host from `setInfo` — `NppExec` asks
+/// for the version there and refuses to start without an answer, so
+/// Code++ read as "older than Notepad++ 5.1" to every such plugin.
+///
+/// The shape is the one `handle_close_active_tab_inner` already uses
+/// for its announcement: take what is needed under the borrow, run
+/// the foreign code with none held, commit under a fresh one, then
+/// deliver the load-time notifications with none held again. Each
+/// `state_from_hwnd` call's borrow ends with its statement, so at no
+/// point does one span a plugin call.
+///
+/// A nested pass — a plugin's `setInfo` sending `WM_COMMAND` back at
+/// the host — is bounded inside `PluginHost`, whose latch answers
+/// "nothing pending" while a load is outstanding.
+unsafe fn load_pending_plugins(hwnd: HWND, npp_data: NppData) {
+    // `PluginCallGuard` used to do two jobs here. Declining a
+    // plugin's re-entrant `NPPM_*` was the bug; suppressing the
+    // `WM_APP_WAKE` drain was a side effect worth keeping, because
+    // `state_from_hwnd` answering `None` inside the wake arm is what
+    // deferred a worker result for the span of the load. Dropping the
+    // guard drops both, so the drain suppression has to be asked for
+    // explicitly — a plugin's `setInfo` may pump the message queue (a
+    // `MessageBoxW`, an init dialog, a nested loop; NppExec, the
+    // plugin that prompted this fix, creates windows at init), and a
+    // wake landing there would drain the shell inside the loading
+    // plugin's own call stack: `active_tab` moving, a load replacing a
+    // buffer, a modal popping. GTK and Cocoa take the same guard for
+    // the same reason.
+    let _freeze = DrainFreeze::new(hwnd);
+    loop {
+        let pending = unsafe { state_from_hwnd(hwnd) }.and_then(|s| s.shell.next_plugin_to_load());
+        let Some(pending) = pending else { break };
+        // No borrow held: `setInfo` and `getFuncsArray` run here, and
+        // anything they send the host is answered for real.
+        let loaded = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            codepp_plugin_host::execute_load(&pending, npp_data, None)
+        }))
+        .unwrap_or_else(|_| Err("plugin panicked during load".to_string()));
+        let committed =
+            unsafe { state_from_hwnd(hwnd) }.map(|s| s.shell.commit_plugin_load(&pending, loaded));
+        let Some(ready) = committed else {
+            // The state went away between the two phases — the window
+            // torn down under a `setInfo`. Nothing commits, so
+            // `PluginHost`'s latch stays set and no further plugin
+            // loads; say so, because the symptom is otherwise silent.
+            tracing::error!(
+                "lost the window state mid plugin load; plugin loading is now disabled"
+            );
+            break;
+        };
+        // Also with no borrow held — a plugin that queries the host
+        // from NPPN_READY is doing something ordinary.
+        if let Some(ready) = ready {
+            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                ready.deliver(npp_data.npp_handle);
+            }));
+        }
+    }
+    if let Some(state) = unsafe { state_from_hwnd(hwnd) } {
+        state.shell.after_plugin_loads();
+    }
+}
+
 /// `Wnd_proc` for the host-owned floating frame that wraps a
 /// plugin's docking dialog (registered via `NPPM_DMMREGASDCKDLG`).
 /// The plugin's `h_client` HWND is stashed in the frame's
@@ -26206,37 +26272,17 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                     if let Some(state) = state_from_hwnd(hwnd) {
                         state.plugins_menu_initialized = true;
                     }
-                    // Trigger lazy load. The PluginCallGuard arms the
-                    // PLUGIN_CALL_ACTIVE flag for the duration of the
-                    // call so any re-entrant `state_from_hwnd` from a
-                    // plugin's `setInfo` returns None — preventing
-                    // the second `&mut WindowState` materialization
-                    // that would otherwise alias with our outer
-                    // borrow. The guard's Drop clears the flag even
-                    // on panic.
-                    //
-                    // The whole call is wrapped in `catch_unwind` so
-                    // a host-internal panic (allocation failure,
-                    // tracing-subscriber misbehaviour) doesn't
-                    // unwind across the `extern "system"` wnd_proc
-                    // frame — that's UB. Plugin entry-points are
-                    // already individually `catch_unwind`-wrapped
-                    // inside `load_inner`; this outer guard catches
-                    // panics in our own bookkeeping.
-                    if let Some(state) = state_from_hwnd(hwnd) {
-                        // Guard inside the catch_unwind closure so
-                        // its assert (nested-guard detection) is
-                        // caught here rather than unwinding across
-                        // extern "system". Same pattern as
-                        // `fire_queued_notifications`.
-                        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                            let _guard = PluginCallGuard::enter();
-                            // `None`: Win32 plugins route `SendMessage`
-                            // through the OS message pump, not the host
-                            // dispatch callback the GTK backend installs.
-                            state.shell.ensure_plugins_loaded(npp_data, None);
-                        }));
-                    }
+                    // Trigger lazy load. This deliberately holds no
+                    // borrow and arms no `PluginCallGuard` across the
+                    // plugin's own entry points — that is what lets a
+                    // plugin's `setInfo` query the host and get a real
+                    // answer. `load_pending_plugins` documents the
+                    // discipline and owns the `catch_unwind` that
+                    // keeps a host-internal panic from unwinding
+                    // across this `extern "system"` frame. Win32 needs
+                    // no dispatch callback: its plugins route
+                    // `SendMessage` through the OS message pump.
+                    load_pending_plugins(hwnd, npp_data);
                     // Populate the menu from loaded plugins. We rebuild
                     // the FuncItem list inside a borrow, then call
                     // AppendMenuW for each entry; AppendMenuW does
@@ -30075,6 +30121,126 @@ mod plugin_staging_guards {
         assert!(
             stage < discover,
             "staging must precede discovery, or the first launch finds nothing to discover"
+        );
+    }
+}
+
+#[cfg(test)]
+mod plugin_load_borrow_guards {
+    //! The rule this backend just learned: no `WindowState` borrow may
+    //! be held while a plugin's own entry points run. Holding one
+    //! forces every re-entrant `NPPM_*` to be declined, and a real
+    //! plugin reads that as a definitive answer — `NppExec` asked for
+    //! the host version from `setInfo`, got 0, and refused to start.
+    //!
+    //! All of this compiles either way, and the failure is a plugin
+    //! that quietly does not work, so it is pinned in the source.
+
+    use super::plugin_reentry_guards::{code_only, fn_body, production_src};
+
+    /// The load loop must not arm `PluginCallGuard`. The guard's cost
+    /// *is* the refusal (its own docs say so), so arming it here
+    /// would restore the bug exactly.
+    #[test]
+    fn the_load_loop_holds_no_plugin_call_guard() {
+        let body = code_only(&fn_body(production_src(), "load_pending_plugins"));
+        assert!(
+            !body.contains("PluginCallGuard"),
+            "the load loop arms PluginCallGuard again; a plugin's setInfo query \
+             would be declined and it would read 0"
+        );
+        // ...but the drain suppression that guard provided as a side
+        // effect still has to be asked for. A plugin's `setInfo` can
+        // pump the message queue, and a wake landing there would
+        // drain the shell inside the plugin's own call stack.
+        assert!(
+            body.contains("DrainFreeze::new(hwnd)"),
+            "the load loop no longer freezes the drain; a worker wake can land \
+             inside a plugin's setInfo"
+        );
+    }
+
+    /// The foreign call sits between the two borrows, not inside
+    /// either. Written the other way — `state_from_hwnd(..).map(|s| {
+    /// execute_load(..) })` — it compiles and reads fine, and holds
+    /// the borrow across the plugin.
+    #[test]
+    fn the_load_runs_between_the_borrows() {
+        let whole = code_only(&fn_body(production_src(), "load_pending_plugins"));
+        // Only the loop matters: the tail after it runs with no
+        // plugin call ahead of it, so a binding there is harmless.
+        // Brace-matched rather than cut at a marker, because the tail
+        // mentions the same names the loop does.
+        let body = {
+            let at = whole.find("loop {").expect("the load loop is gone");
+            let open = whole[at..].find('{').expect("no loop body") + at;
+            let mut depth = 0usize;
+            let mut end = whole.len();
+            for (i, c) in whole[open..].char_indices() {
+                match c {
+                    '{' => depth += 1,
+                    '}' => {
+                        depth -= 1;
+                        if depth == 0 {
+                            end = open + i;
+                            break;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            whole[open..=end].to_string()
+        };
+        let take = whole
+            .find("next_plugin_to_load()")
+            .expect("the loop no longer asks for a pending load");
+        let run = whole
+            .find("execute_load(")
+            .expect("the loop no longer runs the load");
+        let commit = whole
+            .find("commit_plugin_load(")
+            .expect("the loop no longer commits");
+        assert!(
+            take < run && run < commit,
+            "the load must run after the first borrow ends and before the second begins"
+        );
+        // Every `state_from_hwnd` here is consumed as a *temporary*,
+        // inside the same statement that takes it, so NLL ends the
+        // borrow before the next line. Binding it — `let Some(state)
+        // = state_from_hwnd(hwnd)` — keeps it alive to the end of its
+        // scope, which for anything in this function means across the
+        // plugin call. That reads perfectly naturally and is the bug,
+        // so the binding form is banned outright rather than reasoned
+        // about per site.
+        for binding in ["let Some(state)", "let state =", "let Some(st)"] {
+            assert!(
+                !body.contains(binding),
+                "`{binding}` keeps the state borrowed across the plugin call;                  consume it as a temporary instead"
+            );
+        }
+        assert_eq!(
+            body.matches("state_from_hwnd(hwnd)").count(),
+            2,
+            "the loop must take exactly two borrows — one to pick the plugin, one              to commit it — with the plugin's own code running between them"
+        );
+    }
+
+    /// Both lazy-load triggers go through the one loop. A second,
+    /// open-coded load site is how this would come back.
+    #[test]
+    fn every_lazy_load_goes_through_the_one_loop() {
+        let src = code_only(production_src());
+        assert_eq!(
+            src.matches("load_pending_plugins(hwnd, npp_data)").count(),
+            2,
+            "expected exactly the two lazy-load triggers (Plugins-menu open and \
+             a plugin hotkey); a third call site or a missing one means the \
+             borrow rule is being decided somewhere new"
+        );
+        assert!(
+            !src.contains("load_blocking("),
+            "a UI backend must never use `PluginHost::load_blocking` — it holds \
+             the borrow across the plugin's entry points, which is the bug"
         );
     }
 }

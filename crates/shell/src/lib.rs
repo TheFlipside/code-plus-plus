@@ -82,8 +82,8 @@ use codepp_core::{
 };
 use codepp_platform::watch::{FileChange, FileWatcher};
 use codepp_plugin_host::{
-    dispatch_nppm, notify_all, FuncItem, HostDispatchFn, HostServices, Hwnd, Notification,
-    NotifyTargets, NppData, PluginCmd, PluginHost, NPPMAINMENU, NPPPLUGINMENU,
+    dispatch_nppm, notify_all, FuncItem, HostServices, Hwnd, Notification, NotifyTargets,
+    PendingLoad, PluginCmd, PluginHost, PluginReady, NPPMAINMENU, NPPPLUGINMENU,
 };
 
 pub mod fif;
@@ -1926,7 +1926,7 @@ pub struct Shell {
     /// Persisted plugin-command shortcut cache — the Code++ version
     /// of Notepad++'s `shortcuts.xml` (`core::shortcuts` documents
     /// the schema). Loaded at startup; grown by
-    /// [`Self::ensure_plugins_loaded`] absorbing each freshly-loaded
+    /// [`Self::after_plugin_loads`] absorbing each freshly-loaded
     /// plugin's `FuncItem` defaults. It exists to break the lazy-load
     /// circularity (DESIGN.md §6.4/§7.4): the chords cached here are
     /// registrable at startup, *before* any plugin is loaded, so a
@@ -3111,37 +3111,63 @@ impl Shell {
         })
     }
 
-    /// Load every plugin currently in the `Pending` state. Called by
-    /// the UI on first menu-popup open (lazy-load — DESIGN.md §6.4).
-    /// Already-loaded plugins are skipped; failed plugins are recorded
-    /// on the `PluginInfo` and surface to the UI via [`Self::plugin_load_outcomes`].
+    /// The next plugin that wants loading, or `None` when there are
+    /// no more.
     ///
-    /// `npp_data` is the `NppData` struct each plugin's `setInfo`
-    /// receives. The same struct is passed to every plugin loaded by
-    /// this call.
+    /// **This is deliberately not a `load_all` method.** Between this
+    /// call and [`Self::commit_plugin_load`] the caller must run
+    /// `codepp_plugin_host::execute_load` with **no borrow on the
+    /// shell or the UI state held at all**, because that is where the
+    /// plugin's `setInfo` runs and a real plugin interrogates the host
+    /// from it. `NppExec` asks for the host version there and refuses to
+    /// start without an answer; a host holding `&mut` state has to
+    /// decline the re-entrant query, so the plugin reads 0. The loop
+    /// therefore lives in each backend, which is the only place that
+    /// can drop its own state borrow:
     ///
-    /// `dispatch` is the host's message-routing callback, installed into
-    /// each freshly-loaded plugin so its `SendMessage` transport reaches
-    /// the host (non-Windows — see `codepp-plugin-sdk`). Win32 passes
-    /// `None`; its plugins route through the OS message pump instead.
-    pub fn ensure_plugins_loaded(&mut self, npp_data: NppData, dispatch: Option<HostDispatchFn>) {
-        let pending: Vec<usize> = self
-            .plugins
-            .iter()
-            .enumerate()
-            .filter(|(_, p)| !p.is_loaded() && p.failed_reason().is_none())
-            .map(|(i, _)| i)
-            .collect();
-        for idx in pending {
-            if let Err(e) = self.plugins.load(idx, npp_data, dispatch) {
-                tracing::warn!(idx = idx, error = ?e, "plugin load failed");
+    /// ```text
+    /// loop {
+    ///     let pending = { borrow(); shell.next_plugin_to_load() };   // borrow dropped
+    ///     let Some(p) = pending else { break };
+    ///     let loaded = execute_load(&p, npp_data, dispatch);          // no borrow
+    ///     let ready = { borrow(); shell.commit_plugin_load(&p, loaded) };
+    ///     if let Some(r) = ready { r.deliver(npp_handle); }           // no borrow
+    /// }
+    /// { borrow(); shell.after_plugin_loads(); }
+    /// ```
+    ///
+    /// Committing each result before asking for the next is required,
+    /// not stylistic: a plugin's command-id base depends on how many
+    /// `FuncItem`s its predecessors published.
+    pub fn next_plugin_to_load(&mut self) -> Option<PendingLoad> {
+        self.plugins.next_pending_load()
+    }
+
+    /// Record one [`Self::next_plugin_to_load`] outcome. Returns the
+    /// load-time notifications the caller must deliver **after**
+    /// dropping its borrow, for the same reason the load itself runs
+    /// without one.
+    pub fn commit_plugin_load(
+        &mut self,
+        pending: &PendingLoad,
+        result: Result<codepp_plugin_host::LoadedPlugin, String>,
+    ) -> Option<PluginReady> {
+        match self.plugins.commit_load(pending, result) {
+            Ok(ready) => ready,
+            Err(e) => {
+                tracing::warn!(idx = pending.idx, error = ?e, "plugin load failed");
+                None
             }
         }
-        // Fold each freshly-loaded plugin's FuncItem accelerators into
-        // the persistent cache. Sitting here (rather than in each
-        // backend) is what guarantees the cache is refreshed on every
-        // load path — menu open and hotkey alike — on all three
-        // platforms.
+    }
+
+    /// Run once after a load loop finishes.
+    ///
+    /// Folds each freshly-loaded plugin's `FuncItem` accelerators into
+    /// the persistent cache. Sitting here rather than in each backend
+    /// is what guarantees the cache is refreshed on every load path —
+    /// menu open and hotkey alike — on all three platforms.
+    pub fn after_plugin_loads(&mut self) {
         self.absorb_plugin_shortcut_defaults();
     }
 
@@ -3420,7 +3446,7 @@ impl Shell {
 
     /// Iterate the (display name, `FuncItem` array) pairs of every
     /// loaded plugin. The UI uses this to populate the per-plugin
-    /// submenu after [`Self::ensure_plugins_loaded`].
+    /// submenu after a load loop (see [`Self::next_plugin_to_load`]).
     ///
     /// Plugins with zero `FuncItems` are skipped — they're loaded but
     /// contribute no menu items (typically `beNotified`-only plugins).

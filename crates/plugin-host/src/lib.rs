@@ -64,6 +64,7 @@ pub use dispatch::{
 };
 
 pub use host::{
-    PluginAdminEntry, PluginHost, PluginInfo, PLUGIN_ALLOC_CMD_BASE, PLUGIN_ALLOC_CMD_LIMIT,
-    PLUGIN_ALLOC_MARKER_BASE, PLUGIN_ALLOC_MARKER_LIMIT, PLUGIN_CMD_ID_BASE,
+    execute_load, LoadedPlugin, PendingLoad, PluginAdminEntry, PluginHost, PluginInfo, PluginReady,
+    PLUGIN_ALLOC_CMD_BASE, PLUGIN_ALLOC_CMD_LIMIT, PLUGIN_ALLOC_MARKER_BASE,
+    PLUGIN_ALLOC_MARKER_LIMIT, PLUGIN_CMD_ID_BASE,
 };

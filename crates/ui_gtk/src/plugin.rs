@@ -407,21 +407,75 @@ pub(crate) fn discover() {
     }
 }
 
+/// Lazy-load every pending plugin, **holding no `with_state` borrow
+/// while plugin code runs**.
+///
+/// This used to be one `ensure_plugins_loaded` call inside
+/// `with_state`, so a plugin's `setInfo` querying the host was
+/// declined re-entrantly and read 0 — which real plugins take as a
+/// definitive answer. NppExec asks for the host version there and
+/// refuses to start without one.
+///
+/// Take what the load needs under a borrow, run the plugin's own
+/// entry points with none held, commit under a fresh borrow, then
+/// deliver `NPPN_READY` / `NPPN_TBMODIFICATION` with none held again.
+/// A nested pass (a plugin re-entering the loader from `setInfo`) is
+/// bounded inside `PluginHost`, which answers "nothing pending" while
+/// a load is outstanding.
+fn load_pending_plugins() {
+    // Holding the borrow across the whole load used to make this
+    // unnecessary: a wake landing mid-load found the state borrowed
+    // and deferred itself. Dropping the borrow between steps gives
+    // that up, so the guard has to be explicit — otherwise a worker
+    // result could be applied *between* two plugins' loads, moving
+    // the very tabs a `setInfo` is asking about.
+    let _freeze = crate::DrainFreeze::new();
+    let data = npp_data();
+    let dispatch: Option<HostDispatchFn> = Some(plugin_dispatch);
+    loop {
+        let Some(pending) = with_state(|st| st.shell.next_plugin_to_load()).flatten() else {
+            break;
+        };
+        // No borrow held: `setInfo` runs here and its `NPPM_*` are
+        // answered for real. The `catch_unwind` is not about the
+        // plugin — `execute_load` already guards each of its entry
+        // points — but about our own bookkeeping around it: a panic
+        // escaping here would skip the commit below and leave
+        // `PluginHost`'s latch set, which silently disables loading
+        // for the rest of the session.
+        let loaded = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            codepp_plugin_host::execute_load(&pending, data, dispatch)
+        }))
+        .unwrap_or_else(|_| Err("plugin panicked during load".to_string()));
+        let Some(ready) = with_state(|st| st.shell.commit_plugin_load(&pending, loaded)) else {
+            // The state went away between the two phases — the
+            // window torn down under a `setInfo`. Nothing commits,
+            // so the latch stays set and no further plugin loads;
+            // say so, because the symptom is otherwise silent.
+            tracing::error!("lost the UI state mid plugin load; plugin loading is now disabled");
+            break;
+        };
+        if let Some(ready) = ready {
+            ready.deliver(data.npp_handle);
+        }
+    }
+    with_state(|st| st.shell.after_plugin_loads());
+}
+
 /// Lazy-load every pending plugin and rebuild the Plugins menu from the
 /// loaded set. Called from the Plugins menu's `show` handler.
 pub(crate) fn ensure_loaded_and_rebuild(menu: &gtk::Menu) {
     // Load pending plugins, installing the GTK routing callback into each
     // (the SDK handshake) so their `SendMessage` reaches us.
-    let dispatch: Option<HostDispatchFn> = Some(plugin_dispatch);
-    let data = npp_data();
-    with_state(|st| st.shell.ensure_plugins_loaded(data, dispatch));
+    load_pending_plugins();
     rebuild_menu(menu);
     // The load may have absorbed new plugin-shortcut defaults; rebuild
     // the accel group so their chords become live this session (Win32
     // does the equivalent `refresh_plugin_accels` after its populate).
     rebuild_plugin_accel_group();
-    // NPPN_READY fired synchronously inside `ensure_plugins_loaded`; any
-    // notifications a plugin queued back are drained on the next wake.
+    // NPPN_READY fired inside `load_pending_plugins`, outside any
+    // borrow; anything a plugin queued back is drained on the next
+    // wake.
     crate::drain_shell();
 }
 
@@ -883,11 +937,9 @@ fn fire_plugin_chord(ctrl: bool, alt: bool, shift: bool, key: u8) -> bool {
     else {
         return false;
     };
-    let data = npp_data();
-    let dispatch: Option<HostDispatchFn> = Some(plugin_dispatch);
-    with_state(|st| st.shell.ensure_plugins_loaded(data, dispatch));
+    load_pending_plugins();
     // The load may have absorbed new defaults — for *other* commands
-    // than the one just pressed (`ensure_plugins_loaded` loads every
+    // than the one just pressed (`load_pending_plugins` loads every
     // pending plugin). Rebuild the accel group so those become live
     // this session, matching Win32's `refresh_plugin_accels` after
     // `handle_plugin_shortcut_shim`'s load. Deferred to a glib idle

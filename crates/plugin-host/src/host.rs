@@ -201,7 +201,12 @@ enum PluginState {
 /// State of a successfully loaded plugin. Holds the `DynLib` (drops
 /// `FreeLibrary` at shutdown), the resolved entry-point function
 /// pointers, and the cached `FuncItem` array.
-struct LoadedPlugin {
+///
+/// Public only because it travels from [`execute_load`] to
+/// [`PluginHost::commit_load`] through the caller, which is what lets
+/// the load itself run with no host borrow held — its fields stay
+/// private.
+pub struct LoadedPlugin {
     /// The `DynLib`'s job is to keep the underlying DLL mapped: when
     /// `LoadedPlugin` drops, `lib` drops, which calls `FreeLibrary`
     /// and unloads the plugin. Clippy does not count `Drop` as a
@@ -284,6 +289,30 @@ pub struct PluginHost {
     /// fails to load cannot leak its allocated cmds onto a later
     /// plugin's items.
     next_cmd_id: i32,
+    /// Set between [`PluginHost::next_pending_load`] and its
+    /// [`PluginHost::commit_load`].
+    ///
+    /// The load runs with **no host borrow held**, which is the whole
+    /// point of that split — and that is exactly what makes a nested
+    /// load reachable: the plugin's own `setInfo` can send the host a
+    /// `WM_COMMAND` that walks back into the loader. Without this
+    /// latch the nested pass would hand out a second `PendingLoad`
+    /// carrying the *same* `cmd_id_base`, because the base only
+    /// advances at commit — two plugins would then claim one id
+    /// range and a menu click would fire the wrong command. Nested
+    /// passes see `None` and do nothing; the outer loop continues.
+    ///
+    /// **It is cleared only by [`PluginHost::commit_load`], so a
+    /// caller that takes a `PendingLoad` and never commits it leaves
+    /// loading disabled for the rest of the process.** That is a
+    /// window the old single-borrow load did not have. Every backend
+    /// commits on both arms of the load, so the reachable trigger is
+    /// the state borrow failing between the two phases — i.e. the
+    /// window being torn down under a `setInfo` — where the process
+    /// is on its way out anyway. Each backend logs at `error` if it
+    /// ever happens, because the symptom otherwise is "plugins
+    /// silently stopped loading" with nothing to go on.
+    load_in_progress: bool,
     /// Next id to hand out for `NPPM_ALLOCATECMDID`. Distinct
     /// from `next_cmd_id` so plugin menu commands and
     /// programmatically-allocated ids can't collide. Bumped by
@@ -305,6 +334,7 @@ impl Default for PluginHost {
             next_cmd_id: PLUGIN_CMD_ID_BASE,
             next_alloc_cmd_id: PLUGIN_ALLOC_CMD_BASE,
             next_alloc_marker: PLUGIN_ALLOC_MARKER_BASE,
+            load_in_progress: false,
         }
     }
 }
@@ -533,48 +563,91 @@ impl PluginHost {
         out
     }
 
-    /// Load the plugin at index `idx` if it is currently `Pending`.
-    /// Calls `setInfo(npp_data)` and `getFuncsArray` as part of the
-    /// load — same order Notepad++ uses, so existing plugins observe
-    /// the same lifecycle.
+    /// The next plugin that wants loading, taken under the host
+    /// borrow so the caller can then drop it.
     ///
-    /// On error the plugin moves to `Failed(reason)` and `Err(reason)`
-    /// is returned. The plugin entry stays in the registry for
-    /// diagnostic display; the host doesn't retry automatically.
+    /// **Why this is three calls and not one.** `setInfo` and
+    /// `getFuncsArray` are foreign code, and a real plugin uses them
+    /// to interrogate the host — `NppExec` asks for the version in
+    /// `setInfo` and refuses to start if it cannot get one. A host
+    /// that holds `&mut` state across that call has to decline the
+    /// re-entrant query (the alternative is aliasing), so the plugin
+    /// reads 0 and draws the wrong conclusion. The fix is not to hold
+    /// the borrow: take what the load needs here, run the foreign
+    /// code with nothing borrowed ([`execute_load`]), then commit
+    /// ([`Self::commit_load`]). Same shape as
+    /// `Shell::begin_close_active_tab` / `close_announced_tab`.
+    ///
+    /// Returns `None` when every plugin is loaded, failed or
+    /// disabled. Call it in a loop, committing each result before
+    /// asking for the next, because the command-id base each plugin
+    /// gets depends on how many `FuncItem`s its predecessors
+    /// published.
+    pub fn next_pending_load(&mut self) -> Option<PendingLoad> {
+        if self.load_in_progress {
+            // A nested loader — see the field doc. Answering here
+            // would duplicate a command-id range.
+            return None;
+        }
+        let cmd_id_base = self.next_cmd_id;
+        let (idx, plugin) = self
+            .plugins
+            .iter()
+            .enumerate()
+            .find(|(_, p)| !p.is_loaded() && p.failed_reason().is_none() && !p.disabled)?;
+        let pending = PendingLoad {
+            idx,
+            path: plugin.path.clone(),
+            cmd_id_base,
+        };
+        self.load_in_progress = true;
+        Some(pending)
+    }
+
+    /// Record the outcome of an [`execute_load`], and hand back the
+    /// notifications the caller must deliver **after** dropping the
+    /// host borrow.
+    ///
+    /// `NPPN_READY` and `NPPN_TBMODIFICATION` are delivered by the
+    /// caller rather than here for the same reason `setInfo` is: a
+    /// plugin that queries the host from `NPPN_READY` (its config
+    /// directory, the version) is doing something ordinary, and it
+    /// can only be answered if nothing is borrowed.
+    ///
+    /// The `Ok(None)` arm is unreachable today — a successful load
+    /// always yields a `PluginReady`. It exists so a future load that
+    /// legitimately has nothing to notify (a plugin resolved from a
+    /// cache, say) does not have to change this signature and every
+    /// backend with it.
     ///
     /// # Errors
     ///
-    /// Returns a `String` describing the failure: index out of
-    /// range, DLL load failure, missing required entry point
-    /// (`isUnicode`, `setInfo`, `getName`, `getFuncsArray`,
-    /// `beNotified`, `messageProc`), or a `setInfo` /
-    /// `getFuncsArray` call that panicked across the
-    /// `catch_unwind` boundary.
-    pub fn load(
+    /// The load itself failed (the error is recorded on the plugin
+    /// and surfaced to the UI), or `pending.idx` is out of range.
+    pub fn commit_load(
         &mut self,
-        idx: usize,
-        npp_data: NppData,
-        dispatch: Option<crate::ffi::HostDispatchFn>,
-    ) -> Result<(), String> {
-        let Some(plugin) = self.plugins.get_mut(idx) else {
-            return Err(format!("plugin index {idx} out of range"));
+        pending: &PendingLoad,
+        result: Result<LoadedPlugin, String>,
+    ) -> Result<Option<PluginReady>, String> {
+        self.load_in_progress = false;
+        let Some(plugin) = self.plugins.get_mut(pending.idx) else {
+            return Err(format!("plugin index {} out of range", pending.idx));
         };
-        if plugin.is_loaded() {
-            return Ok(());
+        // `PendingLoad` has to be public to cross the borrow gap, so
+        // its fields are constructible by any caller. A value whose
+        // `idx` and `path` disagree would file one library's
+        // `LoadedPlugin` under another plugin's entry — the registry
+        // would then report the wrong name, and a menu click would
+        // reach the wrong DLL. Nothing does this today; the check
+        // costs a string compare once per load.
+        if plugin.path != pending.path {
+            return Err(format!(
+                "PendingLoad for {} does not match plugin {} at {}",
+                pending.path.display(),
+                pending.idx,
+                plugin.path.display()
+            ));
         }
-        if plugin.disabled {
-            // Disabled plugins stay in `Pending` state forever —
-            // `LoadLibraryW` is never called. The Plugin Manager UI
-            // flags them as enabled=false; toggling re-enables on
-            // next launch.
-            return Ok(());
-        }
-
-        let path = plugin.path.clone();
-        let _span = tracing::info_span!("plugin_load", path = ?path).entered();
-
-        let cmd_id_base = self.next_cmd_id;
-        let result = load_inner(&path, npp_data, cmd_id_base, dispatch);
         match result {
             Ok(loaded) => {
                 // Reserve the assigned ids — never reused, even if a
@@ -584,88 +657,61 @@ impl PluginHost {
                 let be_notified = loaded.be_notified;
                 plugin.name = Some(loaded.name.clone());
                 plugin.state = PluginState::Loaded(loaded);
-                // Fire NPPN_READY at the just-loaded plugin only.
-                // N++ broadcasts NPPN_READY once after all static
-                // plugins finish initialising; Code++ loads lazily,
-                // so per-plugin delivery at load time is the
-                // closest equivalent — each plugin sees READY at
-                // the moment it's actually ready to handle host
-                // messages, never sees a duplicate, and plugins
-                // loaded later don't trigger spurious READY
-                // broadcasts to already-initialised peers. The
-                // PluginCallGuard the caller holds (see
-                // `ui_win32::ensure_plugins_loaded`'s wrap) keeps
-                // a synchronous re-entrant SendMessage from
-                // aliasing &mut WindowState while beNotified runs.
-                let sci = SCNotification {
-                    nmhdr: SciNotifyHeader {
-                        hwnd_from: npp_data.npp_handle,
-                        id_from: 0,
-                        code: NPPN_READY,
-                    },
-                    ..SCNotification::default()
-                };
-                let result = catch_unwind(AssertUnwindSafe(|| {
-                    // SAFETY: `be_notified` came from a successful
-                    // resolve in `load_inner`; SCNotification is
-                    // #[repr(C)] and lives on this stack frame
-                    // through the synchronous call.
-                    unsafe { be_notified(&raw const sci) }
-                }));
-                if result.is_err() {
-                    // Match the warn-on-panic pattern in
-                    // `dispatch::notify_all`. Swallowing silently
-                    // would mask plugin bugs that fail during
-                    // NPPN_READY-driven init — observability
-                    // parity matters because the load() caller is
-                    // told `Ok(())` regardless of whether the
-                    // notification panicked.
-                    tracing::warn!(
-                        path = ?path,
-                        "plugin panicked in beNotified(NPPN_READY)",
-                    );
-                }
-
-                // NPPN_TBMODIFICATION immediately follows NPPN_READY:
-                // N++'s sequence is "READY, then TBMODIFICATION so
-                // plugins can register toolbar icons before the
-                // toolbar finishes initialising". Code++ doesn't
-                // ship a toolbar yet, so any
-                // `NPPM_ADDTOOLBARICON` from inside the handler
-                // is currently a no-op (returns 0 and logs in the
-                // dispatcher), but firing the notification at the
-                // ABI-correct timing means a future toolbar
-                // implementation can wire `ADDTOOLBARICON` without
-                // changing notification ordering and breaking
-                // plugin-author expectations.
-                let tbmod_sci = SCNotification {
-                    nmhdr: SciNotifyHeader {
-                        hwnd_from: npp_data.npp_handle,
-                        id_from: 0,
-                        code: NPPN_TBMODIFICATION,
-                    },
-                    ..SCNotification::default()
-                };
-                let tbmod_result = catch_unwind(AssertUnwindSafe(|| {
-                    // SAFETY: same as the NPPN_READY call above —
-                    // `be_notified` came from a successful resolve;
-                    // SCNotification is `#[repr(C)]` and lives on
-                    // the stack through the synchronous call.
-                    unsafe { be_notified(&raw const tbmod_sci) }
-                }));
-                if tbmod_result.is_err() {
-                    tracing::warn!(
-                        path = ?path,
-                        "plugin panicked in beNotified(NPPN_TBMODIFICATION)",
-                    );
-                }
-                Ok(())
+                Ok(Some(PluginReady {
+                    path: pending.path.clone(),
+                    be_notified,
+                }))
             }
             Err(e) => {
                 plugin.state = PluginState::Failed(e.clone());
                 Err(e)
             }
         }
+    }
+
+    /// Load one plugin end to end in a single call.
+    ///
+    /// **Not for a UI backend.** This holds the host borrow across
+    /// the plugin's `setInfo`, `getFuncsArray` and `NPPN_READY`,
+    /// which is precisely what the three-phase API
+    /// ([`Self::next_pending_load`] → [`execute_load`] →
+    /// [`Self::commit_load`]) exists to avoid: a plugin that
+    /// interrogates the host from `setInfo` gets declined, reads 0,
+    /// and — in `NppExec`'s case — refuses to start. A backend calling
+    /// this reintroduces that bug.
+    ///
+    /// It is here for callers with no UI state to alias, which in
+    /// practice means the test harnesses: they own the `PluginHost`
+    /// outright, so there is no second borrow for a re-entrant call
+    /// to collide with.
+    ///
+    /// # Errors
+    ///
+    /// The library failed to map, an entry point was missing, or the
+    /// plugin published a malformed `FuncItem` array.
+    pub fn load_blocking(
+        &mut self,
+        idx: usize,
+        npp_data: NppData,
+        dispatch: Option<crate::ffi::HostDispatchFn>,
+    ) -> Result<(), String> {
+        let Some(plugin) = self.plugins.get(idx) else {
+            return Err(format!("plugin index {idx} out of range"));
+        };
+        if plugin.is_loaded() || plugin.disabled {
+            return Ok(());
+        }
+        let pending = PendingLoad {
+            idx,
+            path: plugin.path.clone(),
+            cmd_id_base: self.next_cmd_id,
+        };
+        let loaded = execute_load(&pending, npp_data, dispatch);
+        let ready = self.commit_load(&pending, loaded)?;
+        if let Some(ready) = ready {
+            ready.deliver(npp_data.npp_handle);
+        }
+        Ok(())
     }
 
     /// Find the `FuncItem` matching `cmd_id` across all loaded plugins
@@ -686,6 +732,96 @@ impl PluginHost {
         }
         None
     }
+}
+
+/// A plugin picked for loading by [`PluginHost::next_pending_load`],
+/// carrying everything [`execute_load`] needs so the host borrow can
+/// be dropped before any plugin code runs.
+#[derive(Clone, Debug)]
+pub struct PendingLoad {
+    /// Index into the host's plugin list, passed back to
+    /// [`PluginHost::commit_load`].
+    pub idx: usize,
+    /// The library to map.
+    pub path: std::path::PathBuf,
+    /// First command id this plugin's `FuncItem`s get.
+    pub cmd_id_base: i32,
+}
+
+/// A freshly-loaded plugin's `beNotified`, handed back by
+/// [`PluginHost::commit_load`] so the caller can fire the load-time
+/// notifications with no host borrow held. See
+/// [`PluginReady::deliver`].
+#[derive(Clone, Debug)]
+pub struct PluginReady {
+    /// Only for the log line on a panicking handler.
+    path: std::path::PathBuf,
+    be_notified: crate::ffi::BeNotifiedFn,
+}
+
+impl PluginReady {
+    /// Fire `NPPN_READY` then `NPPN_TBMODIFICATION` at this plugin.
+    ///
+    /// N++ broadcasts READY once after all static plugins finish
+    /// initialising; Code++ loads lazily, so per-plugin delivery at
+    /// load time is the closest equivalent — each plugin sees READY
+    /// the moment it is actually ready to handle host messages, never
+    /// twice, and a plugin loaded later does not re-broadcast at its
+    /// already-initialised peers. TBMODIFICATION immediately follows,
+    /// which is N++'s order and the window in which a plugin
+    /// registers toolbar icons.
+    ///
+    /// **Call this with no host borrow held.** That is the whole
+    /// point of the type: a plugin's handler may send `NPPM_*` back
+    /// at the host, and it can only be answered if nothing is
+    /// borrowed.
+    pub fn deliver(&self, npp_handle: crate::ffi::Hwnd) {
+        for code in [NPPN_READY, NPPN_TBMODIFICATION] {
+            let sci = SCNotification {
+                nmhdr: SciNotifyHeader {
+                    hwnd_from: npp_handle,
+                    id_from: 0,
+                    code,
+                },
+                ..SCNotification::default()
+            };
+            // SAFETY: `be_notified` came from a successful resolve in
+            // `execute_load`, its library is still mapped (plugins are
+            // never unloaded before the host drops), and the
+            // `SCNotification` is `#[repr(C)]` and lives on this stack
+            // frame through the synchronous call.
+            let result = catch_unwind(AssertUnwindSafe(|| unsafe {
+                (self.be_notified)(&raw const sci);
+            }));
+            if result.is_err() {
+                // Same warn-on-panic posture as `notify_all`: the
+                // caller is told the load succeeded either way, so a
+                // plugin that dies during its own init would
+                // otherwise be invisible.
+                tracing::warn!(path = ?self.path, code = code, "plugin panicked in beNotified");
+            }
+        }
+    }
+}
+
+/// Map a plugin and run its `setInfo` / `getFuncsArray`.
+///
+/// **Takes no host state on purpose** — see
+/// [`PluginHost::next_pending_load`]. Everything this touches is the
+/// plugin's own library, so a re-entrant `NPPM_*` from inside
+/// `setInfo` finds the host unborrowed and gets a real answer.
+///
+/// # Errors
+///
+/// The library failed to map, an entry point was missing, or the
+/// plugin published a malformed `FuncItem` array.
+pub fn execute_load(
+    pending: &PendingLoad,
+    npp_data: NppData,
+    dispatch: Option<crate::ffi::HostDispatchFn>,
+) -> Result<LoadedPlugin, String> {
+    let _span = tracing::info_span!("plugin_load", path = ?pending.path).entered();
+    load_inner(&pending.path, npp_data, pending.cmd_id_base, dispatch)
 }
 
 /// One row's worth of data for the Plugin Manager UI. Decoupled
@@ -1227,7 +1363,7 @@ mod tests {
             scintilla_main_handle: core::ptr::null_mut(),
             scintilla_second_handle: core::ptr::null_mut(),
         };
-        let result = host.load(0, npp_data, None);
+        let result = host.load_blocking(0, npp_data, None);
         assert!(result.is_err());
         let info = host.iter().next().unwrap();
         assert!(!info.is_loaded());
@@ -1242,7 +1378,7 @@ mod tests {
             scintilla_main_handle: core::ptr::null_mut(),
             scintilla_second_handle: core::ptr::null_mut(),
         };
-        let result = host.load(99, npp_data, None);
+        let result = host.load_blocking(99, npp_data, None);
         assert!(result.is_err());
     }
 
@@ -1321,5 +1457,61 @@ mod tests {
         // burning any markers — the alloc is atomic.
         assert_eq!(host.allocate_marker(8), None);
         assert_eq!(host.allocate_marker(1), Some(25));
+    }
+}
+
+// Windows-only for the same reason as the module above: the
+// fixtures are `.dll`-named.
+#[cfg(all(test, target_os = "windows"))]
+mod load_split_tests {
+    //! The three-phase load exists so a plugin's `setInfo` can query
+    //! the host. These pin the parts a backend depends on.
+
+    use super::PluginHost;
+
+    /// An empty registry has nothing to hand out. The loop condition
+    /// every backend writes depends on this terminating.
+    #[test]
+    fn an_empty_host_has_nothing_pending() {
+        let mut host = PluginHost::default();
+        assert!(host.next_pending_load().is_none());
+    }
+
+    /// A second `next_pending_load` before the first is committed
+    /// answers `None`.
+    ///
+    /// Not a nicety: the load runs with no host borrow held, so a
+    /// plugin's own `setInfo` can send the host a message that walks
+    /// back into the loader. Without the latch the nested pass would
+    /// hand out a `PendingLoad` carrying the *same* `cmd_id_base` —
+    /// the base only advances at commit — and two plugins would claim
+    /// one command-id range.
+    #[test]
+    fn a_nested_load_is_refused_until_the_first_commits() {
+        let dir = tempfile::tempdir().unwrap();
+        // Two entries so a nested pass would have something to
+        // return if the latch were missing.
+        for name in ["alpha", "beta"] {
+            let sub = dir.path().join(name);
+            std::fs::create_dir_all(&sub).unwrap();
+            std::fs::write(sub.join(format!("{name}.dll")), b"x").unwrap();
+        }
+        let mut host = PluginHost::default();
+        assert_eq!(host.discover(dir.path()).unwrap(), 2);
+
+        let first = host.next_pending_load().expect("one pending");
+        assert!(
+            host.next_pending_load().is_none(),
+            "a nested pass got a second PendingLoad while one was outstanding"
+        );
+        // Committing a failure releases the latch and does not
+        // advance the id base.
+        let _ = host.commit_load(&first, Err("not a real dll".to_string()));
+        let second = host.next_pending_load().expect("the latch released");
+        assert_ne!(second.idx, first.idx, "the failed plugin was offered again");
+        assert_eq!(
+            second.cmd_id_base, first.cmd_id_base,
+            "a failed load must not consume command ids"
+        );
     }
 }

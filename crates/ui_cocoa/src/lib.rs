@@ -5068,7 +5068,7 @@ let msg = \"found scintilla_cocoa_new() calls\";
     ///
     /// **The guard is on the call site, not on `run`'s body**, and the
     /// difference is not pedantry: the first version of this test
-    /// asserted that `run` does not mention `ensure_plugins_loaded`,
+    /// asserted that `run` does not mention the loader,
     /// and a mutation that moved the load one helper function away
     /// passed it cleanly. Pinning the number of call sites in the whole
     /// crate — and which functions own them — closes that, because any
@@ -5088,7 +5088,7 @@ let msg = \"found scintilla_cocoa_new() calls\";
             "startup no longer discovers plugins, so the Plugins menu has nothing to load"
         );
         assert!(
-            !fn_body(production_src(), "run").contains("ensure_plugins_loaded("),
+            !fn_body(production_src(), "run").contains("load_pending_plugins("),
             "run() maps plugins at startup; loading must stay on first user interaction"
         );
         // Count across the *whole crate*, not just plugin.rs: the
@@ -5097,20 +5097,21 @@ let msg = \"found scintilla_cocoa_new() calls\";
         // there, one file away from where a plugin.rs-only scan looks.
         assert_eq!(
             all_production_code()
-                .matches("ensure_plugins_loaded(")
+                .matches("load_pending_plugins()")
                 .count(),
-            2,
+            // Two triggers, plus the definition itself.
+            3,
             "plugin dylibs are mapped from an unexpected place; the only permitted \
              triggers are the first Plugins-menu open and a plugin hotkey \
              (DESIGN.md §6.4, §8)"
         );
         let src = plugin_src();
         assert!(
-            fn_body(&src, "ensure_loaded_and_rebuild").contains("ensure_plugins_loaded("),
+            fn_body(&src, "ensure_loaded_and_rebuild").contains("load_pending_plugins()"),
             "the menu's lazy-load handler no longer loads plugins"
         );
         assert!(
-            fn_body(&src, "fire_plugin_chord").contains("ensure_plugins_loaded("),
+            fn_body(&src, "fire_plugin_chord").contains("load_pending_plugins()"),
             "the plugin-hotkey path no longer lazy-loads; a cached shortcut would \
              be dead until the user opened the Plugins menu"
         );

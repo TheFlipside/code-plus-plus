@@ -487,6 +487,60 @@ pub(crate) fn discover() {
     }
 }
 
+/// Lazy-load every pending plugin, **holding no `with_state` borrow
+/// while plugin code runs**.
+///
+/// The load used to happen inside one borrow — `dlopen`, `setInfo`,
+/// `getFuncsArray` and `NPPN_READY` together — and that borrow is
+/// exactly what made a plugin's re-entrant `NPPM_*` decline. Real
+/// plugins interrogate the host from `setInfo`: NppExec asks for the
+/// version there and refuses to start without an answer, so a
+/// declined query reads as "older than Notepad++ 5.1".
+///
+/// Splitting it costs the property that made a `DrainFreeze`
+/// unnecessary here — the comment that used to sit on the call site
+/// predicted exactly this — so the guard is now explicit. AppKit's
+/// menu-tracking loop services GCD's main-queue source, and without
+/// it a worker result could be applied *between* two plugins' loads,
+/// moving the very tabs a `setInfo` is asking about.
+///
+/// A nested pass (a plugin re-entering the loader) is bounded inside
+/// `PluginHost`, which answers "nothing pending" while a load is
+/// outstanding.
+fn load_pending_plugins() {
+    let _freeze = crate::DrainFreeze::new();
+    let data = npp_data();
+    let dispatch: Option<HostDispatchFn> = Some(plugin_dispatch);
+    loop {
+        let Some(pending) = with_state(|st| st.shell.next_plugin_to_load()).flatten() else {
+            break;
+        };
+        // No borrow held: `setInfo` runs here and its `NPPM_*` are
+        // answered for real. The `catch_unwind` is not about the
+        // plugin — `execute_load` already guards each of its entry
+        // points — but about our own bookkeeping around it: a panic
+        // escaping here would skip the commit below and leave
+        // `PluginHost`'s latch set, which silently disables loading
+        // for the rest of the session.
+        let loaded = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            codepp_plugin_host::execute_load(&pending, data, dispatch)
+        }))
+        .unwrap_or_else(|_| Err("plugin panicked during load".to_string()));
+        let Some(ready) = with_state(|st| st.shell.commit_plugin_load(&pending, loaded)) else {
+            // The state went away between the two phases — the
+            // window torn down under a `setInfo`. Nothing commits,
+            // so the latch stays set and no further plugin loads;
+            // say so, because the symptom is otherwise silent.
+            tracing::error!("lost the UI state mid plugin load; plugin loading is now disabled");
+            break;
+        };
+        if let Some(ready) = ready {
+            ready.deliver(data.npp_handle);
+        }
+    }
+    with_state(|st| st.shell.after_plugin_loads());
+}
+
 /// Lazy-load every pending plugin, then rebuild the Plugins menu from
 /// the loaded set. Called from the menu's `menuNeedsUpdate:`.
 pub(crate) fn ensure_loaded_and_rebuild(menu: &NSMenu, actions: &Actions) {
@@ -495,20 +549,11 @@ pub(crate) fn ensure_loaded_and_rebuild(menu: &NSMenu, actions: &Actions) {
     };
     // Load pending plugins, installing this backend's routing callback
     // into each (the SDK handshake) so their `SendMessageW` reaches us.
-    let dispatch: Option<HostDispatchFn> = Some(plugin_dispatch);
-    let data = npp_data();
-    // The whole load — `dlopen`, `setInfo`, `getFuncsArray`, and the
-    // synchronous `NPPN_READY` — happens inside this one borrow, which
-    // is what makes a `DrainFreeze` unnecessary here despite AppKit's
-    // menu-tracking loop servicing GCD's main-queue source. A wake that
-    // lands mid-load finds the borrow held and declines, so the work is
-    // deferred rather than interleaved — the same property the guard
-    // provides, obtained structurally. If this is ever split so the
-    // borrow is dropped between steps, it needs the explicit guard.
-    with_state(|st| st.shell.ensure_plugins_loaded(data, dispatch));
+    load_pending_plugins();
     rebuild_menu(menu, actions, mtm);
-    // `NPPN_READY` fires synchronously inside `ensure_plugins_loaded`;
-    // anything a plugin queued back is drained on the next wake.
+    // `NPPN_READY` fires inside `load_pending_plugins`, outside any
+    // borrow; anything a plugin queued back is drained on the next
+    // wake.
     crate::drain_shell();
 }
 
@@ -650,9 +695,7 @@ pub(crate) fn on_plugin_command(cmd_id: i32) {
 /// still reaches the editor rather than being silently eaten. The drain
 /// runs regardless so a partial load's `NPPN_READY` reaches the plugins.
 pub(crate) fn fire_plugin_chord(module_key: &str, internal_id: u32) -> bool {
-    let data = npp_data();
-    let dispatch: Option<HostDispatchFn> = Some(plugin_dispatch);
-    with_state(|st| st.shell.ensure_plugins_loaded(data, dispatch));
+    load_pending_plugins();
     let cmd_id = with_state(|st| st.shell.resolve_plugin_command(module_key, internal_id))
         .flatten()
         .map(|(cmd_id, _)| cmd_id);
