@@ -17894,6 +17894,24 @@ pub fn run(initial_path: Option<PathBuf>, perf: codepp_core::perf::Perf) -> Resu
         let mut shell = Shell::new(wake)
             .map_err(|e| windows::core::Error::new(E_FAIL, format!("shell init: {e}")))?;
 
+        // Stage the bundled plugin DLLs into the user's plugins dir
+        // so they are discoverable without a manual install step.
+        // Copies only on first run (or after a rebuild); otherwise
+        // four `stat` pairs. **Must precede discovery**, which is
+        // what reads that directory — an ordering nothing about the
+        // shape of this code enforces, so it is pinned by
+        // `staging_precedes_discovery`.
+        //
+        // `ui_gtk` and `ui_cocoa` have done this since their plugin
+        // hosts landed; this backend's predates the mechanism and
+        // had simply never adopted it, so until now a freshly built
+        // Code++ on the primary platform discovered nothing at all
+        // unless someone had laid the directory out by hand.
+        let staged = codepp_platform::stage_bundled_plugins();
+        if staged > 0 {
+            tracing::info!(count = staged, "staged bundled plugins");
+        }
+
         // Plugin discovery: enumerate `*.dll` candidates in the user's
         // plugins directory. **No DLL is mapped here** (DESIGN.md
         // §6.4 mandates lazy load); each candidate stays in the
@@ -30024,6 +30042,39 @@ mod dock_dialog_tests {
         assert!(
             arm.contains("idFrom: 0"),
             "upstream sends idFrom = 0; carrying dlg_id here would diverge silently"
+        );
+    }
+}
+
+#[cfg(test)]
+mod plugin_staging_guards {
+    //! The bundled plugins are copied into the user's plugins
+    //! directory at startup, and discovery is what reads that
+    //! directory. Both halves are invisible to a headless test — the
+    //! call lives inside `run`'s `unsafe` body, between a real window
+    //! and a real `Shell` — and the ordering compiles either way, so
+    //! it is pinned in the source like the plugin re-entry rules.
+
+    use super::plugin_reentry_guards::{code_only, fn_body, production_src};
+
+    /// Staging must happen before discovery. Reversed, a first run
+    /// stages the DLLs and then finds none, so the Plugins menu is
+    /// empty until the *second* launch — which looks like a slow
+    /// install rather than a bug, and is exactly the kind of thing
+    /// nobody reports.
+    #[test]
+    fn staging_precedes_discovery() {
+        let body = code_only(&fn_body(production_src(), "run"));
+        let stage = body.find("stage_bundled_plugins()").expect(
+            "ui_win32 no longer stages the bundled plugins; a fresh build then \
+             discovers none on the primary platform",
+        );
+        let discover = body
+            .find("discover_plugins(")
+            .expect("ui_win32 no longer discovers plugins");
+        assert!(
+            stage < discover,
+            "staging must precede discovery, or the first launch finds nothing to discover"
         );
     }
 }

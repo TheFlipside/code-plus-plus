@@ -17,6 +17,12 @@ name = "codepp_platform"
 [dependencies]
 crossbeam-channel = { workspace = true }
 notify            = { workspace = true }
+# Unpredictably-named, `O_EXCL`-created temp files for the plugin
+# staging copy — the same construction `codepp-shell`'s find-in-files
+# replacement and `core::session` already use, and for the same reason
+# (a predictable temp name next to a world-writable destination is a
+# link-planting target). MIT OR Apache-2.0.
+tempfile          = { workspace = true }
 tracing           = { workspace = true }
 
 [target.'cfg(target_os = "windows")'.dependencies]
@@ -29,6 +35,3 @@ windows = { version = "0.62", features = [
 # The dlopen/dlsym/dlclose arm of `dynlib` on Unix (Linux plugin loading).
 [target.'cfg(unix)'.dependencies]
 libc = { workspace = true }
-
-[dev-dependencies]
-tempfile = { workspace = true }
