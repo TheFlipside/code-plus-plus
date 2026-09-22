@@ -17086,11 +17086,29 @@ pub fn run(initial_path: Option<PathBuf>, perf: codepp_core::perf::Perf) -> Resu
 
         // Create the main window without children first; we attach
         // them after the Shell is built and stashed in GWLP_USERDATA.
+        //
+        // `WS_CLIPCHILDREN` is load-bearing. The class is
+        // `CS_HREDRAW | CS_VREDRAW`, so every resize invalidates the
+        // whole client, and `WM_ERASEBKGND` below fills all of it
+        // with `EDITOR_BORDER` grey. Without this style that fill
+        // is not clipped to the gaps between children — it lands
+        // on top of every child that has already painted. Most
+        // children repaint fully afterwards and hide it; a
+        // `SysTreeView32` does not: it repaints only its items,
+        // with opaque text rectangles, so the Folder-as-Workspace
+        // tree came back grey with white boxes around each name
+        // after any resize, until scrolling exposed fresh rows.
+        // Measured: after a `MoveWindow` of the main window the
+        // tree band's dominant colour was `A0A0A0` (this window's
+        // erase brush) at 7 974 of ~10 000 sampled pixels; with the
+        // style it stays white. Every other *resizable* container
+        // in this crate (FIF dock, workspace panel, dock groups)
+        // already carries the style.
         let main_hwnd = CreateWindowExW(
             WINDOW_EX_STYLE::default(),
             MAIN_CLASS,
             w!("Code++"),
-            WS_OVERLAPPEDWINDOW,
+            WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN,
             CW_USEDEFAULT,
             CW_USEDEFAULT,
             900,
@@ -26175,18 +26193,21 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                 DefWindowProcW(hwnd, msg, wparam, lparam)
             }
             WM_ERASEBKGND => {
-                // Paint the entire client area with the editor-
-                // border colour. Child windows (tabs, Scintilla,
-                // status, splitter, dock) draw their own
-                // backgrounds on top of this in the subsequent
-                // WM_PAINT pass; the only places the gray brush
-                // remains visible are the EDITOR_BORDER_PX strips
-                // around the Scintilla view that `layout_children`
-                // deliberately leaves uncovered. This produces the
-                // four-sided delimiter the user requested without
-                // introducing a separate WM_PAINT handler — the
-                // erase pass is enough because all chrome is
-                // child-window-rendered.
+                // Paint the client area with the editor-border
+                // colour. The window is `WS_CLIPCHILDREN`, so the
+                // DC's clip region already excludes every visible
+                // child (tabs, Scintilla, status, splitter, dock)
+                // and this fill only reaches the gaps between them
+                // — the EDITOR_BORDER_PX strips around the
+                // Scintilla view that `layout_children` deliberately
+                // leaves uncovered. This produces the four-sided
+                // delimiter the user requested without introducing
+                // a separate WM_PAINT handler. Do not drop the
+                // style and rely on children repainting over the
+                // fill instead: a `SysTreeView32` repaints only its
+                // item text after a resize, which is exactly the
+                // grey-with-white-boxes workspace tree the style's
+                // comment at `CreateWindowExW` records.
                 //
                 // Returning 1 (TRUE) signals "background already
                 // erased" so DefWindowProcW doesn't re-erase with
