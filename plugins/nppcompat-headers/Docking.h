@@ -49,6 +49,15 @@ extern "C" {
  * Layout (x86): 48 bytes — pointers are 4-byte-aligned so no padding
  * is needed.
  *
+ * Lifetime: the host retains the tTbData POINTER for as long as the
+ * registration lives, because NPPM_DMMUPDATEDISPINFO re-reads it.
+ * The struct and every buffer its pszName / pszAddInfo /
+ * pszModuleName point at must therefore outlive the registration —
+ * a stack temporary is a dangling pointer the moment
+ * NPPM_DMMREGASDCKDLG returns. Notepad++ imposes the same contract;
+ * a plugin that keeps its tTbData as a member of its dialog object
+ * (the usual shape) already satisfies it.
+ *
  * Code++ floating-only mode (Phase 4 m4): hClient, pszName, dlgID,
  * uMask, hIconTab, pszModuleName are honoured. rcFloat is honoured
  * if non-empty (used as the floating frame's initial position);
@@ -61,7 +70,7 @@ extern "C" {
 typedef struct tTbData_ {
     HWND        hClient;        /* plugin's docking-dialog HWND */
     const TCHAR *pszName;       /* display title (also the lookup name) */
-    int         dlgID;          /* nmhdr.idFrom for DMN_* notifications */
+    int         dlgID;          /* plugin's own dialog id (see DMN_* below) */
     UINT        uMask;          /* DWS_* flags (see below) */
     HICON       hIconTab;       /* optional title-bar icon (NULL if none) */
     const TCHAR *pszAddInfo;    /* extra info shown in the title bar */
@@ -98,13 +107,32 @@ typedef struct tTbData_ {
 #define DWS_DF_CONT_BOTTOM  (CONT_BOTTOM << 28)  /* 0x30000000 */
 #define DWS_DF_FLOATING     0x80000000           /* open floating */
 
-/* DMN_* — notifications the host sends to the plugin's beNotified
- * about its docked dialog. Carried in nmhdr.code; nmhdr.hwndFrom is
- * the frame HWND, nmhdr.idFrom is tTbData.dlgID.
+/* DMN_* — notifications about a docked dialog.
  *
- * Floating-only mode (Phase 4 m4) sends DMN_CLOSE only — when the
- * user clicks the floating frame's close button. DMN_DOCK / DMN_FLOAT
- * are reserved for the Phase 5 docking-manager bring-up.
+ * These do NOT go through beNotified. The host sends DMN_CLOSE as an
+ * ordinary WM_NOTIFY to the plugin's own hClient window procedure:
+ *
+ *   wParam       0
+ *   lParam       NMHDR*
+ *   nmhdr.code   DMN_CLOSE
+ *   nmhdr.hwndFrom  the host's frame window (NOT the main window)
+ *   nmhdr.idFrom    0
+ *
+ * That is Notepad++'s shape, field for field, so a plugin written
+ * against the upstream headers needs no change. Note in particular
+ * that idFrom is 0 rather than tTbData.dlgID: a plugin receives the
+ * notification on the very window it registered, so there is nothing
+ * to disambiguate.
+ *
+ * DMN_CLOSE fires when the user closes the dialog — in Code++'s
+ * floating-only mode, the frame's close button. The frame is hidden,
+ * never destroyed: hClient stays alive and a later NPPM_DMMSHOW
+ * re-shows it, so a plugin should treat DMN_CLOSE as "the user hid
+ * me" and update its own menu state, not as a teardown signal.
+ * Upstream sends it before hiding, and so does Code++.
+ *
+ * DMN_DOCK / DMN_FLOAT are reserved for the Phase 5 docking-manager
+ * bring-up and are never sent in floating-only mode.
  */
 #define DMN_FIRST 0x1000
 #define DMN_CLOSE (DMN_FIRST + 1)  /* user closed the dialog (frame hidden) */

@@ -47,7 +47,8 @@ use core::sync::atomic::{AtomicPtr, Ordering};
 // `Hwnd` and `HostDispatchFn` are re-exported (not redefined) so this
 // ABI-critical pair can never silently drift from the host's copy.
 pub use codepp_plugin_host::ffi::{
-    FuncItem, HostDispatchFn, Hwnd, NppData, SCNotification, MENU_TITLE_LENGTH,
+    FuncItem, HostDispatchFn, Hwnd, NppData, SCNotification, SciNotifyHeader, TbData, TbRect,
+    MENU_TITLE_LENGTH,
 };
 
 /// Code++ extension messages + payload constants (see
@@ -57,6 +58,10 @@ pub use codepp_plugin_host::{
     CLIP_FORMAT_HTML, CLIP_FORMAT_PLAIN, CLIP_FORMAT_RTF, EXPORT_KIND_HTML, EXPORT_KIND_OTHER,
     EXPORT_KIND_RTF,
 };
+
+/// `DWS_*` docking-window style bits for a `tTbData.u_mask`.
+/// Re-exported for the same reason as the block above.
+pub use codepp_plugin_host::{DWS_ADDINFO, DWS_DF_FLOATING, DWS_ICONTAB};
 
 // ---- SendMessageW transport -------------------------------------
 //
@@ -232,6 +237,39 @@ pub const STATUSBAR_DOC_TYPE: usize = 0;
 /// of UTF-16 units written including the NUL, or -1 for an unknown
 /// id. Used by [`buffer_path`].
 pub const NPPM_GETFULLPATHFROMBUFFERID: u32 = NPPMSG + 58;
+
+/// `NPPM_DMMREGASDCKDLG(0, *tTbData)` — register a plugin-owned
+/// dialog HWND as a dockable panel. The host wraps it in a frame of
+/// its own; the plugin keeps ownership of the HWND *and* of the
+/// `tTbData`, which the host retains for
+/// [`NPPM_DMMUPDATEDISPINFO`].
+pub const NPPM_DMMREGASDCKDLG: u32 = NPPMSG + 33;
+
+/// `NPPM_DMMSHOW(0, hClient)` — show the panel registered for
+/// `hClient`. Registration alone does not show it.
+pub const NPPM_DMMSHOW: u32 = NPPMSG + 30;
+
+/// `NPPM_DMMHIDE(0, hClient)` — hide it again. The registration
+/// survives, so a later [`NPPM_DMMSHOW`] re-shows.
+pub const NPPM_DMMHIDE: u32 = NPPMSG + 31;
+
+/// `NPPM_DMMUPDATEDISPINFO(0, hClient)` — the plugin has re-pointed
+/// its `tTbData`'s `psz_name` (or the other display fields) and
+/// wants the host to re-read them.
+pub const NPPM_DMMUPDATEDISPINFO: u32 = NPPMSG + 32;
+
+/// `DMN_CLOSE` — the user closed a docked panel. Delivered as a
+/// plain `WM_NOTIFY` to the plugin's **own dialog HWND**, not
+/// through `beNotified`: `nmhdr.hwndFrom` is the host's frame,
+/// `nmhdr.idFrom` is 0, and the `wParam` is 0. That is the upstream
+/// Notepad++ shape, which is the only one a plugin built against
+/// the public headers listens for.
+pub const DMN_CLOSE: u32 = 0x1000 + 1;
+
+/// `WM_NOTIFY` — the Win32 message [`DMN_CLOSE`] arrives on.
+/// Declared here so a plugin needn't pull in a Win32 binding crate
+/// just to name it.
+pub const WM_NOTIFY: u32 = 0x004E;
 
 /// Base of the `NPPN_*` notification codes a plugin receives in
 /// `SCNotification.nmhdr.code` through `beNotified`.
@@ -633,5 +671,17 @@ mod abi_lock {
         );
         assert_eq!(super::NPPN_FIRST, host::NPPN_FIRST);
         assert_eq!(super::NPPN_FILEBEFORECLOSE, host::NPPN_FILEBEFORECLOSE);
+        assert_eq!(super::NPPM_DMMREGASDCKDLG, host::NPPM_DMMREGASDCKDLG);
+        assert_eq!(super::NPPM_DMMSHOW, host::NPPM_DMMSHOW);
+        assert_eq!(super::NPPM_DMMHIDE, host::NPPM_DMMHIDE);
+        assert_eq!(super::NPPM_DMMUPDATEDISPINFO, host::NPPM_DMMUPDATEDISPINFO);
+    }
+
+    /// `DMN_CLOSE` lives in the host's `ffi` module rather than
+    /// `dispatch` (it is a notification code, not a message id), so it
+    /// gets its own line rather than joining the block above.
+    #[test]
+    fn sdk_dmn_close_matches_the_host() {
+        assert_eq!(super::DMN_CLOSE, codepp_plugin_host::DMN_CLOSE);
     }
 }

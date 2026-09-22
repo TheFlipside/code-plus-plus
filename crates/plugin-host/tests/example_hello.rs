@@ -43,7 +43,7 @@ fn npp_data_with_bogus_handles() -> NppData {
 }
 
 #[test]
-fn example_hello_loads_and_publishes_one_func_item() {
+fn example_hello_loads_and_publishes_its_func_items() {
     let Some(dll) = locate_example_hello() else {
         eprintln!(
             "skipping example_hello integration test: \
@@ -74,11 +74,19 @@ fn example_hello_loads_and_publishes_one_func_item() {
     );
 
     let funcs = info.func_items().expect("loaded plugin has func items");
-    assert_eq!(funcs.len(), 1, "example-hello contributes one menu item");
+    assert_eq!(
+        funcs.len(),
+        3,
+        "example-hello contributes the insert command and the two docking-panel commands"
+    );
     assert_eq!(
         funcs[0].cmd_id, PLUGIN_CMD_ID_BASE,
         "first plugin loaded gets the cmd-id base"
     );
+    // Consecutive ids, one per item — the host allocates per
+    // `FuncItem`, not per plugin.
+    assert_eq!(funcs[1].cmd_id, PLUGIN_CMD_ID_BASE + 1);
+    assert_eq!(funcs[2].cmd_id, PLUGIN_CMD_ID_BASE + 2);
 
     // The plugin's func ptr is non-null (defined as
     // `Some(plugin_cmd_insert_hello)` in the static FuncItem).
@@ -97,12 +105,17 @@ fn example_hello_loads_and_publishes_one_func_item() {
         "lookup_cmd should miss for unassigned ids"
     );
 
-    // Decode the menu label back to verify the wide-char round-trip.
-    let label_w = &funcs[0].item_name;
-    let nul = label_w
+    // Decode the menu labels back to verify the wide-char round-trip.
+    let labels: Vec<String> = funcs
         .iter()
-        .position(|&u| u == 0)
-        .unwrap_or(label_w.len());
-    let label = String::from_utf16_lossy(&label_w[..nul]);
-    assert_eq!(label, "Insert Hello");
+        .map(|f| {
+            let w = &f.item_name;
+            let nul = w.iter().position(|&u| u == 0).unwrap_or(w.len());
+            String::from_utf16_lossy(&w[..nul])
+        })
+        .collect();
+    assert_eq!(
+        labels,
+        ["Insert Hello", "Show Dock Panel", "Rename Dock Panel"]
+    );
 }

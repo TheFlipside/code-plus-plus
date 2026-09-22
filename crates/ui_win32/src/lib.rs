@@ -1053,6 +1053,15 @@ const TAB_DRAG_THRESHOLD_PX: i32 = 4;
 /// container hint. Those become live in the Phase 5 docking
 /// manager bring-up.
 struct DockEntry {
+    /// The plugin's own `tTbData`, kept so
+    /// `NPPM_DMMUPDATEDISPINFO` has something to re-read — the
+    /// dispatcher's decoded `String`s are a snapshot, and the
+    /// whole point of that message is that the plugin re-points
+    /// `psz_name` at a new buffer. Never null (the dispatcher
+    /// rejects a null `lparam`), and the plugin owns the memory
+    /// for the registration's lifetime; see the lifetime
+    /// contract on [`codepp_plugin_host::DockDialogParams::tb_data`].
+    tb_data: *const codepp_plugin_host::TbData,
     /// Plugin's pre-built dialog HWND. Re-parented into
     /// `frame_hwnd`'s client area at registration time. The
     /// plugin retains lifetime ownership; the host MUST NOT
@@ -1065,18 +1074,27 @@ struct DockEntry {
     /// dies (the frame is `owned` by the main HWND).
     frame_hwnd: HWND,
     /// Display title — also the lookup key for
-    /// `NPPM_DMMGETPLUGINHWNDBYNAME`. Owned `String`; re-read
-    /// from the plugin's `pszName` at registration and not
-    /// updated thereafter (Phase 5 polish: refresh on
-    /// `NPPM_DMMUPDATEDISPINFO`).
+    /// `NPPM_DMMGETPLUGINHWNDBYNAME`. Owned `String`, decoded
+    /// from the plugin's `pszName` at registration and refreshed
+    /// on every `NPPM_DMMUPDATEDISPINFO`.
+    ///
+    /// This is the **value**, not the label: it is matched
+    /// verbatim by `dock_hwnd_by_name`, while the frame caption
+    /// shows `dock_frame_title`'s sanitized rendering of it. A
+    /// plugin-supplied string reaching a caption is a display
+    /// sink like any other — same split the workspace tree and
+    /// the find-in-files dock make.
     name: String,
     /// Plugin DLL filename without extension; the optional
     /// disambiguator for the two-arg form of
     /// `NPPM_DMMGETPLUGINHWNDBYNAME`.
     module_name: String,
-    /// `tTbData.dlg_id` — carried in `nmhdr.idFrom` for any
-    /// future `DMN_*` notification routed back to the plugin
-    /// (`DMN_CLOSE` in particular, deferred to Phase 5).
+    /// `tTbData.dlg_id`, kept verbatim. It is deliberately *not*
+    /// what `DMN_CLOSE` puts in `nmhdr.idFrom` — upstream sends 0
+    /// there, and a plugin gets the notification on the very
+    /// window it registered, so there is nothing to disambiguate.
+    /// Retained for the docking manager, whose container model
+    /// addresses dialogs by this id.
     #[allow(dead_code)]
     dlg_id: i32,
     /// Snapshot of `tTbData.u_mask` at registration time.
@@ -3124,18 +3142,11 @@ impl UiPlatform for Win32Ui {
             // — Phase 5 docking-manager work places the frame
             // relative to the host window).
             let (x, y, width, height) = compute_dock_frame_position(&params.rc_float);
-            // Encode the title in UTF-16 for SetWindowTextW. An
-            // empty name (plugin sent NULL pszName, or all bad
-            // surrogates) falls back to the module name; if
-            // both are empty, use "Plugin Dialog".
-            let title = if !params.name.is_empty() {
-                params.name.as_str()
-            } else if !params.module_name.is_empty() {
-                params.module_name.as_str()
-            } else {
-                "Plugin Dialog"
-            };
-            let title_utf16: Vec<u16> = title.encode_utf16().chain(core::iter::once(0)).collect();
+            // Caption text, sanitized — see `dock_frame_title`.
+            let title_utf16: Vec<u16> = dock_frame_title(&params.name, &params.module_name)
+                .encode_utf16()
+                .chain(core::iter::once(0))
+                .collect();
             // Owned by the main window so Win32 destroys the
             // frame when the host shuts down (no leak on
             // forgetful plugins). WS_EX_TOOLWINDOW keeps the
@@ -3221,6 +3232,7 @@ impl UiPlatform for Win32Ui {
             // The frame itself stays hidden until NPPM_DMMSHOW.
             let _ = ShowWindow(h_client, SW_SHOW);
             dialogs.push(DockEntry {
+                tb_data: params.tb_data,
                 h_client,
                 frame_hwnd: frame,
                 name: params.name,
@@ -3270,24 +3282,47 @@ impl UiPlatform for Win32Ui {
     }
 
     fn update_dock_disp_info(&mut self, h_client: codepp_plugin_host::Hwnd) -> bool {
-        // Floating-only mode (Phase 4 m4): the registration's
-        // cached strings (name, module_name) were read once at
-        // REGASDCKDLG time and aren't refreshed here. The full
-        // re-read (re-walking the plugin's `tTbData`'s wide
-        // strings and updating the frame title) is a Phase 5
-        // docking-manager polish item — most real plugins set
-        // their title once at registration and never update,
-        // so the gap is invisible in practice. Returns success
-        // for any registered HWND so plugins that gate on the
-        // boolean return don't bail out.
         let h = HWND(h_client);
         if h.is_invalid() {
             return false;
         }
+        // SAFETY: `dock_dialogs` is alive while `Win32Ui` is in
+        // scope and is UI-thread-only — see the field doc on
+        // `Win32Ui::dock_dialogs`. `entry.tb_data` is the pointer
+        // the plugin registered with; re-reading it is the
+        // documented contract of this message, and the plugin owns
+        // keeping it live. Unlike `h_client` there is no liveness
+        // test available for it — `IsWindow` has no counterpart for
+        // a raw pointer — so a plugin that breaks the contract
+        // crashes the host rather than being declined. See the
+        // field doc on `DockDialogParams::tb_data`.
         unsafe {
-            let dialogs = &*self.dock_dialogs;
-            dialogs.iter().any(|e| e.h_client.0 == h.0)
+            let dialogs = &mut *self.dock_dialogs;
+            let Some(entry) = dialogs.iter_mut().find(|e| e.h_client.0 == h.0) else {
+                return false;
+            };
+            // `None` only for a null pointer, which a registered
+            // entry cannot hold. Nothing to refresh, but the HWND
+            // *is* registered, so the message still succeeded.
+            let Some(disp) = codepp_plugin_host::read_dock_disp_info(entry.tb_data) else {
+                return true;
+            };
+            // Re-read faithfully rather than filtering: a plugin
+            // that blanks `psz_name` has asked for a blank name,
+            // and the caption's fallback chain handles it. The
+            // consequence worth knowing is that `name` is also
+            // the `NPPM_DMMGETPLUGINHWNDBYNAME` key, so a rename
+            // moves the key — which is what upstream does too,
+            // and what a plugin renaming its panel means.
+            entry.name = disp.name;
+            entry.module_name = disp.module_name;
+            let title: Vec<u16> = dock_frame_title(&entry.name, &entry.module_name)
+                .encode_utf16()
+                .chain(core::iter::once(0))
+                .collect();
+            let _ = SetWindowTextW(entry.frame_hwnd, PCWSTR(title.as_ptr()));
         }
+        true
     }
 
     fn dock_hwnd_by_name(&self, name: &str, module_name: Option<&str>) -> codepp_plugin_host::Hwnd {
@@ -19638,6 +19673,37 @@ const DOCK_FRAME_DEFAULT_H: i32 = 360;
 const DOCK_FRAME_DEFAULT_X: i32 = 200;
 const DOCK_FRAME_DEFAULT_Y: i32 = 200;
 
+/// Caption text for a plugin's floating dock frame.
+///
+/// Two jobs, and they are separable on purpose. The **fallback
+/// chain** answers what to show when the plugin supplied nothing
+/// usable: an empty `psz_name` (NULL pointer, or a payload
+/// `wide_ptr_to_string` rejected for unpaired surrogates) falls
+/// back to the module name, and if both are empty to a generic
+/// label — a frame with a blank caption and no close affordance
+/// legible against the background is worse than a wrong-ish name.
+///
+/// The **sanitization** is the same rule every other plugin-supplied
+/// string that reaches Code++'s chrome follows (`NPPM_SETSTATUSBAR`
+/// is the precedent): `psz_name` comes from a DLL the user dropped
+/// into a folder, and a caption is a display sink, so bidi
+/// overrides and friends are substituted rather than rendered. The
+/// *unsanitized* name stays on `DockEntry::name` because that is
+/// the `NPPM_DMMGETPLUGINHWNDBYNAME` lookup key — substituting
+/// there would make a plugin unable to find its own dialog.
+fn dock_frame_title(name: &str, module_name: &str) -> String {
+    let raw = if name.is_empty() {
+        if module_name.is_empty() {
+            "Plugin Dialog"
+        } else {
+            module_name
+        }
+    } else {
+        name
+    };
+    sanitize_str_for_display(raw)
+}
+
 /// Compute the floating dock frame's initial (x, y, width, height).
 /// If the plugin's `tTbData.rc_float` is well-formed (right > left,
 /// bottom > top, AND the resulting dimensions fit in i32 without
@@ -19703,11 +19769,98 @@ unsafe fn register_dock_frame_class() {
 /// fill the client area without going through the `WindowState`
 /// registry.
 ///
-/// `WM_CLOSE` hides the frame rather than destroying it — the
-/// registration survives, and a subsequent `NPPM_DMMSHOW` re-shows.
-/// The frame is destroyed by Win32 when the main window dies (the
-/// frames are owned by the main HWND).
+/// `WM_CLOSE` sends `DMN_CLOSE` and then hides the frame rather
+/// than destroying it — the registration survives, and a subsequent
+/// `NPPM_DMMSHOW` re-shows. The frame is destroyed by Win32 when
+/// the main window dies (the frames are owned by the main HWND).
+///
+/// Wrapped in `catch_unwind` like every other window and dialog
+/// proc in this crate: the `WM_CLOSE` arm hands control to plugin
+/// code, which can re-enter the host, and an unwind out of an
+/// `extern "system"` function is at best a defined abort.
 extern "system" fn dock_frame_wnd_proc(
+    hwnd: HWND,
+    msg: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> LRESULT {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
+        dock_frame_wnd_proc_inner(hwnd, msg, wparam, lparam)
+    }))
+    .unwrap_or_else(|_| {
+        tracing::warn!(msg = msg, "panic caught in dock_frame_wnd_proc");
+        // Not `DefWindowProcW` on the recovery path: re-entering
+        // Win32 after an unwind is the shape this boundary exists
+        // to avoid. 0 is the right answer for every arm whose own
+        // code can panic (`WM_SIZE`, `WM_CLOSE`); `WM_NCCREATE`
+        // would rather have had its `DefWindowProcW` result, and
+        // returning 0 there fails the window creation — the safe
+        // direction, and unreachable short of an allocation
+        // failure inside a pointer stash.
+        LRESULT(0)
+    })
+}
+
+thread_local! {
+    /// Set while a `DMN_CLOSE` is being delivered on this thread.
+    /// See [`DmnCloseGuard`].
+    static DMN_CLOSE_ACTIVE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Re-entrancy latch for the `DMN_CLOSE` round trip.
+///
+/// `DMN_CLOSE` is delivered with `SendMessageW`, which on Win32 is a
+/// same-thread call straight into the plugin's window procedure —
+/// not a queued message. A plugin's handler knows its own frame
+/// (`nmhdr.hwndFrom` *is* the frame, and it arrives in the very
+/// notification) and may send `WM_CLOSE` back at it, which re-enters
+/// this proc and sends `DMN_CLOSE` again. Without a latch that
+/// recurses until the guard page faults — and a stack overflow is a
+/// hardware exception, so neither this proc's `catch_unwind` nor the
+/// plugin's own catches it. Four ABI-legal lines in a plugin would
+/// take the host down.
+///
+/// The latch is a plain flag rather than a depth count, and it is
+/// per *thread* rather than per frame: a close nested inside any
+/// other close skips its notification and just hides. That is
+/// deliberately the coarse direction — a per-frame flag would still
+/// allow an A→B→A cycle, and a depth cap would need an arbitrary
+/// number. What it costs is that a plugin closing a *second* panel
+/// from inside the first one's handler sees that second panel hide
+/// without a `DMN_CLOSE`, which is exactly what every close did
+/// before this notification existed at all.
+///
+/// Same shape as `PluginCallGuard` and `DrainFreeze`, and RAII for
+/// the same reason: the flag must clear on the unwinding path too,
+/// or one caught panic disables the notification for the session.
+struct DmnCloseGuard;
+
+impl DmnCloseGuard {
+    /// `None` when a delivery is already in progress on this thread
+    /// — the caller must then skip the send.
+    fn enter() -> Option<Self> {
+        if DMN_CLOSE_ACTIVE.with(std::cell::Cell::get) {
+            return None;
+        }
+        DMN_CLOSE_ACTIVE.with(|f| f.set(true));
+        Some(Self)
+    }
+}
+
+impl Drop for DmnCloseGuard {
+    fn drop(&mut self) {
+        DMN_CLOSE_ACTIVE.with(|f| f.set(false));
+    }
+}
+
+/// Body of [`dock_frame_wnd_proc`], split out so the caller can
+/// wrap it in a single `catch_unwind`.
+///
+/// # Safety
+///
+/// Win32 message-dispatch contract: `hwnd` is the live frame,
+/// and `wparam` / `lparam` carry whatever the message documents.
+unsafe fn dock_frame_wnd_proc_inner(
     hwnd: HWND,
     msg: u32,
     wparam: WPARAM,
@@ -19744,12 +19897,61 @@ extern "system" fn dock_frame_wnd_proc(
                 LRESULT(0)
             }
             WM_CLOSE => {
-                // Hide instead of destroy. Phase 5 polish item:
-                // synthesise a `DMN_CLOSE` notification so the
-                // plugin can update its Show/Hide menu state in
-                // sync with the visual change. Today plugins
-                // discover the hide via the next NPPM-driven
-                // refresh or the user re-clicking the menu item.
+                // Tell the plugin its panel is closing, then hide
+                // (never destroy — the registration survives and
+                // `NPPM_DMMSHOW` re-shows).
+                //
+                // The delivery shape is upstream's, not a choice:
+                // Notepad++'s `DockingCont::doClose` sends
+                // `DMN_CLOSE` as a plain `WM_NOTIFY` **to the
+                // plugin's own `h_client` dialog**, with
+                // `nmhdr.hwndFrom` = the container window (our
+                // frame), `nmhdr.idFrom` = 0 and `wParam` = 0 —
+                // it does not reach `beNotified` at all. A plugin
+                // built against the upstream headers listens in
+                // its dialog proc for exactly that, so anything
+                // else here would be a notification nobody hears.
+                // Ordering matches too: notify first, hide second.
+                let h_client_raw = GetWindowLongPtrW(hwnd, GWLP_USERDATA);
+                // `_guard` is held for the whole send; `None` means a
+                // delivery is already on the stack and this one is
+                // skipped. See `DmnCloseGuard` for why that is not
+                // optional.
+                let reentry_guard = DmnCloseGuard::enter();
+                if h_client_raw != 0 && reentry_guard.is_some() {
+                    let h_client = HWND(h_client_raw as *mut c_void);
+                    // Same defensive `IsWindow` as `WM_SIZE`: the
+                    // plugin may have destroyed h_client without
+                    // unregistering.
+                    if IsWindow(Some(h_client)).as_bool() {
+                        // `nmhdr` lives on this stack frame, which
+                        // outlives the synchronous `SendMessageW`.
+                        //
+                        // The plugin's dialog proc runs inside
+                        // that call and may send `NPPM_*` straight
+                        // back at the host — which works because
+                        // nothing here holds a `WindowState`
+                        // borrow, the same discipline the
+                        // notification-delivery path follows. The
+                        // one path that degrades is a plugin
+                        // posting `WM_CLOSE` at its own frame from
+                        // inside an NPPM dispatch: the borrow is
+                        // live then, and its re-entrant `NPPM_*`
+                        // is declined rather than answered.
+                        let nmhdr = NMHDR {
+                            hwndFrom: hwnd,
+                            idFrom: 0,
+                            code: codepp_plugin_host::DMN_CLOSE,
+                        };
+                        SendMessageW(
+                            h_client,
+                            WM_NOTIFY,
+                            Some(WPARAM(0)),
+                            Some(LPARAM(&raw const nmhdr as isize)),
+                        );
+                    }
+                }
+                drop(reentry_guard);
                 let _ = ShowWindow(hwnd, SW_HIDE);
                 LRESULT(0)
             }
@@ -29697,6 +29899,131 @@ mod drain_freeze_guards {
             src.matches("shell.drain(&mut ui)").count(),
             1,
             "a second `shell.drain` call site would drain outside the freeze"
+        );
+    }
+}
+
+#[cfg(test)]
+mod dock_dialog_tests {
+    //! The plugin docking-dialog surface: the caption's fallback and
+    //! sanitization rules as unit tests, and source-level guards for
+    //! the two `DMN_CLOSE` facts that are ABI rather than taste.
+
+    use super::dock_frame_title;
+    use super::plugin_reentry_guards::{code_only, fn_body, production_src};
+
+    #[test]
+    fn the_caption_prefers_the_name_then_the_module_then_a_generic_label() {
+        assert_eq!(dock_frame_title("Console", "NppExec"), "Console");
+        assert_eq!(dock_frame_title("", "NppExec"), "NppExec");
+        assert_eq!(dock_frame_title("", ""), "Plugin Dialog");
+    }
+
+    /// The caption is a display sink and `psz_name` comes out of a DLL
+    /// the user dropped into a folder, so the same substitution every
+    /// other plugin-supplied string gets applies here.
+    #[test]
+    fn the_caption_substitutes_display_hostile_characters() {
+        let title = dock_frame_title("invoice\u{202E}fdp", "");
+        assert!(
+            !title.contains('\u{202E}'),
+            "a bidi override reached the frame caption: {title:?}"
+        );
+        assert!(
+            title.starts_with("invoice") && title.ends_with("fdp"),
+            "sanitizing should substitute, not truncate: {title:?}"
+        );
+    }
+
+    /// Both sites that write a frame caption go through the helper.
+    /// Writing `params.name` straight into `CreateWindowExW` is what
+    /// the registration path did before, and it compiled fine.
+    #[test]
+    fn every_caption_site_goes_through_dock_frame_title() {
+        let src = production_src();
+        for site in ["register_dock_dialog", "update_dock_disp_info"] {
+            assert!(
+                code_only(&fn_body(src, site)).contains("dock_frame_title("),
+                "`{site}` writes a caption without sanitizing it"
+            );
+        }
+    }
+
+    /// The `WM_CLOSE` arm — everything from the arm's label to the
+    /// end of the proc body — with runs of whitespace collapsed, so
+    /// the assertions below survive rustfmt re-wrapping the calls
+    /// they match.
+    fn wm_close_arm() -> String {
+        let body = code_only(&fn_body(production_src(), "dock_frame_wnd_proc_inner"));
+        let at = body
+            .find("WM_CLOSE =>")
+            .expect("the dock frame no longer handles WM_CLOSE");
+        body[at..].split_whitespace().collect::<Vec<_>>().join(" ")
+    }
+
+    /// Upstream notifies the plugin and *then* hides. Both orders
+    /// compile and both look right; the difference shows only when a
+    /// plugin re-shows the panel from inside its handler, which on
+    /// this order it can (matching Notepad++) and on the other it
+    /// cannot.
+    #[test]
+    fn the_close_notifies_the_plugin_before_it_hides_the_frame() {
+        let arm = wm_close_arm();
+        let notify = arm
+            .find("DMN_CLOSE")
+            .expect("WM_CLOSE no longer sends DMN_CLOSE");
+        let hide = arm
+            .find("SW_HIDE")
+            .expect("WM_CLOSE no longer hides the frame");
+        assert!(
+            notify < hide,
+            "DMN_CLOSE must be sent before the frame hides, as Notepad++ does"
+        );
+    }
+
+    /// The send is gated on the re-entrancy latch. Without it a
+    /// plugin can send `WM_CLOSE` back at its own frame from inside
+    /// its `DMN_CLOSE` handler and recurse until the stack faults —
+    /// which is a hardware exception, so no `catch_unwind` on either
+    /// side of the round trip catches it. Nothing about the shape of
+    /// the code says the latch is load-bearing, so it is pinned.
+    #[test]
+    fn the_close_notification_is_gated_on_the_reentrancy_latch() {
+        let arm = wm_close_arm();
+        let guard = arm
+            .find("DmnCloseGuard::enter()")
+            .expect("the DMN_CLOSE send is no longer behind a re-entrancy latch");
+        let send = arm
+            .find("SendMessageW( h_client,")
+            .expect("WM_CLOSE no longer sends DMN_CLOSE");
+        assert!(
+            guard < send,
+            "the latch must be taken before the send, not after it"
+        );
+        assert!(
+            arm.contains("reentry_guard.is_some()"),
+            "taking the latch is not enough — the send must be skipped when it is already held"
+        );
+    }
+
+    /// `DMN_CLOSE` is a `WM_NOTIFY` aimed at the plugin's own dialog,
+    /// with `idFrom` = 0. Not `beNotified`, and not `dlg_id` — both
+    /// are the plausible-looking wrong answer, and a plugin built
+    /// against the upstream headers would simply never hear either.
+    #[test]
+    fn the_close_notification_matches_the_upstream_abi() {
+        let arm = wm_close_arm();
+        assert!(
+            arm.contains("WM_NOTIFY"),
+            "DMN_CLOSE must travel as WM_NOTIFY"
+        );
+        assert!(
+            arm.contains("SendMessageW( h_client, WM_NOTIFY,"),
+            "DMN_CLOSE must be sent to the plugin's h_client, not to the frame or a broadcast"
+        );
+        assert!(
+            arm.contains("idFrom: 0"),
+            "upstream sends idFrom = 0; carrying dlg_id here would diverge silently"
         );
     }
 }

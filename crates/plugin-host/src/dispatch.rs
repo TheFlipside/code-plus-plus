@@ -371,9 +371,8 @@ const MAX_PLUGIN_PAYLOAD_BYTES: usize = 256 * 1024 * 1024;
 /// Host-owned parameters extracted from a plugin's `tTbData` at
 /// `NPPM_DMMREGASDCKDLG` dispatch time. The dispatcher reads the
 /// wide-string fields (`pszName`, `pszModuleName`, `pszAddInfo`)
-/// using the same `wide_ptr_to_string` helper the rest of the file
-/// uses, so the plugin's buffers don't need to outlive the call —
-/// the trait impl works against `String`s.
+/// using [`read_dock_disp_info`], so the trait impl works against
+/// `String`s for the initial registration.
 ///
 /// `h_client` and `h_icon_tab` stay raw because they are HWND /
 /// HICON handles, which Win32 owns; the plugin holds the lifetime
@@ -391,6 +390,97 @@ pub struct DockDialogParams {
     pub u_mask: u32,
     pub dlg_id: i32,
     pub i_prev_cont: i32,
+    /// The plugin's own `tTbData`, retained so
+    /// [`HostServices::update_dock_disp_info`] has something to
+    /// re-read. **The plugin owns this memory and must keep both
+    /// the struct and the buffers its wide-string fields point at
+    /// alive for as long as the registration lives** — the same
+    /// contract Notepad++ imposes, since it stores the caller's
+    /// pointer too.
+    ///
+    /// **It is not as well defended as `h_client`, despite both
+    /// being plugin-owned.** `h_client` is an opaque Win32 handle,
+    /// so `IsWindow` is a real OS-backed liveness gate and a stale
+    /// one degrades to a decline. There is no equivalent test for
+    /// an arbitrary pointer: a plugin that registers a stack
+    /// temporary — the mistake this API invites, which is why
+    /// `Docking.h` names it — leaves the host reading freed memory
+    /// on the next `NPPM_DMMUPDATEDISPINFO`, and whatever now
+    /// occupies those bytes is walked as if it were the
+    /// `psz_*` pointers. That is an access violation, which is a
+    /// hardware exception rather than a panic, so no `catch_unwind`
+    /// anywhere makes it recoverable. The ABI leaves no room for a
+    /// stronger guarantee; the honest mitigation is that the
+    /// contract is stated where a plugin author reads it.
+    ///
+    /// Never null: the dispatcher rejects a null / negative
+    /// `lparam` before building this struct.
+    pub tb_data: *const crate::ffi::TbData,
+}
+
+/// The three display strings a plugin's `tTbData` carries, decoded
+/// host-side. Produced at registration and again on every
+/// `NPPM_DMMUPDATEDISPINFO`, which is the whole point of the type:
+/// the plugin is allowed to re-point `psz_name` / `psz_add_info` at
+/// new buffers and ask the host to notice.
+#[derive(Debug, Clone, Default)]
+pub struct DockDispInfo {
+    /// `psz_name` — the frame caption and the
+    /// `NPPM_DMMGETPLUGINHWNDBYNAME` lookup key.
+    pub name: String,
+    /// `psz_module_name` — the optional disambiguator for that
+    /// same lookup.
+    pub module_name: String,
+    /// `psz_add_info` — `None` for a null or empty buffer.
+    pub add_info: Option<String>,
+}
+
+/// Decode the display strings out of a live `tTbData`.
+///
+/// Used by the `NPPM_DMMREGASDCKDLG` arm and, later, by whichever
+/// backend implements [`HostServices::update_dock_disp_info`] — the
+/// unsafe wide-string walking stays in the crate that owns the FFI
+/// types rather than being re-implemented per backend.
+///
+/// # Safety
+///
+/// `td` must be null, or a pointer to a live `TbData` whose
+/// wide-string fields are null or point at null-terminated buffers.
+/// On the update path that means the plugin honoured the lifetime
+/// contract on [`DockDialogParams::tb_data`]; there is no way for
+/// the host to verify it, exactly as there is none for `h_client`.
+///
+/// Returns `None` for a null `td`.
+#[must_use]
+pub unsafe fn read_dock_disp_info(td: *const crate::ffi::TbData) -> Option<DockDispInfo> {
+    if td.is_null() {
+        return None;
+    }
+    // Fields are read with `read_unaligned` because a plugin
+    // allocation may sit on a packed boundary; an aligned read
+    // would be UB on the misaligned case.
+    let (psz_name, psz_module_name, psz_add_info) = unsafe {
+        (
+            core::ptr::read_unaligned(core::ptr::addr_of!((*td).psz_name)),
+            core::ptr::read_unaligned(core::ptr::addr_of!((*td).psz_module_name)),
+            core::ptr::read_unaligned(core::ptr::addr_of!((*td).psz_add_info)),
+        )
+    };
+    let add_info = if psz_add_info.is_null() {
+        None
+    } else {
+        let s = unsafe { wide_ptr_to_string(psz_add_info) };
+        if s.is_empty() {
+            None
+        } else {
+            Some(s)
+        }
+    };
+    Some(DockDispInfo {
+        name: unsafe { wide_ptr_to_string(psz_name) },
+        module_name: unsafe { wide_ptr_to_string(psz_module_name) },
+        add_info,
+    })
 }
 
 // --- Outbound: NPPN_* notifications ----------------------------------
@@ -1233,10 +1323,12 @@ pub trait HostServices {
     /// `h_client`: closing the frame hides it (the plugin owns
     /// `h_client` and is responsible for destroying it on
     /// shutdown). `DockDialogParams` carries owned host-side
-    /// strings already (the dispatcher reads the plugin's
-    /// wide-char fields before calling the trait), so the
-    /// plugin's wide-buffer lifetime is irrelevant past this
-    /// call returning.
+    /// copies of the plugin's wide-char fields, so nothing the
+    /// *initial* registration needs outlives this call — but
+    /// [`DockDialogParams::tb_data`] is retained for the later
+    /// `NPPM_DMMUPDATEDISPINFO` re-read, and that pointer does
+    /// carry a lifetime contract on the plugin. See its field
+    /// doc.
     ///
     /// Returns `true` on success, `false` for dead
     /// `h_client` HWND, frame-creation failure, or duplicate
@@ -2274,22 +2366,9 @@ pub unsafe fn dispatch_nppm<S: HostServices>(
             // allocations may live on a packed boundary; an
             // aligned read would invoke UB on the misaligned
             // case.
-            let (
-                h_client,
-                psz_name,
-                psz_module_name,
-                psz_add_info,
-                h_icon_tab,
-                rc_float,
-                u_mask,
-                dlg_id,
-                i_prev_cont,
-            ) = unsafe {
+            let (h_client, h_icon_tab, rc_float, u_mask, dlg_id, i_prev_cont) = unsafe {
                 (
                     core::ptr::read_unaligned(core::ptr::addr_of!((*td).h_client)),
-                    core::ptr::read_unaligned(core::ptr::addr_of!((*td).psz_name)),
-                    core::ptr::read_unaligned(core::ptr::addr_of!((*td).psz_module_name)),
-                    core::ptr::read_unaligned(core::ptr::addr_of!((*td).psz_add_info)),
                     core::ptr::read_unaligned(core::ptr::addr_of!((*td).h_icon_tab)),
                     core::ptr::read_unaligned(core::ptr::addr_of!((*td).rc_float)),
                     core::ptr::read_unaligned(core::ptr::addr_of!((*td).u_mask)),
@@ -2301,32 +2380,23 @@ pub unsafe fn dispatch_nppm<S: HostServices>(
                 tracing::warn!("NPPM_DMMREGASDCKDLG: null h_client (plugin coding error)");
                 return Some(0);
             }
-            // Read the wide strings host-side so the plugin's
-            // buffers don't need to outlive this call. Empty
-            // names (and add_info) fall back to defaults — see
-            // `DockDialogParams` field doc.
-            let name = unsafe { wide_ptr_to_string(psz_name) };
-            let module_name = unsafe { wide_ptr_to_string(psz_module_name) };
-            let add_info = if psz_add_info.is_null() {
-                None
-            } else {
-                let s = unsafe { wide_ptr_to_string(psz_add_info) };
-                if s.is_empty() {
-                    None
-                } else {
-                    Some(s)
-                }
-            };
+            // Decode the wide strings host-side. `td` is non-null
+            // here (guarded above), so the `None` arm is
+            // unreachable; defaulting rather than bailing keeps a
+            // registration with an empty name working, which the
+            // caller's title fallback chain already handles.
+            let disp = unsafe { read_dock_disp_info(td) }.unwrap_or_default();
             let params = DockDialogParams {
                 h_client,
-                name,
-                module_name,
-                add_info,
+                name: disp.name,
+                module_name: disp.module_name,
+                add_info: disp.add_info,
                 h_icon_tab,
                 rc_float,
                 u_mask,
                 dlg_id,
                 i_prev_cont,
+                tb_data: td,
             };
             isize::from(services.register_dock_dialog(params))
         }

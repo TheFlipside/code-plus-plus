@@ -40,17 +40,44 @@ const fn make_plugin_name() -> [u16; 14] {
     buf
 }
 
-/// The plugin's contributed menu items. One entry: "Insert Hello"
-/// bound to [`plugin_cmd_insert_hello`]. `cmd_id` is written by the
+/// Number of entries in [`FUNCS`]. Single-sourced: it is both the
+/// array's length and the count `getFuncsArray` reports, and the
+/// host indexes the array with the number we report — so a literal
+/// left stale after adding an item is an out-of-bounds read on the
+/// host's side.
+const FUNCS_COUNT: usize = 3;
+
+/// The plugin's contributed menu items. `cmd_id` is written by the
 /// host during load; we leave it 0 in the static initialiser per
 /// the ABI contract.
-static FUNCS: SyncCell<[FuncItem; 1]> = SyncCell::new([FuncItem {
-    item_name: sdk::menu_label(b"Insert Hello"),
-    p_func: Some(plugin_cmd_insert_hello),
-    cmd_id: 0,
-    init2_check: 0,
-    p_sh_key: core::ptr::null_mut(),
-}]);
+///
+/// The two docking entries drive the host's `NPPM_DMM*` surface —
+/// see [`crate::dock`] for what each one demonstrates. They are
+/// present on every platform and report their own unavailability
+/// off Windows rather than changing the array's length per target.
+static FUNCS: SyncCell<[FuncItem; FUNCS_COUNT]> = SyncCell::new([
+    FuncItem {
+        item_name: sdk::menu_label(b"Insert Hello"),
+        p_func: Some(plugin_cmd_insert_hello),
+        cmd_id: 0,
+        init2_check: 0,
+        p_sh_key: core::ptr::null_mut(),
+    },
+    FuncItem {
+        item_name: sdk::menu_label(b"Show Dock Panel"),
+        p_func: Some(plugin_cmd_show_dock_panel),
+        cmd_id: 0,
+        init2_check: 0,
+        p_sh_key: core::ptr::null_mut(),
+    },
+    FuncItem {
+        item_name: sdk::menu_label(b"Rename Dock Panel"),
+        p_func: Some(plugin_cmd_rename_dock_panel),
+        cmd_id: 0,
+        init2_check: 0,
+        p_sh_key: core::ptr::null_mut(),
+    },
+]);
 
 #[no_mangle]
 pub extern "C" fn setInfo(data: NppData) {
@@ -68,7 +95,7 @@ pub extern "C" fn getFuncsArray(nb: *mut i32) -> *mut FuncItem {
         // SAFETY: per the ABI, `nb` is a valid out-pointer the host
         // owns for the duration of this call. Writing one `i32`
         // through it does not exceed its bounds.
-        unsafe { *nb = 1 };
+        unsafe { *nb = FUNCS_COUNT as i32 };
     }
     FUNCS.get().cast::<FuncItem>()
 }
@@ -135,4 +162,15 @@ extern "C" fn plugin_cmd_insert_hello() {
     unsafe {
         sdk::SendMessageW(sci, SCI_INSERTTEXT, neg_one, HELLO.as_ptr() as isize);
     }
+}
+
+/// Menu callback: create-register-show the docking panel.
+extern "C" fn plugin_cmd_show_dock_panel() {
+    crate::dock::show_panel();
+}
+
+/// Menu callback: re-point the panel's `psz_name` and refresh it
+/// through `NPPM_DMMUPDATEDISPINFO`.
+extern "C" fn plugin_cmd_rename_dock_panel() {
+    crate::dock::rename_panel();
 }
