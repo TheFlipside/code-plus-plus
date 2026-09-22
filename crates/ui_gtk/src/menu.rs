@@ -2663,15 +2663,20 @@ fn on_save_session() {
 /// `drain_shell` flushes anything already queued and `rebind_active_view`
 /// moves the view onto the resolved active tab.
 ///
-/// Unlike Win32 this does not first discard a sole empty "new 1" scratch
-/// buffer — a leftover empty tab alongside the loaded session is cosmetic,
-/// and GTK's tab layer always keeps at least one tab, so there is no
-/// null-state hazard. Tracked as a follow-up for exact Win32 parity.
+/// An untouched `new 1` is consumed by the session's first entry rather
+/// than left beside it, the same outcome [`open_paths`] gives File → Open:
+/// the editor is measured with [`crate::editor_is_pristine`] and the
+/// answer handed to `Shell::load_npp_session`, whose open loop applies
+/// the same `open_file_replacing_scratch` gate. All three backends reach
+/// this through that one parameter, so they cannot disagree on it.
 fn on_load_session() {
     let Some(path) = choose_open_paths().into_iter().next() else {
         return;
     };
-    let report = with_state(|st| st.shell.load_npp_session(&path));
+    let report = with_state(|st| {
+        let pristine = editor_is_pristine(&st.editor);
+        st.shell.load_npp_session(&path, pristine)
+    });
     match report {
         Some(Ok(r)) => {
             // A session that was *entirely* rejected opened nothing; say

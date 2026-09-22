@@ -134,33 +134,33 @@ use codepp_plugin_host::{
 };
 use codepp_scintilla_sys::{
     ScintillaDirectFunction, Scintilla_RegisterClasses, CARETSTYLE_INVISIBLE, SCI_ADDUNDOACTION,
-    SCI_BEGINUNDOACTION, SCI_CLEAR, SCI_COLOURISE, SCI_CONVERTEOLS, SCI_COPY, SCI_CREATEDOCUMENT,
-    SCI_CUT, SCI_DOCLINEFROMVISIBLE, SCI_EMPTYUNDOBUFFER, SCI_ENDUNDOACTION, SCI_GETANCHOR,
-    SCI_GETCOLUMN, SCI_GETCURRENTPOS, SCI_GETDIRECTFUNCTION, SCI_GETDIRECTPOINTER,
-    SCI_GETDOCPOINTER, SCI_GETFIRSTVISIBLELINE, SCI_GETINDENTATIONGUIDES, SCI_GETLENGTH,
-    SCI_GETLINECOUNT, SCI_GETMODIFY, SCI_GETOVERTYPE, SCI_GETSELECTIONEND, SCI_GETSELECTIONSTART,
-    SCI_GETSELTEXT, SCI_GETTEXT, SCI_GETVIEWEOL, SCI_GETVIEWWS, SCI_GETWRAPMODE, SCI_GETXOFFSET,
-    SCI_GETZOOM, SCI_GOTOLINE, SCI_GOTOPOS, SCI_LINEFROMPOSITION, SCI_LINESCROLL,
-    SCI_LINESONSCREEN, SCI_PASTE, SCI_POINTYFROMPOSITION, SCI_POSITIONAFTER, SCI_POSITIONFROMLINE,
-    SCI_POSITIONFROMPOINTCLOSE, SCI_REDO, SCI_RELEASEDOCUMENT, SCI_REPLACETARGET, SCI_SELECTALL,
-    SCI_SETCARETSTYLE, SCI_SETCODEPAGE, SCI_SETDOCPOINTER, SCI_SETEMPTYSELECTION, SCI_SETEOLMODE,
-    SCI_SETFONTQUALITY, SCI_SETHSCROLLBAR, SCI_SETINDENTATIONGUIDES, SCI_SETMARGINWIDTHN,
-    SCI_SETREADONLY, SCI_SETSAVEPOINT, SCI_SETSCROLLWIDTH, SCI_SETSCROLLWIDTHTRACKING, SCI_SETSEL,
-    SCI_SETSELECTIONEND, SCI_SETSELECTIONMODE, SCI_SETSELECTIONSTART, SCI_SETTABWIDTH,
-    SCI_SETTARGETEND, SCI_SETTARGETSTART, SCI_SETTEXT, SCI_SETVIEWEOL, SCI_SETVIEWWS,
-    SCI_SETVSCROLLBAR, SCI_SETWRAPMODE, SCI_SETXOFFSET, SCI_SETZOOM, SCI_STYLEGETBACK,
-    SCI_STYLEGETFORE, SCI_TEXTHEIGHT, SCI_UNDO, SCI_VISIBLEFROMDOCLINE, SCI_ZOOMIN, SCI_ZOOMOUT,
-    SCN_MODIFIED, SCN_PAINTED, SCN_SAVEPOINTLEFT, SCN_SAVEPOINTREACHED, SCN_STYLENEEDED,
-    SCN_UPDATEUI, SC_AUTOMATICFOLD_CHANGE, SC_AUTOMATICFOLD_CLICK, SC_AUTOMATICFOLD_SHOW,
-    SC_CP_UTF8, SC_DOCUMENTOPTION_DEFAULT, SC_EFF_QUALITY_LCD_OPTIMIZED,
-    SC_EFF_QUALITY_NON_ANTIALIASED, SC_EOL_CR, SC_EOL_CRLF, SC_EOL_LF,
-    SC_FOLDFLAG_LINEAFTER_CONTRACTED, SC_IV_LOOKBOTH, SC_IV_NONE, SC_MARGIN_SYMBOL,
-    SC_MARKNUM_FOLDER, SC_MARKNUM_FOLDEREND, SC_MARKNUM_FOLDERMIDTAIL, SC_MARKNUM_FOLDEROPEN,
-    SC_MARKNUM_FOLDEROPENMID, SC_MARKNUM_FOLDERSUB, SC_MARKNUM_FOLDERTAIL, SC_MARK_BOXMINUS,
-    SC_MARK_BOXMINUSCONNECTED, SC_MARK_BOXPLUS, SC_MARK_BOXPLUSCONNECTED, SC_MARK_LCORNER,
-    SC_MARK_TCORNER, SC_MARK_VLINE, SC_MASK_FOLDERS, SC_MOD_DELETETEXT, SC_MOD_INSERTTEXT,
-    SC_SEL_RECTANGLE, SC_SEL_STREAM, SC_UPDATE_CONTENT, SC_UPDATE_SELECTION, SC_UPDATE_V_SCROLL,
-    STYLE_DEFAULT,
+    SCI_BEGINUNDOACTION, SCI_CANREDO, SCI_CANUNDO, SCI_CLEAR, SCI_COLOURISE, SCI_CONVERTEOLS,
+    SCI_COPY, SCI_CREATEDOCUMENT, SCI_CUT, SCI_DOCLINEFROMVISIBLE, SCI_EMPTYUNDOBUFFER,
+    SCI_ENDUNDOACTION, SCI_GETANCHOR, SCI_GETCOLUMN, SCI_GETCURRENTPOS, SCI_GETDIRECTFUNCTION,
+    SCI_GETDIRECTPOINTER, SCI_GETDOCPOINTER, SCI_GETFIRSTVISIBLELINE, SCI_GETINDENTATIONGUIDES,
+    SCI_GETLENGTH, SCI_GETLINECOUNT, SCI_GETMODIFY, SCI_GETOVERTYPE, SCI_GETSELECTIONEND,
+    SCI_GETSELECTIONSTART, SCI_GETSELTEXT, SCI_GETTEXT, SCI_GETVIEWEOL, SCI_GETVIEWWS,
+    SCI_GETWRAPMODE, SCI_GETXOFFSET, SCI_GETZOOM, SCI_GOTOLINE, SCI_GOTOPOS, SCI_LINEFROMPOSITION,
+    SCI_LINESCROLL, SCI_LINESONSCREEN, SCI_PASTE, SCI_POINTYFROMPOSITION, SCI_POSITIONAFTER,
+    SCI_POSITIONFROMLINE, SCI_POSITIONFROMPOINTCLOSE, SCI_REDO, SCI_RELEASEDOCUMENT,
+    SCI_REPLACETARGET, SCI_SELECTALL, SCI_SETCARETSTYLE, SCI_SETCODEPAGE, SCI_SETDOCPOINTER,
+    SCI_SETEMPTYSELECTION, SCI_SETEOLMODE, SCI_SETFONTQUALITY, SCI_SETHSCROLLBAR,
+    SCI_SETINDENTATIONGUIDES, SCI_SETMARGINWIDTHN, SCI_SETREADONLY, SCI_SETSAVEPOINT,
+    SCI_SETSCROLLWIDTH, SCI_SETSCROLLWIDTHTRACKING, SCI_SETSEL, SCI_SETSELECTIONEND,
+    SCI_SETSELECTIONMODE, SCI_SETSELECTIONSTART, SCI_SETTABWIDTH, SCI_SETTARGETEND,
+    SCI_SETTARGETSTART, SCI_SETTEXT, SCI_SETVIEWEOL, SCI_SETVIEWWS, SCI_SETVSCROLLBAR,
+    SCI_SETWRAPMODE, SCI_SETXOFFSET, SCI_SETZOOM, SCI_STYLEGETBACK, SCI_STYLEGETFORE,
+    SCI_TEXTHEIGHT, SCI_UNDO, SCI_VISIBLEFROMDOCLINE, SCI_ZOOMIN, SCI_ZOOMOUT, SCN_MODIFIED,
+    SCN_PAINTED, SCN_SAVEPOINTLEFT, SCN_SAVEPOINTREACHED, SCN_STYLENEEDED, SCN_UPDATEUI,
+    SC_AUTOMATICFOLD_CHANGE, SC_AUTOMATICFOLD_CLICK, SC_AUTOMATICFOLD_SHOW, SC_CP_UTF8,
+    SC_DOCUMENTOPTION_DEFAULT, SC_EFF_QUALITY_LCD_OPTIMIZED, SC_EFF_QUALITY_NON_ANTIALIASED,
+    SC_EOL_CR, SC_EOL_CRLF, SC_EOL_LF, SC_FOLDFLAG_LINEAFTER_CONTRACTED, SC_IV_LOOKBOTH,
+    SC_IV_NONE, SC_MARGIN_SYMBOL, SC_MARKNUM_FOLDER, SC_MARKNUM_FOLDEREND,
+    SC_MARKNUM_FOLDERMIDTAIL, SC_MARKNUM_FOLDEROPEN, SC_MARKNUM_FOLDEROPENMID,
+    SC_MARKNUM_FOLDERSUB, SC_MARKNUM_FOLDERTAIL, SC_MARK_BOXMINUS, SC_MARK_BOXMINUSCONNECTED,
+    SC_MARK_BOXPLUS, SC_MARK_BOXPLUSCONNECTED, SC_MARK_LCORNER, SC_MARK_TCORNER, SC_MARK_VLINE,
+    SC_MASK_FOLDERS, SC_MOD_DELETETEXT, SC_MOD_INSERTTEXT, SC_SEL_RECTANGLE, SC_SEL_STREAM,
+    SC_UPDATE_CONTENT, SC_UPDATE_SELECTION, SC_UPDATE_V_SCROLL, STYLE_DEFAULT,
 };
 use codepp_shell::{
     close_multi_enabled, pick_next_close_target, sanitize_filename_for_display,
@@ -8387,27 +8387,35 @@ fn handle_save_session(hwnd: HWND) {
 /// dedupe: the existing tab activates instead of reloading, so the
 /// user's in-progress edits are preserved (Load Session does not
 /// force a reset).
+///
+/// An untouched `new 1` is consumed by the session's first entry
+/// rather than left beside it, the same outcome File → Open gives:
+/// the editor is measured with [`editor_is_pristine`] and the answer
+/// handed to `Shell::load_npp_session`, whose open loop applies the
+/// same `open_file_replacing_scratch` gate [`open_user_path`] does.
+/// Because the shell *retargets* the scratch rather than closing it,
+/// a parse failure or a session that resolves to zero opens leaves
+/// the workspace exactly as it was — there is no zero-tab window to
+/// heal, which is why this no longer pairs a pre-parse discard with
+/// `ensure_one_tab` on every exit path.
 fn handle_load_session(hwnd: HWND) {
     // 1. Prompt outside any borrow — dialog spins its own pump.
     let Some(load_path) = prompt_open_session_xml_path(hwnd) else {
         return;
     };
 
-    // 2. Discard a sole empty scratch buffer before the batch so a fresh
-    //    "new N" doesn't linger alongside the loaded session. UI-side (it
-    //    closes a tab + releases a Scintilla document); no-op when there's
-    //    real content open. Done before the shell call rather than after
-    //    parse-validation as before — the scratch is empty by definition,
-    //    so a parse failure at worst swaps one empty scratch for another.
-    unsafe {
-        discard_sole_empty_untitled(hwnd);
-    }
-
-    // 3. Parse + open via the shared shell method. It filters empty-name /
+    // 2. Parse + open via the shared shell method. It filters empty-name /
     //    non-local / over-cap entries, pre-seeds the by-path metadata,
     //    opens each file, restores pins, and re-activates the recorded tab.
-    let report =
-        unsafe { state_from_hwnd(hwnd).map(|state| state.shell.load_npp_session(&load_path)) };
+    //    The pristine measurement is taken under the same borrow, right
+    //    before the loop that consumes it, so nothing can touch the editor
+    //    in between.
+    let report = unsafe {
+        state_from_hwnd(hwnd).map(|state| {
+            let pristine = active_buffer_is_pristine(state);
+            state.shell.load_npp_session(&load_path, pristine)
+        })
+    };
     let report = match report {
         Some(Ok(r)) => r,
         Some(Err(e)) => {
@@ -8420,18 +8428,12 @@ fn handle_load_session(hwnd: HWND) {
                     e.to_string().as_str(),
                 ]),
             );
-            // Step 2 already discarded the sole scratch buffer; a parse
-            // failure means nothing replaced it, so restore the one-tab
-            // invariant before returning.
-            unsafe {
-                ensure_one_tab(hwnd);
-            }
             return;
         }
         None => return,
     };
 
-    // 4. Surface the drop counts. A session entirely UNC-rejected gets an
+    // 3. Surface the drop counts. A session entirely UNC-rejected gets an
     //    explanatory dialog so it doesn't vanish silently; the over-cap
     //    truncation is logged for the post-mortem.
     if report.opened == 0 && report.rejected_nonlocal > 0 {
@@ -8454,18 +8456,15 @@ fn handle_load_session(hwnd: HWND) {
         );
     }
 
-    // 5. Restore the one-tab invariant, then sync the tab strip + drain
-    //    queued plugin notifications. Step 2 discarded the sole scratch
-    //    buffer unconditionally; a session that resolved to zero opened
-    //    files (empty, all-empty-named, or all-UNC-rejected on Windows)
-    //    would otherwise leave the window with no tab and nothing scheduled
-    //    to heal it, so `ensure_one_tab` runs first (a no-op once any file
-    //    opened). The loader's async completions re-sync on WM_APP_WAKE; the
-    //    sync rebind here covers the dedupe / active-override cases.
+    // 4. Sync the tab strip + drain queued plugin notifications. The
+    //    loader's async completions re-sync on WM_APP_WAKE; the sync rebind
+    //    here covers the dedupe / active-override cases. A session that
+    //    resolved to zero opened files (empty, all-empty-named, or all-UNC-
+    //    rejected on Windows) left every existing tab — the scratch
+    //    included — exactly where it was, so there is nothing to heal.
     // SAFETY: these helpers operate on the wnd_proc's own state via HWND
     // lookup; no aliasing `&mut WindowState` is alive at this point.
     unsafe {
-        ensure_one_tab(hwnd);
         refresh_tab_chrome(hwnd);
         if report.needs_rebind {
             handle_tab_selchange(hwnd);
@@ -8628,157 +8627,145 @@ fn handle_preferences_menu(hwnd: HWND) {
     }
 }
 
-/// Discard the sole open tab if it's an empty, unpinned
-/// File→New buffer ("new N" with `untitled_seq` set, no
-/// on-disk path, `pinned == false`, and zero characters in
-/// the Scintilla document). Returns `true` iff a discard
-/// actually happened.
+/// The editor half of `Shell::open_file_replacing_scratch`'s decision:
+/// is the bound Scintilla document *pristine* — empty **and** free of
+/// undo history?
 ///
-/// Mirrors Notepad++'s tab-strip hygiene: when the user opens
-/// files while the only open tab is a fresh scratch "new 1", the
-/// scratch tab is thrown away rather than piling up next to the
-/// files just opened. "Empty" is a live Scintilla content check
-/// (`SCI_GETLENGTH == 0`), not the `Tab.dirty` flag — a typed-
-/// then-erased scratch reads as empty here and gets discarded
-/// (nothing visible is lost; Undo history for a discarded buffer
-/// is lost, which matches N++). A scratch with any typed content
-/// stays open alongside whatever gets opened.
+/// `Shell` owns every model-side term of that decision (a lone untitled
+/// tab, not dirty, not renamed, not pinned, not a crash-recovery
+/// restore). This is the one fact it cannot see for itself, and
+/// emptiness alone does not answer it: type one character into the
+/// startup buffer and undo it, and Scintilla reports `SCI_GETLENGTH ==
+/// 0` **and** `SCI_CANUNDO == 0` while `SCI_CANREDO == 1` — measured on
+/// this backend by driving the real app, not carried over from the
+/// other two.
 ///
-/// The pinned check honours the same "keep this tab across
-/// automatic close operations" invariant that
-/// `pick_next_close_target(CloseMultiKind::AllButPinned)` and
-/// the tab-drag arming guard already respect: a user who
-/// explicitly pinned their scratch buffer is signalling "keep
-/// this around", and silently discarding it here would violate
-/// that signal.
+/// **The redo term is therefore load-bearing rather than defensive.**
+/// Written against length and undo alone, this would answer "untouched"
+/// for a buffer the user had been working in, and the next File → Open
+/// would discard it with no prompt and no undo path. `Tab.text` is not a
+/// substitute either — it is refreshed only on load and on save, so for
+/// a typed-into buffer it still holds the empty string the tab was
+/// created with.
 ///
-/// **Callers**: every user-initiated batch open path — File →
-/// Open, File → Load Session, Restore Recent Closed File, Open
-/// All Recent Files, click on a specific recent-files entry,
-/// drag-and-drop file open, Find-in-Files double-click,
-/// Workspace-tree double-click, Workspace right-click → Open.
-/// Call **once** at the start of a batch (before the loop that
-/// opens N files), not per-file — the scratch tab only exists
-/// to be discarded on the first open.
+/// This replaces the pre-shell `discard_sole_empty_untitled`, which
+/// keyed on `SCI_GETLENGTH` alone — and so *did* discard a typed-then-
+/// erased buffer — and which closed the tab outright before the open
+/// rather than letting the shell retarget the load onto it. Retargeting
+/// keeps the tab's id (so a plugin's cached buffer id stays valid), keeps
+/// its document (filled by the load through `doc_needs_text`), and
+/// removes the zero-tab window the close-then-open dance left behind,
+/// which every caller then had to heal with `ensure_one_tab`.
 ///
-/// **Do NOT call from**: File → New (explicitly wants a fresh
-/// tab), startup session restore (no scratch tab exists yet at
-/// that point), or `apply_file_change` reload (the tab being
-/// reloaded IS the tab, not a bystander).
-///
-/// # Safety
-///
-/// Caller must invoke from the UI thread that owns `hwnd`.
-unsafe fn discard_sole_empty_untitled(hwnd: HWND) -> bool {
-    // Cheap Shell-side checks under a brief borrow — must drop
-    // before `handle_close_active_tab` runs (it takes its own
-    // `&mut WindowState` and may spawn a nested pump for the
-    // save-changes dialog, which the empty-untitled exception
-    // in `handle_close_active_tab_inner` skips for us).
-    //
-    // Three candidacy checks matter:
-    //
-    //   * `tabs.len() == 1` — the "sole tab" premise.
-    //   * `active_tab == Some(0)` — Shell-side index consistency.
-    //     Message-dispatch flows (nested wnd_proc calls from
-    //     WM_APP_WAKE drain paths, batch-open loops that
-    //     interleave close + open) can leave `active_tab`
-    //     transiently out of sync with `tabs.len()`. Bail on
-    //     mismatch rather than trust indices into a
-    //     partially-mutated vector.
-    //   * The tab's own fields (`path`, `untitled_seq`,
-    //     `pinned`) identify a fresh scratch buffer that isn't
-    //     pinned.
-    //
-    // We also capture the Shell-side `scintilla_doc` pointer
-    // for `tabs[0]` alongside the editor handle. The length check
-    // below reads from whatever document the shared editor view
-    // is CURRENTLY bound to, which for the deferred-rebind pattern
-    // used elsewhere in this file (`handle_tab_selchange` /
-    // `apply_load_result`) is not automatically the same as
-    // `tabs[0].scintilla_doc`: Shell can set `active_tab = Some(0)`
-    // before the editor's `SCI_SETDOCPOINTER` catches up. Reading
-    // the wrong buffer's length here would either mistakenly
-    // discard a scratch that has typed content (data loss) or
-    // falsely spare an empty one (harmless nuisance). The
-    // pointer comparison after we drop the borrow closes both
-    // cases.
-    let (candidate, editor, expected_doc) = unsafe {
-        let Some(state) = state_from_hwnd(hwnd) else {
-            return false;
-        };
-        if state.shell.tabs.len() == 1 && state.shell.active_tab != Some(0) {
-            tracing::warn!(
-                active_tab = ?state.shell.active_tab,
-                tabs_len = state.shell.tabs.len(),
-                "discard_sole_empty_untitled: skipping — active_tab out of sync with tabs.len()"
-            );
-        }
-        let candidate = state.shell.tabs.len() == 1
-            && state.shell.active_tab == Some(0)
-            && state.shell.tabs[0].path.is_none()
-            && state.shell.tabs[0].untitled_seq.is_some()
-            && !state.shell.tabs[0].pinned;
-        let expected_doc = state.shell.tabs.first().map_or(0, |t| t.scintilla_doc);
-        (candidate, state.editor, expected_doc)
-    };
-    if !candidate {
-        return false;
-    }
-    // Verify the shared editor view is bound to the exact
-    // Scintilla document `tabs[0]` owns before we trust the
-    // length read. If a deferred rebind hasn't fired yet, the
-    // pointers will differ — bail rather than measure some
-    // other buffer's length and risk discarding a scratch tab
-    // that still has typed content sitting in its (currently
-    // unbound) document.
-    //
-    // `expected_doc == 0` means the tab hasn't been materialised
-    // yet (Shell allocates the Tab before Scintilla's
-    // `SCI_CREATEDOCUMENT` fires). In that state there's nothing
-    // to discard — the buffer is definitionally empty but also
-    // pre-editor, so bail cleanly.
-    if expected_doc == 0 {
-        return false;
-    }
-    let current_doc = editor.send(SCI_GETDOCPOINTER, 0, 0);
-    if current_doc != expected_doc {
-        return false;
-    }
-    // Live content check via the direct-call surface. SCI_GETLENGTH
-    // is a pure query — no state mutation, no re-entry into wnd_proc.
-    // `editor.send` is a safe method (unsafety hidden inside its
-    // impl), so no explicit `unsafe` wrapper is needed here.
-    let len = editor.send(SCI_GETLENGTH, 0, 0);
-    if len != 0 {
-        return false;
-    }
-    unsafe { handle_close_active_tab(hwnd) };
-    true
+/// Three pure queries on the direct-call surface: no state mutation, no
+/// re-entry into `wnd_proc`, so it is safe to call under a live
+/// `&mut WindowState` borrow. The twin of `ui_gtk`'s and `ui_cocoa`'s
+/// `editor_is_pristine`; DESIGN.md §7.4.
+fn editor_is_pristine(editor: &EditorHandle) -> bool {
+    editor.send(SCI_GETLENGTH, 0, 0) == 0
+        && editor.send(SCI_CANUNDO, 0, 0) == 0
+        && editor.send(SCI_CANREDO, 0, 0) == 0
 }
 
-/// Shared open path used by the three recent-files handlers.
-/// Wraps [`Shell::open_file`] with the same `catch_unwind` guard
-/// and post-open UI refresh dance the multi-file File → Open
-/// handler uses, so behaviour is identical whether the user
-/// opened the file through the OS picker or through a
-/// recent-files menu item. Runs
-/// [`discard_sole_empty_untitled`] first so a fresh scratch
-/// tab gets thrown away before the actual open — idempotent
-/// across a batch (subsequent calls see 1+ real tabs and
-/// no-op).
-fn open_recent_path_via_shell(hwnd: HWND, path: PathBuf) {
-    unsafe {
-        discard_sole_empty_untitled(hwnd);
+/// [`editor_is_pristine`] for the tab the shell is about to judge —
+/// the answer the untouched-scratch gate is actually asking for.
+///
+/// The measurement reads whatever document the one shared Scintilla
+/// view is *currently* bound to, which is not automatically the active
+/// tab's: this backend binds lazily and defers rebinds
+/// (`handle_tab_selchange`, `apply_load_result`), so `active_tab` can
+/// move a step ahead of `SCI_SETDOCPOINTER`. Measuring the wrong
+/// buffer would answer "untouched" for a scratch that has typed
+/// content sitting in its unbound document, and the shell would then
+/// retarget a load onto it — which is the data-loss direction.
+///
+/// So the binding is confirmed first and **a mismatch reports not
+/// pristine**, failing in the direction that keeps the buffer: the
+/// worst outcome is a scratch tab that survives an open it could have
+/// been consumed by, which is what the whole feature is a refinement
+/// of. `scintilla_doc == 0` is the same answer for the same reason —
+/// the tab is pre-editor, so there is nothing to have measured.
+///
+/// This is the surviving half of the pre-shell
+/// `discard_sole_empty_untitled`'s doc-pointer check. No path is known
+/// today that reaches the gate with a stale binding (every route to a
+/// lone scratch tab — startup `new_untitled`, every close path's
+/// rebind, the plugin `needs_rebind` arm — binds synchronously before
+/// returning to the pump), but that is an invariant spread across
+/// three call sites rather than anything the types enforce, and it is
+/// one refactor away from silently not holding.
+fn active_buffer_is_pristine(state: &WindowState) -> bool {
+    let Some(doc) = state.shell.active().map(|t| t.scintilla_doc) else {
+        return false;
+    };
+    if doc == 0 || state.editor.send(SCI_GETDOCPOINTER, 0, 0) != doc {
+        return false;
     }
-    let outcome = unsafe {
+    editor_is_pristine(&state.editor)
+}
+
+/// Open `path` on behalf of a *user gesture* — the single shell call
+/// behind File → Open, drag-and-drop, the recent-files region, and
+/// both Workspace-tree opens — measuring the editor first so the shell
+/// can consume an untouched `new 1` rather than open beside it.
+///
+/// Returns the shell's [`OpenFileOutcome`] so the caller can rebind the
+/// view on `SwitchedToExisting` (no load, so no `WM_APP_WAKE` will do
+/// it) exactly as before; `Rejected` when no state is reachable or the
+/// shell panicked, the same `catch_unwind` shape every other shell call
+/// from `wnd_proc` uses. The caller still owns the chrome refresh and
+/// `fire_queued_notifications`, because a batch open wants those once
+/// at the end rather than once per file.
+///
+/// # Why only user-initiated opens go through here
+///
+/// Notepad++ discards the `new 1` it seeds at startup the moment you
+/// open a real file into an otherwise-empty workspace — one tab, not
+/// two. The gate decides whether a buffer is *discarded*, so which
+/// callers opt in is not cosmetic. The two that deliberately keep the
+/// plain [`Shell::open_file`] are named so a future reader does not
+/// "fix" the inconsistency: startup session restore (`WindowState`
+/// construction, both the CLI-path and the `session.xml` loop) is
+/// *replaying a saved workspace* rather than acting on a click, and the
+/// Find-in-Files result jump (`handle_fif_listview_dblclk`) is
+/// navigation within a search the user already ran. Neither should
+/// consume a buffer — the same triage `ui_gtk::menu::open_paths` and
+/// `ui_cocoa::open_path` record. File → Load Session opts in through
+/// `Shell::load_npp_session`'s own parameter rather than through here,
+/// because its open loop lives in the shell.
+///
+/// The measurement is per call rather than hoisted out of a batch,
+/// because the gate is `Shell`'s to evaluate and hoisting would
+/// re-derive its model half here. Only the first open of a batch can
+/// match in any case — after it the workspace is no longer a lone
+/// untitled tab.
+fn open_user_path(hwnd: HWND, path: PathBuf) -> OpenFileOutcome {
+    // SAFETY: called from the UI thread that owns `hwnd`; the borrow is
+    // released before this returns and nothing inside it pumps messages.
+    unsafe {
         if let Some(state) = state_from_hwnd(hwnd) {
-            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| state.shell.open_file(path)))
-                .unwrap_or(OpenFileOutcome::Rejected)
+            let pristine = active_buffer_is_pristine(state);
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                state.shell.open_file_replacing_scratch(path, pristine)
+            }))
+            .unwrap_or(OpenFileOutcome::Rejected)
         } else {
             OpenFileOutcome::Rejected
         }
-    };
+    }
+}
+
+/// Shared open path used by the three recent-files handlers.
+/// Wraps [`open_user_path`] with the post-open UI refresh dance
+/// the multi-file File → Open handler uses, so behaviour is
+/// identical whether the user opened the file through the OS
+/// picker or through a recent-files menu item — including the
+/// untouched-scratch replacement, which `open_user_path` asks
+/// the shell for on every call (only the first of a batch can
+/// match; the rest see a workspace that is no longer a lone
+/// untitled tab).
+fn open_recent_path_via_shell(hwnd: HWND, path: PathBuf) {
+    let outcome = open_user_path(hwnd, path);
     unsafe { refresh_tab_chrome(hwnd) };
     if matches!(outcome, OpenFileOutcome::SwitchedToExisting(_)) {
         // Dedupe branch: shell flipped `active_tab` but no async
@@ -20461,14 +20448,15 @@ unsafe fn handle_fif_listview_dblclk(main_hwnd: HWND, row: usize) {
     let Some(row) = row_data else {
         return;
     };
-    // Scratch-tab hygiene: a sole empty "new N" gets discarded
-    // before the FIF result opens, matching the File → Open /
-    // drag-drop paths. If the FIF target is already open (dedupe
-    // branch below) this is a no-op — tabs.len() >= 2 fails the
-    // sole-tab guard.
-    unsafe {
-        discard_sole_empty_untitled(main_hwnd);
-    }
+    // Deliberately the plain `open_file`, not `open_user_path`: a
+    // result jump is navigation within a search the user already
+    // ran, not a request to open a file into their workspace, so it
+    // does not consume an untouched `new 1` the way File → Open does.
+    // The same triage `ui_gtk::fif` and `ui_cocoa::fif` make, so the
+    // three backends agree by construction; see `open_user_path` for
+    // the full list of who opts in. (The pre-shell
+    // `discard_sole_empty_untitled` did discard here; that was Win32
+    // alone, and the shell gate now decides for every backend.)
     let deduped = if let Some(state) = unsafe { state_from_hwnd(main_hwnd) } {
         state.fif_pending_jumps.push(row.clone());
         matches!(
@@ -21340,27 +21328,24 @@ unsafe fn handle_tree_double_click(main_hwnd: HWND, tree: HWND) {
         );
         return;
     }
-    // Scratch-tab hygiene: same as the right-click → Open
-    // Workspace entry (`ID_WORKSPACE_CTX_OPEN_FILE`). Both
-    // gestures activate the same user intent — "open this file
-    // from the workspace tree" — so they must apply the same
-    // discard rule, otherwise the sole scratch buffer's fate
-    // depends on which mouse button the user pressed.
-    unsafe {
-        discard_sole_empty_untitled(main_hwnd);
-    }
-    // Drop the state borrow completely, then call open_file on
-    // a fresh borrow — `Shell::open_file` mutates and we do NOT
-    // want a re-entrant borrow via any load-progress wakeup.
-    if let Some(state) = unsafe { state_from_hwnd(main_hwnd) } {
-        let _ = state.shell.open_file(path);
-    }
-    // `open_file` queues a load; the tab strip / editor update
-    // when the load completes (WM_APP_WAKE drain). No further
-    // action needed here.
+    // A user gesture, so it goes through `open_user_path` — the same
+    // call the right-click → Open Workspace entry
+    // (`ID_WORKSPACE_CTX_OPEN_FILE`) makes. Both gestures express
+    // the same intent, "open this file from the workspace tree", so
+    // they must apply the same untouched-scratch rule, otherwise the
+    // sole `new 1`'s fate depends on which mouse button the user
+    // pressed. The helper takes its own fresh borrow — the tree
+    // lookup's borrow above has ended, and `Shell::open_file` mutates.
+    let outcome = open_user_path(main_hwnd, path);
+    // A fresh open queues a load; the tab strip / editor update when
+    // it completes (WM_APP_WAKE drain). An already-open target moved
+    // `active_tab` with no load to wake, so rebind the view here.
     unsafe {
         crate::fire_queued_notifications(main_hwnd);
         refresh_tab_chrome(main_hwnd);
+        if matches!(outcome, OpenFileOutcome::SwitchedToExisting(_)) {
+            handle_tab_selchange(main_hwnd);
+        }
     }
 }
 
@@ -24541,13 +24526,10 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                 LRESULT(0)
             }
             WM_DROPFILES => {
-                // Same scratch-tab hygiene the File → Open handler
-                // applies — dragging files onto a sole empty "new N"
-                // should replace it rather than pile up alongside.
-                // Runs before `handle_dropped_files` so the first
-                // dropped file lands in a clean workspace; subsequent
-                // drops in the same batch see 1+ real tabs and no-op.
-                discard_sole_empty_untitled(hwnd);
+                // Dragging files onto an untouched "new 1" replaces it
+                // rather than piling up alongside — the same rule File
+                // → Open applies, decided by the same shell gate inside
+                // `handle_dropped_files`.
                 let mut deduped = false;
                 if let Some(state) = state_from_hwnd(hwnd) {
                     let hdrop = HDROP(wparam.0 as *mut c_void);
@@ -24661,7 +24643,7 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                         // Multi-select: `prompt_open_paths` returns
                         // every file the user picked. Empty Vec on
                         // Cancel. Each path funnels through
-                        // `Shell::open_file` in the same shape the
+                        // `open_user_path` in the same shape the
                         // single-path handler used — the shell
                         // dedupes already-open paths and pushes fresh
                         // tabs for the rest. `deduped` tracks whether
@@ -24670,25 +24652,16 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                         // once at the end and rebinds the view to
                         // whichever tab ended up active.
                         let paths = prompt_open_paths(hwnd);
-                        // Discard a sole empty "new N" tab before the
-                        // batch so the freshly-opened files don't pile
-                        // up next to a scratch buffer no one asked to
-                        // keep. Idempotent across the loop below —
-                        // subsequent iterations see 1+ real tabs.
-                        // No-op if the user cancelled the dialog.
-                        if !paths.is_empty() {
-                            discard_sole_empty_untitled(hwnd);
-                        }
+                        // Each path goes through `open_user_path`, which
+                        // lets the shell consume an untouched "new 1"
+                        // rather than pile the opened files up beside a
+                        // scratch buffer no one asked to keep. Only the
+                        // first iteration can match — after it the
+                        // workspace is no longer a lone untitled tab.
+                        // Nothing happens on Cancel (empty `paths`).
                         let mut deduped = false;
                         for p in paths {
-                            let outcome = if let Some(state) = state_from_hwnd(hwnd) {
-                                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                                    state.shell.open_file(p)
-                                }))
-                                .unwrap_or(OpenFileOutcome::Rejected)
-                            } else {
-                                OpenFileOutcome::Rejected
-                            };
+                            let outcome = open_user_path(hwnd, p);
                             if matches!(outcome, OpenFileOutcome::SwitchedToExisting(_)) {
                                 deduped = true;
                             }
@@ -24960,16 +24933,16 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                             state_from_hwnd(hwnd).and_then(|s| s.workspace_ctx_target.take());
                         if let Some(target) = taken {
                             if target.kind == WorkspaceCtxKind::File {
-                                // Scratch-tab hygiene: same as File →
-                                // Open. A right-click → Open on a
-                                // Workspace file with only a sole empty
-                                // "new N" open should replace it.
-                                discard_sole_empty_untitled(hwnd);
-                                if let Some(state) = state_from_hwnd(hwnd) {
-                                    let _ = state.shell.open_file(target.path);
-                                }
+                                // A user gesture: same as File → Open
+                                // and the tree's double-click, so a
+                                // right-click → Open with only an
+                                // untouched "new 1" open replaces it.
+                                let outcome = open_user_path(hwnd, target.path);
                                 fire_queued_notifications(hwnd);
                                 refresh_tab_chrome(hwnd);
+                                if matches!(outcome, OpenFileOutcome::SwitchedToExisting(_)) {
+                                    handle_tab_selchange(hwnd);
+                                }
                             }
                         }
                     }
@@ -27394,7 +27367,15 @@ unsafe fn handle_dropped_files(state: &mut WindowState, hdrop: HDROP) -> bool {
         // `copied` excludes the trailing null.
         buf.truncate(copied);
         let path = PathBuf::from(String::from_utf16_lossy(&buf));
-        let outcome = state.shell.open_file(path);
+        // The one user-initiated open that does not go through
+        // `open_user_path`, because the caller already holds the
+        // `&mut WindowState` this loop runs under; it makes the same
+        // two calls that helper makes, and the source guard that
+        // counts `open_file_replacing_scratch(` call sites names this
+        // one. Measured per iteration for the reason `open_user_path`
+        // gives; only the first drop of a batch can match.
+        let pristine = active_buffer_is_pristine(state);
+        let outcome = state.shell.open_file_replacing_scratch(path, pristine);
         any_deduped |= matches!(outcome, OpenFileOutcome::SwitchedToExisting(_));
     }
     any_deduped
@@ -29252,6 +29233,164 @@ mod plugin_reentry_guards {
             !arm.contains("PluginCallGuard::enter"),
             "the plugin command arm arms the guard; every NPPM_* the command sends is \
              then refused"
+        );
+    }
+}
+
+#[cfg(test)]
+mod scratch_replacement_guards {
+    //! Source-level guards for which opens may consume an untouched
+    //! `new 1` — the Win32 half of DESIGN.md §7.4's "replace the
+    //! untouched scratch on open" entry.
+    //!
+    //! The gate decides whether a buffer is *discarded*, so the set of
+    //! callers that opt in is a data-loss boundary rather than a style
+    //! choice. Every user-initiated open goes through
+    //! `open_file_replacing_scratch` with a live `editor_is_pristine`
+    //! measurement; startup session restore and the Find-in-Files
+    //! result jump keep the plain `open_file`. A `SysTabControl32`
+    //! cannot be driven from a headless test, so the shape is pinned
+    //! in the source, the same tool `ui_cocoa` uses for its `open_path`.
+
+    use super::plugin_reentry_guards::{code_only, fn_body, production_src};
+
+    /// The plain `open_file` survives at exactly the three sites that
+    /// must not consume a buffer: the CLI-path open and the
+    /// `session.xml` loop in `run` (replaying a saved workspace), and
+    /// the FIF result jump (navigation). A fourth
+    /// is a user-initiated open that quietly stopped opting in; a
+    /// missing one means a restore or a jump started discarding.
+    #[test]
+    fn only_session_restore_and_the_fif_jump_keep_the_plain_open() {
+        let src = code_only(production_src());
+        let plain = src.matches(".open_file(").count();
+        assert_eq!(
+            plain, 3,
+            "expected exactly three plain `shell.open_file(` call sites \
+             (startup CLI path, startup session loop, FIF result jump); \
+             a user-initiated open must go through `open_user_path` and a \
+             restore or jump must not consume the scratch"
+        );
+        let fif = code_only(&fn_body(production_src(), "handle_fif_listview_dblclk"));
+        assert!(
+            fif.contains(".open_file(") && !fif.contains("open_user_path("),
+            "the FIF result jump is navigation and keeps the plain `open_file`"
+        );
+        let session = code_only(&fn_body(production_src(), "run"));
+        assert_eq!(
+            session.matches(".open_file(").count(),
+            2,
+            "`run` should hold the two startup opens (CLI path, session loop)"
+        );
+        assert!(
+            !session.contains("open_user_path(") && !session.contains("replacing_scratch("),
+            "startup session restore replays a saved workspace and must not \
+             consume a buffer"
+        );
+    }
+
+    /// The gate is reached from exactly two places — `open_user_path`
+    /// and the drop loop that already holds the state borrow — and both
+    /// measure the editor on every call rather than passing a constant.
+    #[test]
+    fn every_gated_open_measures_the_editor() {
+        let src = code_only(production_src());
+        assert_eq!(
+            src.matches(".open_file_replacing_scratch(").count(),
+            2,
+            "expected exactly two `open_file_replacing_scratch(` call sites: \
+             `open_user_path` and `handle_dropped_files`"
+        );
+        for name in ["open_user_path", "handle_dropped_files"] {
+            let body = code_only(&fn_body(production_src(), name));
+            assert!(
+                body.contains(".open_file_replacing_scratch(path, pristine)"),
+                "`{name}` no longer passes a fresh `pristine` to the gate"
+            );
+            assert!(
+                body.contains("let pristine = active_buffer_is_pristine(state);"),
+                "`{name}` no longer measures the active buffer before the gate; a \
+                 stale or constant answer here discards a buffer the user typed \
+                 into, and measuring the editor without confirming its binding \
+                 can measure a different buffer entirely"
+            );
+        }
+    }
+
+    /// The pristine test carries all three terms. The redo one is the
+    /// load-bearing clause: type a character and undo it, and length
+    /// and undo both read as untouched while redo does not.
+    #[test]
+    fn the_pristine_test_checks_length_undo_and_redo() {
+        let body = code_only(&fn_body(production_src(), "editor_is_pristine"));
+        for msg in ["SCI_GETLENGTH", "SCI_CANUNDO", "SCI_CANREDO"] {
+            assert!(
+                body.contains(&format!("send({msg}, 0, 0) == 0")),
+                "`editor_is_pristine` no longer requires `{msg} == 0`"
+            );
+        }
+    }
+
+    /// The measurement confirms the view is bound to the tab the shell
+    /// is about to judge, and reports "not pristine" when it is not.
+    ///
+    /// This is the clause with no runtime symptom on the happy path and
+    /// a data-loss one off it: drop it, and a deferred rebind means the
+    /// gate measures one buffer and the shell retargets a load onto
+    /// another. `handle_tab_selchange` and `apply_load_result` are the
+    /// two deferring paths, so the invariant this rests on is not one
+    /// the types enforce.
+    #[test]
+    fn the_measurement_confirms_the_view_is_bound_to_the_tab_it_judges() {
+        let body = code_only(&fn_body(production_src(), "active_buffer_is_pristine"));
+        assert!(
+            body.contains("state.editor.send(SCI_GETDOCPOINTER, 0, 0) != doc"),
+            "`active_buffer_is_pristine` no longer compares the bound document \
+             against the active tab's; with a deferred rebind outstanding it \
+             would measure a different buffer than the shell judges"
+        );
+        assert!(
+            body.contains("doc == 0 ||"),
+            "`active_buffer_is_pristine` no longer refuses a tab with no \
+             document; there is nothing to have measured there"
+        );
+        // Matched as the whole arm, not as a bare `return false;`: the
+        // function has a second early return that would satisfy the
+        // looser form, so a mismatch flipped to `return true` — the
+        // data-loss direction — would pass a guard written that way.
+        // The exact failure DESIGN.md §7.2 records for the m3c and m4d
+        // guards, caught here by mutating it.
+        assert!(
+            body.contains("!= doc {\n        return false;\n    }"),
+            "`active_buffer_is_pristine` no longer fails closed on a mismatch; \
+             it must keep the buffer rather than let it be consumed"
+        );
+    }
+
+    /// Load Session opts in through the shell's own parameter, measured
+    /// under the same borrow the loop runs in, so a session loaded into
+    /// a fresh workspace consumes `new 1` like a File → Open would; and
+    /// nothing re-seeds a tab afterwards, because retargeting never
+    /// leaves the workspace empty.
+    #[test]
+    fn load_session_measures_the_editor_and_no_longer_heals_a_zero_tab_state() {
+        let body = code_only(&fn_body(production_src(), "handle_load_session"));
+        assert!(
+            body.contains("let pristine = active_buffer_is_pristine(state);")
+                && body.contains(".load_npp_session(&load_path, pristine)"),
+            "`handle_load_session` no longer hands a fresh pristine measurement \
+             to `Shell::load_npp_session`"
+        );
+        assert!(
+            !body.contains("ensure_one_tab("),
+            "`handle_load_session` re-seeds a tab; that dance existed only for \
+             the pre-shell close-then-open discard and would now add a second \
+             untitled buffer beside a session that opened nothing"
+        );
+        assert!(
+            !production_src().contains("fn discard_sole_empty_untitled"),
+            "the pre-shell close-then-open discard is back; it keyed on \
+             `SCI_GETLENGTH` alone and discarded typed-then-erased buffers"
         );
     }
 }

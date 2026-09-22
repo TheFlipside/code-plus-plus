@@ -3947,14 +3947,36 @@ impl Shell {
     /// * `dirty`: unsaved work, whatever the editor's own bit says;
     /// * `custom_name` set: the user deliberately named this buffer
     ///   through File→Rename, which is not nothing;
+    /// * `pinned`: the user deliberately pinned it, which is the same
+    ///   "keep this tab across automatic close operations" signal
+    ///   `CloseMultiKind::AllButPinned` honours — retargeting a load
+    ///   onto it would turn the pinned scratch into a pinned file the
+    ///   user never asked to pin (the term `ui_win32`'s pre-shell
+    ///   `discard_sole_empty_untitled` carried, kept when that helper
+    ///   was retired in favour of this gate);
     /// * an unsaved crash-recovery restore: its contents exist in no
-    ///   file the user could reopen.
+    ///   file the user could reopen;
+    /// * `doc_needs_text` or `shadow_unsaved`: the tab's real content
+    ///   lives in [`Tab::text`] and has not been installed into a
+    ///   Scintilla document yet, so the caller's measurement is of a
+    ///   document that legitimately reads empty while the tab is not.
+    ///   The one clause the caller *cannot* stand in for.
     ///
-    /// The last three are belt-and-braces given the caller also
-    /// establishes the document is empty with no undo history — a
-    /// dirty or restored buffer would fail that test too. They are
-    /// cheap, and each states an independent reason, so a future change
-    /// to the pristine test cannot quietly widen this.
+    /// `dirty`, `custom_name` and the restore check are belt-and-braces
+    /// given the caller also establishes the document is empty with no
+    /// undo history — a dirty or restored buffer would fail that test
+    /// too. They are cheap, and each states an independent reason, so a
+    /// future change to the pristine test cannot quietly widen this.
+    ///
+    /// The two shadow clauses are in that spirit rather than known to
+    /// be reachable: every setter of either is gated on something a
+    /// lone active scratch tab cannot be (`doc_needs_text` on the tab
+    /// being *inactive*, `shadow_unsaved` on it having a path or no
+    /// document), so nothing today can reach this with shadow content
+    /// pending. That is an invariant spread across three call sites and
+    /// not one the types enforce, and the failure it would produce —
+    /// retargeting a load onto a buffer whose only copy is `Tab::text`
+    /// — is silent and unrecoverable, so the gate states it itself.
     fn active_is_lone_untitled_scratch(&self) -> bool {
         if self.tabs.len() != 1 {
             return false;
@@ -3967,6 +3989,9 @@ impl Shell {
                 && t.pending_load.is_none()
                 && !t.dirty
                 && t.custom_name.is_none()
+                && !t.pinned
+                && !t.doc_needs_text
+                && !t.shadow_unsaved
                 && !self.is_unsaved_restore(t.id)
         })
     }
@@ -6124,10 +6149,22 @@ impl Shell {
     /// UI surfaces carries the drop counts.
     ///
     /// The loads are asynchronous — the caller drains as usual after this
-    /// returns. The caller should also discard a sole empty scratch buffer
-    /// beforehand (that releases a Scintilla document, so it stays UI-side);
-    /// a caller that does so must guarantee at least one tab survives when
-    /// this returns `opened == 0` (Win32 pairs it with `ensure_one_tab`).
+    /// returns.
+    ///
+    /// `editor_is_pristine` is the editor half of
+    /// [`Self::open_file_replacing_scratch`]'s decision, measured by the
+    /// caller against the bound document *before* this call: a session
+    /// loaded into an otherwise-empty workspace consumes the untouched
+    /// `new 1` rather than opening beside it, exactly as a File → Open
+    /// would. Only the first entry can ever match — after one open the
+    /// workspace is no longer a lone untitled tab — and measuring once
+    /// is sound because nothing between the measurement and that first
+    /// open touches the editor. Retargeting rather than closing is what
+    /// makes `opened == 0` safe for every caller: the scratch is never
+    /// removed, so a session that resolves to nothing leaves the
+    /// workspace exactly as it found it. (Win32 used to close the
+    /// scratch *before* the parse and re-seed one afterwards when nothing
+    /// opened; that dance is gone.)
     ///
     /// Re-entrancy: the whole open loop runs under one `&mut self` borrow.
     /// That is sound today because `open_file` only *queues* notifications —
@@ -6144,6 +6181,7 @@ impl Shell {
     pub fn load_npp_session(
         &mut self,
         path: &Path,
+        editor_is_pristine: bool,
     ) -> Result<LoadSessionReport, codepp_core::npp_session::NppSessionError> {
         use codepp_core::npp_session::{
             is_non_local_windows_path, lang_type_from_npp_name, NppSessionDoc,
@@ -6214,7 +6252,7 @@ impl Shell {
                     ..codepp_core::session::Tab::default()
                 }),
             }
-            let outcome = self.open_file(file_path);
+            let outcome = self.open_file_replacing_scratch(file_path, editor_is_pristine);
             if matches!(outcome, OpenFileOutcome::SwitchedToExisting(_)) {
                 deduped = true;
             }
@@ -14314,6 +14352,26 @@ mod tests {
                 true,
             ),
             (
+                "buffer is pinned",
+                |s: &mut Shell| s.tabs[0].pinned = true,
+                true,
+            ),
+            // The last two are staged rather than reachable — see
+            // `active_is_lone_untitled_scratch` for why nothing sets
+            // either on a lone active scratch today. They are here so
+            // the clauses cannot be deleted as dead weight by someone
+            // who checks only that the suite still passes.
+            (
+                "buffer's content is an uninstalled shadow",
+                |s: &mut Shell| s.tabs[0].doc_needs_text = true,
+                true,
+            ),
+            (
+                "buffer's shadow holds unsaved work",
+                |s: &mut Shell| s.tabs[0].shadow_unsaved = true,
+                true,
+            ),
+            (
                 "a second tab is open",
                 |s: &mut Shell| {
                     let id = s.allocate_buffer_id();
@@ -15067,7 +15125,7 @@ mod tests {
 
         let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
         let mut shell = Shell::new(wake).unwrap();
-        let report = shell.load_npp_session(&sess_path).unwrap();
+        let report = shell.load_npp_session(&sess_path, false).unwrap();
 
         assert_eq!(report.opened, 2, "the empty-filename entry must be skipped");
         assert_eq!(report.rejected_nonlocal, 0);
@@ -15085,11 +15143,11 @@ mod tests {
     fn load_npp_session_with_all_entries_filtered_opens_nothing() {
         // A session whose every <File> is filtered out (here: all
         // empty-named) opens no tabs and reports `opened == 0`, adding no
-        // tab to the shell. This is the contract the Win32 handler relies
-        // on when it pairs the pre-load scratch discard with `ensure_one_tab`
-        // — the shell can legitimately return zero opens, so the UI must not
-        // assume a load always yields a tab. (The invariant restore itself
-        // is UI-side and covered by the Win32 demo, not testable headless.)
+        // tab to the shell — and, with a pristine scratch buffer in the
+        // workspace, *removing* none either. The shell can legitimately
+        // return zero opens, and because the scratch is retargeted rather
+        // than closed, an empty session leaves the workspace exactly as it
+        // found it. No backend needs to re-seed a tab afterwards.
         use codepp_core::npp_session::{NppFile, NppSession, NppSessionDoc, NppView};
         let dir = tempfile::tempdir().unwrap();
         let doc = NppSessionDoc {
@@ -15116,8 +15174,11 @@ mod tests {
 
         let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
         let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+        shell.new_untitled(&mut ui);
         let before = shell.tabs.len();
-        let report = shell.load_npp_session(&sess_path).unwrap();
+        let scratch_id = shell.tabs[0].id;
+        let report = shell.load_npp_session(&sess_path, true).unwrap();
         assert_eq!(report.opened, 0);
         assert_eq!(report.rejected_nonlocal, 0);
         assert_eq!(
@@ -15125,6 +15186,80 @@ mod tests {
             before,
             "an all-filtered session must open no tabs",
         );
+        assert_eq!(
+            shell.tabs[0].id, scratch_id,
+            "an all-filtered session must leave the pristine scratch untouched"
+        );
+        assert!(
+            shell.tabs[0].path.is_none() && shell.tabs[0].pending_load.is_none(),
+            "nothing was opened, so nothing may have been retargeted onto the scratch"
+        );
+    }
+
+    #[test]
+    fn load_npp_session_consumes_the_lone_pristine_scratch() {
+        // File → Load Session into a fresh workspace: the untouched
+        // `new 1` is consumed by the first entry rather than left beside
+        // the loaded files, the same outcome File → Open gives. Pinned by
+        // the tab *id*: the scratch's id survives, so the tab was
+        // retargeted rather than closed and replaced.
+        use codepp_core::npp_session::{NppFile, NppSession, NppSessionDoc, NppView};
+        let dir = tempfile::tempdir().unwrap();
+        let f1 = dir.path().join("one.txt");
+        let f2 = dir.path().join("two.txt");
+        std::fs::write(&f1, "1\n").unwrap();
+        std::fs::write(&f2, "2\n").unwrap();
+        let doc = NppSessionDoc {
+            session: NppSession {
+                active_view: 0,
+                main_view: NppView {
+                    active_index: 1,
+                    files: vec![
+                        NppFile {
+                            filename: f1.clone(),
+                            ..Default::default()
+                        },
+                        NppFile {
+                            filename: f2.clone(),
+                            ..Default::default()
+                        },
+                    ],
+                },
+                sub_view: None,
+            },
+        };
+        let sess_path = dir.path().join("sess.xml");
+        doc.save_to_xml(&sess_path).unwrap();
+
+        for (pristine, expected_tabs) in [(true, 2usize), (false, 3usize)] {
+            let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+            let mut shell = Shell::new(wake).unwrap();
+            let mut ui = FakeUi::default();
+            shell.new_untitled(&mut ui);
+            let scratch_id = shell.tabs[0].id;
+
+            let report = shell.load_npp_session(&sess_path, pristine).unwrap();
+            assert_eq!(report.opened, 2);
+            assert_eq!(
+                shell.tabs.len(),
+                expected_tabs,
+                "pristine={pristine}: a session load must consume the untouched \
+                 scratch exactly when the editor reports it pristine"
+            );
+            if pristine {
+                assert_eq!(
+                    shell.tabs[0].id, scratch_id,
+                    "the scratch must be retargeted (same id), not closed and replaced"
+                );
+                assert!(
+                    shell.tabs[0].pending_load.is_some(),
+                    "the first entry's load must have landed on the scratch"
+                );
+            }
+            // The recorded active entry (f2) is restored either way.
+            let active = shell.active_tab.expect("a tab is active after the load");
+            assert_eq!(active, expected_tabs - 1);
+        }
     }
 
     #[test]
