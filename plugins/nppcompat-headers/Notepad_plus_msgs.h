@@ -638,10 +638,14 @@ typedef struct CommunicationInfo_ {
  *     same way they would in N++. (Code++'s UI does not yet style
  *     marker 24 as a visible bookmark glyph — Phase 4 polish —
  *     but the marker is set on the buffer correctly.) */
-#define NPPM_GETBOOKMARKID                (NPPMSG + 101)
-/* v3: returns the active editor's zoom level in points (Scintilla
- *     `SCI_GETZOOM`). Range is approximately [-10, 20]. */
-#define NPPM_GETZOOMLEVEL                 (NPPMSG + 102)
+#define NPPM_GETBOOKMARKID                (NPPMSG + 111)
+/* NPPM_GETZOOMLEVEL was declared here, at (NPPMSG + 102), and has
+ * been removed: Notepad++ has no zoom-level message, and that number
+ * is upstream's NPPM_DOCLISTDISABLEPATHCOLUMN. It survives as the
+ * Code++ extension CODEPPM_GETZOOMLEVEL at (WM_USER + 5000 + 2).
+ * The CODEPPM_* band has no C header yet, so the number is spelled
+ * out here rather than cross-referenced; a Rust plugin gets it as
+ * `codepp_plugin_sdk::CODEPPM_GETZOOMLEVEL`. */
 
 /* Dark-mode query family. Plugins observe a system theme flip
  * via `NPPN_DARKMODECHANGED` then re-read the live host state
@@ -656,7 +660,7 @@ typedef struct CommunicationInfo_ {
  *     plugins should re-read this on every NPPN_DARKMODECHANGED
  *     rather than caching from the system signal alone.
  *     Code++ Phase 4: always FALSE. */
-#define NPPM_ISDARKMODEENABLED            (NPPMSG + 110)
+#define NPPM_ISDARKMODEENABLED            (NPPMSG + 107)
 
 /* Plugin-side payload struct for NPPM_GETDARKMODECOLORS — 12 ×
  * COLORREF (each `0x00BBGGRR`, 4 bytes), 48 bytes total on
@@ -691,7 +695,7 @@ typedef struct NppDarkModeColors_ {
  *             (no dark mode active → no palette to share).
  *             Plugins that gate on NPPM_ISDARKMODEENABLED
  *             skip the call and never observe the gap. */
-#define NPPM_GETDARKMODECOLORS            (NPPMSG + 111)
+#define NPPM_GETDARKMODECOLORS            (NPPMSG + 108)
 
 /*
  * RUNCOMMAND_USER family. Notepad++ split a handful of host-state-
@@ -709,11 +713,11 @@ typedef struct NppDarkModeColors_ {
  *     lParam: TCHAR* OUT.
  *     Returns 1 on success, 0 on bad arguments or unresolvable
  *     executable path. */
-#define NPPM_GETNPPDIRECTORY              (RUNCOMMAND_USER + 23)
+#define NPPM_GETNPPDIRECTORY              (RUNCOMMAND_USER + 7)
 /* v1: returns the full path of the running executable (the
  *     installation directory plus the binary's filename).
  *     Same wParam/lParam contract as NPPM_GETNPPDIRECTORY. */
-#define NPPM_GETNPPFULLFILEPATH           (RUNCOMMAND_USER + 42)
+#define NPPM_GETNPPFULLFILEPATH           (RUNCOMMAND_USER + 10)
 
 /*
  * Selectors for NPPM_GETMENUHANDLE — Notepad++ has historically

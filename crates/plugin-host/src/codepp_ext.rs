@@ -48,6 +48,18 @@ pub const CODEPPM_EXPORTSAVEDIALOG: u32 = CODEPPMSG;
 /// success / `0` on failure.
 pub const CODEPPM_SETCLIPBOARD: u32 = CODEPPMSG + 1;
 
+/// `CODEPPM_GETZOOMLEVEL(0, 0)` — the active editor's Scintilla zoom
+/// level (`SCI_GETZOOM`), roughly `[-10, 20]`.
+///
+/// **Code++-only.** Notepad++ has no zoom-level message at all. This
+/// shipped as `NPPM_GETZOOMLEVEL` at `NPPMSG + 102` — a number that is
+/// upstream's `NPPM_DOCLISTDISABLEPATHCOLUMN`, so an invented message
+/// was squatting on a real one and a plugin asking Notepad++ to drop
+/// the document list's path column would instead have been answered
+/// with a zoom level. Moved here, where an extension belongs and where
+/// it cannot alias anything upstream may add.
+pub const CODEPPM_GETZOOMLEVEL: u32 = CODEPPMSG + 2;
+
 // ---- Export "kind" hints (dialog filter + default extension) -------
 
 /// HTML output — `*.html` filter, `html` default extension.

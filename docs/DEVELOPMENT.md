@@ -335,6 +335,30 @@ cursors fall back to system defaults. Cosmetic; not a build problem.
 
 ## 5. Common Tasks After Setup
 
+### Add or change an `NPPM_*` / `NPPN_*` constant
+
+Verify the number against Notepad++'s published header, mechanically:
+
+```sh
+python tools/npp-abi-check/check.py
+```
+
+It fetches upstream's `Notepad_plus_msgs.h` and diffs both places
+Code++ declares the ABI — `crates/plugin-host/src/dispatch.rs` and
+`plugins/nppcompat-headers/Notepad_plus_msgs.h` — reporting any name
+whose number disagrees. `--header <path>` compares against a local
+copy for an offline run.
+
+This is not optional diligence. Six numbers were wrong for two
+phases, three of them landing on *other* real Notepad++ messages, and
+the in-repo lock test could not see it because it pins the Rust
+constants against the same hand-written literals. A wrong number is
+not an unanswered message — it is a different message answered
+confidently. See DESIGN.md §7.4.
+
+Nothing from upstream is vendored: the tool fetches, prints names and
+integers, and writes nothing into the tree.
+
 ### Update vendored Scintilla / Lexilla
 
 **Source provenance.** Lexilla's canonical git source is

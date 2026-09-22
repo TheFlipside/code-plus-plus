@@ -32,7 +32,8 @@ use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::PathBuf;
 
 use crate::codepp_ext::{
-    CODEPPMSG, CODEPPMSG_RANGE, CODEPPM_EXPORTSAVEDIALOG, CODEPPM_SETCLIPBOARD,
+    CODEPPMSG, CODEPPMSG_RANGE, CODEPPM_EXPORTSAVEDIALOG, CODEPPM_GETZOOMLEVEL,
+    CODEPPM_SETCLIPBOARD,
 };
 use crate::ffi::{Hwnd, SCNotification};
 use crate::host::PluginHost;
@@ -170,10 +171,15 @@ pub const NPPM_GETPLUGINHOMEPATH: u32 = NPPMSG + 97;
 pub const NPPM_GETSETTINGSCLOUDPATH: u32 = NPPMSG + 98;
 pub const NPPM_SETLINENUMBERWIDTHMODE: u32 = NPPMSG + 99;
 pub const NPPM_GETLINENUMBERWIDTHMODE: u32 = NPPMSG + 100;
-pub const NPPM_GETBOOKMARKID: u32 = NPPMSG + 101;
-pub const NPPM_GETZOOMLEVEL: u32 = NPPMSG + 102;
-// +103..+109 are unimplemented upstream offsets — Code++ does
-// not declare those names because plugins compiled against a
+pub const NPPM_GETBOOKMARKID: u32 = NPPMSG + 111;
+// `NPPM_GETZOOMLEVEL` used to live here, at `NPPMSG + 102`. It has
+// no upstream counterpart — Notepad++ has no zoom-level message —
+// and that number is upstream's `NPPM_DOCLISTDISABLEPATHCOLUMN`, so
+// a Code++ invention was sitting on a real plugin's message. It is
+// now `CODEPPM_GETZOOMLEVEL` in the extension range.
+
+// +103..+106 and +109 are unimplemented upstream offsets — Code++
+// does not declare those names because plugins compiled against a
 // future N++ header that adds them would still link via the
 // dispatcher's "unknown in-range NPPM" handler (returns 0 +
 // trace-warn).
@@ -185,7 +191,7 @@ pub const NPPM_GETZOOMLEVEL: u32 = NPPMSG + 102;
 /// system setting). Code++ returns FALSE today, on every
 /// backend — host-side dark-mode rendering is unimplemented
 /// (tracked in DESIGN.md §7.4).
-pub const NPPM_ISDARKMODEENABLED: u32 = NPPMSG + 110;
+pub const NPPM_ISDARKMODEENABLED: u32 = NPPMSG + 107;
 /// wparam: size of the plugin's `NppDarkModeColors` struct
 ///         (host validates against `sizeof(NppDarkModeColors)`).
 /// lparam: pointer to the plugin's `NppDarkModeColors`.
@@ -198,7 +204,7 @@ pub const NPPM_ISDARKMODEENABLED: u32 = NPPMSG + 110;
 /// Plugins that gate on [`NPPM_ISDARKMODEENABLED`] (which also
 /// returns FALSE) skip the call entirely and never observe the
 /// gap.
-pub const NPPM_GETDARKMODECOLORS: u32 = NPPMSG + 111;
+pub const NPPM_GETDARKMODECOLORS: u32 = NPPMSG + 108;
 
 /// `NPPM_SETLINENUMBERWIDTHMODE` / `GETLINENUMBERWIDTHMODE`
 /// values. Match the upstream `LineNumberWidthMode` enum so
@@ -222,12 +228,12 @@ pub const LINENUMWIDTH_CONSTANT: i32 = 1;
 /// `wparam` carries the buffer capacity in TCHARs; `lparam` the
 /// `TCHAR*` OUT pointer. Returns 1 on success, 0 on bad arguments
 /// or unresolvable executable path.
-pub const NPPM_GETNPPDIRECTORY: u32 = RUNCOMMAND_USER + 23;
+pub const NPPM_GETNPPDIRECTORY: u32 = RUNCOMMAND_USER + 7;
 /// Returns the full path of the running executable (the
 /// installation directory plus `code++.exe` filename) into a
 /// plugin-allocated wide buffer. Same wparam/lparam contract as
 /// `NPPM_GETNPPDIRECTORY`.
-pub const NPPM_GETNPPFULLFILEPATH: u32 = RUNCOMMAND_USER + 42;
+pub const NPPM_GETNPPFULLFILEPATH: u32 = RUNCOMMAND_USER + 10;
 
 /// Selectors for [`NPPM_GETMENUHANDLE`].
 pub const NPPPLUGINMENU: i32 = 0;
@@ -328,13 +334,55 @@ pub const NPPN_DARKMODECHANGED: u32 = NPPN_FIRST + 27;
 /// is informational only. Fired before [`NPPN_SHUTDOWN`].
 pub const NPPN_BEFORESHUTDOWN: u32 = NPPN_FIRST + 19;
 
-/// Code++'s self-reported plugin-API version. Matches the encoding
-/// plugins expect from `NPPM_GETNPPVERSION`: HIWORD = major, LOWORD =
-/// minor. `0x0000_0001` reads as 0.1 — deliberately *below* any real
-/// Notepad++ version so plugin gating like
-/// `if (NPPM_GETNPPVERSION() >= 0x00080000)` correctly disables N++-
-/// version-locked features that Code++ Phase 3 doesn't yet expose.
-pub const CODEPP_PLUGIN_API_VERSION: isize = 0x0000_0001;
+/// The Notepad++ release whose plugin ABI Code++ reports itself as,
+/// as `(major, minor-digits)`. Answered by `NPPM_GETNPPVERSION`.
+///
+/// **This is a compatibility claim, not Code++'s own version.** The
+/// value was `0.1` until a real plugin proved that wrong: the
+/// reasoning recorded here was that reporting below every real
+/// release would make a plugin's *feature* gates
+/// (`if (version >= 0x00080000)`) fail closed. That is true and it is
+/// the less common shape. The common shape is a **minimum-version
+/// floor** — "I require N++ ≥ X, otherwise refuse to run" — and
+/// against a floor, a version below every real release fails *every*
+/// check rather than none. `NppExec` does exactly this and answered
+/// with "This version of `NppExec` requires Notepad++ ver. 5.1 or
+/// higher", so Code++ shipped a value that locked out the plugins
+/// §6.1 exists to support.
+///
+/// 8.4.1 is the newest Notepad++ release whose plugin-facing API
+/// Code++ actually implements — it is the release that introduced
+/// `NPPM_ISDARKMODEENABLED` and `NPPM_GETDARKMODECOLORS`, the two
+/// newest messages in the dispatcher. Under-claiming is the safe
+/// direction for the feature-gate shape (a plugin simply does not use
+/// something newer), so the rule when raising this is: report the
+/// newest release whose messages are all implemented, never a newer
+/// one.
+pub const NPP_COMPAT_VERSION: (u16, u16) = (8, 41);
+
+/// Pack a `(major, minor)` pair the way `NPPM_GETNPPVERSION` returns
+/// it: HIWORD = major, LOWORD = the minor version's digits run
+/// together (8.4.1 → 41, 6.6.6 → 66, 9 → 0).
+///
+/// `add_zero_padding` is the message's `wParam`: when set, the minor
+/// is right-padded with zeros to three digits (8.4.1 → 410, 6.9 →
+/// 900), which is what makes a plain `<` comparison order versions
+/// correctly across differing digit counts. Upstream documents both
+/// forms and plugins pick per call, so the host cannot answer one and
+/// ignore the flag.
+#[must_use]
+pub fn pack_npp_version(major: u16, minor: u16, add_zero_padding: bool) -> isize {
+    let mut minor = u32::from(minor);
+    if add_zero_padding {
+        // "41" → "410", "9" → "900", "964" → "964". Zero stays zero:
+        // v9 reports LOWORD 0 in both forms, per upstream's own
+        // documented examples.
+        while minor != 0 && minor < 100 {
+            minor *= 10;
+        }
+    }
+    ((u32::from(major) << 16) | minor) as isize
+}
 
 /// `MAX_PATH` in TCHARs — Win32's documented cap for path-shaped
 /// out-buffers passed to NPPM messages. Plugins that opt into
@@ -1143,7 +1191,7 @@ pub trait HostServices {
     fn bookmark_marker_id(&self) -> i32;
 
     /// Active editor's zoom level in points (Scintilla
-    /// `SCI_GETZOOM`). Drives [`NPPM_GETZOOMLEVEL`]. Range is
+    /// `SCI_GETZOOM`). Drives [`CODEPPM_GETZOOMLEVEL`]. Range is
     /// approximately `[-10, 20]` (Scintilla's documented bounds).
     fn editor_zoom_level(&self) -> i32;
 
@@ -1914,7 +1962,11 @@ pub unsafe fn dispatch_nppm<S: HostServices>(
             1
         }
 
-        NPPM_GETNPPVERSION => CODEPP_PLUGIN_API_VERSION,
+        // wParam is `ADD_ZERO_PADDING` — see `pack_npp_version`.
+        NPPM_GETNPPVERSION => {
+            let (major, minor) = NPP_COMPAT_VERSION;
+            pack_npp_version(major, minor, wparam != 0)
+        }
 
         NPPM_HIDETABBAR => {
             // wparam: BOOL — TRUE hides the tab strip, FALSE shows
@@ -2622,7 +2674,7 @@ pub unsafe fn dispatch_nppm<S: HostServices>(
 
         NPPM_GETBOOKMARKID => services.bookmark_marker_id() as isize,
 
-        NPPM_GETZOOMLEVEL => services.editor_zoom_level() as isize,
+        CODEPPM_GETZOOMLEVEL => services.editor_zoom_level() as isize,
 
         NPPM_ISDARKMODEENABLED => {
             // No args. Returns BOOL — TRUE iff the host renders
@@ -3230,7 +3282,7 @@ mod tests {
         /// long-tail accessors. `None` for the unhappy-path tests.
         plugin_home_dir: Option<PathBuf>,
         settings_cloud_dir: Option<PathBuf>,
-        /// Reported zoom level for `NPPM_GETZOOMLEVEL`. Real
+        /// Reported zoom level for `CODEPPM_GETZOOMLEVEL`. Real
         /// Scintilla zoom range is approximately `[-10, 20]`;
         /// tests pin specific values.
         zoom_level: i32,
@@ -4070,11 +4122,53 @@ mod tests {
         assert_eq!(s.calls(), vec!["fif_launch[dir=<none>,filters=*.txt]"]);
     }
 
+    /// The version must clear a plugin's *minimum-version floor*, which
+    /// is the shape that actually bites: `NppExec` refuses to initialise
+    /// below 5.1, and Code++ used to answer 0.1 and be locked out.
     #[test]
-    fn get_npp_version_returns_phase3_version() {
+    fn get_npp_version_reports_a_notepad_plus_plus_compatible_version() {
         let mut s = MockServices::default();
-        let r = unsafe { dispatch_nppm(&mut s, NPPM_GETNPPVERSION, 0, 0) };
-        assert_eq!(r, Some(CODEPP_PLUGIN_API_VERSION));
+        let r = unsafe { dispatch_nppm(&mut s, NPPM_GETNPPVERSION, 0, 0) }.unwrap();
+        let (major, minor) = ((r >> 16) as u16, (r & 0xFFFF) as u16);
+        assert_eq!((major, minor), (8, 41), "8.4.1, unpadded");
+        // The floor NppExec checks, and a couple of others plugins use.
+        for (floor_major, floor_minor) in [(5u16, 1u16), (7, 0), (8, 0)] {
+            let floor = pack_npp_version(floor_major, floor_minor, false);
+            assert!(
+                r >= floor,
+                "reported version {r:#x} fails a >= {floor_major}.{floor_minor} floor"
+            );
+        }
+    }
+
+    /// `wParam` is `ADD_ZERO_PADDING`; ignoring it makes a padded
+    /// comparison order versions wrongly.
+    #[test]
+    fn get_npp_version_honours_the_zero_padding_flag() {
+        let mut s = MockServices::default();
+        let plain = unsafe { dispatch_nppm(&mut s, NPPM_GETNPPVERSION, 0, 0) }.unwrap();
+        let padded = unsafe { dispatch_nppm(&mut s, NPPM_GETNPPVERSION, 1, 0) }.unwrap();
+        assert_eq!(plain & 0xFFFF, 41);
+        assert_eq!(padded & 0xFFFF, 410);
+        assert_eq!(plain >> 16, padded >> 16);
+    }
+
+    /// Upstream's own documented examples, which are the only
+    /// authority on how the minor digits pack.
+    #[test]
+    fn pack_npp_version_matches_the_documented_examples() {
+        // v8.9.6.4 -> 964 either way; v9 -> 0 either way.
+        assert_eq!(pack_npp_version(8, 964, false) & 0xFFFF, 964);
+        assert_eq!(pack_npp_version(8, 964, true) & 0xFFFF, 964);
+        assert_eq!(pack_npp_version(9, 0, false) & 0xFFFF, 0);
+        assert_eq!(pack_npp_version(9, 0, true) & 0xFFFF, 0);
+        // v6.9 -> 9 unpadded, 900 padded. v6.6.6 -> 66 / 660.
+        assert_eq!(pack_npp_version(6, 9, false) & 0xFFFF, 9);
+        assert_eq!(pack_npp_version(6, 9, true) & 0xFFFF, 900);
+        assert_eq!(pack_npp_version(6, 66, false) & 0xFFFF, 66);
+        assert_eq!(pack_npp_version(6, 66, true) & 0xFFFF, 660);
+        // The major lands in the high word in every case.
+        assert_eq!(pack_npp_version(8, 41, true) >> 16, 8);
     }
 
     #[test]
@@ -4475,6 +4569,25 @@ mod tests {
         assert_eq!(NPPM_GETLANGUAGEDESC, NPPMSG + 84);
         assert_eq!(NPPM_GETPLUGINSCONFIGDIR, NPPMSG + 46);
         assert_eq!(NPPM_GETNPPVERSION, NPPMSG + 50);
+        // The six that were wrong. Every one of them was transcribed
+        // by hand and pinned by nothing, and the resulting numbers
+        // collided with real upstream messages — `NPPM_GETBOOKMARKID`
+        // sat on `NPPM_ADDTOOLBARICON_FORDARKMODE`, our
+        // `NPPM_GETDARKMODECOLORS` on the real `NPPM_GETBOOKMARKID`,
+        // and `NPPM_ISDARKMODEENABLED` on `NPPM_CREATELEXER`. Verify
+        // any change here against upstream's published header — see
+        // `tools/npp-abi-check/`, which does it mechanically.
+        assert_eq!(NPPM_ISDARKMODEENABLED, NPPMSG + 107);
+        assert_eq!(NPPM_GETDARKMODECOLORS, NPPMSG + 108);
+        assert_eq!(NPPM_GETBOOKMARKID, NPPMSG + 111);
+        assert_eq!(NPPM_GETNPPDIRECTORY, RUNCOMMAND_USER + 7);
+        assert_eq!(NPPM_GETNPPFULLFILEPATH, RUNCOMMAND_USER + 10);
+        // Not an NPPM message at all: Notepad++ has no zoom-level
+        // query, and NPPMSG + 102 is its NPPM_DOCLISTDISABLEPATHCOLUMN.
+        assert_eq!(CODEPPM_GETZOOMLEVEL, CODEPPMSG + 2);
+        // ...and clear of both Notepad++ bands, which the value
+        // above already guarantees: CODEPPMSG is WM_USER + 5000,
+        // above NPPMSG + 200 and RUNCOMMAND_USER + 100.
         assert_eq!(NPPN_FIRST, 1000);
     }
 
@@ -6576,7 +6689,7 @@ mod tests {
             zoom_level: 5,
             ..Default::default()
         };
-        let r = unsafe { dispatch_nppm(&mut s, NPPM_GETZOOMLEVEL, 0, 0) };
+        let r = unsafe { dispatch_nppm(&mut s, CODEPPM_GETZOOMLEVEL, 0, 0) };
         assert_eq!(r, Some(5));
     }
 
@@ -6586,7 +6699,7 @@ mod tests {
             zoom_level: -3,
             ..Default::default()
         };
-        let r = unsafe { dispatch_nppm(&mut s, NPPM_GETZOOMLEVEL, 0, 0) };
+        let r = unsafe { dispatch_nppm(&mut s, CODEPPM_GETZOOMLEVEL, 0, 0) };
         // The signed cast survives — `i32` widens to `isize` with
         // sign extension, so -3 stays -3 (not 4_294_967_293).
         assert_eq!(r, Some(-3));

@@ -55,8 +55,8 @@ pub use codepp_plugin_host::ffi::{
 /// [`export_save_dialog`] / [`set_clipboard`]). Re-exported so a plugin
 /// depends only on the SDK, not directly on `codepp-plugin-host`.
 pub use codepp_plugin_host::{
-    CLIP_FORMAT_HTML, CLIP_FORMAT_PLAIN, CLIP_FORMAT_RTF, EXPORT_KIND_HTML, EXPORT_KIND_OTHER,
-    EXPORT_KIND_RTF,
+    CLIP_FORMAT_HTML, CLIP_FORMAT_PLAIN, CLIP_FORMAT_RTF, CODEPPM_GETZOOMLEVEL, EXPORT_KIND_HTML,
+    EXPORT_KIND_OTHER, EXPORT_KIND_RTF,
 };
 
 /// `DWS_*` docking-window style bits for a `tTbData.u_mask`.

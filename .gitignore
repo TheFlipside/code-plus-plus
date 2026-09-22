@@ -39,3 +39,7 @@ Thumbs.db
 test_case.cpp
 test_case.rs
 /test_files/
+
+# Python bytecode from the maintenance tools under `tools/`.
+__pycache__/
+*.pyc

@@ -377,7 +377,7 @@ pub trait UiPlatform {
     fn set_statusbar_hidden(&mut self, hidden: bool) -> bool;
 
     /// Active editor's zoom level in points. Drives
-    /// `NPPM_GETZOOMLEVEL` via the host's `editor_zoom_level`.
+    /// `CODEPPM_GETZOOMLEVEL` via the host's `editor_zoom_level`.
     /// Wraps Scintilla's `SCI_GETZOOM` — typically returns a
     /// signed int in `[-10, 20]`.
     fn editor_zoom_level(&self) -> i32;
