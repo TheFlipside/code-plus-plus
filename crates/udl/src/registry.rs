@@ -72,16 +72,14 @@ const MAX_UDL_SCAN_ENTRIES: usize = (UDL_LANG_TYPE_END - UDL_LANG_TYPE_BASE + 1)
 /// One registered UDL — the parsed definition plus the dynamic
 /// `LangType` id it was assigned at scan time.
 ///
-/// **ID stability caveat.** Current assignment is sequential in
-/// alphabetically-sorted scan order (see
-/// [`UdlRegistry::scan_dir`]). A user adding, removing, or
-/// renaming a UDL file mid-alphabet renumbers every entry that
-/// sorts after the change. Session-restore across a renumbering
-/// event will resolve a stored `LangType(id)` to a **different**
-/// UDL than the one active when the session was saved. Fix
-/// (deferred to Phase 4.6 m1d): store UDL identity by
-/// `definition.name` in `session.xml` and look up by name on
-/// restore, treating the numeric id as ephemeral.
+/// **The id is ephemeral — never persist it.** Assignment is
+/// sequential in scan order (see [`UdlRegistry::scan_dir`]), so a
+/// user adding, removing or renaming a UDL file mid-alphabet
+/// renumbers every entry that sorts after the change, and an id
+/// stored across that event names a **different** UDL on the way
+/// back. `session.xml` therefore persists `definition.name` and
+/// resolves it through [`UdlRegistry::find_by_name`]; anything
+/// else that outlives the process must do the same.
 ///
 /// `#[non_exhaustive]` so m1d / m3 can add fields (e.g. a menu-
 /// item command id derived from `lang_type_id`) without a
@@ -386,6 +384,26 @@ impl UdlRegistry {
         self.entries.iter().find(|e| e.lang_type_id == id)
     }
 
+    /// Look up a UDL by its `<UserLang name="...">` value — the
+    /// durable identity `session.xml` persists, as opposed to the
+    /// scan-order [`UdlEntry::lang_type_id`], which shifts whenever
+    /// the `userDefineLangs/` file set changes.
+    ///
+    /// **Exact, case-sensitive match.** The stored name was written
+    /// verbatim from this same field, so anything looser would only
+    /// serve hand-edited session files — and the failure mode of a
+    /// miss is benign (the caller falls back to extension detection),
+    /// whereas a loose match risks resolving to a *different* UDL,
+    /// which is the very hazard persisting by name exists to close.
+    ///
+    /// **Duplicate names win by scan order**, first match — the same
+    /// user-config issue, and the same resolution, as two UDLs
+    /// claiming one extension in [`Self::find_by_extension`].
+    #[must_use]
+    pub fn find_by_name(&self, name: &str) -> Option<&UdlEntry> {
+        self.entries.iter().find(|e| e.definition.name == name)
+    }
+
     /// Case-insensitive extension lookup. Returns the first UDL
     /// that claims `ext` in its `<UserLang ext="...">` list.
     ///
@@ -411,6 +429,11 @@ mod tests {
     /// under `assets/preinstalled-udls/`. Resolved relative to
     /// `CARGO_MANIFEST_DIR` so tests work from any working
     /// directory.
+    /// The fixture's `<UserLang name>` attribute verbatim, and the
+    /// rewrite used to mint a second, distinctly-named UDL from it.
+    const NAME_ATTR_MARKDOWN: &str = "UserLang name=\"Markdown (preinstalled)\"";
+    const NAME_ATTR_SECOND: &str = "UserLang name=\"Second\"";
+
     fn markdown_fixture_path() -> PathBuf {
         Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("..")
@@ -521,6 +544,51 @@ mod tests {
         let reg = UdlRegistry::scan_dir(tmp.path());
         assert_eq!(reg.entries().len(), 1);
         assert_eq!(reg.entries()[0].definition.name, "Markdown (preinstalled)");
+    }
+
+    /// Name lookup is the durable identity — it must keep pointing at the
+    /// same UDL after a scan-order change that moves every id, and it must
+    /// miss (rather than approximate) when the name is gone.
+    #[test]
+    fn find_by_name_is_exact_and_survives_renumbering() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::copy(
+            markdown_fixture_path(),
+            tmp.path().join("markdown._preinstalled.udl.xml"),
+        )
+        .unwrap();
+        let before = UdlRegistry::scan_dir(tmp.path());
+        let md_before = before
+            .find_by_name("Markdown (preinstalled)")
+            .expect("name lookup must find the fixture");
+        assert_eq!(md_before.lang_type_id, UDL_LANG_TYPE_BASE);
+
+        // Add a UDL whose filename sorts first, taking the base slot.
+        let second = std::fs::read_to_string(markdown_fixture_path())
+            .unwrap()
+            .replace(NAME_ATTR_MARKDOWN, NAME_ATTR_SECOND);
+        std::fs::write(tmp.path().join("a_second.udl.xml"), second).unwrap();
+        let after = UdlRegistry::scan_dir(tmp.path());
+
+        // The id moved and somebody else holds the old one — so an id-keyed
+        // lookup now answers with the wrong language...
+        assert_eq!(
+            after
+                .find_by_lang_type_id(UDL_LANG_TYPE_BASE)
+                .map(|e| e.definition.name.as_str()),
+            Some("Second"),
+        );
+        // ...while the name still resolves to the UDL it names.
+        assert_eq!(
+            after
+                .find_by_name("Markdown (preinstalled)")
+                .map(|e| e.lang_type_id),
+            Some(UDL_LANG_TYPE_BASE + 1),
+        );
+
+        // Exact match: neither a case variant nor an absent name resolves.
+        assert!(after.find_by_name("markdown (preinstalled)").is_none());
+        assert!(after.find_by_name("Nothing Like It").is_none());
     }
 
     #[test]

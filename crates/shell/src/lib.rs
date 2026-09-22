@@ -763,9 +763,11 @@ pub enum SessionRestoreEntry {
         /// untitled buffer (the default `new N` label is
         /// rebuilt from `untitled_seq` instead).
         custom_name: Option<String>,
-        /// Persisted language override (the raw N++-ABI id, as
-        /// stored in `core::session::Tab.lang`). `None` means
-        /// "no stored choice" — the buffer restores at `L_TEXT`
+        /// Persisted language override, already resolved by
+        /// `Shell::resolve_persisted_lang` — a built-in id read back
+        /// verbatim, or the live id of the UDL the session named.
+        /// `None` means "no stored choice, or the UDL it named is
+        /// no longer installed" — the buffer restores at `L_TEXT`
         /// since untitled buffers have no extension to detect
         /// from. The Language menu's user-set value comes back
         /// through this attribute, so a renamed-then-Rust-lexed
@@ -816,11 +818,14 @@ pub enum SessionRestoreEntry {
         /// `PendingDialog::Error` so the user knows the buffer
         /// content shown isn't the one they typed.
         backup_modified_externally: bool,
-        /// Persisted language override (raw N++-ABI id from
-        /// `core::session::Tab.lang`). `None` falls back to
-        /// extension-based detection from `path`; `Some` wins
-        /// so a Language-menu choice the user made during the
-        /// previous session reapplies on restore.
+        /// Persisted language override, already resolved by
+        /// `Shell::resolve_persisted_lang` — a built-in id read back
+        /// verbatim, or the live id of the UDL the session named.
+        /// `None` falls back to extension-based detection from
+        /// `path`, which is also where a session naming a UDL that
+        /// is no longer installed lands; `Some` wins so a
+        /// Language-menu choice the user made during the previous
+        /// session reapplies on restore.
         lang: Option<i32>,
         /// Persisted pin state — `true` restores the tab as pinned.
         /// Same round-trip semantics as
@@ -4897,7 +4902,9 @@ impl Shell {
                     .iter()
                     .find(|t| t.path.as_deref() == Some(loaded.path.as_path()));
                 let cursor = stored.map_or(0, |t| t.cursor);
-                let stored_lang_override = stored.and_then(|t| t.lang).map(LangType);
+                let stored_lang_override = stored.and_then(|t| {
+                    Self::resolve_persisted_lang(t.lang, t.udl.as_deref(), &self.udl_registry)
+                });
                 let stored_pinned = stored.is_some_and(|t| t.pinned);
                 // Resolve the lang before the `&mut tab` borrow below so the
                 // UDL-registry read (a separate field) can't conflict with it.
@@ -5554,19 +5561,21 @@ impl Shell {
             .map_or(L_TEXT, |entry| LangType(entry.lang_type_id))
     }
 
-    /// The `@lang` value to persist for a tab in `session.xml`, or `None`
-    /// when it matches the extension-derived default.
+    /// The language a tab should persist in `session.xml`, or `None` when it
+    /// matches the extension-derived default.
     ///
     /// Skipping the default keeps `session.xml` free of no-op attributes and
-    /// — crucially for UDL buffers — lets a tab auto-detected as a UDL (e.g.
-    /// a `.md` file → the Markdown UDL) re-resolve *by extension* on the next
-    /// load rather than by a persisted, scan-order-assigned UDL id that could
-    /// shift if the `userDefineLangs/` set changed. An *explicit* choice that
-    /// diverges from the default (the user set this `.md` file to Python, or
-    /// forced a built-in file to plain text) is still written, so it survives
-    /// the restart. This delegates to [`Self::detect_lang`] so the "default"
-    /// the save path compares against is the same language the open path
-    /// would derive.
+    /// lets a tab auto-detected as a UDL (e.g. a `.md` file → the Markdown
+    /// UDL) re-resolve *by extension* on the next load. An *explicit* choice
+    /// that diverges from the default (the user set this `.md` file to
+    /// Python, or forced a built-in file to plain text) is written, so it
+    /// survives the restart. This delegates to [`Self::detect_lang`] so the
+    /// "default" the save path compares against is the same language the open
+    /// path would derive.
+    ///
+    /// Split into the raw id and the UDL name by
+    /// [`Self::persisted_lang_fields`], which is what the two session
+    /// attributes actually carry.
     fn lang_to_persist(
         tab_lang: LangType,
         path: Option<&Path>,
@@ -5574,6 +5583,103 @@ impl Shell {
     ) -> Option<i32> {
         let extension_default = path.map_or(L_TEXT, |p| Self::detect_lang(p, registry));
         (tab_lang != extension_default).then(|| tab_lang.as_npp_id())
+    }
+
+    /// The `(@lang, @udl)` pair to write for a tab — at most one of which is
+    /// ever `Some`, because a UDL is persisted by name and everything else by
+    /// id.
+    ///
+    /// **Why a UDL never writes its id.** The dynamic `LangType` ids
+    /// `UdlRegistry::scan_dir` hands out are positions in a sorted directory
+    /// listing, so adding, removing or renaming one file in
+    /// `userDefineLangs/` renumbers every UDL that sorts after it. An id
+    /// stored across that event names a *different* UDL on the way back, and
+    /// the buffer restores under someone else's rules with nothing to signal
+    /// it. The `<UserLang name>` is the identity that survives, so that is
+    /// what goes to disk; see [`Self::resolve_persisted_lang`] for the other
+    /// half.
+    ///
+    /// A UDL-range id with no registry entry keeps the id, deliberately: the
+    /// only way a tab holds one is a plugin's `NPPM_SETBUFFERLANGTYPE` with a
+    /// raw number, and `core::session::Tab::lang` is documented to round-trip
+    /// values Code++ does not recognise rather than discard them.
+    fn persisted_lang_fields(
+        tab_lang: LangType,
+        path: Option<&Path>,
+        registry: &codepp_udl::UdlRegistry,
+    ) -> (Option<i32>, Option<String>) {
+        let Some(id) = Self::lang_to_persist(tab_lang, path, registry) else {
+            return (None, None);
+        };
+        if !codepp_udl::is_udl_lang_id(id) {
+            return (Some(id), None);
+        }
+        if let Some(entry) = registry.find_by_lang_type_id(id) {
+            (None, Some(entry.definition.name.clone()))
+        } else {
+            tracing::debug!(
+                lang = id,
+                path = ?path,
+                "tab holds a UDL-range language id with no registry entry; persisting the raw id"
+            );
+            (Some(id), None)
+        }
+    }
+
+    /// Resolve the `(@lang, @udl)` pair read back from `session.xml` into a
+    /// language, or `None` for "nothing stored" — which every caller answers
+    /// with extension detection (path-bound tabs) or `L_TEXT` (untitled).
+    ///
+    /// `@udl` is authoritative when present and `@lang` is not consulted at
+    /// all, so the two cannot disagree about which language a tab restores
+    /// under. A name the registry no longer knows resolves to `None`: the UDL
+    /// was deleted or renamed, and falling back to detection is the honest
+    /// answer where resolving something else is the bug this pair exists to
+    /// prevent.
+    ///
+    /// **A bare UDL-range id in `@lang` is declined**, not honoured. It is a
+    /// session written before the split, and the id means whatever the
+    /// directory ordering happened to be when it was saved — so "resolve it
+    /// once, as a migration" reads as the kind thing to do and is the one
+    /// branch that could still restore a buffer under the wrong UDL's rules.
+    ///
+    /// The deciding fact is *when* it would fire. `Shell::new` runs
+    /// `copy_preinstalled_udls` immediately before `UdlRegistry::scan_dir`,
+    /// so a release that bundles one more preinstalled UDL adds a file, and
+    /// renumbers every id that sorts after it, **on the very boot that would
+    /// perform the migration**. The hazard is correlated with the upgrade
+    /// rather than independent of it, which is the opposite of what a
+    /// one-shot migration assumes. Validating the id against the registry
+    /// does not help either: a renumbered id resolves to a live entry — the
+    /// wrong one — so the check would pass.
+    ///
+    /// The cost is that an explicit pre-split UDL choice reverts to
+    /// extension detection once and the user re-picks it. That is visible
+    /// and two clicks; being styled by a different UDL is neither.
+    fn resolve_persisted_lang(
+        lang: Option<i32>,
+        udl: Option<&str>,
+        registry: &codepp_udl::UdlRegistry,
+    ) -> Option<LangType> {
+        if let Some(name) = udl {
+            let resolved = registry.find_by_name(name);
+            if resolved.is_none() {
+                tracing::warn!(
+                    udl = name,
+                    "session.xml names a User Defined Language that is no longer installed; falling back to extension detection"
+                );
+            }
+            return resolved.map(|entry| LangType(entry.lang_type_id));
+        }
+        let id = lang?;
+        if codepp_udl::is_udl_lang_id(id) {
+            tracing::warn!(
+                lang = id,
+                "session.xml carries a User Defined Language as a scan-order id, which no longer identifies one; falling back to extension detection"
+            );
+            return None;
+        }
+        Some(LangType(id))
     }
 
     /// Set the **active** tab's syntax-highlighting language — the
@@ -6242,6 +6348,12 @@ impl Shell {
                 Some(existing) => {
                     existing.cursor = cursor;
                     existing.lang = lang;
+                    // The N++ session file is the authority for this record
+                    // now, and its `lang` attribute is a built-in language
+                    // name — it can never name a UDL. Leaving a `@udl` from
+                    // the record this overwrites would let that stale name
+                    // win, since it outranks `@lang` on the way back.
+                    existing.udl = None;
                     existing.pinned = pinned;
                 }
                 None => self.session.tabs.push(codepp_core::session::Tab {
@@ -6433,6 +6545,11 @@ impl Shell {
                 }
             }
 
+            // Split the tab's language into the two attributes that carry
+            // it: a built-in lexer by id, a UDL by name. See
+            // `persisted_lang_fields` for why a UDL id must never reach disk.
+            let (persisted_lang, persisted_udl) =
+                Self::persisted_lang_fields(tab.lang, tab.path.as_deref(), &self.udl_registry);
             session.tabs.push(codepp_core::Tab {
                 path: tab.path.clone(),
                 cursor,
@@ -6453,7 +6570,8 @@ impl Shell {
                 // no-op `@lang` and the user's explicit Language-menu choice
                 // still survives a restart. See [`Self::lang_to_persist`] for
                 // why a UDL-auto-detected tab is deliberately left unpersisted.
-                lang: Self::lang_to_persist(tab.lang, tab.path.as_deref(), &self.udl_registry),
+                lang: persisted_lang,
+                udl: persisted_udl,
                 // Persist the user's pin choice so pinned tabs come
                 // back pinned (and at the left edge) on next launch.
                 // Older session.xml files without the attribute
@@ -6544,6 +6662,12 @@ impl Shell {
             );
         }
         let backups_dir = codepp_platform::backups_dir();
+        // Resolve each tab's stored language here rather than handing the raw
+        // attributes to the backends: the registry lives on the shell, and one
+        // resolution site is what keeps the three UI crates from drifting on
+        // it. The entries below therefore carry an id the registry has already
+        // vouched for, or `None`.
+        let registry = &self.udl_registry;
         let entries: Vec<SessionRestoreEntry> = session
             .tabs
             .iter()
@@ -6620,7 +6744,8 @@ impl Shell {
                             eol: t.eol,
                             disk_changed_externally,
                             backup_modified_externally,
-                            lang: t.lang,
+                            lang: Self::resolve_persisted_lang(t.lang, t.udl.as_deref(), registry)
+                                .map(LangType::as_npp_id),
                             pinned: t.pinned,
                         })
                     } else {
@@ -6645,7 +6770,8 @@ impl Shell {
                             eol: t.eol,
                             backup_modified_externally,
                             custom_name: t.custom_name.clone(),
-                            lang: t.lang,
+                            lang: Self::resolve_persisted_lang(t.lang, t.udl.as_deref(), registry)
+                                .map(LangType::as_npp_id),
                             pinned: t.pinned,
                         }
                     })
@@ -10417,6 +10543,193 @@ mod tests {
         assert_eq!(Shell::lang_to_persist(L_TEXT, None, &reg), None);
     }
 
+    /// Two real UDL directories that differ by one file, so the same UDL
+    /// carries a *different* scan-order id in each — which is the event this
+    /// name-keyed persistence exists to survive.
+    ///
+    /// Returns `(before, after)`. `before` holds the Markdown UDL alone;
+    /// `after` adds a second UDL whose filename sorts ahead of it, pushing
+    /// Markdown one slot along and leaving Markdown's old id occupied by
+    /// somebody else. The tempdirs are returned so the caller keeps them
+    /// alive — the registries do not reference the files after the scan, but
+    /// dropping a `TempDir` early is the kind of thing that makes a later
+    /// edit to this helper mysterious.
+    fn renumbering_udl_registries() -> (
+        tempfile::TempDir,
+        tempfile::TempDir,
+        codepp_udl::UdlRegistry,
+        codepp_udl::UdlRegistry,
+    ) {
+        // The second UDL is the Markdown fixture with its identity rewritten
+        // — a real, parseable definition rather than a hand-written stub, so
+        // the test exercises the same parser the product does.
+        let second = String::from_utf8(PREINSTALLED_MARKDOWN_UDL.to_vec())
+            .unwrap()
+            .replace(
+                "UserLang name=\"Markdown (preinstalled)\"",
+                "UserLang name=\"Sorts First\"",
+            );
+        assert!(second.contains("Sorts First"), "fixture rewrite must apply");
+
+        let before = tempfile::tempdir().unwrap();
+        std::fs::write(
+            before.path().join(PREINSTALLED_MARKDOWN_FILENAME),
+            PREINSTALLED_MARKDOWN_UDL,
+        )
+        .unwrap();
+
+        let after = tempfile::tempdir().unwrap();
+        std::fs::write(
+            after.path().join(PREINSTALLED_MARKDOWN_FILENAME),
+            PREINSTALLED_MARKDOWN_UDL,
+        )
+        .unwrap();
+        // `a_...` sorts before `markdown...`, so this takes the first slot.
+        std::fs::write(after.path().join("a_sorts_first.udl.xml"), second).unwrap();
+
+        let reg_before = codepp_udl::UdlRegistry::scan_dir(before.path());
+        let reg_after = codepp_udl::UdlRegistry::scan_dir(after.path());
+        (before, after, reg_before, reg_after)
+    }
+
+    /// The tracked hazard, end to end: a UDL choice saved before the
+    /// `userDefineLangs/` set changed must come back as *that* UDL after it.
+    ///
+    /// The counterfactual is the point — the same tab persisted as a raw id
+    /// resolves, in the post-change registry, to a different language
+    /// entirely. That is what the id-keyed format did, and it is why the
+    /// assertions below are about the name rather than about round-tripping
+    /// a number.
+    #[test]
+    fn a_udl_choice_survives_a_renumbering_of_the_udl_directory() {
+        let (_before_dir, _after_dir, reg_before, reg_after) = renumbering_udl_registries();
+
+        let md_before = reg_before.find_by_name("Markdown (preinstalled)").unwrap();
+        let md_after = reg_after.find_by_name("Markdown (preinstalled)").unwrap();
+        // Precondition: the id really did move, and somebody else took the
+        // vacated slot. Without this the test could pass vacuously.
+        assert_ne!(md_before.lang_type_id, md_after.lang_type_id);
+        assert_eq!(
+            reg_after
+                .find_by_lang_type_id(md_before.lang_type_id)
+                .map(|e| e.definition.name.as_str()),
+            Some("Sorts First"),
+        );
+
+        // Save: an explicit UDL choice on a `.txt` file (so it diverges from
+        // the extension default and is persisted at all) writes the name and
+        // no id.
+        let (lang, udl) = Shell::persisted_lang_fields(
+            LangType(md_before.lang_type_id),
+            Some(Path::new("notes.txt")),
+            &reg_before,
+        );
+        assert_eq!(lang, None, "a UDL id must never reach disk");
+        assert_eq!(udl.as_deref(), Some("Markdown (preinstalled)"));
+
+        // Restore against the changed directory: still Markdown.
+        assert_eq!(
+            Shell::resolve_persisted_lang(lang, udl.as_deref(), &reg_after),
+            Some(LangType(md_after.lang_type_id)),
+        );
+
+        // The counterfactual: had the choice been stored as an id, that id
+        // now belongs to "Sorts First" (asserted above), so reading it back
+        // would restore the buffer under the wrong UDL's rules. The load
+        // path therefore refuses a bare UDL-range id outright and lets the
+        // caller re-detect, rather than trusting a number whose meaning is
+        // a directory listing.
+        assert_eq!(
+            Shell::resolve_persisted_lang(Some(md_before.lang_type_id), None, &reg_after),
+            None,
+        );
+    }
+
+    #[test]
+    fn persisted_lang_fields_writes_ids_for_builtins_and_nothing_for_defaults() {
+        use codepp_core::lang::{L_CPP, L_PYTHON};
+        let (_before_dir, _after_dir, reg, _) = renumbering_udl_registries();
+        let md = LangType(reg.find_by_extension("md").unwrap().lang_type_id);
+
+        // A built-in override keeps the id path — only UDLs go by name.
+        assert_eq!(
+            Shell::persisted_lang_fields(L_PYTHON, Some(Path::new("a.md")), &reg),
+            (Some(L_PYTHON.as_npp_id()), None),
+        );
+        // The extension-derived default is not persisted at all, in either
+        // field — a `.md` tab auto-detected as the Markdown UDL re-detects.
+        assert_eq!(
+            Shell::persisted_lang_fields(md, Some(Path::new("a.md")), &reg),
+            (None, None),
+        );
+        assert_eq!(
+            Shell::persisted_lang_fields(L_CPP, Some(Path::new("a.cpp")), &reg),
+            (None, None),
+        );
+        // An untitled buffer explicitly set to a UDL has no extension to
+        // re-derive from, so the name is what carries the choice.
+        assert_eq!(
+            Shell::persisted_lang_fields(md, None, &reg),
+            (None, Some("Markdown (preinstalled)".to_string())),
+        );
+        // A UDL-range id the registry does not know keeps its raw value —
+        // only a plugin's `NPPM_SETBUFFERLANGTYPE` can produce one, and
+        // `core::session::Tab::lang` round-trips values we don't recognise.
+        let unknown = LangType(codepp_udl::UDL_LANG_TYPE_END);
+        assert!(reg.find_by_lang_type_id(unknown.as_npp_id()).is_none());
+        assert_eq!(
+            Shell::persisted_lang_fields(unknown, None, &reg),
+            (Some(unknown.as_npp_id()), None),
+        );
+    }
+
+    #[test]
+    fn resolve_persisted_lang_prefers_the_name_and_fails_safe() {
+        use codepp_core::lang::L_PYTHON;
+        let (_before_dir, _after_dir, reg, _) = renumbering_udl_registries();
+        let md_id = reg.find_by_extension("md").unwrap().lang_type_id;
+
+        // Nothing stored.
+        assert_eq!(Shell::resolve_persisted_lang(None, None, &reg), None);
+        // A built-in id reads back verbatim.
+        assert_eq!(
+            Shell::resolve_persisted_lang(Some(L_PYTHON.as_npp_id()), None, &reg),
+            Some(L_PYTHON),
+        );
+        // A name the registry no longer knows (the UDL was deleted or
+        // renamed) resolves to nothing, so the caller falls back to
+        // extension detection rather than to somebody else's rules.
+        assert_eq!(
+            Shell::resolve_persisted_lang(None, Some("Deleted Lang"), &reg),
+            None,
+        );
+        // The name is authoritative: a contradictory `@lang` alongside it —
+        // hand-edited, or written by a version that stored both — is ignored
+        // rather than blended.
+        assert_eq!(
+            Shell::resolve_persisted_lang(
+                Some(L_PYTHON.as_npp_id()),
+                Some("Markdown (preinstalled)"),
+                &reg,
+            ),
+            Some(LangType(md_id)),
+        );
+        // ...including when the name is the one that is gone, which must not
+        // silently fall through to the stale id.
+        assert_eq!(
+            Shell::resolve_persisted_lang(Some(L_PYTHON.as_npp_id()), Some("Deleted Lang"), &reg),
+            None,
+        );
+        // A session written before the split carries a bare UDL id, which
+        // is declined even though it happens to name a live entry here —
+        // the id is a position in a directory listing, and `Shell::new`
+        // seeds preinstalled UDLs immediately before the scan, so the very
+        // boot that would migrate it is the one most likely to have
+        // renumbered it.
+        assert!(reg.find_by_lang_type_id(md_id).is_some());
+        assert_eq!(Shell::resolve_persisted_lang(Some(md_id), None, &reg), None);
+    }
+
     #[test]
     fn set_active_custom_name_sets_and_clears() {
         let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
@@ -12886,6 +13199,7 @@ mod tests {
                     backup: None,
                     custom_name: None,
                     lang: None,
+                    udl: None,
                     pinned: false,
                 },
                 CoreTab {
@@ -12897,6 +13211,7 @@ mod tests {
                     backup: None,
                     custom_name: None,
                     lang: None,
+                    udl: None,
                     pinned: false,
                 },
             ],
@@ -15137,6 +15452,62 @@ mod tests {
         // logic fired. (Paths are `None` until the async load completes, so
         // the index, not the path, is what's populated synchronously here.)
         assert_eq!(shell.active_tab, Some(0));
+    }
+
+    /// An N++ session file is the authority for the records it overwrites,
+    /// and its `lang` attribute is a *built-in* language name — the format
+    /// has no way to name a UDL. So a `@udl` left over from the Code++
+    /// session this replaces would silently outrank the language the N++
+    /// file actually asked for, because the name wins over `@lang` on the
+    /// way back.
+    #[test]
+    fn load_npp_session_clears_a_stale_udl_name_on_the_records_it_overwrites() {
+        use codepp_core::npp_session::{NppFile, NppSession, NppSessionDoc, NppView};
+        let dir = tempfile::tempdir().unwrap();
+        let f1 = dir.path().join("a.txt");
+        std::fs::write(&f1, "aaa").unwrap();
+
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        // A record from a previous Code++ session: this path was on a UDL.
+        shell.session.tabs.push(codepp_core::session::Tab {
+            path: Some(f1.clone()),
+            udl: Some("Markdown (preinstalled)".to_string()),
+            ..codepp_core::session::Tab::default()
+        });
+
+        let doc = NppSessionDoc {
+            session: NppSession {
+                active_view: 0,
+                main_view: NppView {
+                    active_index: 0,
+                    files: vec![NppFile {
+                        filename: f1.clone(),
+                        lang: "Python".to_string(),
+                        ..Default::default()
+                    }],
+                },
+                sub_view: None,
+            },
+        };
+        let sess_path = dir.path().join("sess.xml");
+        doc.save_to_xml(&sess_path).unwrap();
+        shell.load_npp_session(&sess_path, false).unwrap();
+
+        let record = shell
+            .session
+            .tabs
+            .iter()
+            .find(|t| t.path.as_deref() == Some(f1.as_path()))
+            .expect("the record is upserted in place, not duplicated");
+        assert_eq!(record.udl, None, "the stale UDL name must not survive");
+        assert_eq!(record.lang, Some(codepp_core::lang::L_PYTHON.as_npp_id()));
+        // And it resolves to what the N++ file asked for rather than to the
+        // UDL the old record named — which is the property that matters.
+        assert_eq!(
+            Shell::resolve_persisted_lang(record.lang, record.udl.as_deref(), &shell.udl_registry),
+            Some(codepp_core::lang::L_PYTHON),
+        );
     }
 
     #[test]

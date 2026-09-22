@@ -120,8 +120,41 @@ pub struct Tab {
     /// the choice back so manual overrides survive relaunches.
     /// Older session.xml files round-trip cleanly thanks to
     /// `default`.
+    ///
+    /// **Never carries a User Defined Language the host recognises.**
+    /// Those are written to [`Self::udl`] by name instead, because a
+    /// UDL's numeric id is assigned in directory-scan order and so
+    /// names a different language once the `userDefineLangs/` set
+    /// changes. Two things can still put a UDL-range *number* here: a
+    /// session.xml written before that split, which the load path
+    /// declines and replaces with extension detection; and an id no
+    /// UDL claims, which only a plugin's raw `NPPM_SETBUFFERLANGTYPE`
+    /// can produce and which round-trips verbatim under this field's
+    /// stated "unknown values survive" contract. See [`Self::udl`].
     #[serde(rename = "@lang", skip_serializing_if = "Option::is_none", default)]
     pub lang: Option<i32>,
+    /// `<UserLang name="...">` of the User Defined Language this
+    /// buffer uses — the durable identity of a UDL, as opposed to
+    /// the dynamic `LangType` id in [`Self::lang`], which is
+    /// assigned in scan order at every startup and therefore means
+    /// nothing across a change to the `userDefineLangs/` directory.
+    ///
+    /// Set only for an *explicit* UDL choice, on the same "diverges
+    /// from the extension-derived default" rule that governs
+    /// [`Self::lang`] — a `.md` file auto-detected as the Markdown
+    /// UDL re-detects by extension on the next load and stores
+    /// nothing here.
+    ///
+    /// **Authoritative when present**: the load path resolves the
+    /// name against the live registry and ignores [`Self::lang`]
+    /// entirely, so the two can never disagree about which language
+    /// a tab restores under. A name no longer in the registry (the
+    /// UDL was deleted or renamed) resolves to nothing and the tab
+    /// falls back to extension detection, which is the honest
+    /// degradation — the alternative, resolving a stale id, is a
+    /// buffer silently restored under someone else's rules.
+    #[serde(rename = "@udl", skip_serializing_if = "Option::is_none", default)]
+    pub udl: Option<String>,
     /// `true` iff the user pinned this tab. Pinned tabs stay
     /// clustered at the left edge of the tab strip in insertion
     /// order and cannot be moved by drag; unpinned tabs occupy the
@@ -624,6 +657,7 @@ mod tests {
                     backup: None,
                     custom_name: None,
                     lang: None,
+                    udl: None,
                     pinned: false,
                 },
                 Tab {
@@ -635,6 +669,7 @@ mod tests {
                     backup: None,
                     custom_name: None,
                     lang: None,
+                    udl: None,
                     pinned: false,
                 },
             ],
@@ -664,6 +699,7 @@ mod tests {
                 backup: None,
                 custom_name: None,
                 lang: None,
+                udl: None,
                 pinned: false,
             }],
         };
@@ -695,6 +731,7 @@ mod tests {
                 backup: Some("new 1@2026-05-04_215750".into()),
                 custom_name: None,
                 lang: None,
+                udl: None,
                 pinned: false,
             }],
         };
@@ -728,6 +765,7 @@ mod tests {
                     backup: None,
                     custom_name: None,
                     lang: None,
+                    udl: None,
                     pinned: false,
                 },
                 Tab {
@@ -739,6 +777,7 @@ mod tests {
                     backup: Some("new 1@2026-05-04_215800".into()),
                     custom_name: None,
                     lang: None,
+                    udl: None,
                     pinned: false,
                 },
                 Tab {
@@ -750,6 +789,7 @@ mod tests {
                     backup: Some("new 2@2026-05-04_215800".into()),
                     custom_name: None,
                     lang: None,
+                    udl: None,
                     pinned: false,
                 },
             ],
@@ -784,6 +824,7 @@ mod tests {
                 backup: Some("new 3@2026-05-09_141500".into()),
                 custom_name: Some("release notes".into()),
                 lang: None,
+                udl: None,
                 pinned: false,
             }],
         };
@@ -822,6 +863,7 @@ mod tests {
                 // extension-based detection would yield Text, so
                 // the persisted override must dominate on restore.
                 lang: Some(81),
+                udl: None,
                 pinned: false,
             }],
         };
@@ -854,6 +896,7 @@ mod tests {
                 backup: None,
                 custom_name: None,
                 lang: None,
+                udl: None,
                 pinned: true,
             }],
         };
@@ -887,6 +930,7 @@ mod tests {
                 backup: None,
                 custom_name: None,
                 lang: None,
+                udl: None,
                 pinned: false,
             }],
         };
@@ -917,9 +961,9 @@ mod tests {
         );
     }
 
-    /// A session.xml written before the `@lang` attribute shipped
-    /// must still parse — the load path falls back to extension
-    /// detection (or `L_TEXT` for untitled) when `lang` is `None`.
+    /// A session.xml written before the `@lang` and `@udl` attributes
+    /// shipped must still parse — the load path falls back to extension
+    /// detection (or `L_TEXT` for untitled) when both are `None`.
     #[test]
     fn pre_lang_session_xml_loads_with_none_lang() {
         let (_dir, path) = temp_session_path();
@@ -928,6 +972,40 @@ mod tests {
         std::fs::write(&path, xml).unwrap();
         let loaded = Session::load_from_xml(&path).unwrap();
         assert_eq!(loaded.tabs.len(), 1);
+        assert_eq!(loaded.tabs[0].lang, None);
+        assert_eq!(loaded.tabs[0].udl, None);
+    }
+
+    /// The serialized form of `Tab::udl`, spelled out so the round-trip
+    /// test below pins the wire name rather than re-deriving it from serde.
+    const UDL_ATTR: &str = "udl=\"Markdown (preinstalled)\"";
+
+    /// `udl` round-trips, and is independent of `lang` on the wire — the
+    /// two attributes carry different kinds of identity (a User Defined
+    /// Language by name, everything else by its numeric id) and the reader
+    /// has to be able to tell which one a tab used.
+    #[test]
+    fn round_trip_tab_with_udl_name() {
+        let (_dir, path) = temp_session_path();
+        let original = Session {
+            tabs: vec![Tab {
+                path: Some(PathBuf::from("/tmp/notes.txt")),
+                udl: Some("Markdown (preinstalled)".to_string()),
+                ..Tab::default()
+            }],
+            ..Session::default()
+        };
+        original.save_to_xml(&path).unwrap();
+
+        let raw = std::fs::read_to_string(&path).unwrap();
+        assert!(raw.contains(UDL_ATTR), "{raw}");
+        assert!(!raw.contains("lang="), "a UDL tab writes no @lang: {raw}");
+
+        let loaded = Session::load_from_xml(&path).unwrap();
+        assert_eq!(
+            loaded.tabs[0].udl.as_deref(),
+            Some("Markdown (preinstalled)")
+        );
         assert_eq!(loaded.tabs[0].lang, None);
     }
 
