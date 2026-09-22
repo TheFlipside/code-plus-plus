@@ -4439,6 +4439,13 @@ unsafe fn close_multiple_documents(hwnd: HWND, kind: CloseMultiKind) {
     if initial_count == 0 {
         return;
     }
+    // Held across the whole loop, not only each inner close: a wake
+    // swallowed by one iteration's prompt would otherwise be re-posted
+    // on that close's release and dispatched into the *next*
+    // iteration's prompt, where it is swallowed again — correct, but
+    // the operation the user is deciding about is the multi-close as a
+    // whole, so the flush belongs after it. See [`DrainFreeze`].
+    let _freeze = DrainFreeze::new(hwnd);
     for _ in 0..initial_count {
         // Pick the next target index under a fresh borrow.
         let next_idx = unsafe { state_from_hwnd(hwnd) }
@@ -4546,6 +4553,17 @@ unsafe fn handle_close_active_tab_with_outcome(hwnd: HWND) -> CloseOutcome {
 ///
 /// Caller must invoke from the UI thread that owns `hwnd`.
 unsafe fn handle_close_active_tab_inner(hwnd: HWND) -> CloseOutcome {
+    // Freeze the `WM_APP_WAKE` drain for the whole close, taken
+    // before the dirty sample below so nothing can move `active_tab`
+    // between the sample, the prompt it feeds, the announcement and
+    // the close. The modal pumps in Phase 0 dispatch every posted
+    // message; without this a worker wake landing there could
+    // `drain` the shell mid-prompt and slide a different buffer
+    // under the user's Save / Don't Save / Cancel decision. See
+    // [`DrainFreeze`] — it lifts on every exit path, panic included,
+    // and re-posts any wake it swallowed.
+    let _freeze = DrainFreeze::new(hwnd);
+
     // Phase 0: dirty-check gate. If the active tab's buffer has
     // unsaved changes, prompt the user with Save / Don't Save /
     // Cancel before any data-model mutation. Cancel aborts the
@@ -4590,12 +4608,13 @@ unsafe fn handle_close_active_tab_inner(hwnd: HWND) -> CloseOutcome {
             let cached_dirty = tab.dirty || state.shell.is_unsaved_restore(tab.id);
             let dirty = state.editor.send(SCI_GETMODIFY, 0, 0) != 0 || cached_dirty;
             let length = state.editor.send(SCI_GETLENGTH, 0, 0);
-            (name, has_path, has_pending_load, dirty, length)
+            (tab.id, name, has_path, has_pending_load, dirty, length)
         })
     } else {
         return CloseOutcome::NothingToClose;
     };
-    let Some((display_name, has_path, has_pending_load, dirty, length)) = prelude else {
+    let Some((prompted_id, display_name, has_path, has_pending_load, dirty, length)) = prelude
+    else {
         return CloseOutcome::NothingToClose;
     };
     // **Data-loss safeguard.** A tab whose async load is still
@@ -4613,7 +4632,31 @@ unsafe fn handle_close_active_tab_inner(hwnd: HWND) -> CloseOutcome {
     // the discipline `Shell::save_all` uses on its own iteration
     // path (`pending_load.is_some()` skips the tab there too).
     if dirty && !has_pending_load && (has_path || length > 0) {
-        match show_save_confirm_dialog(hwnd, &display_name) {
+        let choice = show_save_confirm_dialog(hwnd, &display_name);
+        // The prompt named `prompted_id`; act only if that is still
+        // the active tab. The `DrainFreeze` stops the host's own
+        // drain from moving `active_tab` under the modal, but the
+        // pump still dispatches a plugin's cross-thread
+        // `SendMessage(WM_COMMAND, ID_FILE_CLOSE)` — this function
+        // holds no `PluginCallGuard` (it must not: the announcement
+        // below needs the plugin's NPPM_* answered) — and that runs
+        // a complete nested close whose own prompt the user may
+        // answer first. Acting on a stale sample would then save or
+        // announce whichever tab the nested close left in front:
+        // the same stale-id shape `close_announced_tab` refuses one
+        // phase later, refused here for the prompt as well. The
+        // refusal is logged, not shown: the prompted tab was closed
+        // by a prompt the user answered *inside* this one, so there
+        // is nothing left to save and a second modal explaining that
+        // on top of a plugin-reentered pump is worse than a warning.
+        if !unsafe { active_tab_is(hwnd, prompted_id) } {
+            tracing::warn!(
+                prompted_id,
+                "close: the prompted tab is no longer active after the save prompt; refusing"
+            );
+            return CloseOutcome::Aborted;
+        }
+        match choice {
             SaveConfirmResult::Cancel => return CloseOutcome::Aborted,
             SaveConfirmResult::No => {
                 // Proceed to the close without saving. The
@@ -4622,17 +4665,16 @@ unsafe fn handle_close_active_tab_inner(hwnd: HWND) -> CloseOutcome {
             }
             SaveConfirmResult::Yes => {
                 // `has_path` was sampled BEFORE the confirm
-                // modal ran. The modal's nested message pump
-                // can dispatch WM_APP_WAKE (which drains
-                // shell-level deferred work), but no current
-                // code path clears an already-set `tab.path`
-                // back to `None` — the invariant holds. If a
-                // future code path could break it,
+                // modal ran, and still describes the active
+                // tab: the `DrainFreeze` above stops the
+                // modal's nested pump from draining the shell,
+                // and the `active_tab_is` re-check above refuses
+                // the answer if a plugin's nested close moved
+                // `active_tab` by the other route. Defence in
+                // depth if either ever changes:
                 // `save_current_to_disk` returns
-                // `ShellError::NoActivePath` and the error
-                // dialog below surfaces it; the worst case is
-                // a confusing "Save failed: no active file
-                // path" message, not silent data loss.
+                // `ShellError::NoActivePath` on a pathless tab
+                // and the error dialog below surfaces it.
                 if has_path {
                     // Titled tab — save in place. On error,
                     // surface the message and abort the close;
@@ -4675,6 +4717,16 @@ unsafe fn handle_close_active_tab_inner(hwnd: HWND) -> CloseOutcome {
                     // itself failed, the buffer is still dirty
                     // and we must abort the close.
                     unsafe { run_save_as_flow(hwnd) };
+                    // Its chooser pumps too; same re-check as after
+                    // the prompt, before the dirty re-read below is
+                    // trusted to describe the prompted tab.
+                    if !unsafe { active_tab_is(hwnd, prompted_id) } {
+                        tracing::warn!(
+                            prompted_id,
+                            "close: the prompted tab is no longer active after Save As; refusing"
+                        );
+                        return CloseOutcome::Aborted;
+                    }
                     let still_dirty = if let Some(state) = unsafe { state_from_hwnd(hwnd) } {
                         state.editor.send(SCI_GETMODIFY, 0, 0) != 0
                     } else {
@@ -5262,18 +5314,36 @@ unsafe fn update_window_title(hwnd: HWND, shell: &Shell) {
 ///
 /// Caller must invoke from the UI thread that owns `hwnd`.
 unsafe fn run_save_as_flow(hwnd: HWND) {
-    let suggestion = if let Some(state) = unsafe { state_from_hwnd(hwnd) } {
-        state
-            .shell
-            .active()
-            .and_then(|t| t.path.as_ref())
-            .and_then(|p| p.file_name())
-            .and_then(|s| s.to_str())
-            .map(std::string::ToString::to_string)
+    // The tab this Save As is for, recorded before the chooser: its
+    // pump dispatches a plugin's cross-thread `SendMessage(WM_COMMAND,
+    // ID_FILE_CLOSE)`, and a nested close answered first can leave a
+    // different tab in front by the time the user picks a path. The
+    // write below is re-checked against this id so it can never put
+    // another buffer's contents at the path chosen for this one.
+    let sample = if let Some(state) = unsafe { state_from_hwnd(hwnd) } {
+        state.shell.active().map(|t| {
+            let suggestion = t
+                .path
+                .as_ref()
+                .and_then(|p| p.file_name())
+                .and_then(|s| s.to_str())
+                .map(std::string::ToString::to_string);
+            (t.id, suggestion)
+        })
     } else {
         None
     };
+    let Some((saving_id, suggestion)) = sample else {
+        return;
+    };
     let new_path = prompt_save_path(hwnd, suggestion.as_deref());
+    if new_path.is_some() && !unsafe { active_tab_is(hwnd, saving_id) } {
+        tracing::warn!(
+            saving_id,
+            "save as: the tab being saved is no longer active after the chooser; not writing"
+        );
+        return;
+    }
     let save_error: Option<String> = if let Some(p) = new_path {
         if let Some(state) = unsafe { state_from_hwnd(hwnd) } {
             let (shell, mut ui) = state.split();
@@ -5298,6 +5368,20 @@ unsafe fn run_save_as_flow(hwnd: HWND) {
     // the strip so the label switches from "new N" (or the old
     // basename) to the new file's basename.
     unsafe { refresh_tab_chrome(hwnd) };
+}
+
+/// Whether the active tab is still the one with `id`. Read under a
+/// fresh borrow, so it is what a caller uses to re-validate a sample
+/// taken before a modal pump ran; `false` when there is no active tab,
+/// when a different one is in front, or when the state is unavailable
+/// (a plugin call on the stack) — every case where acting on the
+/// sample would act on the wrong buffer.
+///
+/// # Safety
+///
+/// Caller must invoke from the UI thread that owns `hwnd`.
+unsafe fn active_tab_is(hwnd: HWND, id: i32) -> bool {
+    unsafe { state_from_hwnd(hwnd) }.is_some_and(|s| s.shell.active().is_some_and(|t| t.id == id))
 }
 
 /// Enforce the "always at least one tab" invariant: if `shell.tabs`
@@ -24358,6 +24442,15 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                 DefWindowProcW(hwnd, msg, wparam, lparam)
             }
             WM_APP_WAKE => {
+                // Frozen for the span of a tab close — see
+                // [`DrainFreeze`]. The close's modal pumps dispatch
+                // this message, and a drain from inside them could
+                // move `active_tab` off the buffer the user is
+                // deciding about. The wake is recorded, not dropped:
+                // the outermost guard re-posts it on release.
+                if DrainFreeze::defer_wake() {
+                    return LRESULT(0);
+                }
                 // Drain the shell's task queues. Drain returns any
                 // pending modal dialogs; we MUST show them only AFTER
                 // the &mut WindowState borrow is dropped, otherwise
@@ -25111,6 +25204,10 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                         } else {
                             0
                         };
+                        // Held across the whole loop — see the same
+                        // guard in `close_multiple_documents` and
+                        // [`DrainFreeze`].
+                        let _freeze = DrainFreeze::new(hwnd);
                         let mut ran_to_completion = true;
                         for _ in 0..initial {
                             let still_open =
@@ -27117,6 +27214,117 @@ impl Drop for PluginCallGuard {
     }
 }
 
+thread_local! {
+    /// Nesting depth of active [`DrainFreeze`] guards. Non-zero while a
+    /// close is deferring the `WM_APP_WAKE` drain. See [`DrainFreeze`].
+    static DRAIN_FREEZE_DEPTH: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+    /// Set when a `WM_APP_WAKE` arrived while frozen and was swallowed.
+    /// The outermost guard's `Drop` turns it back into a posted wake.
+    static WAKE_DEFERRED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// RAII freeze of the `WM_APP_WAKE` drain for the span of a tab close.
+///
+/// The close path runs modal pumps — the Save / Don't Save / Cancel
+/// prompt, the Save As chooser, the save-error box — and a nested
+/// Win32 pump dispatches every posted message, the §5.4 wake
+/// included. A `Shell::drain` from inside one of them can move
+/// `active_tab`: `apply_load_result`'s failed-fresh-open branch and
+/// `apply_file_change` both do. That would slide a different buffer
+/// under the user's decision, and under the `NPPN_FILEBEFORECLOSE`
+/// announcement the close reads *after* the prompt returns — so the
+/// tab prompted, the tab announced and the tab closed could all
+/// differ. It could also stack a second modal on top of the first via
+/// `present_pending_dialog`. `ui_gtk` and `ui_cocoa` close the same
+/// race with the same guard (DESIGN.md §7.4); this is the Win32 port.
+///
+/// While a guard is held the `WM_APP_WAKE` arm consumes the message
+/// and does nothing. Nothing is lost: the shell's channels are
+/// unbounded, so the work merely lands after the close instead of
+/// during it. The difference from the other two backends is who
+/// flushes. There the caller drains once on release; here a swallowed
+/// wake is a *consumed* window message, so the guard records it and
+/// the outermost `Drop` posts a fresh `WM_APP_WAKE` to the main window.
+/// The flush obligation therefore lives in the guard rather than at
+/// every site that takes one, and a future freeze site cannot forget
+/// it. The re-post is asynchronous by construction — it lands on the
+/// next pump iteration, after the `wnd_proc` that held the guard has
+/// returned — so the drain never runs with a close's borrow live.
+///
+/// Two properties a bare flag would not have:
+///
+///   * **Panic-safe.** The freeze lifts in `Drop`, so a panic inside
+///     the confirm handler (caught by the `catch_unwind` in
+///     `handle_close_active_tab_with_outcome`) cannot leave the drain
+///     frozen for the rest of the session — which would silently kill
+///     reload prompts, load-completion rebinds and FIF results.
+///   * **Reentrancy-safe.** It is a depth count, so a Close All that
+///     loops the close path, or a plugin that runs a complete nested
+///     close from inside its `NPPN_FILEBEFORECLOSE` handler, stays
+///     frozen until the *outermost* guard drops rather than the first
+///     inner one lifting the freeze early.
+///
+/// A `thread_local` rather than a process-wide atomic like
+/// [`PLUGIN_CALL_ACTIVE`]: only the UI thread ever takes or reads it,
+/// and per-thread storage lets the unit tests exercise a guard on a
+/// test thread without touching a live window.
+struct DrainFreeze {
+    /// Where the deferred wake is re-posted. The main window in
+    /// production; a null `HWND` posts to the calling thread's own
+    /// queue instead, which is what the unit tests read back.
+    hwnd: HWND,
+    /// `!Send`: the depth lives in a `thread_local`, so a guard dropped
+    /// on any thread but the one that took it would decrement the wrong
+    /// counter and leave this thread frozen for the rest of the session.
+    /// A compile error rather than a convention.
+    _not_send: std::marker::PhantomData<*const ()>,
+}
+
+impl DrainFreeze {
+    fn new(hwnd: HWND) -> Self {
+        DRAIN_FREEZE_DEPTH.with(|d| d.set(d.get() + 1));
+        Self {
+            hwnd,
+            _not_send: std::marker::PhantomData,
+        }
+    }
+
+    /// Whether any close is currently holding the freeze.
+    fn active() -> bool {
+        DRAIN_FREEZE_DEPTH.with(std::cell::Cell::get) > 0
+    }
+
+    /// Called by the `WM_APP_WAKE` arm before it drains. Returns `true`
+    /// when a freeze is held, in which case the wake has been recorded
+    /// for re-posting and the arm must return without draining.
+    fn defer_wake() -> bool {
+        if !Self::active() {
+            return false;
+        }
+        WAKE_DEFERRED.with(|w| w.set(true));
+        true
+    }
+}
+
+impl Drop for DrainFreeze {
+    fn drop(&mut self) {
+        let depth = DRAIN_FREEZE_DEPTH.with(|d| {
+            let n = d.get().saturating_sub(1);
+            d.set(n);
+            n
+        });
+        if depth == 0 && WAKE_DEFERRED.with(|w| w.replace(false)) {
+            // SAFETY: `PostMessageW` only enqueues; it neither
+            // dereferences `hwnd` nor re-enters any `wnd_proc`
+            // synchronously, so it is sound from `Drop` on any thread
+            // that owns a message queue. A failed post (queue full,
+            // window gone during shutdown) is not worth surfacing: the
+            // work stays on the channels and the next wake drains it.
+            let _ = unsafe { PostMessageW(Some(self.hwnd), WM_APP_WAKE, WPARAM(0), LPARAM(0)) };
+        }
+    }
+}
+
 /// SAFETY: the returned reference borrows from the `Box<WindowState>`
 /// stashed in `GWLP_USERDATA`. `wnd_proc` invocations are serialized
 /// per-window (Win32 dispatches one at a time on the owning thread),
@@ -28939,7 +29147,7 @@ mod plugin_reentry_guards {
 
     /// The crate source cut at its first test module, so a pattern
     /// quoted in an assertion message cannot count as a call site.
-    fn production_src() -> &'static str {
+    pub(super) fn production_src() -> &'static str {
         let src = include_str!("lib.rs");
         match src.find("#[cfg(test)]") {
             Some(i) => &src[..i],
@@ -28948,7 +29156,7 @@ mod plugin_reentry_guards {
     }
 
     /// The body of `fn name`, by brace matching from its signature.
-    fn fn_body(src: &str, name: &str) -> String {
+    pub(super) fn fn_body(src: &str, name: &str) -> String {
         let sig = format!("fn {name}(");
         let start = src.find(&sig).unwrap_or_else(|| panic!("no fn {name}"));
         let open = src[start..].find('{').expect("no body") + start;
@@ -28994,7 +29202,7 @@ mod plugin_reentry_guards {
     /// `body` with every `//` line comment removed, so a guard matches
     /// the construct and not a mention of it in a comment — the pitfall
     /// DESIGN.md §7.2 records for the m3c and m4d guards.
-    fn code_only(body: &str) -> String {
+    pub(super) fn code_only(body: &str) -> String {
         body.lines()
             .map(|l| l.split("//").next().unwrap_or(""))
             .collect::<Vec<_>>()
@@ -29044,6 +29252,312 @@ mod plugin_reentry_guards {
             !arm.contains("PluginCallGuard::enter"),
             "the plugin command arm arms the guard; every NPPM_* the command sends is \
              then refused"
+        );
+    }
+}
+
+#[cfg(test)]
+mod drain_freeze_tests {
+    //! The [`DrainFreeze`] guard's bookkeeping, exercised on a test
+    //! thread with a null `HWND` so the re-posted wake lands on the
+    //! thread's own queue, where `PeekMessageW` can read it back.
+    //! That makes the flush observable without a window: the property
+    //! under test is "a swallowed wake is re-posted exactly once, on
+    //! the outermost release", and `PostMessageW` to a null handle is
+    //! the same enqueue as to the main window.
+
+    use super::*;
+    use windows::Win32::UI::WindowsAndMessaging::{PeekMessageW, PM_REMOVE};
+
+    /// Remove every `WM_APP_WAKE` from the calling thread's queue and
+    /// return how many there were. Also creates the queue on first
+    /// call, which `PostMessageW(NULL, …)` needs to exist.
+    fn take_thread_wakes() -> usize {
+        let mut n = 0;
+        let mut msg = MSG::default();
+        // SAFETY: `msg` is a stack binding that lives across the call;
+        // a null window filter reads this thread's own queue.
+        while unsafe { PeekMessageW(&raw mut msg, None, WM_APP_WAKE, WM_APP_WAKE, PM_REMOVE) }
+            .as_bool()
+        {
+            n += 1;
+        }
+        n
+    }
+
+    #[test]
+    fn active_tracks_nesting_depth() {
+        assert!(!DrainFreeze::active());
+        let outer = DrainFreeze::new(HWND::default());
+        assert!(DrainFreeze::active());
+        let inner = DrainFreeze::new(HWND::default());
+        assert!(DrainFreeze::active());
+        drop(inner);
+        assert!(
+            DrainFreeze::active(),
+            "the inner guard lifted the freeze while the outer one was still held"
+        );
+        drop(outer);
+        assert!(!DrainFreeze::active());
+    }
+
+    #[test]
+    fn an_unfrozen_wake_is_not_deferred() {
+        let _ = take_thread_wakes();
+        assert!(!DrainFreeze::defer_wake());
+        assert_eq!(
+            take_thread_wakes(),
+            0,
+            "nothing was frozen, so nothing to re-post"
+        );
+    }
+
+    #[test]
+    fn a_wake_swallowed_while_frozen_is_reposted_once_on_the_outermost_release() {
+        let _ = take_thread_wakes();
+        let outer = DrainFreeze::new(HWND::default());
+        let inner = DrainFreeze::new(HWND::default());
+        // Two wakes arrive during the freeze; both are swallowed.
+        assert!(DrainFreeze::defer_wake());
+        assert!(DrainFreeze::defer_wake());
+        assert_eq!(
+            take_thread_wakes(),
+            0,
+            "a swallowed wake must not be re-posted while frozen"
+        );
+        drop(inner);
+        assert_eq!(
+            take_thread_wakes(),
+            0,
+            "the inner release re-posted; the drain would run inside the outer close"
+        );
+        drop(outer);
+        assert_eq!(
+            take_thread_wakes(),
+            1,
+            "the outermost release must re-post exactly one wake for the swallowed ones"
+        );
+        // The deferred flag was consumed: a later freeze with no wake
+        // inside it must not replay the old one.
+        drop(DrainFreeze::new(HWND::default()));
+        assert_eq!(take_thread_wakes(), 0);
+    }
+
+    #[test]
+    fn a_freeze_that_swallowed_nothing_reposts_nothing() {
+        let _ = take_thread_wakes();
+        drop(DrainFreeze::new(HWND::default()));
+        assert_eq!(take_thread_wakes(), 0);
+    }
+
+    #[test]
+    fn a_panic_inside_the_freeze_lifts_it_and_still_flushes() {
+        let _ = take_thread_wakes();
+        let result = std::panic::catch_unwind(|| {
+            let _freeze = DrainFreeze::new(HWND::default());
+            assert!(DrainFreeze::defer_wake());
+            panic!("confirm handler panicked");
+        });
+        assert!(result.is_err());
+        assert!(
+            !DrainFreeze::active(),
+            "a panic left the drain frozen for the rest of the session"
+        );
+        assert_eq!(
+            take_thread_wakes(),
+            1,
+            "the wake swallowed before the panic was lost"
+        );
+    }
+}
+
+#[cfg(test)]
+mod drain_freeze_guards {
+    //! Source-level guards for the rule that the `WM_APP_WAKE` drain is
+    //! frozen for the span of a tab close. Both halves are invisible to
+    //! a headless test — a modal pump dispatching a worker wake needs a
+    //! real window and a real worker — and both compile either way, so
+    //! they are pinned in the source like the plugin re-entry rules.
+    //! Each scan matches the construct, not a mention of it in a
+    //! comment (`code_only`), the lesson DESIGN.md §7.2 records.
+
+    use super::plugin_reentry_guards::{code_only, fn_body, production_src};
+
+    /// The brace-matched block that follows `marker` in `src`.
+    fn block_after(src: &str, marker: &str) -> String {
+        let start = src
+            .find(marker)
+            .unwrap_or_else(|| panic!("no `{marker}` in the source"));
+        let open = src[start..].find('{').expect("no block") + start;
+        let mut depth = 0usize;
+        for (i, c) in src[open..].char_indices() {
+            match c {
+                '{' => depth += 1,
+                '}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return src[open..=open + i].to_string();
+                    }
+                }
+                _ => {}
+            }
+        }
+        panic!("unterminated block after `{marker}`");
+    }
+
+    /// The close takes the freeze before it samples the tab it will
+    /// prompt about, so nothing can move `active_tab` between the
+    /// sample, the prompt, the announcement and the close.
+    #[test]
+    fn the_close_freezes_the_drain_before_sampling_the_active_tab() {
+        let body = code_only(&fn_body(production_src(), "handle_close_active_tab_inner"));
+        let freeze = body
+            .find("DrainFreeze::new(hwnd)")
+            .expect("the close no longer freezes the WM_APP_WAKE drain");
+        let sample = body
+            .find("state.shell.active()")
+            .expect("the close no longer samples the active tab");
+        let prompt = body
+            .find("show_save_confirm_dialog(")
+            .expect("the close no longer prompts before discarding edits");
+        assert!(
+            freeze < sample && sample < prompt,
+            "the freeze must be taken before the dirty sample and the prompt it feeds; \
+             taken later, a wake dispatched by the prompt's pump can drain the shell \
+             and move `active_tab` under the user's decision"
+        );
+    }
+
+    /// The `WM_APP_WAKE` arm consults the freeze before it drains, and
+    /// returns without draining when one is held.
+    #[test]
+    fn the_wake_arm_defers_while_frozen_and_before_it_drains() {
+        let arm = code_only(&block_after(production_src(), "WM_APP_WAKE => {"));
+        let defer = arm
+            .find("if DrainFreeze::defer_wake()")
+            .expect("the WM_APP_WAKE arm no longer consults the freeze");
+        let drain = arm
+            .find("shell.drain(&mut ui)")
+            .expect("the WM_APP_WAKE arm no longer drains the shell");
+        assert!(
+            defer < drain,
+            "the freeze check must precede the drain, or the close's modal pump drains anyway"
+        );
+        let guarded = &arm[defer..drain];
+        assert!(
+            guarded.contains("return LRESULT(0);"),
+            "a deferred wake must return without draining; falling through defeats the freeze"
+        );
+    }
+
+    /// Both Close-All loops hold one outer freeze across the whole
+    /// operation rather than relying on the per-close guard alone.
+    ///
+    /// Pinned against the loop's own `for`, not only against the close
+    /// call inside it: a guard moved to the first statement *of* the
+    /// loop body would still precede the close textually while being
+    /// constructed and dropped once per iteration — which re-posts a
+    /// swallowed wake into the next iteration's prompt, the exact
+    /// shape the outer guard exists to avoid.
+    #[test]
+    fn both_close_all_loops_hold_an_outer_freeze() {
+        fn pin(body: &str, what: &str, loop_head: &str) {
+            let freeze = body
+                .find("DrainFreeze::new(hwnd)")
+                .unwrap_or_else(|| panic!("{what} no longer holds an outer freeze"));
+            let looped = body
+                .find(loop_head)
+                .unwrap_or_else(|| panic!("{what} no longer loops with `{loop_head}`"));
+            let close = body
+                .find("handle_close_active_tab_with_outcome(hwnd)")
+                .unwrap_or_else(|| panic!("{what} no longer closes through the outcome path"));
+            assert!(
+                freeze < looped && looped < close,
+                "{what}: the outer freeze must be taken before the loop, not inside it — \
+                 a per-iteration guard re-posts a swallowed wake into the next prompt"
+            );
+        }
+        pin(
+            &code_only(&fn_body(production_src(), "close_multiple_documents")),
+            "`close_multiple_documents`",
+            "for _ in 0..initial_count {",
+        );
+        pin(
+            &code_only(&block_after(production_src(), "ID_FILE_CLOSE_ALL => {")),
+            "the ID_FILE_CLOSE_ALL arm",
+            "for _ in 0..initial {",
+        );
+    }
+
+    /// The freeze cannot stop a plugin's cross-thread
+    /// `SendMessage(WM_COMMAND, ID_FILE_CLOSE)` from running a nested
+    /// close inside the prompt's pump, so the close re-checks that the
+    /// tab it prompted about is still the active one — after the
+    /// prompt, before it acts on the answer, and again after the Save
+    /// As chooser, before the dirty re-read is trusted.
+    #[test]
+    fn the_close_re_checks_the_prompted_tab_after_every_pump() {
+        let body = code_only(&fn_body(production_src(), "handle_close_active_tab_inner"));
+        let prompt = body
+            .find("show_save_confirm_dialog(")
+            .expect("the close no longer prompts before discarding edits");
+        let act = body
+            .find("match choice {")
+            .expect("the close no longer acts on a stored prompt answer");
+        let recheck = "active_tab_is(hwnd, prompted_id)";
+        let first = body
+            .find(recheck)
+            .expect("the close no longer re-checks the prompted tab's id");
+        assert!(
+            prompt < first && first < act,
+            "the id re-check must sit between the prompt and acting on its answer; \
+             a nested close answered first would otherwise save or announce the wrong tab"
+        );
+        let save_as = body
+            .find("run_save_as_flow(hwnd)")
+            .expect("the close no longer routes an untitled tab through Save As");
+        let dirty_reread = body[save_as..]
+            .find("let still_dirty =")
+            .expect("the close no longer re-reads the dirty bit after Save As")
+            + save_as;
+        let second = body[save_as..]
+            .find(recheck)
+            .map(|i| i + save_as)
+            .expect("the close no longer re-checks the prompted tab after Save As");
+        assert!(
+            second < dirty_reread,
+            "the Save As chooser pumps too; the re-check must precede the dirty re-read"
+        );
+        // And inside Save As itself, whichever menu or close path reached
+        // it: the write is gated on the tab sampled before the chooser.
+        let flow = code_only(&fn_body(production_src(), "run_save_as_flow"));
+        let chooser = flow
+            .find("prompt_save_path(hwnd")
+            .expect("`run_save_as_flow` no longer opens the chooser");
+        let gate = flow
+            .find("active_tab_is(hwnd, saving_id)")
+            .expect("`run_save_as_flow` no longer re-checks the tab it is saving");
+        let write = flow
+            .find("shell.save_buffer_as(&mut ui, p)")
+            .expect("`run_save_as_flow` no longer writes through `save_buffer_as`");
+        assert!(
+            chooser < gate && gate < write,
+            "`run_save_as_flow` must re-check the sampled tab between its chooser and its \
+             write, or a nested close during the chooser puts another buffer's contents at \
+             the chosen path"
+        );
+    }
+
+    /// There is exactly one place the shell is drained on this backend,
+    /// and it is the guarded arm. A second drain call site — a
+    /// "post-command drain", say — would bypass the freeze.
+    #[test]
+    fn the_wake_arm_is_the_only_drain_call_site() {
+        let src = code_only(production_src());
+        assert_eq!(
+            src.matches("shell.drain(&mut ui)").count(),
+            1,
+            "a second `shell.drain` call site would drain outside the freeze"
         );
     }
 }
