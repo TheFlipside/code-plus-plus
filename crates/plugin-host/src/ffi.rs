@@ -359,10 +359,10 @@ pub struct TbData {
     /// the lifetime contract (the plugin destroys the HWND, not
     /// the host).
     pub h_client: *mut c_void,
-    /// Wide-char display title. Used for the floating frame's
-    /// caption and as the lookup key for
-    /// `NPPM_DMMGETPLUGINHWNDBYNAME`. Plugin owns the buffer;
-    /// host reads on every UPDATEDISPINFO and on lookup.
+    /// Wide-char display title. Used for the panel's caption and
+    /// as the lookup key for `NPPM_DMMGETPLUGINHWNDBYNAME` and
+    /// `NPPM_DMMVIEWOTHERTAB`. Plugin owns the buffer; host reads
+    /// on every UPDATEDISPINFO and on lookup.
     pub psz_name: *const u16,
     /// Carried in `nmhdr.idFrom` for any future `DMN_*`
     /// notification routed back to the plugin.
@@ -374,11 +374,15 @@ pub struct TbData {
     /// Optional extra-info wide string shown alongside the title.
     /// NULL skips. Plugin owns the buffer.
     pub psz_add_info: *const u16,
-    /// Preferred floating position. `(0,0,0,0)` falls back to a
-    /// default offset from the host window.
+    /// Preferred floating position. Stored verbatim and not yet
+    /// acted on — the host decides a float's rectangle itself, and
+    /// a torn-off panel opens at a third of the main window.
     pub rc_float: TbRect,
     /// Previous-container id (`CONT_LEFT/RIGHT/TOP/BOTTOM` = 0..=3).
-    /// Stored verbatim; floating-only mode does not act on it.
+    /// Stored verbatim and not yet acted on; the host takes the
+    /// panel's first position from `u_mask`'s `DWS_DF_CONT_*`
+    /// nibble instead, and everything after that from where the
+    /// user last put it.
     pub i_prev_cont: i32,
     /// Plugin DLL filename without extension. Used by
     /// `GETPLUGINHWNDBYNAME`'s second argument (the optional
@@ -418,14 +422,15 @@ pub const DWS_DF_CONT_BOTTOM: u32 = 0x3000_0000;
 
 /// First DMN_* code. Notifications below this floor are reserved.
 pub const DMN_FIRST: u32 = 0x1000;
-/// User closed the floating dialog (frame hidden, plugin's HWND
-/// stays alive).
+/// User closed the panel from its group's caption ✕ (the panel is
+/// hidden, the plugin's HWND stays alive).
 pub const DMN_CLOSE: u32 = DMN_FIRST + 1;
-/// Floating dialog has been docked into a container. Reserved for
-/// the Phase-5 docking manager — never sent in floating-only mode.
+/// Dialog has been docked into a container. Not sent yet — the host
+/// does move panels between docked and floating, so this and
+/// [`DMN_FLOAT`] are the next two to wire, and a plugin must not
+/// depend on them today.
 pub const DMN_DOCK: u32 = DMN_FIRST + 2;
-/// Docked dialog has been floated. Reserved for the Phase-5
-/// docking manager — never sent in floating-only mode.
+/// Docked dialog has been floated. Not sent yet — see [`DMN_DOCK`].
 pub const DMN_FLOAT: u32 = DMN_FIRST + 3;
 
 #[cfg(test)]

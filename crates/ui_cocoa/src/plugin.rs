@@ -493,7 +493,7 @@ pub(crate) fn discover() {
 /// The load used to happen inside one borrow — `dlopen`, `setInfo`,
 /// `getFuncsArray` and `NPPN_READY` together — and that borrow is
 /// exactly what made a plugin's re-entrant `NPPM_*` decline. Real
-/// plugins interrogate the host from `setInfo`: NppExec asks for the
+/// plugins interrogate the host from `setInfo`: `NppExec` asks for the
 /// version there and refuses to start without an answer, so a
 /// declined query reads as "older than Notepad++ 5.1".
 ///
@@ -511,10 +511,7 @@ fn load_pending_plugins() {
     let _freeze = crate::DrainFreeze::new();
     let data = npp_data();
     let dispatch: Option<HostDispatchFn> = Some(plugin_dispatch);
-    loop {
-        let Some(pending) = with_state(|st| st.shell.next_plugin_to_load()).flatten() else {
-            break;
-        };
+    while let Some(pending) = with_state(|st| st.shell.next_plugin_to_load()).flatten() {
         // No borrow held: `setInfo` runs here and its `NPPM_*` are
         // answered for real. The `catch_unwind` is not about the
         // plugin — `execute_load` already guards each of its entry

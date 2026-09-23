@@ -227,10 +227,19 @@ impl Ui {
     /// `every_panel_is_handed_to_the_dock` scan in `lib.rs` pins the
     /// hand-off from `build_content` to [`install`], which is the half
     /// the compiler cannot see.)
-    fn panel_content(&self, panel: DockPanel) -> Retained<NSView> {
+    /// `None` only for a plugin panel, which this backend has no
+    /// content view for: `NPPM_DMMREGASDCKDLG` is Win32-only
+    /// (DESIGN.md §7.4), so nothing here ever supplies one.
+    /// [`DockLayout::drop_plugin_panels`] is called at restore for
+    /// exactly that reason, so a layout reaching this function cannot
+    /// name one — `None` is the fail-safe, not the expected path, and
+    /// every caller skips rather than substituting a placeholder the
+    /// user could neither use nor close.
+    fn panel_content(&self, panel: DockPanel) -> Option<Retained<NSView>> {
         match panel {
-            DockPanel::Workspace => self.workspace_content.clone(),
-            DockPanel::DocMap => self.docmap_content.clone(),
+            DockPanel::Workspace => Some(self.workspace_content.clone()),
+            DockPanel::DocMap => Some(self.docmap_content.clone()),
+            DockPanel::Plugin(_) => None,
         }
     }
 
@@ -1193,6 +1202,10 @@ fn panel_icon(panel: DockPanel) -> Option<Retained<NSImage>> {
             include_bytes!("../../../assets/icons/document-map.png"),
             include_bytes!("../../../assets/icons/document-map@2x.png"),
         ),
+        // No artwork for a panel this backend cannot host. A tab
+        // without an icon keeps its label, which is the same
+        // degradation a decode failure takes.
+        DockPanel::Plugin(_) => return None,
     };
     let image = NSImage::initWithSize(
         NSImage::alloc(),
@@ -1335,7 +1348,7 @@ fn reconcile(d: &mut Ui) {
     }
 
     // 4. Hidden panels go to parking.
-    for panel in DockPanel::ALL {
+    for panel in DockPanel::BUILT_IN {
         if !layout.is_visible(panel) {
             park(d, panel);
         }
@@ -1415,10 +1428,13 @@ fn rehost_group(d: &mut Ui, gi: usize, location: DockLocation, mtm: MainThreadMa
 /// Move `group`'s panels into its slot, show the active one, set the
 /// caption, rebuild the tab bar.
 fn fill_group(d: &mut Ui, gi: usize, group: &DockGroup, mtm: MainThreadMarker) {
-    let contents: Vec<Retained<NSView>> =
+    let contents: Vec<Option<Retained<NSView>>> =
         group.panels.iter().map(|p| d.panel_content(*p)).collect();
     let g = &mut d.groups[gi];
     for (i, content) in contents.iter().enumerate() {
+        let Some(content) = content else {
+            continue;
+        };
         if !is_child_of(content, &g.slot) {
             content.removeFromSuperview();
             content.setAutoresizingMask(
@@ -1455,7 +1471,9 @@ fn rebuild_tab_bar(g: &mut GroupWidget, group: &DockGroup, mtm: MainThreadMarker
 
 /// Send a hidden panel's content to parking.
 fn park(d: &mut Ui, panel: DockPanel) {
-    let content = d.panel_content(panel);
+    let Some(content) = d.panel_content(panel) else {
+        return;
+    };
     if !is_child_of(&content, &d.parking) {
         content.removeFromSuperview();
         d.parking.addSubview(&content);
@@ -1563,6 +1581,12 @@ pub(crate) fn apply_saved() {
     if root.is_none() && layout.is_visible(DockPanel::Workspace) {
         layout.hide(DockPanel::Workspace);
     }
+    // `session.xml` is portable but plugin dock panels are not: only
+    // the Win32 host accepts `NPPM_DMMREGASDCKDLG` (DESIGN.md §7.4),
+    // so a layout written there names panels this backend can never
+    // supply a content widget for. Dropping them here is what lets
+    // `Ui::panel_content`'s `None` arm stay unreachable.
+    layout.drop_plugin_panels();
     // A float rect persisted on a bigger display (or hand-edited to the
     // moon) must stay retrievable. The window has its restored frame
     // by now even though it is not yet on screen; failing that, the
@@ -1669,6 +1693,13 @@ fn close_panel(panel: DockPanel) {
     match panel {
         DockPanel::Workspace => crate::workspace::set_visible(false),
         DockPanel::DocMap => crate::docmap::set_visible(false),
+        // Unreachable in practice: this backend never hosts one
+        // (see `Ui::panel_content`), and `drop_plugin_panels` keeps
+        // a restored layout from naming one. Hiding through the same
+        // funnel the two built-ins reach is the safe degradation — it
+        // reconciles, so a ✕ that does nothing is not left behind on
+        // an empty group.
+        DockPanel::Plugin(_) => set_panel_visible(panel, false),
     }
 }
 

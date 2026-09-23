@@ -30,7 +30,7 @@ extern "C" {
  * and passes a pointer in lParam. The host reads each field; ownership
  * of every pointer-typed field stays with the plugin. The host reads
  * pszName / pszAddInfo / pszModuleName at every call that depends on
- * the value (e.g. UPDATEDISPINFO refreshes the frame title from
+ * the value (e.g. UPDATEDISPINFO refreshes the panel's caption from
  * pszName) — the plugin must keep the buffer alive for the lifetime
  * of the registration.
  *
@@ -58,14 +58,23 @@ extern "C" {
  * a plugin that keeps its tTbData as a member of its dialog object
  * (the usual shape) already satisfies it.
  *
- * Code++ floating-only mode (Phase 4 m4): hClient, pszName, dlgID,
- * uMask, hIconTab, pszModuleName are honoured. rcFloat is honoured
- * if non-empty (used as the floating frame's initial position);
- * empty rcFloat falls back to a default offset from the host
- * window. iPrevCont and pszAddInfo are stored but not yet rendered
- * — the docking title bar lands in Phase 5 with the rest of the
- * cross-platform dock UX. DWS_DF_CONT_* flags are likewise stored
- * but the host always opens the dialog floating until Phase 5.
+ * Code++ field support: hClient, pszName, dlgID, uMask,
+ * pszModuleName are honoured. A registered panel is an ordinary
+ * dock panel — it docks to any side, floats, shares a container
+ * with other panels as tabs (the host's own Folder as Workspace
+ * and Document Map included), reorders by drag, and is persisted
+ * in the host's session file by module and name.
+ *
+ * uMask's DWS_DF_CONT_* nibble names the container the panel first
+ * opens in, which is what upstream means by it: two panels asking
+ * for the same one become two tabs of one group rather than two
+ * bands. It applies only until the user moves the panel; from then
+ * on the remembered position wins.
+ *
+ * rcFloat, iPrevCont, hIconTab and pszAddInfo are stored but not
+ * yet acted on: the host decides the floating rectangle itself,
+ * a torn-off panel opens at a third of the main window, and a tab
+ * carries the host's own glyph rather than hIconTab.
  */
 typedef struct tTbData_ {
     HWND        hClient;        /* plugin's docking-dialog HWND */
@@ -115,7 +124,7 @@ typedef struct tTbData_ {
  *   wParam       0
  *   lParam       NMHDR*
  *   nmhdr.code   DMN_CLOSE
- *   nmhdr.hwndFrom  the host's frame window (NOT the main window)
+ *   nmhdr.hwndFrom  the host's group container (NOT the main window)
  *   nmhdr.idFrom    0
  *
  * That is Notepad++'s shape, field for field, so a plugin written
@@ -124,18 +133,19 @@ typedef struct tTbData_ {
  * notification on the very window it registered, so there is nothing
  * to disambiguate.
  *
- * DMN_CLOSE fires when the user closes the dialog — in Code++'s
- * floating-only mode, the frame's close button. The frame is hidden,
- * never destroyed: hClient stays alive and a later NPPM_DMMSHOW
- * re-shows it, so a plugin should treat DMN_CLOSE as "the user hid
- * me" and update its own menu state, not as a teardown signal.
+ * DMN_CLOSE fires when the user closes the panel from the X on its
+ * group's caption. The panel is hidden, never destroyed: hClient
+ * stays alive, its position is remembered, and a later NPPM_DMMSHOW
+ * reopens it there — so a plugin should treat DMN_CLOSE as "the user
+ * hid me" and update its own menu state, not as a teardown signal.
  * Upstream sends it before hiding, and so does Code++.
  *
- * DMN_DOCK / DMN_FLOAT are reserved for the Phase 5 docking-manager
- * bring-up and are never sent in floating-only mode.
+ * DMN_DOCK / DMN_FLOAT are not sent yet. The host does move panels
+ * between docked and floating, so these are the next two to wire;
+ * a plugin must not depend on them today.
  */
 #define DMN_FIRST 0x1000
-#define DMN_CLOSE (DMN_FIRST + 1)  /* user closed the dialog (frame hidden) */
+#define DMN_CLOSE (DMN_FIRST + 1)  /* user closed the dialog (panel hidden) */
 #define DMN_DOCK  (DMN_FIRST + 2)  /* dialog moved from floating to docked */
 #define DMN_FLOAT (DMN_FIRST + 3)  /* dialog moved from docked to floating */
 

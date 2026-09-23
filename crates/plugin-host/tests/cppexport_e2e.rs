@@ -278,7 +278,7 @@ fn load_cppexport() -> Option<(PluginHost, tempfile::TempDir)> {
         scintilla_main_handle: sci_ptr(),
         scintilla_second_handle: std::ptr::null_mut(),
     };
-    host.load(0, npp_data, Some(mock_dispatch))
+    host.load_blocking(0, npp_data, Some(mock_dispatch))
         .expect("cppexport should load");
     Some((host, tmp))
 }

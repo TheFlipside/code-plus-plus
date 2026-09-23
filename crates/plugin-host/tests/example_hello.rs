@@ -76,8 +76,8 @@ fn example_hello_loads_and_publishes_its_func_items() {
     let funcs = info.func_items().expect("loaded plugin has func items");
     assert_eq!(
         funcs.len(),
-        3,
-        "example-hello contributes the insert command and the two docking-panel commands"
+        5,
+        "example-hello contributes the insert command and four docking-panel commands"
     );
     assert_eq!(
         funcs[0].cmd_id, PLUGIN_CMD_ID_BASE,
@@ -87,6 +87,8 @@ fn example_hello_loads_and_publishes_its_func_items() {
     // `FuncItem`, not per plugin.
     assert_eq!(funcs[1].cmd_id, PLUGIN_CMD_ID_BASE + 1);
     assert_eq!(funcs[2].cmd_id, PLUGIN_CMD_ID_BASE + 2);
+    assert_eq!(funcs[3].cmd_id, PLUGIN_CMD_ID_BASE + 3);
+    assert_eq!(funcs[4].cmd_id, PLUGIN_CMD_ID_BASE + 4);
 
     // The plugin's func ptr is non-null (defined as
     // `Some(plugin_cmd_insert_hello)` in the static FuncItem).
@@ -116,6 +118,12 @@ fn example_hello_loads_and_publishes_its_func_items() {
         .collect();
     assert_eq!(
         labels,
-        ["Insert Hello", "Show Dock Panel", "Rename Dock Panel"]
+        [
+            "Insert Hello",
+            "Show Dock Panel",
+            "Rename Dock Panel",
+            "Show Second Dock Panel",
+            "Switch To Other Dock Panel",
+        ]
     );
 }

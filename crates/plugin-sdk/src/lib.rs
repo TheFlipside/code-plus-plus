@@ -61,7 +61,17 @@ pub use codepp_plugin_host::{
 
 /// `DWS_*` docking-window style bits for a `tTbData.u_mask`.
 /// Re-exported for the same reason as the block above.
-pub use codepp_plugin_host::{DWS_ADDINFO, DWS_DF_FLOATING, DWS_ICONTAB};
+///
+/// The four `DWS_DF_CONT_*` values are a *value* in the mask's top
+/// nibble rather than four independent bits — `DWS_DF_CONT_LEFT` is
+/// zero, so a `u_mask` carrying none of them reads as "dock left",
+/// which is what upstream means by it. They name the container on a
+/// side, not a band of a plugin's own: two plugins asking for the
+/// same one become tabs of a single dock group.
+pub use codepp_plugin_host::{
+    DWS_ADDINFO, DWS_DF_CONT_BOTTOM, DWS_DF_CONT_LEFT, DWS_DF_CONT_RIGHT, DWS_DF_CONT_TOP,
+    DWS_DF_FLOATING, DWS_ICONTAB,
+};
 
 // ---- SendMessageW transport -------------------------------------
 //
@@ -253,6 +263,11 @@ pub const NPPM_DMMSHOW: u32 = NPPMSG + 30;
 /// survives, so a later [`NPPM_DMMSHOW`] re-shows.
 pub const NPPM_DMMHIDE: u32 = NPPMSG + 31;
 
+/// `NPPM_DMMVIEWOTHERTAB(0, *wchar)` — bring the panel with that
+/// display name to the front of whatever container it shares. Returns
+/// non-zero if a panel by that name exists.
+pub const NPPM_DMMVIEWOTHERTAB: u32 = NPPMSG + 35;
+
 /// `NPPM_DMMUPDATEDISPINFO(0, hClient)` — the plugin has re-pointed
 /// its `tTbData`'s `psz_name` (or the other display fields) and
 /// wants the host to re-read them.
@@ -274,6 +289,14 @@ pub const WM_NOTIFY: u32 = 0x004E;
 /// Base of the `NPPN_*` notification codes a plugin receives in
 /// `SCNotification.nmhdr.code` through `beNotified`.
 pub const NPPN_FIRST: u32 = 1000;
+
+/// `NPPN_TBMODIFICATION` — the host's toolbar and docking
+/// manager are up. The canonical moment to create and register a
+/// dockable dialog (`NPPM_DMMREGASDCKDLG`): the host answers `NPPM_*`
+/// from here, and a panel the user had docked last session is
+/// waiting for its content window, so registering any later leaves a
+/// restored group empty until the user clicks something.
+pub const NPPN_TBMODIFICATION: u32 = NPPN_FIRST + 2;
 
 /// `NPPN_FILEBEFORECLOSE` — a buffer is about to close;
 /// `nmhdr.idFrom` carries its id. Delivered while the buffer is
@@ -670,11 +693,13 @@ mod abi_lock {
             host::NPPM_GETFULLPATHFROMBUFFERID
         );
         assert_eq!(super::NPPN_FIRST, host::NPPN_FIRST);
+        assert_eq!(super::NPPN_TBMODIFICATION, host::NPPN_TBMODIFICATION);
         assert_eq!(super::NPPN_FILEBEFORECLOSE, host::NPPN_FILEBEFORECLOSE);
         assert_eq!(super::NPPM_DMMREGASDCKDLG, host::NPPM_DMMREGASDCKDLG);
         assert_eq!(super::NPPM_DMMSHOW, host::NPPM_DMMSHOW);
         assert_eq!(super::NPPM_DMMHIDE, host::NPPM_DMMHIDE);
         assert_eq!(super::NPPM_DMMUPDATEDISPINFO, host::NPPM_DMMUPDATEDISPINFO);
+        assert_eq!(super::NPPM_DMMVIEWOTHERTAB, host::NPPM_DMMVIEWOTHERTAB);
     }
 
     /// `DMN_CLOSE` lives in the host's `ffi` module rather than

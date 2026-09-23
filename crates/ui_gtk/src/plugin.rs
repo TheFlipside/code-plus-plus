@@ -413,7 +413,7 @@ pub(crate) fn discover() {
 /// This used to be one `ensure_plugins_loaded` call inside
 /// `with_state`, so a plugin's `setInfo` querying the host was
 /// declined re-entrantly and read 0 — which real plugins take as a
-/// definitive answer. NppExec asks for the host version there and
+/// definitive answer. `NppExec` asks for the host version there and
 /// refuses to start without one.
 ///
 /// Take what the load needs under a borrow, run the plugin's own
@@ -432,10 +432,7 @@ fn load_pending_plugins() {
     let _freeze = crate::DrainFreeze::new();
     let data = npp_data();
     let dispatch: Option<HostDispatchFn> = Some(plugin_dispatch);
-    loop {
-        let Some(pending) = with_state(|st| st.shell.next_plugin_to_load()).flatten() else {
-            break;
-        };
+    while let Some(pending) = with_state(|st| st.shell.next_plugin_to_load()).flatten() {
         // No borrow held: `setInfo` runs here and its `NPPM_*` are
         // answered for real. The `catch_unwind` is not about the
         // plugin — `execute_load` already guards each of its entry

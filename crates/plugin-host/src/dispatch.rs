@@ -100,14 +100,13 @@ pub const NPPM_ACTIVATEDOC: u32 = NPPMSG + 28;
 pub const NPPM_LAUNCHFINDINFILESDLG: u32 = NPPMSG + 29;
 // --- Docking-manager (DMM) family ---
 //
-// `NPPM_DMM*` drive plugins' dockable dialogs. Code++ Phase 4 m4
-// runs in floating-only mode: each registered `tTbData` becomes a
-// host-owned overlapped frame that wraps the plugin's `h_client`
-// HWND, with show/hide drilling through to the frame's
-// `ShowWindow`. The full multi-zone docking manager (drag-to-
-// rearrange, drag-to-detach, dock-on-drop, session persistence) is
-// Phase 5 scope so plugin-side ABI freezes here while the host UI
-// is still being designed.
+// `NPPM_DMM*` drive plugins' dockable dialogs. Each registered
+// `tTbData` becomes a dock panel of the host's own model, so a
+// plugin panel docks to any side, floats, shares a container with
+// other panels as tabs, reorders by drag and persists across runs —
+// the same machinery the host's Folder as Workspace and Document
+// Map use. Only the Win32 host accepts the registration; the other
+// two backends decline it (DESIGN.md §7.4).
 pub const NPPM_DMMSHOW: u32 = NPPMSG + 30;
 pub const NPPM_DMMHIDE: u32 = NPPMSG + 31;
 pub const NPPM_DMMUPDATEDISPINFO: u32 = NPPMSG + 32;
@@ -473,7 +472,7 @@ pub struct DockDialogParams {
 /// new buffers and ask the host to notice.
 #[derive(Debug, Clone, Default)]
 pub struct DockDispInfo {
-    /// `psz_name` — the frame caption and the
+    /// `psz_name` — the panel caption and the
     /// `NPPM_DMMGETPLUGINHWNDBYNAME` lookup key.
     pub name: String,
     /// `psz_module_name` — the optional disambiguator for that
@@ -1358,49 +1357,52 @@ pub trait HostServices {
     fn create_plugin_scintilla(&mut self, parent: crate::ffi::Hwnd) -> crate::ffi::Hwnd;
 
     /// Register a plugin's HWND as a dockable dialog. Drives
-    /// [`NPPM_DMMREGASDCKDLG`]. The host wraps `params.h_client`
-    /// in a host-owned floating frame whose title is
-    /// `params.name`, optional icon is `params.h_icon_tab`
-    /// (when `DWS_ICONTAB` is set in `params.u_mask`), and
-    /// initial position is `params.rc_float` (or a default
-    /// offset if `rc_float` is empty). The frame is NOT shown
-    /// by registration alone — the plugin must follow with
-    /// `NPPM_DMMSHOW` to make it visible.
+    /// [`NPPM_DMMREGASDCKDLG`]. The host restyles
+    /// `params.h_client` as a child window and adopts it as the
+    /// content of a dock panel captioned `params.name`, whose
+    /// first position comes from the `DWS_DF_CONT_*` nibble of
+    /// `params.u_mask` — a *container* on that side, as upstream
+    /// means it, so two panels asking for the same one become two
+    /// tabs of one group. The panel is NOT shown by registration
+    /// alone; the plugin must follow with `NPPM_DMMSHOW`.
     ///
-    /// The frame's lifetime is bound to the plugin's
-    /// `h_client`: closing the frame hides it (the plugin owns
-    /// `h_client` and is responsible for destroying it on
-    /// shutdown). `DockDialogParams` carries owned host-side
-    /// copies of the plugin's wide-char fields, so nothing the
-    /// *initial* registration needs outlives this call — but
+    /// The plugin keeps ownership of `h_client`: the host hides
+    /// the panel rather than destroying anything, and a plugin
+    /// must not `DestroyWindow` it while the registration stands.
+    /// `DockDialogParams` carries owned host-side copies of the
+    /// plugin's wide-char fields, so nothing the *initial*
+    /// registration needs outlives this call — but
     /// [`DockDialogParams::tb_data`] is retained for the later
     /// `NPPM_DMMUPDATEDISPINFO` re-read, and that pointer does
     /// carry a lifetime contract on the plugin. See its field
     /// doc.
     ///
-    /// Returns `true` on success, `false` for dead
-    /// `h_client` HWND, frame-creation failure, or duplicate
-    /// registration of the same `h_client`. The dispatcher
-    /// rejects null `h_client` before reaching the trait.
+    /// `params.h_icon_tab` and `params.rc_float` are snapshotted
+    /// but not yet acted on: a tab carries the host's own glyph,
+    /// and the host decides a float's rectangle itself.
+    ///
+    /// Returns `true` on success, `false` for a dead `h_client`,
+    /// one belonging to another process or to the host itself, a
+    /// duplicate registration, or the per-session registration
+    /// cap. The dispatcher rejects a null `h_client` before
+    /// reaching the trait.
     fn register_dock_dialog(&mut self, params: DockDialogParams) -> bool;
 
-    /// Show the floating frame wrapping `h_client`. Drives
-    /// [`NPPM_DMMSHOW`]. The plugin's `h_client` must already
-    /// have been registered via `NPPM_DMMREGASDCKDLG`; calls
-    /// against an unregistered HWND return `false`. Returns
-    /// `true` if the frame was shown (or was already visible);
-    /// `false` for unregistered / dead HWND.
+    /// Show the panel whose content is `h_client`, bringing it to
+    /// the front of its group if it is behind another tab. Drives
+    /// [`NPPM_DMMSHOW`]. The `h_client` must already have been
+    /// registered via `NPPM_DMMREGASDCKDLG`; calls against an
+    /// unregistered HWND return `false`.
     fn show_dock_dialog(&mut self, h_client: crate::ffi::Hwnd) -> bool;
 
-    /// Hide the floating frame wrapping `h_client`. Drives
-    /// [`NPPM_DMMHIDE`]. Hiding re-shows on a subsequent
-    /// `NPPM_DMMSHOW`; the registration entry survives. Returns
-    /// `true` if the frame was hidden (or was already hidden);
-    /// `false` for unregistered / dead HWND.
+    /// Hide the panel whose content is `h_client`. Drives
+    /// [`NPPM_DMMHIDE`]. The registration survives, and so does
+    /// the panel's position — a subsequent `NPPM_DMMSHOW` reopens
+    /// it where it was. Returns `false` for an unregistered HWND.
     fn hide_dock_dialog(&mut self, h_client: crate::ffi::Hwnd) -> bool;
 
-    /// Update the floating frame's display info from the
-    /// plugin's current `tTbData`. Drives
+    /// Update the panel's display info from the plugin's current
+    /// `tTbData`. Drives
     /// [`NPPM_DMMUPDATEDISPINFO`]. The plugin must keep its
     /// original `tTbData` registration alive (re-pointing the
     /// `psz_name` / `psz_add_info` buffers without re-registering
@@ -1408,6 +1410,23 @@ pub trait HostServices {
     /// caches owned copies). Returns `true` on success, `false`
     /// for unregistered HWND.
     fn update_dock_disp_info(&mut self, h_client: crate::ffi::Hwnd) -> bool;
+
+    /// Bring the dock panel named `name` to the front of whatever
+    /// container it shares. Drives [`NPPM_DMMVIEWOTHERTAB`].
+    ///
+    /// "Tab" is the docking manager's sense of the word: panels
+    /// dropped onto one another share a container and are switched
+    /// between by a tab bar, exactly as the host's own Folder as
+    /// Workspace and Document Map are. A panel that is in a container
+    /// by itself is already frontmost, so the call succeeds and
+    /// changes nothing.
+    ///
+    /// Returns `true` if a panel by that name exists and is now
+    /// showing; `false` if no registered panel has that name.
+    fn view_other_dock_tab(&mut self, name: &str) -> bool {
+        let _ = name;
+        false
+    }
 
     /// Look up a registered plugin dock dialog's `h_client` by
     /// display name. Drives [`NPPM_DMMGETPLUGINHWNDBYNAME`].
@@ -2493,24 +2512,19 @@ pub unsafe fn dispatch_nppm<S: HostServices>(
         }
 
         NPPM_DMMVIEWOTHERTAB => {
-            // wparam: unused. lparam: TCHAR* dialog name.
-            // Upstream switches to another tab in the same
-            // docking container as the active dialog. Code++'s
-            // floating-only mode has no tabs; this is a no-op
-            // returning 0. The Phase 5 docking manager wires it
-            // up properly.
+            // wparam: unused. lparam: TCHAR* dialog name. Brings
+            // that panel to the front of its container.
             //
             // `<= 0` rejects both NULL and kernel-mode-pointer
-            // negatives — even though the floating-only impl
-            // can't do anything useful with the name, we never
-            // hand a kernel address to `wide_ptr_to_string`
-            // (which would dereference it).
+            // negatives before `wide_ptr_to_string` dereferences.
             if lparam <= 0 {
                 return Some(0);
             }
-            let _name = unsafe { wide_ptr_to_string(lparam as *const u16) };
-            tracing::trace!("NPPM_DMMVIEWOTHERTAB: floating-only mode, no tab to switch to");
-            0
+            let name = unsafe { wide_ptr_to_string(lparam as *const u16) };
+            if name.is_empty() {
+                return Some(0);
+            }
+            isize::from(services.view_other_dock_tab(&name))
         }
 
         NPPM_DMMGETPLUGINHWNDBYNAME => {
@@ -6436,10 +6450,13 @@ mod tests {
     }
 
     #[test]
-    fn dmm_view_other_tab_is_noop_returning_zero() {
-        // Floating-only mode: no tab-strip exists. Plugin's
-        // request can never succeed, so always return 0.
-        // Phase 5 docking manager wires it up.
+    fn dmm_view_other_tab_declines_when_the_backend_hosts_no_panels() {
+        // `MockServices` takes the trait's default, which is what
+        // a backend that cannot host a plugin panel answers — GTK
+        // and Cocoa, where `NPPM_DMMREGASDCKDLG` is also defaulted.
+        // This pins the *decline*, not the message: the Win32 arm
+        // shows the named panel and makes it its group's active
+        // tab, and is exercised end to end by `example-hello`.
         let mut s = MockServices::default();
         let name = make_wide("Console");
         let r = unsafe { dispatch_nppm(&mut s, NPPM_DMMVIEWOTHERTAB, 0, name.as_ptr() as isize) };

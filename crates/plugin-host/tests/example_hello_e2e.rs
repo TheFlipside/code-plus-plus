@@ -188,7 +188,7 @@ fn example_hello_inserts_via_the_dispatch_pipeline() {
         scintilla_second_handle: std::ptr::null_mut(),
     };
     // Load with the routing callback installed (the SDK handshake).
-    host.load(0, npp_data, Some(mock_dispatch))
+    host.load_blocking(0, npp_data, Some(mock_dispatch))
         .expect("example-hello should load");
 
     // getName / getFuncsArray ran during load; the one menu command is
@@ -253,7 +253,7 @@ fn example_hello_resolves_the_closing_path_from_inside_file_before_close() {
         scintilla_main_handle: sci_ptr(),
         scintilla_second_handle: std::ptr::null_mut(),
     };
-    host.load(0, npp_data, Some(mock_dispatch))
+    host.load_blocking(0, npp_data, Some(mock_dispatch))
         .expect("example-hello should load");
 
     notify_all(

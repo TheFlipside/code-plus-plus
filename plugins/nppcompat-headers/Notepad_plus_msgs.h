@@ -247,46 +247,58 @@ typedef struct sessionInfo_ {
 
 /* Docking / docked-dialog API (DM = "Docking Manager") -------------
  *
- * The host wraps the plugin's `hClient` HWND in a host-owned
- * floating frame; the plugin is responsible for the lifetime of
- * `hClient` (register before plugin shutdown, but DO NOT destroy
- * before the frame closes — the host re-parents the HWND into its
- * frame, so the plugin's normal "destroy on shutdown" cleanup is
- * fine). See `Docking.h` for the `tTbData` struct, the `DWS_*`
- * style flags, and the `DMN_*` notification codes. */
+ * The host adopts the plugin's `hClient` HWND as the content of a
+ * dock panel and re-parents it into whichever group container the
+ * panel currently lives in; the plugin keeps ownership of the HWND
+ * (register before plugin shutdown, but DO NOT destroy it while it
+ * is registered). The host also rewrites `hClient`'s window styles
+ * to those of a child window — a dialog created as a top-level
+ * window would otherwise draw its own caption and border inside
+ * the host's. See `Docking.h` for the `tTbData` struct, the `DWS_*`
+ * style flags, and the `DMN_*` notification codes.
+ *
+ * Register from NPPN_TBMODIFICATION. The host restores its dock
+ * arrangement before any plugin loads, so a panel the user had
+ * docked last session already has a place waiting and is missing
+ * only its content window; registering later leaves that place
+ * empty until the plugin gets round to it. */
 
-/* v3: show the floating frame previously registered for the
- *     `hClient` HWND in lParam (wParam unused). Returns 1 on
- *     success, 0 if the HWND isn't registered. */
+/* v3: show the panel previously registered for the `hClient`
+ *     HWND in lParam (wParam unused). A panel that is already
+ *     visible but behind another tab is brought to the front.
+ *     Returns 1 on success, 0 if the HWND isn't registered. */
 #define NPPM_DMMSHOW                      (NPPMSG + 30)
-/* v3: hide the floating frame previously registered for the
- *     `hClient` HWND in lParam (wParam unused). Registration
- *     survives — a subsequent NPPM_DMMSHOW re-shows. The user
- *     clicking the frame's X button routes through the same
- *     hide path (no DestroyWindow). Returns 1 on success, 0 if
- *     the HWND isn't registered. */
+/* v3: hide the panel previously registered for the `hClient`
+ *     HWND in lParam (wParam unused). Registration survives, and
+ *     so does the panel's position — a subsequent NPPM_DMMSHOW
+ *     reopens it where it was. The user clicking the panel's X
+ *     routes through the same hide path (no DestroyWindow), after
+ *     the plugin has been sent DMN_CLOSE. Returns 1 on success,
+ *     0 if the HWND isn't registered. */
 #define NPPM_DMMHIDE                      (NPPMSG + 31)
-/* v3: refresh the floating frame's title / icon / add-info from
- *     the plugin's tTbData. wParam unused; lParam: registered
- *     hClient. Code++ floating-only mode (Phase 4 m4) returns
- *     success for any registered HWND but does **not** re-read
- *     the plugin's wide-string fields — the frame title stays
- *     as registered. Phase 5 docking-manager work re-reads the
- *     original tTbData pointer and refreshes everything. */
+/* v3: refresh the panel's display info from the plugin's
+ *     tTbData. wParam unused; lParam: registered hClient. The
+ *     host re-reads the tTbData pointer it was given at
+ *     registration, so that pointer and the strings it names must
+ *     still be alive — see the lifetime note in Docking.h. A
+ *     changed pszName moves the panel's caption and its
+ *     NPPM_DMMGETPLUGINHWNDBYNAME key together, as upstream does.
+ *     Returns 1 if the HWND is registered, 0 otherwise. */
 #define NPPM_DMMUPDATEDISPINFO            (NPPMSG + 32)
 /* v3: register a plugin's HWND as a dockable dialog. wParam
  *     unused; lParam: pointer to a `tTbData` (see Docking.h).
- *     The host wraps `hClient` in a WS_OVERLAPPEDWINDOW |
- *     WS_EX_TOOLWINDOW frame, re-parents `hClient` into the
- *     frame's client area, and stores the registration entry.
- *     The frame is hidden until NPPM_DMMSHOW.
- *     Wide-string fields (pszName / pszModuleName / pszAddInfo)
- *     are read once at registration into host-side owned copies;
- *     the plugin's tTbData buffer can be freed after the call
- *     returns (though plugins typically keep it alive for the
- *     plugin's lifetime — N++ has the same convention).
+ *     The host restyles `hClient` as a child window, parks it,
+ *     and stores the registration. Registering does not show the
+ *     panel; NPPM_DMMSHOW does.
+ *     The tTbData pointer is retained, not copied, because
+ *     NPPM_DMMUPDATEDISPINFO re-reads it — keep the struct and
+ *     the strings it names alive for as long as the registration
+ *     lasts. A stack temporary is a dangling pointer the moment
+ *     this call returns.
  *     Returns 1 on success, 0 for null hClient / dead HWND /
- *     duplicate registration / frame-creation failure. */
+ *     an hClient owned by another process or belonging to the
+ *     host itself / duplicate registration / the host's
+ *     per-session registration cap. */
 #define NPPM_DMMREGASDCKDLG               (NPPMSG + 33)
 /* v2: open every titled file listed in a session-XML at lParam,
  *     in the order they appear. The recorded active-tab is
@@ -298,11 +310,13 @@ typedef struct sessionInfo_ {
  *     Returns: 1 on a successful parse, 0 on read / parse
  *     failure. */
 #define NPPM_LOADSESSION                  (NPPMSG + 34)
-/* v3: switch to a sibling tab in the same docking container as the
- *     dialog whose name appears at lParam (wParam unused). Code++
- *     floating-only mode (Phase 4 m4) has no tab strip — every
- *     dock dialog is its own floating frame — so this is a no-op
- *     returning 0. Phase 5 docking-manager work activates it. */
+/* v3: bring the dock panel named at lParam to the front of
+ *     whatever container it shares (wParam unused). The name is
+ *     the pszName the panel was registered with. A hidden panel is
+ *     shown; a panel alone in its container is already frontmost,
+ *     so the call succeeds and changes nothing.
+ *     Returns 1 if a panel by that name is registered, 0
+ *     otherwise. */
 #define NPPM_DMMVIEWOTHERTAB              (NPPMSG + 35)
 
 /* File operations -------------------------------------------------- */

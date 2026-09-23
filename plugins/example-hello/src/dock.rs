@@ -30,10 +30,10 @@
 //! disappearing, which keeps one `FuncItem` array across all three.
 
 #[cfg(target_os = "windows")]
-pub use win::{rename_panel, show_panel};
+pub use win::{register_panels, rename_panel, show_panel, show_second_panel, view_other_tab};
 
 #[cfg(not(target_os = "windows"))]
-pub use stub::{rename_panel, show_panel};
+pub use stub::{register_panels, rename_panel, show_panel, show_second_panel, view_other_tab};
 
 /// The non-Windows arm. `NPPM_DMMREGASDCKDLG` carries an HWND, so
 /// there is nothing to send; DESIGN.md §7.4 tracks what a
@@ -49,6 +49,16 @@ mod stub {
     pub fn rename_panel() {
         show_panel();
     }
+
+    pub fn show_second_panel() {
+        show_panel();
+    }
+
+    pub fn view_other_tab() {
+        show_panel();
+    }
+
+    pub fn register_panels() {}
 }
 
 #[cfg(target_os = "windows")]
@@ -148,6 +158,13 @@ mod win {
         sdk::menu_label(b"Example Hello Panel (renamed)");
     const LABEL_TEXT: [u16; sdk::MENU_TITLE_LENGTH] =
         sdk::menu_label(b"Close me to fire DMN_CLOSE.");
+    /// The second panel exists so `NPPM_DMMVIEWOTHERTAB` has
+    /// something to switch *to*: the message means "bring that panel
+    /// to the front of the container it shares", which needs two
+    /// panels to be observable at all.
+    const TITLE_2: [u16; sdk::MENU_TITLE_LENGTH] = sdk::menu_label(b"Example Hello Notes");
+    const LABEL_TEXT_2: [u16; sdk::MENU_TITLE_LENGTH] =
+        sdk::menu_label(b"Drag my tab onto the other panel.");
 
     /// The registration payload. It lives in a `static` because the
     /// host keeps the pointer: `NPPM_DMMUPDATEDISPINFO` re-reads this
@@ -159,7 +176,12 @@ mod win {
         h_client: core::ptr::null_mut(),
         psz_name: core::ptr::null(),
         dlg_id: 0,
-        u_mask: sdk::DWS_DF_FLOATING,
+        // Both demo panels ask for the *bottom container*, which is
+        // what `DWS_DF_CONT_*` names (see the SDK's re-export). Two
+        // panels naming the same one become two tabs of a single dock
+        // group, which is the arrangement `NPPM_DMMVIEWOTHERTAB`
+        // exists to switch between.
+        u_mask: sdk::DWS_DF_CONT_BOTTOM,
         h_icon_tab: core::ptr::null_mut(),
         psz_add_info: core::ptr::null(),
         rc_float: TbRect {
@@ -188,6 +210,30 @@ mod win {
     static REGISTERED: AtomicBool = AtomicBool::new(false);
     /// Which of the two titles `psz_name` currently points at.
     static RENAMED: AtomicBool = AtomicBool::new(false);
+
+    /// The second panel's registration payload, its window, and
+    /// whether the host has accepted it. Same lifetime rules as the
+    /// first — `TB_DATA_2` is `static` because the host keeps the
+    /// pointer.
+    static TB_DATA_2: SyncCell<TbData> = SyncCell::new(TbData {
+        h_client: core::ptr::null_mut(),
+        psz_name: core::ptr::null(),
+        dlg_id: 1,
+        // The same container as the first panel — see there.
+        u_mask: sdk::DWS_DF_CONT_BOTTOM,
+        h_icon_tab: core::ptr::null_mut(),
+        psz_add_info: core::ptr::null(),
+        rc_float: TbRect {
+            left: 0,
+            top: 0,
+            right: 0,
+            bottom: 0,
+        },
+        i_prev_cont: -1,
+        psz_module_name: core::ptr::null(),
+    });
+    static PANEL_2: AtomicPtr<c_void> = AtomicPtr::new(core::ptr::null_mut());
+    static REGISTERED_2: AtomicBool = AtomicBool::new(false);
 
     /// Window procedure for the panel.
     ///
@@ -253,8 +299,8 @@ mod win {
 
     /// Create the panel window on first use. Returns its HWND, or
     /// null if any step failed.
-    fn create() -> Hwnd {
-        let existing = PANEL.load(Ordering::Acquire);
+    fn create_in(slot: &'static AtomicPtr<c_void>, label: *const u16) -> Hwnd {
+        let existing = slot.load(Ordering::Acquire);
         if !existing.is_null() {
             return existing;
         }
@@ -344,10 +390,10 @@ mod win {
                 // itself succeeded and re-registering would fail.
                 return core::ptr::null_mut();
             }
-            let label = CreateWindowExW(
+            let label_hwnd = CreateWindowExW(
                 0,
                 sdk::menu_label(b"STATIC").as_ptr(),
-                LABEL_TEXT.as_ptr(),
+                label,
                 WS_CHILD | WS_VISIBLE | SS_LEFT,
                 LABEL_INSET,
                 LABEL_INSET,
@@ -358,57 +404,170 @@ mod win {
                 instance,
                 core::ptr::null_mut(),
             );
-            LABEL.store(label, Ordering::Release);
-            PANEL.store(panel, Ordering::Release);
+            LABEL.store(label_hwnd, Ordering::Release);
+            slot.store(panel, Ordering::Release);
             panel
         }
     }
 
-    /// Create the panel if needed, register it once, and show it.
-    pub fn show_panel() {
-        let panel = create();
-        if panel.is_null() {
-            sdk::set_status("Example Hello: could not create the dock panel");
-            return;
+    /// Create and register one panel, without showing it. Idempotent
+    /// through `registered`, because the host rejects a second
+    /// registration of the same `h_client`.
+    ///
+    /// Returns the panel window, or null if it could not be created
+    /// or the host refused the registration.
+    fn register_one(
+        slot: &'static AtomicPtr<c_void>,
+        label: *const u16,
+        tb_data: &'static SyncCell<TbData>,
+        title: *const u16,
+        registered: &'static AtomicBool,
+    ) -> Hwnd {
+        let panel = create_in(slot, label);
+        if panel.is_null() || registered.load(Ordering::Acquire) {
+            return panel;
         }
-        let npp = sdk::npp_handle();
-        if !REGISTERED.load(Ordering::Acquire) {
-            // Fill in the parts of the registration that are only
-            // known now. `TB_DATA` outlives this call by being
-            // `static`, which is what lets the host re-read it on
-            // NPPM_DMMUPDATEDISPINFO.
-            //
-            // SAFETY: single-threaded — plugin menu commands run on
-            // the host's UI thread, and this is the only writer.
-            unsafe {
-                let tb = TB_DATA.get();
-                (*tb).h_client = panel;
-                (*tb).psz_name = TITLE_A.as_ptr();
-                (*tb).psz_module_name = MODULE_NAME.as_ptr();
-            }
-            // SAFETY: `TB_DATA` is a live `static` for the process's
-            // whole life, which is exactly the lifetime the host's
-            // `DockDialogParams::tb_data` contract asks for.
-            let ok = unsafe {
-                sdk::SendMessageW(
-                    npp,
-                    sdk::NPPM_DMMREGASDCKDLG,
-                    0,
-                    TB_DATA.get().cast_const() as isize,
-                )
-            };
-            if ok == 0 {
-                sdk::set_status("Example Hello: the host refused the dock registration");
-                return;
-            }
-            REGISTERED.store(true, Ordering::Release);
+        // Fill in the parts of the registration that are only known
+        // now. The `tTbData` outlives this call by being `static`,
+        // which is what lets the host re-read it on
+        // `NPPM_DMMUPDATEDISPINFO`.
+        //
+        // SAFETY: single-threaded — notifications and menu commands
+        // both run on the host's UI thread, and this is the only
+        // writer.
+        unsafe {
+            let tb = tb_data.get();
+            (*tb).h_client = panel;
+            (*tb).psz_name = title;
+            (*tb).psz_module_name = MODULE_NAME.as_ptr();
+        }
+        // SAFETY: the `tTbData` is a live `static` for the process's
+        // whole life, which is exactly the lifetime the host's
+        // `DockDialogParams::tb_data` contract asks for.
+        let ok = unsafe {
+            sdk::SendMessageW(
+                sdk::npp_handle(),
+                sdk::NPPM_DMMREGASDCKDLG,
+                0,
+                tb_data.get().cast_const() as isize,
+            )
+        };
+        if ok == 0 {
+            return core::ptr::null_mut();
+        }
+        registered.store(true, Ordering::Release);
+        panel
+    }
+
+    /// Register both panels with the docking manager, showing
+    /// neither. Called from `NPPN_TBMODIFICATION`, which is the
+    /// moment the ABI sets aside for it.
+    ///
+    /// The timing is the point rather than an implementation detail.
+    /// The host restores its dock arrangement from `session.xml`
+    /// before any plugin loads, so a panel the user had docked last
+    /// session already has a group waiting and is missing only its
+    /// content window; registering here fills it the moment the
+    /// plugin loads. Registering on the menu click instead — which an
+    /// earlier version of this file did — leaves that group visibly
+    /// empty until the user clicks an item they have no reason to
+    /// connect with it.
+    pub fn register_panels() {
+        let a = register_one(
+            &PANEL,
+            LABEL_TEXT.as_ptr(),
+            &TB_DATA,
+            TITLE_A.as_ptr(),
+            &REGISTERED,
+        );
+        let b = register_one(
+            &PANEL_2,
+            LABEL_TEXT_2.as_ptr(),
+            &TB_DATA_2,
+            TITLE_2.as_ptr(),
+            &REGISTERED_2,
+        );
+        if a.is_null() || b.is_null() {
+            sdk::set_status("Example Hello: the host refused a dock registration");
+        }
+    }
+
+    pub fn show_panel() {
+        let panel = register_one(
+            &PANEL,
+            LABEL_TEXT.as_ptr(),
+            &TB_DATA,
+            TITLE_A.as_ptr(),
+            &REGISTERED,
+        );
+        if panel.is_null() {
+            sdk::set_status("Example Hello: could not open the dock panel");
+            return;
         }
         // SAFETY: `panel` is the registered `h_client`; this message
         // takes it by value, not by pointer.
         unsafe {
-            sdk::SendMessageW(npp, sdk::NPPM_DMMSHOW, 0, panel as isize);
+            sdk::SendMessageW(sdk::npp_handle(), sdk::NPPM_DMMSHOW, 0, panel as isize);
         }
         sdk::set_status("Example Hello: dock panel shown");
+    }
+
+    /// Create, register and show the second panel.
+    ///
+    /// Identical to [`show_panel`] but for its own `tTbData`, window
+    /// and title — deliberately a near-copy rather than a shared
+    /// helper, because what it demonstrates is that a plugin may
+    /// register *several* panels and the host keeps them distinct.
+    pub fn show_second_panel() {
+        let panel = register_one(
+            &PANEL_2,
+            LABEL_TEXT_2.as_ptr(),
+            &TB_DATA_2,
+            TITLE_2.as_ptr(),
+            &REGISTERED_2,
+        );
+        if panel.is_null() {
+            sdk::set_status("Example Hello: could not open the second panel");
+            return;
+        }
+        // SAFETY: `panel` is the registered `h_client`.
+        unsafe {
+            sdk::SendMessageW(sdk::npp_handle(), sdk::NPPM_DMMSHOW, 0, panel as isize);
+        }
+        sdk::set_status("Example Hello: second dock panel shown");
+    }
+
+    /// Ask the host to bring the *first* panel to the front of
+    /// whatever container it is in — `NPPM_DMMVIEWOTHERTAB`.
+    ///
+    /// Drag one panel's tab onto the other first and the two share a
+    /// container; this then switches the visible tab, which is what
+    /// the message is for. With them in separate containers it still
+    /// does the useful half — brings the named panel into view.
+    pub fn view_other_tab() {
+        // The name is the plugin's own `pszName`, which is how the
+        // host indexes the panel.
+        let name = if RENAMED.load(Ordering::Acquire) {
+            TITLE_B.as_ptr()
+        } else {
+            TITLE_A.as_ptr()
+        };
+        // SAFETY: the title arrays are `static` and NUL-terminated;
+        // the host reads the string during the call and does not
+        // retain it.
+        let shown = unsafe {
+            sdk::SendMessageW(
+                sdk::npp_handle(),
+                sdk::NPPM_DMMVIEWOTHERTAB,
+                0,
+                name as isize,
+            )
+        };
+        if shown == 0 {
+            sdk::set_status("Example Hello: the host knows no panel by that name");
+        } else {
+            sdk::set_status("Example Hello: switched to the other panel");
+        }
     }
 
     /// Re-point `psz_name` at the other title and ask the host to

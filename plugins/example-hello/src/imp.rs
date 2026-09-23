@@ -45,7 +45,7 @@ const fn make_plugin_name() -> [u16; 14] {
 /// host indexes the array with the number we report — so a literal
 /// left stale after adding an item is an out-of-bounds read on the
 /// host's side.
-const FUNCS_COUNT: usize = 3;
+const FUNCS_COUNT: usize = 5;
 
 /// The plugin's contributed menu items. `cmd_id` is written by the
 /// host during load; we leave it 0 in the static initialiser per
@@ -77,6 +77,20 @@ static FUNCS: SyncCell<[FuncItem; FUNCS_COUNT]> = SyncCell::new([
         init2_check: 0,
         p_sh_key: core::ptr::null_mut(),
     },
+    FuncItem {
+        item_name: sdk::menu_label(b"Show Second Dock Panel"),
+        p_func: Some(plugin_cmd_show_second_dock_panel),
+        cmd_id: 0,
+        init2_check: 0,
+        p_sh_key: core::ptr::null_mut(),
+    },
+    FuncItem {
+        item_name: sdk::menu_label(b"Switch To Other Dock Panel"),
+        p_func: Some(plugin_cmd_view_other_dock_tab),
+        cmd_id: 0,
+        init2_check: 0,
+        p_sh_key: core::ptr::null_mut(),
+    },
 ]);
 
 #[no_mangle]
@@ -102,7 +116,10 @@ pub extern "C" fn getFuncsArray(nb: *mut i32) -> *mut FuncItem {
 
 /// `beNotified`: dispatch on `nmhdr.code`.
 ///
-/// The one event example-hello handles is `NPPN_FILEBEFORECLOSE`,
+/// `NPPN_TBMODIFICATION` is where the two dock panels are registered
+/// — see [`crate::dock::register_panels`].
+///
+/// The other event example-hello handles is `NPPN_FILEBEFORECLOSE`,
 /// and it handles it the way real Notepad++ plugins do — by calling
 /// **back into the host from inside the notification** to resolve
 /// the closing buffer's path, then reporting it on the status bar
@@ -119,12 +136,18 @@ pub extern "C" fn beNotified(notification: *const SCNotification) {
     // SAFETY: per the ABI the host hands a valid `SCNotification`
     // that stays live for the duration of this synchronous call.
     let header = unsafe { &(*notification).nmhdr };
-    if header.code != sdk::NPPN_FILEBEFORECLOSE {
-        return;
-    }
-    match sdk::buffer_path(header.id_from) {
-        Some(path) => sdk::set_status(&format!("Closing: {path}")),
-        None => sdk::set_status("Closing: (untitled)"),
+    match header.code {
+        // The docking manager is up: register both panels now, the
+        // way a real plugin does. Registration is what hands the host
+        // the content window for a panel the user had docked last
+        // session — do it on the menu click instead and the restored
+        // group sits empty until they happen to click.
+        sdk::NPPN_TBMODIFICATION => crate::dock::register_panels(),
+        sdk::NPPN_FILEBEFORECLOSE => match sdk::buffer_path(header.id_from) {
+            Some(path) => sdk::set_status(&format!("Closing: {path}")),
+            None => sdk::set_status("Closing: (untitled)"),
+        },
+        _ => {}
     }
 }
 
@@ -173,4 +196,16 @@ extern "C" fn plugin_cmd_show_dock_panel() {
 /// through `NPPM_DMMUPDATEDISPINFO`.
 extern "C" fn plugin_cmd_rename_dock_panel() {
     crate::dock::rename_panel();
+}
+
+/// Menu callback: register and show a *second* dock panel, so
+/// `NPPM_DMMVIEWOTHERTAB` has something to switch between.
+extern "C" fn plugin_cmd_show_second_dock_panel() {
+    crate::dock::show_second_panel();
+}
+
+/// Menu callback: `NPPM_DMMVIEWOTHERTAB` at the first panel. Drag one
+/// panel's tab onto the other first and this switches the visible tab.
+extern "C" fn plugin_cmd_view_other_dock_tab() {
+    crate::dock::view_other_tab();
 }

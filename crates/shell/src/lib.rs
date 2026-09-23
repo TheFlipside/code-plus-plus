@@ -496,37 +496,45 @@ pub trait UiPlatform {
         core::ptr::null_mut()
     }
 
-    /// Register a plugin's docking dialog and create the
-    /// host-owned floating frame that wraps it. Drives
-    /// `NPPM_DMMREGASDCKDLG`. The frame is created hidden;
-    /// the plugin must follow with `show_dock_dialog` to make
-    /// it visible. Returns `true` on success, `false` for dead
-    /// `params.h_client`, frame-creation failure, or duplicate
-    /// `h_client` registration.
+    /// Adopt a plugin's docking dialog as the content of a dock
+    /// panel. Drives `NPPM_DMMREGASDCKDLG`. The panel starts
+    /// hidden; the plugin must follow with `show_dock_dialog` to
+    /// place it. Defaulted to `false` — only the Win32 backend
+    /// accepts the registration (DESIGN.md §7.4).
     fn register_dock_dialog(&mut self, _params: codepp_plugin_host::DockDialogParams) -> bool {
         false
     }
 
-    /// Show the floating frame previously registered for
-    /// `h_client`. Drives `NPPM_DMMSHOW`. Returns `true` on
-    /// success, `false` for unregistered HWND.
+    /// Show the panel previously registered for `h_client`,
+    /// bringing it to the front of its group if it is behind
+    /// another tab. Drives `NPPM_DMMSHOW`. Returns `true` on
+    /// success, `false` for an unregistered HWND.
     fn show_dock_dialog(&mut self, _h_client: codepp_plugin_host::Hwnd) -> bool {
         false
     }
 
-    /// Hide the floating frame previously registered for
-    /// `h_client`. Drives `NPPM_DMMHIDE`. The registration
-    /// survives — a subsequent `show_dock_dialog` re-shows.
-    /// Returns `true` on success, `false` for unregistered
-    /// HWND.
+    /// Hide the panel previously registered for `h_client`.
+    /// Drives `NPPM_DMMHIDE`. The registration survives, and so
+    /// does the panel's position — a subsequent
+    /// `show_dock_dialog` reopens it where it was. Returns
+    /// `true` on success, `false` for an unregistered HWND.
     fn hide_dock_dialog(&mut self, _h_client: codepp_plugin_host::Hwnd) -> bool {
         false
     }
 
-    /// Refresh the floating frame's title (and add-info /
-    /// icon) from the cached `DockDialogParams`. Drives
+    /// Bring the dock panel named `name` to the front of the
+    /// group it shares. Drives `NPPM_DMMVIEWOTHERTAB`. Defaulted
+    /// to `false` — the message addresses a panel registered
+    /// through `NPPM_DMMREGASDCKDLG`, which only the Win32
+    /// backend accepts.
+    fn view_other_dock_tab(&mut self, _name: &str) -> bool {
+        false
+    }
+
+    /// Re-read the plugin's `tTbData` and refresh the panel's
+    /// caption and lookup name from it. Drives
     /// `NPPM_DMMUPDATEDISPINFO`. Returns `true` on success,
-    /// `false` for unregistered HWND.
+    /// `false` for an unregistered HWND.
     fn update_dock_disp_info(&mut self, _h_client: codepp_plugin_host::Hwnd) -> bool {
         false
     }
@@ -8692,6 +8700,10 @@ impl<U: UiPlatform> HostServices for HostBridge<'_, U> {
 
     fn update_dock_disp_info(&mut self, h_client: codepp_plugin_host::Hwnd) -> bool {
         self.ui.update_dock_disp_info(h_client)
+    }
+
+    fn view_other_dock_tab(&mut self, name: &str) -> bool {
+        self.ui.view_other_dock_tab(name)
     }
 
     fn dock_hwnd_by_name(&self, name: &str, module_name: Option<&str>) -> codepp_plugin_host::Hwnd {

@@ -123,7 +123,7 @@ use codepp_editor::EditorHandle;
 // `editor` with the lexer theme table (see `codepp_editor::theme`)
 // so the GTK backend can share them; imported by name here so the
 // call sites read exactly as they did before the move.
-use codepp_core::dock::DockPanel;
+use codepp_core::dock::{DockPanel, DockSide};
 use codepp_editor::theme::{
     apply_brace_styles, apply_default_styles, apply_indent_guide_style, apply_line_number_margin,
 };
@@ -227,37 +227,36 @@ use windows::Win32::UI::WindowsAndMessaging::{
     AdjustWindowRectEx, AppendMenuW, CheckMenuItem, CheckMenuRadioItem, CopyAcceleratorTableW,
     CreateAcceleratorTableW, CreateMenu, CreatePopupMenu, CreateWindowExW, DefWindowProcW,
     DeleteMenu, DestroyAcceleratorTable, DestroyIcon, DestroyMenu, DestroyWindow, DispatchMessageW,
-    DrawIconEx, DrawMenuBar, EnableMenuItem, EndDialog, GetClientRect, GetCursorPos, GetDlgItem,
-    GetMenu, GetMenuItemCount, GetMenuItemID, GetMenuItemInfoW, GetMessageW, GetParent, GetSubMenu,
-    GetWindowLongPtrW, GetWindowRect, GetWindowTextLengthW, GetWindowTextW,
-    GetWindowThreadProcessId, InsertMenuW, IsChild, IsDialogMessageW, IsWindow, IsWindowVisible,
-    KillTimer, LoadCursorW, LoadIconW, LoadImageW, MessageBoxW, MoveWindow, PostMessageW,
-    PostQuitMessage, RegisterClassExW, RemoveMenu, SendMessageW, SetCursor,
-    SetLayeredWindowAttributes, SetMenu, SetMenuItemInfoW, SetParent, SetTimer, SetWindowLongPtrW,
-    SetWindowPos, SetWindowTextW, ShowWindow, TrackPopupMenu, TranslateAcceleratorW,
-    TranslateMessage, ACCEL, ACCEL_VIRT_FLAGS, BM_GETCHECK, BM_SETCHECK, BN_CLICKED,
-    BS_AUTOCHECKBOX, BS_AUTORADIOBUTTON, BS_DEFPUSHBUTTON, BS_OWNERDRAW, BS_PUSHBUTTON,
-    CBS_AUTOHSCROLL, CBS_DROPDOWN, CB_ADDSTRING, CB_RESETCONTENT, CB_SETEDITSEL, CREATESTRUCTW,
-    CS_HREDRAW, CS_VREDRAW, CW_USEDEFAULT, DC_HASDEFID, DI_NORMAL, DM_GETDEFID, DWLP_MSGRESULT,
-    ES_AUTOHSCROLL, ES_NUMBER, ES_READONLY, FALT, FCONTROL, FSHIFT, FVIRTKEY, GWLP_USERDATA,
-    GWL_EXSTYLE, GWL_STYLE, HACCEL, HICON, HMENU, IDCANCEL, IDC_ARROW, IDC_HAND, IDC_SIZENS, IDNO,
-    IDOK, IDYES, IMAGE_ICON, LR_DEFAULTCOLOR, LWA_ALPHA, MB_ICONQUESTION, MB_ICONWARNING, MB_OK,
-    MB_OKCANCEL, MB_YESNO, MB_YESNOCANCEL, MENUITEMINFOW, MENU_ITEM_FLAGS, MFS_CHECKED,
-    MFS_UNCHECKED, MFT_RADIOCHECK, MFT_RIGHTJUSTIFY, MFT_SEPARATOR, MF_BYCOMMAND, MF_BYPOSITION,
-    MF_CHECKED, MF_ENABLED, MF_GRAYED, MF_POPUP, MF_SEPARATOR, MF_STRING, MF_UNCHECKED, MIIM_FTYPE,
-    MIIM_STATE, MSG, PRF_CLIENT, PRF_ERASEBKGND, SHOW_WINDOW_CMD, SWP_FRAMECHANGED, SWP_NOMOVE,
-    SWP_NOSIZE, SWP_NOZORDER, SW_HIDE, SW_SHOW, SW_SHOWMAXIMIZED, SW_SHOWNORMAL, TPM_BOTTOMALIGN,
-    TPM_LEFTALIGN, TPM_RETURNCMD, TPM_RIGHTBUTTON, WINDOW_EX_STYLE, WINDOW_LONG_PTR_INDEX,
-    WINDOW_STYLE, WM_APP, WM_CAPTURECHANGED, WM_CHAR, WM_CLOSE, WM_COMMAND, WM_CTLCOLOREDIT,
-    WM_CTLCOLORLISTBOX, WM_CTLCOLORSTATIC, WM_DESTROY, WM_DRAWITEM, WM_DROPFILES, WM_ERASEBKGND,
-    WM_HSCROLL, WM_INITDIALOG, WM_INITMENUPOPUP, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE,
-    WM_MOUSEWHEEL, WM_NCCREATE, WM_NCDESTROY, WM_NOTIFY, WM_PAINT, WM_PRINTCLIENT, WM_QUIT,
-    WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SETCURSOR, WM_SETFOCUS, WM_SETFONT, WM_SETREDRAW,
-    WM_SETTINGCHANGE, WM_SIZE, WM_TIMER, WNDCLASSEXW, WS_BORDER, WS_CAPTION, WS_CHILD,
-    WS_CLIPCHILDREN, WS_EX_APPWINDOW, WS_EX_CLIENTEDGE, WS_EX_CONTROLPARENT, WS_EX_DLGMODALFRAME,
-    WS_EX_LAYERED, WS_EX_STATICEDGE, WS_EX_TOOLWINDOW, WS_EX_WINDOWEDGE, WS_GROUP, WS_HSCROLL,
-    WS_MAXIMIZEBOX, WS_MINIMIZEBOX, WS_OVERLAPPEDWINDOW, WS_POPUP, WS_SYSMENU, WS_TABSTOP,
-    WS_THICKFRAME, WS_VISIBLE, WS_VSCROLL,
+    DrawIconEx, DrawMenuBar, EnableMenuItem, EndDialog, GetClassNameW, GetClientRect, GetCursorPos,
+    GetDlgItem, GetMenu, GetMenuItemCount, GetMenuItemID, GetMenuItemInfoW, GetMessageW, GetParent,
+    GetSubMenu, GetWindowLongPtrW, GetWindowRect, GetWindowTextLengthW, GetWindowTextW,
+    GetWindowThreadProcessId, InsertMenuW, IsDialogMessageW, IsWindow, IsWindowVisible, KillTimer,
+    LoadCursorW, LoadIconW, LoadImageW, MessageBoxW, MoveWindow, PostMessageW, PostQuitMessage,
+    RegisterClassExW, RemoveMenu, SendMessageW, SetCursor, SetLayeredWindowAttributes, SetMenu,
+    SetMenuItemInfoW, SetParent, SetTimer, SetWindowLongPtrW, SetWindowPos, SetWindowTextW,
+    ShowWindow, TrackPopupMenu, TranslateAcceleratorW, TranslateMessage, ACCEL, ACCEL_VIRT_FLAGS,
+    BM_GETCHECK, BM_SETCHECK, BN_CLICKED, BS_AUTOCHECKBOX, BS_AUTORADIOBUTTON, BS_DEFPUSHBUTTON,
+    BS_OWNERDRAW, BS_PUSHBUTTON, CBS_AUTOHSCROLL, CBS_DROPDOWN, CB_ADDSTRING, CB_RESETCONTENT,
+    CB_SETEDITSEL, CREATESTRUCTW, CS_HREDRAW, CS_VREDRAW, CW_USEDEFAULT, DC_HASDEFID, DI_NORMAL,
+    DM_GETDEFID, DWLP_MSGRESULT, ES_AUTOHSCROLL, ES_NUMBER, ES_READONLY, FALT, FCONTROL, FSHIFT,
+    FVIRTKEY, GWLP_USERDATA, GWL_EXSTYLE, GWL_STYLE, HACCEL, HICON, HMENU, IDCANCEL, IDC_ARROW,
+    IDC_HAND, IDC_SIZENS, IDNO, IDOK, IDYES, IMAGE_ICON, LR_DEFAULTCOLOR, LWA_ALPHA,
+    MB_ICONQUESTION, MB_ICONWARNING, MB_OK, MB_OKCANCEL, MB_YESNO, MB_YESNOCANCEL, MENUITEMINFOW,
+    MENU_ITEM_FLAGS, MFS_CHECKED, MFS_UNCHECKED, MFT_RADIOCHECK, MFT_RIGHTJUSTIFY, MFT_SEPARATOR,
+    MF_BYCOMMAND, MF_BYPOSITION, MF_CHECKED, MF_ENABLED, MF_GRAYED, MF_POPUP, MF_SEPARATOR,
+    MF_STRING, MF_UNCHECKED, MIIM_FTYPE, MIIM_STATE, MSG, PRF_CLIENT, PRF_ERASEBKGND,
+    SHOW_WINDOW_CMD, SWP_FRAMECHANGED, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SW_HIDE, SW_SHOW,
+    SW_SHOWMAXIMIZED, SW_SHOWNORMAL, TPM_BOTTOMALIGN, TPM_LEFTALIGN, TPM_RETURNCMD,
+    TPM_RIGHTBUTTON, WINDOW_EX_STYLE, WINDOW_LONG_PTR_INDEX, WINDOW_STYLE, WM_APP,
+    WM_CAPTURECHANGED, WM_CHAR, WM_CLOSE, WM_COMMAND, WM_CTLCOLOREDIT, WM_CTLCOLORLISTBOX,
+    WM_CTLCOLORSTATIC, WM_DESTROY, WM_DRAWITEM, WM_DROPFILES, WM_ERASEBKGND, WM_HSCROLL,
+    WM_INITDIALOG, WM_INITMENUPOPUP, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL,
+    WM_NCCREATE, WM_NCDESTROY, WM_NOTIFY, WM_PAINT, WM_PRINTCLIENT, WM_QUIT, WM_RBUTTONDOWN,
+    WM_RBUTTONUP, WM_SETCURSOR, WM_SETFOCUS, WM_SETFONT, WM_SETREDRAW, WM_SETTINGCHANGE, WM_SIZE,
+    WM_TIMER, WNDCLASSEXW, WS_BORDER, WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN, WS_EX_APPWINDOW,
+    WS_EX_CLIENTEDGE, WS_EX_CONTROLPARENT, WS_EX_DLGMODALFRAME, WS_EX_LAYERED, WS_EX_STATICEDGE,
+    WS_EX_TOOLWINDOW, WS_EX_WINDOWEDGE, WS_GROUP, WS_HSCROLL, WS_MAXIMIZEBOX, WS_MINIMIZEBOX,
+    WS_OVERLAPPEDWINDOW, WS_POPUP, WS_SYSMENU, WS_TABSTOP, WS_THICKFRAME, WS_VISIBLE, WS_VSCROLL,
 };
 
 // --- Built-in menu command ids ----------------------------------------
@@ -669,12 +668,8 @@ const STATUSBAR_CLASS: PCWSTR = w!("msctls_statusbar32");
 /// `wnd_proc` that sets the resize cursor and forwards drag events to
 /// the parent's `WindowState`.
 const FIF_DOCK_CLASS: PCWSTR = w!("CodePlusPlusFifDock");
-/// Window class for the host-owned floating frame that wraps a
-/// plugin's `h_client` after `NPPM_DMMREGASDCKDLG`. One frame is
-/// created per registered docking dialog; `Scintilla_RegisterClasses`
-/// and friends already prove the lazy-register-via-OnceLock pattern.
-/// A plugin docking dialog's window style, rewritten for life as a
-/// child of a host dock frame.
+/// A plugin docking dialog's window style, rewritten for life as the
+/// content of a host dock panel.
 ///
 /// Adds `WS_CHILD` and clears every bit that draws non-client
 /// furniture. Everything else the plugin asked for is preserved —
@@ -687,6 +682,104 @@ fn dock_client_style(style: u32) -> u32 {
 /// The extended-style half of [`dock_client_style`].
 fn dock_client_ex_style(ex_style: u32) -> u32 {
     ex_style & !DOCK_CLIENT_DROPPED_EX_STYLES
+}
+
+/// The side a plugin asked its panel to dock to, from `tTbData`'s
+/// `u_mask`.
+///
+/// The container preference lives in the top nibble: `DWS_DF_FLOATING`
+/// in bit 31 means "open floating", and bits 28..30 carry a
+/// `CONT_LEFT`/`RIGHT`/`TOP`/`BOTTOM` id otherwise. `None` for a
+/// plugin that asked to float or expressed nothing — the panel then
+/// takes `DockPanel::default_side`.
+///
+/// Floating is answered with `None` rather than a side because a
+/// plugin panel that opens floating is exactly the pre-dock behaviour
+/// this milestone replaced; honouring it would put the panel back in
+/// a window of its own. A plugin that wants to float can be dragged
+/// out, which is the same affordance the host's own panels have.
+fn dock_side_from_u_mask(u_mask: u32) -> Option<DockSide> {
+    use codepp_plugin_host::{
+        DWS_DF_CONT_BOTTOM, DWS_DF_CONT_LEFT, DWS_DF_CONT_RIGHT, DWS_DF_CONT_TOP, DWS_DF_FLOATING,
+    };
+    if u_mask & DWS_DF_FLOATING != 0 {
+        return None;
+    }
+    // The nibble is a value, not a bitmask: CONT_LEFT is 0, so a
+    // mask-and-test would read "left" out of every u_mask that
+    // happens to carry none of the other three.
+    const CONT_MASK: u32 = 0x7000_0000;
+    match u_mask & CONT_MASK {
+        v if v == DWS_DF_CONT_LEFT & CONT_MASK => Some(DockSide::Left),
+        v if v == DWS_DF_CONT_RIGHT & CONT_MASK => Some(DockSide::Right),
+        v if v == DWS_DF_CONT_TOP & CONT_MASK => Some(DockSide::Top),
+        v if v == DWS_DF_CONT_BOTTOM & CONT_MASK => Some(DockSide::Bottom),
+        _ => None,
+    }
+}
+
+/// Prefix shared by every window class this crate registers. The
+/// discriminator behind [`is_host_own_window`]: a plugin's own window
+/// cannot carry one of our class names, and the host's own windows
+/// either carry one or are a handle we hold outright.
+const HOST_CLASS_PREFIX: &str = "CodePlusPlus";
+
+/// Is `h` one of the host's own windows?
+///
+/// Bug attribution, not a security boundary — DESIGN.md §6.5 states
+/// that distinction as a rule, and is where a future reader should
+/// look before adding a check here in the belief that it hardens
+/// anything. A plugin runs in-process with the whole Win32 API and
+/// needs no help from us to call `SetParent`. This is here so that an
+/// ordinary bug — a stale handle, the wrong variable, a threading
+/// mistake — fails loudly and attributably instead of silently
+/// stripping the caption off a window nobody can trace, which is what
+/// registration would otherwise do to whatever it was handed.
+///
+/// Three tests, in cost order. The handles the host holds outright
+/// (main window, both Scintilla views, the three chrome controls) are
+/// pointer comparisons. Everything else the host creates — the dock
+/// group containers, the drop hint, the splitters, the two built-in
+/// panels, the FIF dock — carries a class name only this crate
+/// registers, so one `GetClassNameW` covers the lot without needing a
+/// field per window.
+///
+/// A plugin's own Scintilla, created through
+/// `NPPM_CREATESCINTILLAHANDLE`, is deliberately *allowed*: it shares
+/// its class with ours, so only the two explicit handle comparisons
+/// separate them, and a plugin docking an editor of its own is a
+/// legitimate thing to do.
+fn is_host_own_window(ui: &Win32Ui, main_hwnd: HWND, h: HWND) -> bool {
+    if h == main_hwnd
+        || h.0 == ui.editor.hwnd()
+        || h.0 == ui.docmap_editor.hwnd()
+        || h == ui.tab_hwnd
+        || h == ui.toolbar_hwnd
+        || h == ui.status_hwnd
+    {
+        return true;
+    }
+    let mut class = [0u16; 64];
+    // SAFETY: `h` is a live window (the caller checked `IsWindow` and
+    // the owning process) and the buffer bound is passed as its true
+    // length.
+    let n = unsafe { GetClassNameW(h, &mut class) };
+    if n <= 0 {
+        return false;
+    }
+    class_is_host_owned(&String::from_utf16_lossy(&class[..n as usize]))
+}
+
+/// Does this window class name belong to a class this crate
+/// registers? The pure half of [`is_host_own_window`], split out
+/// because the interesting cases are all input shapes and the whole
+/// function needs live HWNDs.
+///
+/// `Scintilla` is deliberately **not** host-owned by class: a plugin
+/// may create one of its own through `NPPM_CREATESCINTILLAHANDLE`,
+/// and the host's two views are separated from it by handle instead.
+fn class_is_host_owned(name: &str) -> bool {
+    name.starts_with(HOST_CLASS_PREFIX)
 }
 
 /// Window styles stripped from a plugin's docking dialog when the
@@ -715,7 +808,6 @@ const DOCK_CLIENT_DROPPED_EX_STYLES: u32 = WS_EX_DLGMODALFRAME.0
     | WS_EX_APPWINDOW.0
     | WS_EX_TOOLWINDOW.0;
 
-const DOCK_FRAME_CLASS: PCWSTR = w!("CodePlusPlusDockFrame");
 const FIF_SPLITTER_CLASS: PCWSTR = w!("CodePlusPlusFifSplitter");
 /// Window class for the "Folder as Workspace" left-side panel.
 /// A plain `WS_CHILD` container; its own `wnd_proc` paints the
@@ -1085,19 +1177,26 @@ const TAB_DRAG_THRESHOLD_PX: i32 = 4;
 
 /// One plugin-registered docking dialog. Plugins call
 /// `NPPM_DMMREGASDCKDLG` with a `tTbData` whose `h_client` is the
-/// plugin's pre-built dialog HWND; the host wraps that HWND in a
-/// `frame_hwnd` it owns and re-parents `h_client` into the frame's
-/// client area. The frame's title comes from `name`; the
-/// `module_name` is kept so `NPPM_DMMGETPLUGINHWNDBYNAME` can
-/// disambiguate when two plugins register dialogs with the same
-/// display name.
+/// plugin's pre-built dialog HWND; the host restyles that window as a
+/// child and adopts it as the content of a [`DockPanel::Plugin`],
+/// which from then on is an ordinary dock panel — it docks, floats,
+/// tabs with the host's own panels and persists in `session.xml`.
+/// `name` is the panel's caption; `module_name` is kept so
+/// `NPPM_DMMGETPLUGINHWNDBYNAME` can disambiguate when two plugins
+/// register dialogs with the same display name.
 ///
-/// Floating-only mode (Phase 4 m4) does not yet act on the
-/// docking-position bits in `u_mask` (`DWS_DF_CONT_*`), the
-/// `pszAddInfo` add-info string, or the `iPrevCont` previous-
-/// container hint. Those become live in the Phase 5 docking
-/// manager bring-up.
+/// `u_mask`'s `DWS_DF_CONT_*` nibble is acted on — see
+/// [`dock_side_from_u_mask`] — but the `pszAddInfo` add-info string
+/// and the `iPrevCont` previous-container hint are still only
+/// snapshotted.
 struct DockEntry {
+    /// The dock panel this registration owns.
+    ///
+    /// Interned from `(module_name, sanitized name)`, so it is stable
+    /// across runs and is what `session.xml` persists the panel's
+    /// position under. The panel is the identity; everything else
+    /// here is the plugin's current view of it.
+    panel: DockPanel,
     /// The plugin's own `tTbData`, kept so
     /// `NPPM_DMMUPDATEDISPINFO` has something to re-read — the
     /// dispatcher's decoded `String`s are a snapshot, and the
@@ -1107,25 +1206,22 @@ struct DockEntry {
     /// for the registration's lifetime; see the lifetime
     /// contract on [`codepp_plugin_host::DockDialogParams::tb_data`].
     tb_data: *const codepp_plugin_host::TbData,
-    /// Plugin's pre-built dialog HWND. Re-parented into
-    /// `frame_hwnd`'s client area at registration time. The
-    /// plugin retains lifetime ownership; the host MUST NOT
+    /// Plugin's pre-built dialog HWND, restyled as a child at
+    /// registration time and re-parented by the dock reconciler
+    /// into whichever group container holds its panel. The plugin
+    /// retains lifetime ownership; the host MUST NOT
     /// `DestroyWindow` it.
     h_client: HWND,
-    /// Host-owned floating frame. Created `WS_OVERLAPPEDWINDOW |
-    /// WS_EX_TOOLWINDOW`-style so the user gets a normal
-    /// resizable mini-window with title and close buttons but no
-    /// taskbar entry. Destroyed by Win32 when the main window
-    /// dies (the frame is `owned` by the main HWND).
-    frame_hwnd: HWND,
     /// Display title — also the lookup key for
     /// `NPPM_DMMGETPLUGINHWNDBYNAME`. Owned `String`, decoded
     /// from the plugin's `pszName` at registration and refreshed
     /// on every `NPPM_DMMUPDATEDISPINFO`.
     ///
     /// This is the **value**, not the label: it is matched
-    /// verbatim by `dock_hwnd_by_name`, while the frame caption
-    /// shows `dock_frame_title`'s sanitized rendering of it. A
+    /// verbatim by `dock_hwnd_by_name` and by
+    /// `view_other_dock_tab`, both of which a plugin addresses with
+    /// the string it registered, while the panel's caption shows
+    /// `dock_frame_title`'s sanitized rendering of it. A
     /// plugin-supplied string reaching a caption is a display
     /// sink like any other — same split the workspace tree and
     /// the find-in-files dock make.
@@ -1143,8 +1239,14 @@ struct DockEntry {
     #[allow(dead_code)]
     dlg_id: i32,
     /// Snapshot of `tTbData.u_mask` at registration time.
-    /// Floating-only mode currently checks only `DWS_ICONTAB`;
-    /// the other bits are kept for Phase 5.
+    ///
+    /// The `DWS_DF_CONT_*` nibble is acted on, but from
+    /// `params.u_mask` at the moment of registration — see
+    /// [`dock_side_from_u_mask`] — because it seeds a *first*
+    /// position and re-reading it later would override wherever the
+    /// user has since put the panel. So nothing reads this copy back
+    /// yet; it is kept for `DWS_ICONTAB` and for the `DMN_DOCK` /
+    /// `DMN_FLOAT` notifications the headers describe as not-yet-sent.
     #[allow(dead_code)]
     u_mask: u32,
 }
@@ -1373,16 +1475,20 @@ struct WindowState {
     /// (unlike `find_replace_dlg`, which is host-owned and
     /// single-instance).
     plugin_modeless_dialogs: Vec<HWND>,
-    /// Plugin-registered dockable dialogs (floating-only mode for
-    /// Phase 4 m4 — the multi-zone docking manager lands in Phase
-    /// 5). Each entry pairs the plugin's `h_client` HWND with the
-    /// host-owned floating frame that wraps it. Driven by the
-    /// `NPPM_DMM*` family; the Vec is small (typically 1–4
-    /// entries) so linear scans are fine for show / hide / lookup.
-    /// Cleaned up implicitly when the main window dies — the
-    /// frames are owned by the main HWND so Win32 destroys them
-    /// alongside.
+    /// Plugin-registered dockable dialogs, one entry per accepted
+    /// `NPPM_DMMREGASDCKDLG`. Each pairs the plugin's `h_client`
+    /// HWND with the `DockPanel` identity it was interned as, which
+    /// is what `dock_layout` positions and `session.xml` persists.
+    /// Driven by the `NPPM_DMM*` family; the Vec is small (typically
+    /// 1–4 entries) so linear scans are fine for show / hide /
+    /// lookup. It is also the dock reconciler's only source for a
+    /// plugin panel's content window — a panel absent from here has
+    /// no `h_client` yet, which is the ordinary state of a restored
+    /// panel whose plugin has not been lazily loaded.
     dock_dialogs: Vec<DockEntry>,
+    /// Set when a plugin message changed `dock_layout` and the
+    /// window tree has not caught up yet. See `Win32Ui::dock_dirty`.
+    dock_dirty: bool,
     /// FIF results dock (Phase 4 m4 step 3). Hidden until a search
     /// completes and step 4b populates the listview.
     fif_dock_hwnd: HWND,
@@ -1728,6 +1834,8 @@ impl WindowState {
             accel_handle: &raw mut self.accel_handle,
             plugin_modeless_dialogs: &raw mut self.plugin_modeless_dialogs,
             dock_dialogs: &raw mut self.dock_dialogs,
+            dock_layout: &raw mut self.dock_layout,
+            dock_dirty: &raw mut self.dock_dirty,
             udl_registry: &raw const self.shell.udl_registry,
             editor: self.editor,
             docmap_editor: self.docmap_editor,
@@ -1804,12 +1912,30 @@ struct Win32Ui {
     plugin_modeless_dialogs: *mut Vec<HWND>,
     /// Pointer to `WindowState.dock_dialogs` so the
     /// `NPPM_DMM*` family can register / show / hide / look up
-    /// floating frames. Same "`Win32Ui` stays Copy, UI-thread-only
+    /// plugin panels. Same "`Win32Ui` stays Copy, UI-thread-only
     /// access" invariant as `accel_handle` and
     /// `plugin_modeless_dialogs`. The Vec is mutated by
     /// `register_dock_dialog` (push) and read by every other
     /// DMM method.
     dock_dialogs: *mut Vec<DockEntry>,
+    /// Pointer to `WindowState.dock_layout`, so the `NPPM_DMM*`
+    /// handlers can place, show, hide and re-activate plugin panels
+    /// in the same model that owns Folder as Workspace and the
+    /// Document Map.
+    ///
+    /// A pointer rather than a borrow for the same reason as
+    /// `dock_dialogs`: these run inside a live `state.split()`, so
+    /// `state_from_hwnd` would alias. UI-thread-only.
+    dock_layout: *mut codepp_core::dock::DockLayout,
+    /// Set by a `NPPM_DMM*` handler that changed `dock_layout`.
+    ///
+    /// The model can be mutated during a dispatch; the *window tree*
+    /// cannot, because `apply_dock_layout` reaches for
+    /// `state_from_hwnd` and would be declined under the split. So
+    /// the handler marks, and the `wnd_proc` arm reconciles once the
+    /// borrow has ended — the same shape as the `needs_rebind`
+    /// post-dispatch step beside it.
+    dock_dirty: *mut bool,
     /// Pointer to `WindowState.shell.udl_registry` so
     /// `apply_udl_lang` can read the loaded UDLs without
     /// reaching back through `state_from_hwnd(GetParent(...))`
@@ -3126,10 +3252,9 @@ impl UiPlatform for Win32Ui {
     }
 
     fn register_dock_dialog(&mut self, params: codepp_plugin_host::DockDialogParams) -> bool {
-        // Floating-only mode (Phase 4 m4): wrap the plugin's
-        // h_client in a host-owned WS_OVERLAPPEDWINDOW frame and
-        // re-parent h_client into the frame's client area. The
-        // frame is hidden until NPPM_DMMSHOW.
+        // Adopt the plugin's h_client as a dock panel's content:
+        // intern the panel identity, restyle the window as a child,
+        // and park it until NPPM_DMMSHOW places it.
         //
         // SAFETY: every Win32 call here runs on the UI thread
         // (the trait method is invoked from a NPPM dispatch).
@@ -3181,14 +3306,28 @@ impl UiPlatform for Win32Ui {
             // needs no help from us to call `SetParent`. It is here
             // so an ordinary bug fails loudly and attributably
             // instead of corrupting a window nobody can trace.
+            // DESIGN.md §6.5 states that distinction as a rule, and
+            // is where a future reader should look before adding a
+            // check here in the belief that it hardens anything.
             //
             // Two rules. Same process, because a cross-process
             // `SetParent` between same-integrity windows generally
             // succeeds and would reach another application entirely.
-            // And nothing already inside our own window tree — the
-            // main window itself, the Scintilla views, the tab strip,
-            // the toolbar, the status bar, a previously-registered
-            // dock client — which `IsChild` covers in one call.
+            // And none of the host's *own* windows: the main window,
+            // the two Scintilla views, the chrome controls, and
+            // anything of a class only this crate registers.
+            //
+            // **Not** "anything inside our window tree", which an
+            // earlier version tested with one `IsChild` and which was
+            // wrong in the worst direction — it rejected the ordinary
+            // case. A Notepad++ plugin builds its docking dialog with
+            // `_nppData._nppHandle` as the `hWndParent` argument to
+            // `CreateDialogParam`, and a template carrying `WS_CHILD`
+            // (which a dialog meant to be docked does) makes that a
+            // real parent rather than an owner — so `IsChild` is
+            // *true* for a correctly written plugin. The check exists
+            // to catch a plugin bug, and it was refusing every
+            // registration it was meant to serve.
             let mut client_pid = 0u32;
             let _ = GetWindowThreadProcessId(h_client, Some(&raw mut client_pid));
             if client_pid != std::process::id() {
@@ -3198,7 +3337,7 @@ impl UiPlatform for Win32Ui {
                 );
                 return false;
             }
-            if h_client == main_hwnd_owner || IsChild(main_hwnd_owner, h_client).as_bool() {
+            if is_host_own_window(self, main_hwnd_owner, h_client) {
                 tracing::warn!(
                     h = h_client.0 as usize,
                     "NPPM_DMMREGASDCKDLG: h_client is one of the host's own windows"
@@ -3212,10 +3351,7 @@ impl UiPlatform for Win32Ui {
             // <= 4 docks per session) and this is the only
             // call-site that grows it.
             let dialogs = &mut *self.dock_dialogs;
-            if dialogs
-                .iter()
-                .any(|e| e.h_client.0 == h_client.0 || e.frame_hwnd.0 == h_client.0)
-            {
+            if dialogs.iter().any(|e| e.h_client.0 == h_client.0) {
                 tracing::warn!(
                     h = h_client.0 as usize,
                     "NPPM_DMMREGASDCKDLG: h_client already registered"
@@ -3233,106 +3369,81 @@ impl UiPlatform for Win32Ui {
                 );
                 return false;
             }
-            register_dock_frame_class();
-            let instance = match GetModuleHandleW(None) {
-                Ok(h) => h,
-                Err(e) => {
-                    tracing::warn!(error = ?e, "NPPM_DMMREGASDCKDLG: GetModuleHandleW failed");
-                    return false;
-                }
-            };
-            // Initial position: use the plugin's `rc_float` if
-            // it's non-empty (right > left, bottom > top); else
-            // fall back to a default size centred on the
-            // primary monitor's working area (cheap, predictable
-            // — Phase 5 docking-manager work places the frame
-            // relative to the host window).
-            let (x, y, width, height) = compute_dock_frame_position(&params.rc_float);
-            // Caption text, sanitized — see `dock_frame_title`.
-            let title_utf16: Vec<u16> = dock_frame_title(&params.name, &params.module_name)
-                .encode_utf16()
-                .chain(core::iter::once(0))
-                .collect();
-            // Owned by the main window so Win32 destroys the
-            // frame when the host shuts down (no leak on
-            // forgetful plugins). WS_EX_TOOLWINDOW keeps the
-            // frame off the taskbar — these are accessory
-            // panels, not standalone documents.
-            let frame = match CreateWindowExW(
-                WS_EX_TOOLWINDOW,
-                DOCK_FRAME_CLASS,
-                PCWSTR(title_utf16.as_ptr()),
-                WS_OVERLAPPEDWINDOW,
-                x,
-                y,
-                width,
-                height,
-                Some(main_hwnd_owner),
-                None,
-                Some(instance.into()),
-                // Plugin's h_client passed via lpCreateParams;
-                // dock_frame_wnd_proc stashes it in
-                // GWLP_USERDATA at WM_NCCREATE.
-                Some(h_client.0.cast_const()),
-            ) {
-                Ok(h) => h,
-                Err(e) => {
-                    tracing::warn!(error = ?e, "NPPM_DMMREGASDCKDLG: CreateWindowExW failed");
-                    return false;
-                }
-            };
-            // Re-parent the plugin's h_client into the frame's
-            // client area. SetParent returns the previous parent
-            // on success (the value we don't need); on failure
-            // (different desktop, threading mismatch, etc.) it
-            // returns Err. We MUST treat failure as fatal
-            // here — otherwise we'd push a DockEntry whose
-            // frame_hwnd has no child, and dock_frame_wnd_proc's
-            // WM_SIZE would resize an unrelated plugin HWND
-            // that's still attached to the plugin's original
-            // parent (silent UI corruption).
+            // Intern the panel identity from the module and the
+            // *sanitized* display name.
             //
-            // TOCTOU note: between the `IsWindow(h_client)`
-            // check above and this `SetParent` call there's a
-            // window where the plugin could destroy h_client
-            // from another thread. Same race the
-            // `create_plugin_scintilla` path documents: Win32
-            // has no atomic "act on HWND only if alive"
-            // primitive, the plugin owns the destroy contract,
-            // and the host stays UI-thread-only. SetParent
-            // failure here is the catch-all for any reason
-            // h_client became unusable after the IsWindow
-            // check.
-            if SetParent(h_client, Some(frame)).is_err() {
+            // Sanitizing here rather than at each paint site is what
+            // keeps `DockPanel::title` — which every caption and tab
+            // label goes through, on a `&'static str` — safe by
+            // construction for a plugin-supplied string. It also
+            // makes the identity deterministic, which matters because
+            // `persist_key` is derived from it: the same plugin gets
+            // the same key every run.
+            // Both halves of the identity are sanitized, not just the
+            // one that is displayed. The module half reaches no chrome
+            // sink today — but it *is* half of `persist_key`, so a raw
+            // control character in it would be written into
+            // `session.xml`, and a NUL there produces a file the next
+            // launch cannot parse. Sanitizing at the one boundary that
+            // creates the identity is also what stops a future
+            // consumer of `DockPanel::plugin_module` — a Plugin
+            // Manager column is the obvious one — reintroducing the
+            // bidi-override bug this project has now closed four
+            // times. The *raw* module name is kept on `DockEntry`,
+            // which is what `NPPM_DMMGETPLUGINHWNDBYNAME` matches
+            // against, because a plugin knows only what it registered.
+            let display_module = sanitize_str_for_display(&params.module_name);
+            let display_name = dock_frame_title(&params.name, &params.module_name);
+            let Some(panel) =
+                codepp_core::dock::intern_plugin_panel(&display_module, &display_name)
+            else {
+                // `intern_plugin_panel` refuses an unusable identity
+                // as well as a full table: an empty or over-long
+                // half, or one carrying the `|` its persist key is
+                // split on. The message names both so a plugin author
+                // reading the log is not sent looking for a cap they
+                // are nowhere near.
+                tracing::warn!(
+                    module = params.module_name,
+                    panel = display_name,
+                    "NPPM_DMMREGASDCKDLG: unusable panel identity, or the panel table is full"
+                );
+                return false;
+            };
+            if dialogs.iter().any(|e| e.panel == panel) {
+                tracing::warn!(
+                    panel = display_name,
+                    "NPPM_DMMREGASDCKDLG: that panel is already registered"
+                );
+                return false;
+            }
+            // Adopt `h_client` as a child of the main window: parked
+            // there, hidden, until the dock reconciler moves it into
+            // whichever group the layout puts the panel in. That is
+            // the same place `apply_dock_layout` evacuates panel
+            // content to when a group is destroyed, so a plugin panel
+            // is in the state the reconciler already understands.
+            if SetParent(h_client, Some(main_hwnd_owner)).is_err() {
                 tracing::warn!(
                     h = h_client.0 as usize,
-                    "NPPM_DMMREGASDCKDLG: SetParent failed; tearing down frame"
+                    "NPPM_DMMREGASDCKDLG: SetParent failed"
                 );
-                let _ = DestroyWindow(frame);
                 return false;
             }
             // Make `h_client` look like the child it now is.
             //
             // `SetParent` changes the parent; it does not change the
             // window's *styles*. A plugin creates its docking dialog
-            // as a top-level or popup window with its own caption,
-            // system menu and resizing border — that is what it looks
-            // like before a host adopts it — so re-parenting alone
-            // leaves the user staring at two title bars and two close
-            // buttons, the outer one ours and the inner one the
-            // plugin's, with the inner frame drawn in the plain
-            // non-client style because it is no longer a top-level
-            // window. Reported on the real NppExec, and it is what a
-            // docking host is for: `WS_CHILD` on, every frame bit off.
-            //
-            // The extended bits matter as much as the ordinary ones:
-            // `WS_EX_DLGMODALFRAME` and the edge styles each draw
-            // their own border inside the frame we already drew.
-            //
-            // `SetWindowPos` with `SWP_FRAMECHANGED` is required —
-            // without it the non-client area keeps its cached size
-            // and the caption stays on screen until something else
-            // forces a recalculation.
+            // as the top-level window it is until a host adopts it,
+            // so re-parenting alone leaves the user staring at two
+            // title bars and two close buttons, the inner frame drawn
+            // in the plain non-client style. `WS_CHILD` on, every
+            // frame bit off — including the extended ones, where
+            // `WS_EX_DLGMODALFRAME` and the edge styles each draw a
+            // border inside the container we already painted — then
+            // `SetWindowPos` with `SWP_FRAMECHANGED`, without which
+            // the non-client area keeps its cached size and the
+            // caption stays on screen.
             let style = GetWindowLongPtrW(h_client, GWL_STYLE) as u32;
             SetWindowLongPtrW(h_client, GWL_STYLE, dock_client_style(style) as isize);
             let ex = GetWindowLongPtrW(h_client, GWL_EXSTYLE) as u32;
@@ -3346,65 +3457,93 @@ impl UiPlatform for Win32Ui {
                 0,
                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED,
             );
-            // Resize h_client to the frame's client area
-            // immediately so the first paint shows it filling
-            // the client area; subsequent WM_SIZE on the frame
-            // does the same via dock_frame_wnd_proc.
-            let mut rc = RECT::default();
-            if GetClientRect(frame, &raw mut rc).is_ok() {
-                let _ = MoveWindow(h_client, 0, 0, rc.right, rc.bottom, true);
-            }
-            // Make the plugin's dialog visible inside the frame.
-            // The frame itself stays hidden until NPPM_DMMSHOW.
-            let _ = ShowWindow(h_client, SW_SHOW);
+            // Registration does not show the panel — `NPPM_DMMSHOW`
+            // does, which is the ABI's own split and the reason a
+            // plugin can register at `setInfo` time without anything
+            // appearing.
+            let _ = ShowWindow(h_client, SW_HIDE);
             dialogs.push(DockEntry {
+                panel,
                 tb_data: params.tb_data,
                 h_client,
-                frame_hwnd: frame,
                 name: params.name,
                 module_name: params.module_name,
                 dlg_id: params.dlg_id,
                 u_mask: params.u_mask,
             });
+            // Seed where the panel will land the first time it is
+            // shown, from the plugin's own `DWS_DF_CONT_*`
+            // preference. Those bits were snapshotted and ignored for
+            // as long as every plugin panel was a floating frame of
+            // its own; they finally mean something.
+            if let Some(side) = dock_side_from_u_mask(params.u_mask) {
+                (*self.dock_layout).set_initial_side(panel, side);
+            }
+            // A restored layout can already name this panel — the
+            // arrangement is persisted by key and comes back before
+            // any plugin loads, so its group has been sitting there
+            // with no content window since startup. Registration is
+            // what supplies one, so the tree has to be reconciled
+            // even though the *model* did not change. Without this
+            // the group stays empty until some unrelated dock
+            // mutation happens to repaint it.
+            *self.dock_dirty = true;
         }
         true
     }
 
     fn show_dock_dialog(&mut self, h_client: codepp_plugin_host::Hwnd) -> bool {
-        let h = HWND(h_client);
-        if h.is_invalid() {
+        // SAFETY: UI-thread-only access to the two `WindowState`
+        // fields — see the field docs on `Win32Ui`.
+        let Some(panel) = (unsafe { panel_for_client(self.dock_dialogs, h_client) }) else {
             return false;
-        }
-        // SAFETY: `dock_dialogs` is alive while `Win32Ui` is in
-        // scope; UI-thread-only access — see the field doc on
-        // `Win32Ui::dock_dialogs`.
+        };
         unsafe {
-            let dialogs = &*self.dock_dialogs;
-            for entry in dialogs {
-                if entry.h_client.0 == h.0 {
-                    let _ = ShowWindow(entry.frame_hwnd, SW_SHOW);
-                    return true;
-                }
-            }
+            (*self.dock_layout).show(panel);
+            (*self.dock_layout).activate(panel);
+            // The model moved; the window tree catches up after the
+            // dispatch borrow ends. See `Win32Ui::dock_dirty`.
+            *self.dock_dirty = true;
         }
-        false
+        true
     }
 
     fn hide_dock_dialog(&mut self, h_client: codepp_plugin_host::Hwnd) -> bool {
-        let h = HWND(h_client);
-        if h.is_invalid() {
+        let Some(panel) = (unsafe { panel_for_client(self.dock_dialogs, h_client) }) else {
             return false;
-        }
+        };
         unsafe {
-            let dialogs = &*self.dock_dialogs;
-            for entry in dialogs {
-                if entry.h_client.0 == h.0 {
-                    let _ = ShowWindow(entry.frame_hwnd, SW_HIDE);
-                    return true;
-                }
-            }
+            (*self.dock_layout).hide(panel);
+            *self.dock_dirty = true;
         }
-        false
+        true
+    }
+
+    fn view_other_dock_tab(&mut self, name: &str) -> bool {
+        // The name a plugin passes is its own `pszName`, which the
+        // panel identity carries in sanitized form — so compare
+        // against the registration's raw name, which is what the
+        // plugin knows, and resolve to the panel through the entry.
+        // Looking the interned panel up by name directly would miss
+        // any name the sanitizer rewrote.
+        let panel = unsafe { &*self.dock_dialogs }
+            .iter()
+            .find(|e| e.name == name)
+            .map(|e| e.panel);
+        let Some(panel) = panel else {
+            return false;
+        };
+        unsafe {
+            // Upstream switches to another tab in the same container.
+            // A panel that is hidden has no container to be frontmost
+            // in, so showing it first is the only reading of "view"
+            // that does anything — and it matches what a plugin means
+            // by the call, which is "put me in front of the user".
+            (*self.dock_layout).show(panel);
+            (*self.dock_layout).activate(panel);
+            *self.dock_dirty = true;
+        }
+        true
     }
 
     fn update_dock_disp_info(&mut self, h_client: codepp_plugin_host::Hwnd) -> bool {
@@ -3412,42 +3551,38 @@ impl UiPlatform for Win32Ui {
         if h.is_invalid() {
             return false;
         }
-        // SAFETY: `dock_dialogs` is alive while `Win32Ui` is in
-        // scope and is UI-thread-only — see the field doc on
-        // `Win32Ui::dock_dialogs`. `entry.tb_data` is the pointer
-        // the plugin registered with; re-reading it is the
-        // documented contract of this message, and the plugin owns
-        // keeping it live. Unlike `h_client` there is no liveness
-        // test available for it — `IsWindow` has no counterpart for
-        // a raw pointer — so a plugin that breaks the contract
-        // crashes the host rather than being declined. See the
-        // field doc on `DockDialogParams::tb_data`.
+        // SAFETY: `dock_dialogs` is alive while `Win32Ui` is in scope
+        // and is UI-thread-only — see the field doc. `entry.tb_data`
+        // is the pointer the plugin registered with; re-reading it is
+        // this message's documented contract, and the plugin owns
+        // keeping it live. Unlike `h_client` there is no liveness test
+        // for it, so a plugin that breaks the contract crashes the
+        // host rather than being declined — see the field doc on
+        // `DockDialogParams::tb_data`.
         unsafe {
             let dialogs = &mut *self.dock_dialogs;
             let Some(entry) = dialogs.iter_mut().find(|e| e.h_client.0 == h.0) else {
                 return false;
             };
-            // `None` only for a null pointer, which a registered
-            // entry cannot hold. Nothing to refresh, but the HWND
-            // *is* registered, so the message still succeeded.
             let Some(disp) = codepp_plugin_host::read_dock_disp_info(entry.tb_data) else {
                 return true;
             };
-            // Re-read faithfully rather than filtering: a plugin
-            // that blanks `psz_name` has asked for a blank name,
-            // and the caption's fallback chain handles it. The
-            // consequence worth knowing is that `name` is also
-            // the `NPPM_DMMGETPLUGINHWNDBYNAME` key, so a rename
-            // moves the key — which is what upstream does too,
-            // and what a plugin renaming its panel means.
+            // The cached strings drive `NPPM_DMMGETPLUGINHWNDBYNAME`
+            // and `NPPM_DMMVIEWOTHERTAB`, both of which a plugin
+            // addresses by its *current* name, so a rename has to
+            // land here.
             entry.name = disp.name;
             entry.module_name = disp.module_name;
-            let title: Vec<u16> = dock_frame_title(&entry.name, &entry.module_name)
-                .encode_utf16()
-                .chain(core::iter::once(0))
-                .collect();
-            let _ = SetWindowTextW(entry.frame_hwnd, PCWSTR(title.as_ptr()));
         }
+        // What a rename does **not** move is the caption, and that is
+        // deliberate rather than an omission. A panel's title is its
+        // interned identity, and `session.xml` keys the panel's
+        // remembered position on that identity — so a caption that
+        // followed the plugin would either lose the user's layout on
+        // every rename or need a second, divergent name to persist
+        // under. Plugins set a title once at registration and rename
+        // essentially never; a stable dock layout is worth more than
+        // tracking the rare one.
         true
     }
 
@@ -5071,6 +5206,8 @@ unsafe fn handle_close_active_tab_inner(hwnd: HWND) -> CloseOutcome {
                 accel_handle: &raw mut state.accel_handle,
                 plugin_modeless_dialogs: &raw mut state.plugin_modeless_dialogs,
                 dock_dialogs: &raw mut state.dock_dialogs,
+                dock_layout: &raw mut state.dock_layout,
+                dock_dirty: &raw mut state.dock_dirty,
                 udl_registry: &raw const state.shell.udl_registry,
                 editor: state.editor,
                 docmap_editor: state.docmap_editor,
@@ -5156,6 +5293,8 @@ unsafe fn handle_close_active_tab_inner(hwnd: HWND) -> CloseOutcome {
                     accel_handle: &raw mut state.accel_handle,
                     plugin_modeless_dialogs: &raw mut state.plugin_modeless_dialogs,
                     dock_dialogs: &raw mut state.dock_dialogs,
+                    dock_layout: &raw mut state.dock_layout,
+                    dock_dirty: &raw mut state.dock_dirty,
                     udl_registry: &raw const state.shell.udl_registry,
                     editor: state.editor,
                     docmap_editor: state.docmap_editor,
@@ -18126,6 +18265,7 @@ pub fn run(initial_path: Option<PathBuf>, perf: codepp_core::perf::Perf) -> Resu
             udl_editor_dlg: None,
             plugin_modeless_dialogs: Vec::new(),
             dock_dialogs: Vec::new(),
+            dock_dirty: false,
             fif_dock_hwnd,
             fif_listview_hwnd,
             fif_dock_status,
@@ -19803,15 +19943,6 @@ unsafe fn paint_docmap_viewport_overlay(dst_hdc: HDC, client_rect: RECT, main_hw
 /// users running many docked plugins simultaneously.
 const DOCK_DIALOG_REGISTRATION_CAP: usize = 64;
 
-/// Default floating-frame dimensions when the plugin's
-/// `rc_float` is empty or adversarial. Width × height in pixels.
-const DOCK_FRAME_DEFAULT_W: i32 = 480;
-const DOCK_FRAME_DEFAULT_H: i32 = 360;
-/// Default top-left corner. Fixed (not monitor-relative) — Phase
-/// 5 docking manager adds DPI / multi-monitor awareness.
-const DOCK_FRAME_DEFAULT_X: i32 = 200;
-const DOCK_FRAME_DEFAULT_Y: i32 = 200;
-
 /// Caption text for a plugin's floating dock frame.
 ///
 /// Two jobs, and they are separable on purpose. The **fallback
@@ -19841,64 +19972,6 @@ fn dock_frame_title(name: &str, module_name: &str) -> String {
         name
     };
     sanitize_str_for_display(raw)
-}
-
-/// Compute the floating dock frame's initial (x, y, width, height).
-/// If the plugin's `tTbData.rc_float` is well-formed (right > left,
-/// bottom > top, AND the resulting dimensions fit in i32 without
-/// overflow AND are positive), use it verbatim — that's the
-/// position the plugin remembered from its last session. Otherwise
-/// fall back to a centred, modestly-sized panel so the user sees
-/// the dialog somewhere reasonable on first registration.
-///
-/// `saturating_sub` guards against an adversarial `rc_float`:
-/// e.g. `left = i32::MIN, right = i32::MAX` would otherwise
-/// overflow on the `right - left` subtraction (debug panic, release
-/// silent wrap). Saturation produces `i32::MAX` which is then
-/// rejected by the `<= 0` post-check (well — `i32::MAX > 0`, but
-/// `CreateWindowExW` would silently clamp the window to monitor
-/// bounds). The subsequent dimension-positivity check is the real
-/// guard.
-fn compute_dock_frame_position(rc_float: &codepp_plugin_host::TbRect) -> (i32, i32, i32, i32) {
-    if rc_float.right > rc_float.left && rc_float.bottom > rc_float.top {
-        let w = rc_float.right.saturating_sub(rc_float.left);
-        let h = rc_float.bottom.saturating_sub(rc_float.top);
-        if w > 0 && h > 0 {
-            return (rc_float.left, rc_float.top, w, h);
-        }
-    }
-    (
-        DOCK_FRAME_DEFAULT_X,
-        DOCK_FRAME_DEFAULT_Y,
-        DOCK_FRAME_DEFAULT_W,
-        DOCK_FRAME_DEFAULT_H,
-    )
-}
-
-/// Register the dock-frame window class. Idempotent via `OnceLock` —
-/// safe to call from `register_dock_dialog` immediately before each
-/// frame's `CreateWindowExW`. The class wndproc is
-/// `dock_frame_wnd_proc` which handles `WM_SIZE` (resize the
-/// plugin's `h_client` to fill the client area) and `WM_CLOSE`
-/// (hide the frame instead of destroying — the registration
-/// outlives a close-button click).
-unsafe fn register_dock_frame_class() {
-    use std::sync::OnceLock;
-    static REGISTERED: OnceLock<()> = OnceLock::new();
-    REGISTERED.get_or_init(|| unsafe {
-        let instance = GetModuleHandleW(None).unwrap_or_default();
-        let class = WNDCLASSEXW {
-            cbSize: std::mem::size_of::<WNDCLASSEXW>() as u32,
-            style: CS_HREDRAW | CS_VREDRAW,
-            lpfnWndProc: Some(dock_frame_wnd_proc),
-            hInstance: instance.into(),
-            hCursor: LoadCursorW(None, IDC_ARROW).unwrap_or_default(),
-            hbrBackground: dialog_bg_brush(),
-            lpszClassName: DOCK_FRAME_CLASS,
-            ..Default::default()
-        };
-        let _ = RegisterClassExW(&raw const class);
-    });
 }
 
 /// Lazy-load every pending plugin, **holding no `WindowState` borrow
@@ -19972,45 +20045,6 @@ unsafe fn load_pending_plugins(hwnd: HWND, npp_data: NppData) {
     }
 }
 
-/// `Wnd_proc` for the host-owned floating frame that wraps a
-/// plugin's docking dialog (registered via `NPPM_DMMREGASDCKDLG`).
-/// The plugin's `h_client` HWND is stashed in the frame's
-/// `GWLP_USERDATA` at `WM_NCCREATE` so `WM_SIZE` can resize it to
-/// fill the client area without going through the `WindowState`
-/// registry.
-///
-/// `WM_CLOSE` sends `DMN_CLOSE` and then hides the frame rather
-/// than destroying it — the registration survives, and a subsequent
-/// `NPPM_DMMSHOW` re-shows. The frame is destroyed by Win32 when
-/// the main window dies (the frames are owned by the main HWND).
-///
-/// Wrapped in `catch_unwind` like every other window and dialog
-/// proc in this crate: the `WM_CLOSE` arm hands control to plugin
-/// code, which can re-enter the host, and an unwind out of an
-/// `extern "system"` function is at best a defined abort.
-extern "system" fn dock_frame_wnd_proc(
-    hwnd: HWND,
-    msg: u32,
-    wparam: WPARAM,
-    lparam: LPARAM,
-) -> LRESULT {
-    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
-        dock_frame_wnd_proc_inner(hwnd, msg, wparam, lparam)
-    }))
-    .unwrap_or_else(|_| {
-        tracing::warn!(msg = msg, "panic caught in dock_frame_wnd_proc");
-        // Not `DefWindowProcW` on the recovery path: re-entering
-        // Win32 after an unwind is the shape this boundary exists
-        // to avoid. 0 is the right answer for every arm whose own
-        // code can panic (`WM_SIZE`, `WM_CLOSE`); `WM_NCCREATE`
-        // would rather have had its `DefWindowProcW` result, and
-        // returning 0 there fails the window creation — the safe
-        // direction, and unreachable short of an allocation
-        // failure inside a pointer stash.
-        LRESULT(0)
-    })
-}
-
 thread_local! {
     /// Set while a `DMN_CLOSE` is being delivered on this thread.
     /// See [`DmnCloseGuard`].
@@ -20060,113 +20094,6 @@ impl DmnCloseGuard {
 impl Drop for DmnCloseGuard {
     fn drop(&mut self) {
         DMN_CLOSE_ACTIVE.with(|f| f.set(false));
-    }
-}
-
-/// Body of [`dock_frame_wnd_proc`], split out so the caller can
-/// wrap it in a single `catch_unwind`.
-///
-/// # Safety
-///
-/// Win32 message-dispatch contract: `hwnd` is the live frame,
-/// and `wparam` / `lparam` carry whatever the message documents.
-unsafe fn dock_frame_wnd_proc_inner(
-    hwnd: HWND,
-    msg: u32,
-    wparam: WPARAM,
-    lparam: LPARAM,
-) -> LRESULT {
-    unsafe {
-        match msg {
-            WM_NCCREATE => {
-                // CREATESTRUCTW.lpCreateParams carries the plugin's
-                // h_client HWND (passed via the lpParam arg of
-                // CreateWindowExW). Stash it so WM_SIZE can find
-                // it without a Vec lookup.
-                let cs = lparam.0 as *const CREATESTRUCTW;
-                if !cs.is_null() {
-                    let h_client_raw = (*cs).lpCreateParams as isize;
-                    SetWindowLongPtrW(hwnd, GWLP_USERDATA, h_client_raw);
-                }
-                DefWindowProcW(hwnd, msg, wparam, lparam)
-            }
-            WM_SIZE => {
-                let h_client_raw = GetWindowLongPtrW(hwnd, GWLP_USERDATA);
-                if h_client_raw != 0 {
-                    let h_client = HWND(h_client_raw as *mut c_void);
-                    // Defensive: the plugin may have destroyed
-                    // h_client without unregistering. `IsWindow`
-                    // catches that without a Vec lookup.
-                    if IsWindow(Some(h_client)).as_bool() {
-                        let mut rc = RECT::default();
-                        if GetClientRect(hwnd, &raw mut rc).is_ok() {
-                            let _ = MoveWindow(h_client, 0, 0, rc.right, rc.bottom, true);
-                        }
-                    }
-                }
-                LRESULT(0)
-            }
-            WM_CLOSE => {
-                // Tell the plugin its panel is closing, then hide
-                // (never destroy — the registration survives and
-                // `NPPM_DMMSHOW` re-shows).
-                //
-                // The delivery shape is upstream's, not a choice:
-                // Notepad++'s `DockingCont::doClose` sends
-                // `DMN_CLOSE` as a plain `WM_NOTIFY` **to the
-                // plugin's own `h_client` dialog**, with
-                // `nmhdr.hwndFrom` = the container window (our
-                // frame), `nmhdr.idFrom` = 0 and `wParam` = 0 —
-                // it does not reach `beNotified` at all. A plugin
-                // built against the upstream headers listens in
-                // its dialog proc for exactly that, so anything
-                // else here would be a notification nobody hears.
-                // Ordering matches too: notify first, hide second.
-                let h_client_raw = GetWindowLongPtrW(hwnd, GWLP_USERDATA);
-                // `_guard` is held for the whole send; `None` means a
-                // delivery is already on the stack and this one is
-                // skipped. See `DmnCloseGuard` for why that is not
-                // optional.
-                let reentry_guard = DmnCloseGuard::enter();
-                if h_client_raw != 0 && reentry_guard.is_some() {
-                    let h_client = HWND(h_client_raw as *mut c_void);
-                    // Same defensive `IsWindow` as `WM_SIZE`: the
-                    // plugin may have destroyed h_client without
-                    // unregistering.
-                    if IsWindow(Some(h_client)).as_bool() {
-                        // `nmhdr` lives on this stack frame, which
-                        // outlives the synchronous `SendMessageW`.
-                        //
-                        // The plugin's dialog proc runs inside
-                        // that call and may send `NPPM_*` straight
-                        // back at the host — which works because
-                        // nothing here holds a `WindowState`
-                        // borrow, the same discipline the
-                        // notification-delivery path follows. The
-                        // one path that degrades is a plugin
-                        // posting `WM_CLOSE` at its own frame from
-                        // inside an NPPM dispatch: the borrow is
-                        // live then, and its re-entrant `NPPM_*`
-                        // is declined rather than answered.
-                        let nmhdr = NMHDR {
-                            hwndFrom: hwnd,
-                            idFrom: 0,
-                            code: codepp_plugin_host::DMN_CLOSE,
-                        };
-                        SendMessageW(
-                            h_client,
-                            WM_NOTIFY,
-                            Some(WPARAM(0)),
-                            Some(LPARAM(&raw const nmhdr as isize)),
-                        );
-                    }
-                }
-                drop(reentry_guard);
-                let _ = ShowWindow(hwnd, SW_HIDE);
-                LRESULT(0)
-            }
-            _ => DefWindowProcW(hwnd, msg, wparam, lparam),
-        }
     }
 }
 
@@ -22717,7 +22644,115 @@ unsafe fn dock_close_panel(main_hwnd: HWND, panel: DockPanel) {
         match panel {
             DockPanel::Workspace => hide_workspace_panel(main_hwnd),
             DockPanel::DocMap => hide_docmap_panel(main_hwnd),
+            // Closing a plugin's panel is the same event its own
+            // floating frame's ✕ used to be, so it owes the plugin
+            // the same `DMN_CLOSE` — that notification is how a
+            // plugin keeps its "Show Console" menu check in step.
+            DockPanel::Plugin(_) => hide_plugin_panel(main_hwnd, panel),
         }
+    }
+}
+
+/// The panel a registered `h_client` belongs to.
+///
+/// A free function rather than a `Win32Ui` method because the trait
+/// impl is the only `impl` block that type has here, and a helper is
+/// not a trait method.
+///
+/// # Safety
+///
+/// `dialogs` must be the live `WindowState.dock_dialogs`; UI thread
+/// only, like every other read of it.
+unsafe fn panel_for_client(
+    dialogs: *const Vec<DockEntry>,
+    h_client: codepp_plugin_host::Hwnd,
+) -> Option<DockPanel> {
+    let h = HWND(h_client);
+    if h.is_invalid() {
+        return None;
+    }
+    unsafe { &*dialogs }
+        .iter()
+        .find(|e| e.h_client.0 == h.0)
+        .map(|e| e.panel)
+}
+
+/// Hide a plugin's dock panel, telling the plugin first.
+///
+/// This is the ✕ on the panel's caption, and it is the same event the
+/// plugin's own floating frame's ✕ used to be — so it owes the plugin
+/// the same `DMN_CLOSE`. That notification is how a plugin keeps a
+/// "Show Console"-style menu check in step with what the user can
+/// actually see; without it the plugin believes its panel is still
+/// open.
+///
+/// Delivery is upstream's shape, not a choice: a plain `WM_NOTIFY` to
+/// the plugin's own `h_client`, `wParam` 0, `nmhdr.hwndFrom` the
+/// host's container, `nmhdr.idFrom` 0. See `plugins/nppcompat-headers/Docking.h`.
+///
+/// # Safety
+///
+/// `main_hwnd` must be the main window HWND. UI thread only.
+unsafe fn hide_plugin_panel(main_hwnd: HWND, panel: DockPanel) {
+    // Resolve under a borrow, notify with none held: the plugin's
+    // handler may send `NPPM_*` straight back at the host, and it can
+    // only be answered if nothing is borrowed — the same discipline
+    // the plugin load follows.
+    let target = unsafe { state_from_hwnd(main_hwnd) }.and_then(|state| {
+        let client = state
+            .dock_dialogs
+            .iter()
+            .find(|e| e.panel == panel)
+            .map(|e| e.h_client)?;
+        let group = state.dock_layout.group_of(panel).map(|g| g.id);
+        Some((client, group))
+    });
+    if let Some((h_client, group)) = target {
+        // The container the notification says it came from: the
+        // group's own window when the panel is in one, else the main
+        // window. A plugin that compares `hwndFrom` gets something
+        // meaningful either way.
+        let from = group
+            .and_then(|id| {
+                unsafe { state_from_hwnd(main_hwnd) }.and_then(|s| {
+                    s.dock_groups
+                        .iter()
+                        .find(|gw| gw.id == id)
+                        .map(|gw| gw.hwnd)
+                })
+            })
+            .unwrap_or(main_hwnd);
+        // `_guard` bounds the round trip: a plugin's handler may close
+        // the panel again, and without the latch that recurses until
+        // the stack faults — a hardware exception no `catch_unwind`
+        // catches. See `DmnCloseGuard`.
+        let reentry_guard = DmnCloseGuard::enter();
+        if reentry_guard.is_some() && unsafe { IsWindow(Some(h_client)) }.as_bool() {
+            let nmhdr = NMHDR {
+                hwndFrom: from,
+                idFrom: 0,
+                code: codepp_plugin_host::DMN_CLOSE,
+            };
+            unsafe {
+                SendMessageW(
+                    h_client,
+                    WM_NOTIFY,
+                    Some(WPARAM(0)),
+                    Some(LPARAM(&raw const nmhdr as isize)),
+                );
+            }
+        }
+        drop(reentry_guard);
+    }
+    let changed = unsafe { state_from_hwnd(main_hwnd) }.is_some_and(|state| {
+        if !state.dock_layout.is_visible(panel) {
+            return false;
+        }
+        state.dock_layout.hide(panel);
+        true
+    });
+    if changed {
+        unsafe { dock_panels::apply_dock_layout(main_hwnd) };
     }
 }
 
@@ -26042,6 +26077,8 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                                         plugin_modeless_dialogs: &raw mut state
                                             .plugin_modeless_dialogs,
                                         dock_dialogs: &raw mut state.dock_dialogs,
+                                        dock_layout: &raw mut state.dock_layout,
+                                        dock_dirty: &raw mut state.dock_dirty,
                                         udl_registry: &raw const state.shell.udl_registry,
                                         editor: state.editor,
                                         docmap_editor: state.docmap_editor,
@@ -26997,6 +27034,22 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                     if needs_rebind {
                         refresh_tab_chrome(hwnd);
                         handle_tab_selchange(hwnd);
+                    }
+                    // A `NPPM_DMM*` handler may have shown, hidden or
+                    // re-activated a plugin panel. The *model* can be
+                    // mutated inside the dispatch; the window tree
+                    // cannot, because `apply_dock_layout` reaches for
+                    // `state_from_hwnd` and would be declined under
+                    // the live split. So the handler marks and the
+                    // reconcile happens here, with the borrow ended —
+                    // the same shape as `needs_rebind` above.
+                    let dock_dirty = state_from_hwnd(hwnd).is_some_and(|s| {
+                        let was = s.dock_dirty;
+                        s.dock_dirty = false;
+                        was
+                    });
+                    if dock_dirty {
+                        dock_panels::apply_dock_layout(hwnd);
                     }
                     if let Some(state) = state_from_hwnd(hwnd) {
                         let tab_hwnd = state.tab_hwnd;
@@ -30125,30 +30178,53 @@ mod dock_dialog_tests {
         );
     }
 
-    /// Both sites that write a frame caption go through the helper.
-    /// Writing `params.name` straight into `CreateWindowExW` is what
-    /// the registration path did before, and it compiled fine.
+    /// Both halves of a plugin's panel identity are sanitized
+    /// **once, at interning**.
+    ///
+    /// For the name that is what makes `DockPanel::title` — which
+    /// every caption and tab label goes through, returning
+    /// `&'static str` — safe by construction rather than by each
+    /// paint site remembering; interning the raw name would push the
+    /// obligation back out to the paint sites, and there are two of
+    /// them in another module. For the module it is one step ahead of
+    /// a sink rather than at one: nothing renders it today, but it is
+    /// half of `persist_key`, so a raw control character in it would
+    /// land in `session.xml`.
     #[test]
-    fn every_caption_site_goes_through_dock_frame_title() {
-        let src = production_src();
-        for site in ["register_dock_dialog", "update_dock_disp_info"] {
-            assert!(
-                code_only(&fn_body(src, site)).contains("dock_frame_title("),
-                "`{site}` writes a caption without sanitizing it"
-            );
-        }
+    fn the_panel_identity_is_interned_from_sanitized_halves() {
+        let body = code_only(&fn_body(production_src(), "register_dock_dialog"));
+        let sanitize = body
+            .find("dock_frame_title(")
+            .expect("the registration no longer sanitizes the plugin's name");
+        let intern = body
+            .find("intern_plugin_panel(")
+            .expect("the registration no longer interns a panel identity");
+        assert!(
+            sanitize < intern,
+            "the name must be sanitized before it becomes the panel identity"
+        );
+        assert!(
+            body.contains("intern_plugin_panel(&display_module, &display_name)"),
+            "the interned identity is not built from the sanitized halves"
+        );
+        assert!(
+            body.contains("sanitize_str_for_display(&params.module_name)"),
+            "the module half of the identity is no longer sanitized"
+        );
     }
 
-    /// The `WM_CLOSE` arm — everything from the arm's label to the
-    /// end of the proc body — with runs of whitespace collapsed, so
-    /// the assertions below survive rustfmt re-wrapping the calls
-    /// they match.
-    fn wm_close_arm() -> String {
-        let body = code_only(&fn_body(production_src(), "dock_frame_wnd_proc_inner"));
-        let at = body
-            .find("WM_CLOSE =>")
-            .expect("the dock frame no longer handles WM_CLOSE");
-        body[at..].split_whitespace().collect::<Vec<_>>().join(" ")
+    /// The body of `hide_plugin_panel`, with runs of whitespace
+    /// collapsed so the assertions below survive rustfmt re-wrapping
+    /// the calls they match.
+    ///
+    /// The `DMN_CLOSE` send used to live in the dock frame's
+    /// `WM_CLOSE`; a plugin panel has no frame of its own any more,
+    /// so the panel's ✕ is where the notification is owed.
+    fn close_path() -> String {
+        code_only(&fn_body(production_src(), "hide_plugin_panel"))
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
     }
 
     /// Upstream notifies the plugin and *then* hides. Both orders
@@ -30158,16 +30234,16 @@ mod dock_dialog_tests {
     /// cannot.
     #[test]
     fn the_close_notifies_the_plugin_before_it_hides_the_frame() {
-        let arm = wm_close_arm();
+        let arm = close_path();
         let notify = arm
             .find("DMN_CLOSE")
-            .expect("WM_CLOSE no longer sends DMN_CLOSE");
+            .expect("the close path no longer sends DMN_CLOSE");
         let hide = arm
-            .find("SW_HIDE")
-            .expect("WM_CLOSE no longer hides the frame");
+            .find("dock_layout.hide(panel)")
+            .expect("the close path no longer hides the panel");
         assert!(
             notify < hide,
-            "DMN_CLOSE must be sent before the frame hides, as Notepad++ does"
+            "DMN_CLOSE must be sent before the panel hides, as Notepad++ does"
         );
     }
 
@@ -30179,13 +30255,13 @@ mod dock_dialog_tests {
     /// the code says the latch is load-bearing, so it is pinned.
     #[test]
     fn the_close_notification_is_gated_on_the_reentrancy_latch() {
-        let arm = wm_close_arm();
+        let arm = close_path();
         let guard = arm
             .find("DmnCloseGuard::enter()")
             .expect("the DMN_CLOSE send is no longer behind a re-entrancy latch");
         let send = arm
             .find("SendMessageW( h_client,")
-            .expect("WM_CLOSE no longer sends DMN_CLOSE");
+            .expect("the close path no longer sends DMN_CLOSE");
         assert!(
             guard < send,
             "the latch must be taken before the send, not after it"
@@ -30202,7 +30278,7 @@ mod dock_dialog_tests {
     /// against the upstream headers would simply never hear either.
     #[test]
     fn the_close_notification_matches_the_upstream_abi() {
-        let arm = wm_close_arm();
+        let arm = close_path();
         assert!(
             arm.contains("WM_NOTIFY"),
             "DMN_CLOSE must travel as WM_NOTIFY"
@@ -30379,8 +30455,47 @@ mod dock_client_style_tests {
     //! inside a window, with two close buttons", as it was reported
     //! against the real `NppExec`.
 
+    use super::class_is_host_owned;
     use super::plugin_reentry_guards::{code_only, fn_body, production_src};
     use super::{dock_client_ex_style, dock_client_style};
+
+    /// The class-prefix half of the `h_client` guard. It has to
+    /// refuse every window class this crate registers and accept
+    /// everything a plugin can plausibly hand over — including a
+    /// plain dialog, which is what a Notepad++ plugin's docking
+    /// dialog is, and a Scintilla view, which a plugin may own.
+    #[test]
+    fn class_is_host_owned_refuses_only_our_own_classes() {
+        for ours in [
+            "CodePlusPlusMainWindow",
+            "CodePlusPlusDockGroup",
+            "CodePlusPlusDockHint",
+            "CodePlusPlusDockSideSplitter",
+            "CodePlusPlusWorkspacePanel",
+            "CodePlusPlusDocMapPanel",
+            "CodePlusPlusFifDock",
+        ] {
+            assert!(class_is_host_owned(ours), "{ours} is one of ours");
+        }
+        for theirs in [
+            // A dialog — the shape every Notepad++ plugin's docking
+            // dialog takes, and the case an earlier `IsChild` guard
+            // wrongly refused.
+            "#32770",
+            // A plugin's own Scintilla, from
+            // `NPPM_CREATESCINTILLAHANDLE`.
+            "Scintilla",
+            "NppExecConsole",
+            "",
+            // Near-misses: the prefix is matched at the start of the
+            // whole name, so a plugin is not refused for merely
+            // mentioning us.
+            "MyCodePlusPlusHelper",
+            "CodePlus",
+        ] {
+            assert!(!class_is_host_owned(theirs), "{theirs} is not ours");
+        }
+    }
 
     /// The styles `NppExec`'s console actually had, read off the live
     /// window: `WS_POPUP | WS_VISIBLE | WS_CAPTION | WS_SYSMENU |

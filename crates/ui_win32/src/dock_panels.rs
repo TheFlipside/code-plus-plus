@@ -370,6 +370,18 @@ fn panel_content_hwnd(state: &WindowState, panel: DockPanel) -> HWND {
     match panel {
         DockPanel::Workspace => state.workspace_hwnd,
         DockPanel::DocMap => state.docmap_hwnd,
+        // A plugin panel's content is the `h_client` the plugin
+        // handed us at `NPPM_DMMREGASDCKDLG`. Null until then: a
+        // layout restored from `session.xml` can name a panel whose
+        // plugin has not been lazily loaded yet, which is the normal
+        // case rather than an error. The reconciler skips a null
+        // content window and the group renders as an empty tab until
+        // the plugin registers.
+        DockPanel::Plugin(_) => state
+            .dock_dialogs
+            .iter()
+            .find(|e| e.panel == panel)
+            .map_or(HWND::default(), |e| e.h_client),
     }
 }
 
@@ -377,6 +389,11 @@ fn panel_icon_index(panel: DockPanel) -> usize {
     match panel {
         DockPanel::Workspace => 0,
         DockPanel::DocMap => 1,
+        // No per-plugin artwork: a plugin's `tTbData.h_icon_tab` is
+        // an `HICON` it owns, and the tab strip blits from a shared
+        // image list. Reusing the document-map glyph is a placeholder
+        // a plugin icon would replace.
+        DockPanel::Plugin(_) => 1,
     }
 }
 
@@ -398,10 +415,21 @@ pub(crate) unsafe fn apply_dock_layout(main_hwnd: HWND) {
                 (
                     state.dock_layout.clone(),
                     state.dock_groups.clone(),
-                    [
-                        (DockPanel::Workspace, state.workspace_hwnd),
-                        (DockPanel::DocMap, state.docmap_hwnd),
-                    ],
+                    {
+                        // Every panel whose content this reconciler
+                        // owns: the two built-in ones, plus each
+                        // plugin panel's `h_client`. It was a fixed
+                        // pair until plugin panels became peers —
+                        // and a plugin panel missing from this list
+                        // is not a compile error, it is a group that
+                        // appears with nothing inside it.
+                        let mut pairs = vec![
+                            (DockPanel::Workspace, state.workspace_hwnd),
+                            (DockPanel::DocMap, state.docmap_hwnd),
+                        ];
+                        pairs.extend(state.dock_dialogs.iter().map(|e| (e.panel, e.h_client)));
+                        pairs
+                    },
                     state.dock_splitters,
                 )
             })
@@ -423,7 +451,8 @@ pub(crate) unsafe fn apply_dock_layout(main_hwnd: HWND) {
                 // Evacuate any panel content back under the main
                 // window BEFORE the container dies — a destroyed
                 // parent would take the content windows with it.
-                for (_, panel_hwnd) in panel_pair {
+                for (_, panel_hwnd) in &panel_pair {
+                    let panel_hwnd = *panel_hwnd;
                     if GetParent(panel_hwnd).unwrap_or_default() == gw.hwnd {
                         let _ = ShowWindow(panel_hwnd, SW_HIDE);
                         let _ = SetParent(panel_hwnd, Some(main_hwnd));
@@ -546,7 +575,7 @@ pub(crate) unsafe fn apply_dock_layout(main_hwnd: HWND) {
         }
         // Hidden panels go back under the (invisible) care of the
         // main window so a dying group can never take them along.
-        for (panel, panel_hwnd) in panel_pair {
+        for (panel, panel_hwnd) in panel_pair.iter().copied() {
             if !layout.is_visible(panel) {
                 let _ = ShowWindow(panel_hwnd, SW_HIDE);
                 if GetParent(panel_hwnd).unwrap_or_default() != main_hwnd {

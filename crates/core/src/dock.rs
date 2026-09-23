@@ -81,21 +81,144 @@ pub const MIN_FLOAT_H: i32 = 100;
 /// safer first impression for a horizontal strip).
 const DEFAULT_SIDE_SIZE: [i32; 4] = [240, 160, 160, 160];
 
-/// A dockable panel. Today the two Phase 4.6 panels; future plugin
-/// panels extend this enum (or, once panels become dynamically
-/// registered, replace it with an id space — the persistence layer
-/// already keys on a string so the wire format survives that change).
+/// Identity of a plugin-registered dock panel.
+///
+/// Held by [`DockPanel::Plugin`] as a `&'static`, which is what lets
+/// `DockPanel` stay `Copy` — and `Copy` is not a nicety here: the
+/// type is a `HashMap` key, sits in const arrays, and is copied
+/// through every layout computation and every backend's reconciler.
+/// A `String` in the enum would have rewritten all of that.
+///
+/// See [`intern_plugin_panel`] for how these come to be `'static`.
+#[derive(Debug, PartialEq, Eq, Hash)]
+pub struct PluginPanelIdent {
+    /// The plugin's module name (`tTbData.pszModuleName`), which is
+    /// what disambiguates two plugins offering the same panel name.
+    pub module: String,
+    /// The panel's display name (`tTbData.pszName`), shown on the
+    /// caption and the tab, and the key `NPPM_DMMVIEWOTHERTAB` and
+    /// `NPPM_DMMGETPLUGINHWNDBYNAME` look up.
+    pub name: String,
+    /// [`DockPanel::persist_key`]'s answer, precomputed so it can be
+    /// returned as `&'static str` like the built-in panels'.
+    key: String,
+}
+
+/// Registered plugin panels, in interning order.
+///
+/// Leaked on purpose. A plugin panel is registered once and never
+/// unregistered — `PluginHost` never unloads a plugin, and a panel
+/// outlives every layout that mentions it — so the alternative to
+/// leaking is a registry that every `title()` call site would have to
+/// be handed. Bounded by [`MAX_PLUGIN_PANELS`]; a process at the cap
+/// refuses further registrations rather than growing.
+static PLUGIN_PANELS: std::sync::Mutex<Vec<&'static PluginPanelIdent>> =
+    std::sync::Mutex::new(Vec::new());
+
+/// Ceiling on interned plugin panels, mirroring the Win32 host's own
+/// registration cap. The point is that the leak above is bounded by a
+/// constant rather than by whatever a plugin — or a hand-edited
+/// `session.xml` — asks for.
+///
+/// Deliberately not covered by a test that reaches it. The table is
+/// process-global and never shrinks, so a test that interns 64
+/// identities would starve every sibling test in the same binary of
+/// the ability to intern one — an order-dependent suite, traded for a
+/// property the cap check makes structurally: it is the one early
+/// return inside the single mutex-guarded critical section, ahead of
+/// every allocation, on the only path that can add an entry. What
+/// *is* tested is the boundary that a caller can actually cross,
+/// [`MAX_PLUGIN_PANEL_FIELD_LEN`].
+pub const MAX_PLUGIN_PANELS: usize = 64;
+
+/// Ceiling on the bytes of either half of a plugin panel's identity.
+///
+/// [`MAX_PLUGIN_PANELS`] bounds how many identities can be leaked;
+/// this bounds how large one can be, which matters because
+/// [`DockPanel::from_persist_key`] interns straight from
+/// `session.xml` — a file the user can edit and a crash can
+/// truncate. Generous against any real module filename or panel
+/// title, so it never rejects something legitimate.
+pub const MAX_PLUGIN_PANEL_FIELD_LEN: usize = 256;
+
+/// Intern `(module, name)` into a [`DockPanel::Plugin`].
+///
+/// Idempotent: the same pair always yields the same panel, so a
+/// plugin re-registering, and a `session.xml` naming a panel that
+/// plugin also registers, converge on one identity rather than two
+/// that compare unequal.
+///
+/// `None` for an empty or over-long `module` / `name` (see
+/// [`MAX_PLUGIN_PANEL_FIELD_LEN`]), and once [`MAX_PLUGIN_PANELS`]
+/// distinct panels exist.
+///
+/// A `|` in either half is refused too: it is the separator
+/// [`DockPanel::persist_key`] joins them with, so a name carrying one
+/// would round-trip back through [`DockPanel::from_persist_key`] as a
+/// *different* split — a panel able to collide with another plugin's
+/// identity by choosing its own title.
+#[must_use]
+pub fn intern_plugin_panel(module: &str, name: &str) -> Option<DockPanel> {
+    let usable = |s: &str| {
+        !s.is_empty()
+            && s.len() <= MAX_PLUGIN_PANEL_FIELD_LEN
+            && !s.contains(PLUGIN_PANEL_SEPARATOR)
+    };
+    if !usable(module) || !usable(name) {
+        return None;
+    }
+    let mut panels = PLUGIN_PANELS.lock().ok()?;
+    if let Some(found) = panels.iter().find(|p| p.module == module && p.name == name) {
+        return Some(DockPanel::Plugin(found));
+    }
+    if panels.len() >= MAX_PLUGIN_PANELS {
+        return None;
+    }
+    let ident: &'static PluginPanelIdent = Box::leak(Box::new(PluginPanelIdent {
+        module: module.to_string(),
+        name: name.to_string(),
+        key: format!("{PLUGIN_PANEL_KEY_PREFIX}{module}{PLUGIN_PANEL_SEPARATOR}{name}"),
+    }));
+    panels.push(ident);
+    Some(DockPanel::Plugin(ident))
+}
+
+/// Prefix distinguishing a plugin panel's `session.xml` key from the
+/// built-in panels' bare keys. The separator inside is `|`, which
+/// cannot appear in a Win32 module filename.
+const PLUGIN_PANEL_KEY_PREFIX: &str = "plugin:";
+
+/// Separator between the two halves of a plugin panel's key. Refused
+/// inside either half by [`intern_plugin_panel`], so the split is
+/// unambiguous in both directions.
+const PLUGIN_PANEL_SEPARATOR: char = '|';
+
+/// A dockable panel: the two built-in ones, or a plugin-registered
+/// panel identified by an interned [`PluginPanelIdent`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum DockPanel {
     /// "Folder as Workspace" — the lazily-populated folder tree.
     Workspace,
     /// "Document Map" — the miniature second Scintilla view.
     DocMap,
+    /// A panel a plugin registered through `NPPM_DMMREGASDCKDLG`.
+    /// Only the Win32 backend ever creates these: the message
+    /// carries an `HWND`, and the other two backends decline it.
+    Plugin(&'static PluginPanelIdent),
 }
 
 impl DockPanel {
-    /// Every panel, for iteration. Order is presentation-neutral.
-    pub const ALL: [DockPanel; 2] = [DockPanel::Workspace, DockPanel::DocMap];
+    /// The panels that exist in every process, for iteration.
+    ///
+    /// **Not every panel**: plugin panels are interned at
+    /// registration and are not in here, so a caller that means
+    /// "every panel this layout might mention" must not iterate
+    /// this. There is deliberately no such iterator — the one place
+    /// that needs the full set is the Win32 dock reconciler, which
+    /// builds it from the live registrations it already holds, so
+    /// that a panel whose plugin has not loaded yet is absent rather
+    /// than present with no content window.
+    pub const BUILT_IN: [DockPanel; 2] = [DockPanel::Workspace, DockPanel::DocMap];
 
     /// Human-readable title shown in the group caption and on the
     /// panel's tab when active.
@@ -104,6 +227,17 @@ impl DockPanel {
         match self {
             DockPanel::Workspace => "Folder as Workspace",
             DockPanel::DocMap => "Document Map",
+            DockPanel::Plugin(ident) => &ident.name,
+        }
+    }
+
+    /// The plugin module that registered this panel, or `None` for a
+    /// built-in one.
+    #[must_use]
+    pub fn plugin_module(self) -> Option<&'static str> {
+        match self {
+            DockPanel::Plugin(ident) => Some(&ident.module),
+            _ => None,
         }
     }
 
@@ -114,6 +248,7 @@ impl DockPanel {
         match self {
             DockPanel::Workspace => "workspace",
             DockPanel::DocMap => "docmap",
+            DockPanel::Plugin(ident) => &ident.key,
         }
     }
 
@@ -122,23 +257,40 @@ impl DockPanel {
     /// with those panels silently dropped rather than erroring, the
     /// same forward-compatibility posture the rest of `session.xml`
     /// takes.
+    ///
+    /// A `plugin:` key interns, so a restored layout can place a
+    /// panel *before* the plugin that owns it has been lazily loaded
+    /// — which is the normal case, since plugins load on first touch
+    /// and the layout is restored at startup. The panel simply has no
+    /// content window until its plugin registers.
     #[must_use]
     pub fn from_persist_key(key: &str) -> Option<DockPanel> {
         match key {
             "workspace" => Some(DockPanel::Workspace),
             "docmap" => Some(DockPanel::DocMap),
-            _ => None,
+            other => {
+                let rest = other.strip_prefix(PLUGIN_PANEL_KEY_PREFIX)?;
+                let (module, name) = rest.split_once(PLUGIN_PANEL_SEPARATOR)?;
+                intern_plugin_panel(module, name)
+            }
         }
     }
 
     /// The side a panel docks to the first time it is shown with no
     /// remembered location — the pre-dock fixed positions, kept so
     /// the refactor changes nothing for a user who never drags.
+    ///
+    /// Plugin panels default to the bottom, which is where Notepad++
+    /// puts a console and where a panel that expresses no preference
+    /// is least in the way. A plugin that *does* express one, through
+    /// `tTbData.u_mask`'s `DWS_DF_CONT_*` bits, is placed there
+    /// instead by the caller — this is only the fallback.
     #[must_use]
     pub fn default_side(self) -> DockSide {
         match self {
             DockPanel::Workspace => DockSide::Left,
             DockPanel::DocMap => DockSide::Right,
+            DockPanel::Plugin(_) => DockSide::Bottom,
         }
     }
 }
@@ -353,6 +505,17 @@ pub struct DockLayout {
     /// reopens where the user last had it rather than at the
     /// factory default. At most one entry per panel.
     remembered: Vec<(DockPanel, DockLocation)>,
+    /// Where a panel that has *never* been placed should first
+    /// appear, and the weaker of the two: [`Self::remembered`] wins,
+    /// so anything the user chose survives. Separate from it rather
+    /// than folded into it because the two mean different things —
+    /// a remembered `Side` reopens the panel in a band of its own,
+    /// whereas this says "the container on that side", which is the
+    /// upstream docking manager's model and the reason two plugins
+    /// asking for `DWS_DF_CONT_BOTTOM` become tabs rather than two
+    /// stacked bands. Not persisted: it is re-seeded from each
+    /// plugin's `tTbData.u_mask` at every registration.
+    initial_side: Vec<(DockPanel, DockSide)>,
     /// Next group id. Monotonic, never reused within a session (and
     /// re-seeded past every persisted id on load).
     next_id: u32,
@@ -364,6 +527,7 @@ impl Default for DockLayout {
             groups: Vec::new(),
             side_size: DEFAULT_SIDE_SIZE,
             remembered: Vec::new(),
+            initial_side: Vec::new(),
             next_id: 1,
         }
     }
@@ -454,6 +618,33 @@ impl DockLayout {
         self.remembered.push((panel, location));
     }
 
+    /// Say which side's container `panel` should join the first
+    /// time it is shown, **without** overriding a position the user
+    /// already chose.
+    ///
+    /// For a plugin panel this carries `tTbData.u_mask`'s
+    /// `DWS_DF_CONT_*` preference into the model. Upstream's docking
+    /// manager has exactly one container per side, so that bit means
+    /// "put me in the bottom container", not "give me a band of my
+    /// own" — which is why [`Self::show`] *joins* an existing group
+    /// on this side rather than inserting beside it.
+    ///
+    /// Precedence over a user's own arrangement falls out of where
+    /// the two are stored rather than being special-cased:
+    /// [`Self::show`] consults [`Self::remembered`] first, and that
+    /// is what a hide (and a restored session) populates.
+    pub fn set_initial_side(&mut self, panel: DockPanel, side: DockSide) {
+        self.initial_side.retain(|(p, _)| *p != panel);
+        self.initial_side.push((panel, side));
+    }
+
+    fn initial_side_for(&self, panel: DockPanel) -> Option<DockSide> {
+        self.initial_side
+            .iter()
+            .find(|(p, _)| *p == panel)
+            .map(|(_, s)| *s)
+    }
+
     fn remembered_for(&self, panel: DockPanel) -> Option<DockLocation> {
         self.remembered
             .iter()
@@ -507,6 +698,31 @@ impl DockLayout {
         id
     }
 
+    /// Forget every plugin panel: out of the groups, out of both
+    /// placement tables.
+    ///
+    /// For a backend that cannot host one. A plugin registers its
+    /// dock dialog through `NPPM_DMMREGASDCKDLG`, which only the
+    /// Win32 host accepts (DESIGN.md §7.4 — the `HWND`-shaped
+    /// `UiPlatform` methods keep their trait defaults on GTK and
+    /// Cocoa), yet `session.xml` is portable and a layout written on
+    /// Windows names panels by a key that interns on any platform. A
+    /// backend that called this at restore never sees a panel it has
+    /// no content window for; one that did not would render an empty
+    /// group and have no way to close it.
+    pub fn drop_plugin_panels(&mut self) {
+        self.groups.retain_mut(|g| {
+            g.panels.retain(|p| !matches!(p, DockPanel::Plugin(_)));
+            g.active = g.active.min(g.panels.len().saturating_sub(1));
+            !g.panels.is_empty()
+        });
+        self.remembered
+            .retain(|(p, _)| !matches!(p, DockPanel::Plugin(_)));
+        self.initial_side
+            .retain(|(p, _)| !matches!(p, DockPanel::Plugin(_)));
+        self.debug_assert_invariants();
+    }
+
     /// Show `panel`. Already visible → just make it the active tab
     /// of its group (a "show" on an open-but-behind panel reveals
     /// it). Hidden → reopen at its remembered location, or the
@@ -516,10 +732,30 @@ impl DockLayout {
             self.activate(panel);
             return;
         }
-        let location = self
-            .remembered_for(panel)
-            .unwrap_or(DockLocation::Side(panel.default_side()));
-        self.insert_panel_at(panel, location);
+        if let Some(location) = self.remembered_for(panel) {
+            self.insert_panel_at(panel, location);
+            return;
+        }
+        // Never placed before. A registration-supplied side means the
+        // *container* there (see `set_initial_side`), so join a group
+        // that already occupies it; the panel's own default side is
+        // only a fallback and opens a band of its own, which is what
+        // the two built-in panels have always done.
+        if let Some(side) = self.initial_side_for(panel) {
+            if let Some(group) = self
+                .groups
+                .iter_mut()
+                .find(|g| g.location == DockLocation::Side(side))
+            {
+                group.panels.push(panel);
+                group.active = group.panels.len() - 1;
+                self.debug_assert_invariants();
+                return;
+            }
+            self.insert_panel_at(panel, DockLocation::Side(side));
+            return;
+        }
+        self.insert_panel_at(panel, DockLocation::Side(panel.default_side()));
     }
 
     /// Hide `panel`, remembering where it was so the next
@@ -1226,6 +1462,164 @@ mod tests {
 
     fn mid() -> DockRect {
         DockRect::new(0, 0, 1000, 700)
+    }
+
+    /// Two plugins asking for the same `DWS_DF_CONT_*` side become
+    /// tabs in one container, which is what upstream's docking
+    /// manager does — it has exactly one container per side — and is
+    /// what makes `NPPM_DMMVIEWOTHERTAB` mean anything: the message
+    /// switches between tabs that share a container.
+    #[test]
+    fn two_registration_sides_share_one_container() {
+        let a = intern_plugin_panel("a.dll", "Panel A").expect("intern A");
+        let b = intern_plugin_panel("b.dll", "Panel B").expect("intern B");
+        let mut l = DockLayout::new();
+        l.set_initial_side(a, DockSide::Bottom);
+        l.set_initial_side(b, DockSide::Bottom);
+        l.show(a);
+        l.show(b);
+
+        let ga = l.group_of(a).expect("A visible");
+        let gb = l.group_of(b).expect("B visible");
+        assert_eq!(ga.id, gb.id, "both panels should share one group");
+        assert_eq!(ga.panels, vec![a, b]);
+        // The panel just shown is the visible tab...
+        assert_eq!(ga.panels[ga.active], b);
+        // ...and `NPPM_DMMVIEWOTHERTAB` brings the other one forward.
+        l.activate(a);
+        assert_eq!(
+            l.group_of(a).expect("A visible").panels[l.group_of(a).unwrap().active],
+            a
+        );
+    }
+
+    /// The precedence that lets a plugin state a preference without
+    /// overriding the user: a location the user's own arrangement
+    /// recorded wins, and it opens a band of its own rather than
+    /// joining whatever else happens to be on that side.
+    #[test]
+    fn a_remembered_location_beats_a_registration_side() {
+        let a = intern_plugin_panel("pref-a.dll", "Pref A").expect("intern A");
+        let b = intern_plugin_panel("pref-b.dll", "Pref B").expect("intern B");
+        let mut l = DockLayout::new();
+        l.set_initial_side(a, DockSide::Bottom);
+        l.show(a);
+
+        // The user dragged B to the bottom and closed it again, so
+        // the bottom is remembered for B — even though B's
+        // registration also asked for the bottom.
+        l.set_initial_side(b, DockSide::Bottom);
+        l.show(b);
+        l.move_panel(b, DropTarget::Side(DockSide::Bottom));
+        l.hide(b);
+        assert!(!l.is_visible(b));
+
+        l.show(b);
+        assert_ne!(
+            l.group_of(a).expect("A visible").id,
+            l.group_of(b).expect("B visible").id,
+            "a remembered Side means a band of its own, not the container there"
+        );
+    }
+
+    /// The identity a `session.xml` key restores has to be the same
+    /// one the plugin's own registration interns, or a restored
+    /// layout and a live registration describe two panels that
+    /// compare unequal and the group renders empty.
+    #[test]
+    fn a_plugin_panel_round_trips_through_its_persist_key() {
+        let panel = intern_plugin_panel("rt.dll", "Round Trip").expect("intern");
+        let key = panel.persist_key();
+        assert_eq!(key, "plugin:rt.dll|Round Trip");
+        assert_eq!(DockPanel::from_persist_key(key), Some(panel));
+        // Interning the same pair again is the same identity, not a
+        // second one that merely prints the same.
+        assert_eq!(intern_plugin_panel("rt.dll", "Round Trip"), Some(panel));
+        // The module is part of the identity: two plugins may ship a
+        // panel with the same display name.
+        let other = intern_plugin_panel("other.dll", "Round Trip").expect("intern other");
+        assert_ne!(other, panel);
+        assert_eq!(panel.title(), "Round Trip");
+    }
+
+    /// A key that is not a plugin key, or is a malformed one, must
+    /// not intern anything — `session.xml` is hand-editable, and
+    /// `MAX_PLUGIN_PANELS` is the only thing bounding the leak.
+    #[test]
+    fn a_malformed_plugin_key_interns_nothing() {
+        assert_eq!(DockPanel::from_persist_key("plugin:no-separator"), None);
+        assert_eq!(DockPanel::from_persist_key("plugin:"), None);
+        assert_eq!(DockPanel::from_persist_key("nonsense"), None);
+        // Either half empty.
+        assert_eq!(DockPanel::from_persist_key("plugin:|name"), None);
+        assert_eq!(DockPanel::from_persist_key("plugin:mod|"), None);
+        // Either half over the field cap. The intern table is leaked
+        // for the process's life and this key comes off disk, so an
+        // over-long half is refused rather than truncated — two keys
+        // that truncate alike would otherwise become one panel.
+        let long = "x".repeat(MAX_PLUGIN_PANEL_FIELD_LEN + 1);
+        assert_eq!(
+            DockPanel::from_persist_key(&format!("plugin:{long}|name")),
+            None
+        );
+        assert_eq!(
+            DockPanel::from_persist_key(&format!("plugin:mod|{long}")),
+            None
+        );
+        // At the cap exactly, it is accepted.
+        let at_cap = "y".repeat(MAX_PLUGIN_PANEL_FIELD_LEN);
+        assert!(DockPanel::from_persist_key(&format!("plugin:{at_cap}|n")).is_some());
+        // A separator inside a half would re-split differently on the
+        // way back, letting a plugin choose a title that collides
+        // with another plugin's identity.
+        assert_eq!(intern_plugin_panel("mod", "a|b"), None);
+        assert_eq!(intern_plugin_panel("a|b", "name"), None);
+        assert_eq!(
+            DockPanel::from_persist_key("workspace"),
+            Some(DockPanel::Workspace)
+        );
+    }
+
+    /// The backends that cannot host a plugin panel drop them at
+    /// restore, and a shared group must survive losing one tab
+    /// rather than taking the whole group with it.
+    #[test]
+    fn dropping_plugin_panels_leaves_a_valid_layout() {
+        let a = intern_plugin_panel("drop.dll", "Drop A").expect("intern A");
+        let b = intern_plugin_panel("drop.dll", "Drop B").expect("intern B");
+        let mut l = DockLayout::new();
+        l.show(DockPanel::DocMap);
+        l.set_initial_side(a, DockSide::Right);
+        l.show(a);
+        l.set_initial_side(b, DockSide::Bottom);
+        l.show(b);
+        l.hide(b);
+        // Preconditions: A shares the docmap's group and is its
+        // active tab; B is hidden but remembered.
+        assert_eq!(
+            l.group_of(a).expect("A visible").panels,
+            vec![DockPanel::DocMap, a]
+        );
+        assert_eq!(l.group_of(a).unwrap().active, 1);
+        assert!(!l.is_visible(b));
+
+        l.drop_plugin_panels();
+
+        assert!(!l.is_visible(a));
+        assert_eq!(
+            l.group_of(DockPanel::DocMap)
+                .expect("docmap survives")
+                .panels,
+            vec![DockPanel::DocMap],
+            "losing a tab must not take the group with it"
+        );
+        assert_eq!(l.group_of(DockPanel::DocMap).unwrap().active, 0);
+        // And neither plugin panel can be resurrected by a show:
+        // nothing remembers them, so they are simply gone.
+        assert!(l
+            .groups()
+            .iter()
+            .all(|g| g.panels.iter().all(|p| !matches!(p, DockPanel::Plugin(_)))));
     }
 
     #[test]
