@@ -3151,6 +3151,51 @@ impl Shell {
         self.plugins.next_pending_load()
     }
 
+    /// [`Self::next_plugin_to_load`], restricted to the plugins that
+    /// own a dock panel the restored session had open.
+    ///
+    /// The startup counterpart of the lazy triggers: a panel the user
+    /// left docked is a recorded interaction with *that* plugin, so
+    /// loading it is what lets the panel come back — the plugin is
+    /// the only thing that can supply its content window, and most
+    /// register it from `NPPN_TBMODIFICATION`. Notepad++ reaches the
+    /// same end by loading everything at startup; this pays for only
+    /// the plugins the arrangement names.
+    pub fn next_restored_panel_plugin_to_load(&mut self) -> Option<PendingLoad> {
+        let modules = self.modules_with_restored_panels();
+        if modules.is_empty() {
+            return None;
+        }
+        self.plugins.next_pending_load_in(Some(&modules))
+    }
+
+    /// Module keys of every plugin owning a *docked* panel in the
+    /// restored dock layout, deduped.
+    ///
+    /// Docked, not visible: a group's inactive tabs are in here too.
+    /// That is deliberate — an inactive tab is still part of the
+    /// arrangement the user left, and pre-loading its plugin is what
+    /// stops the panel being blank the moment they click its tab.
+    /// Panels the user *closed* are not, because `hide` takes them
+    /// out of the groups this walks and into the remembered table.
+    #[must_use]
+    pub fn modules_with_restored_panels(&self) -> Vec<String> {
+        let layout = self.restored_dock_layout();
+        let mut out: Vec<String> = Vec::new();
+        for group in layout.groups() {
+            for panel in &group.panels {
+                let Some(module) = panel.plugin_module() else {
+                    continue;
+                };
+                let key = codepp_core::shortcuts::module_key(module);
+                if !out.contains(&key) {
+                    out.push(key);
+                }
+            }
+        }
+        out
+    }
+
     /// Record one [`Self::next_plugin_to_load`] outcome. Returns the
     /// load-time notifications the caller must deliver **after**
     /// dropping its borrow, for the same reason the load itself runs
@@ -17553,6 +17598,74 @@ mod tests {
         assert_eq!(ExportFileKind::Rtf.dialog_filter().2, "rtf");
         // Other forces no extension, so a chosen name is written verbatim.
         assert_eq!(ExportFileKind::Other.dialog_filter().2, "");
+    }
+
+    /// The startup load is keyed on the plugins a docked restored
+    /// panel names, and nobody else — that narrowness is what keeps
+    /// DESIGN.md §8's "zero plugins loaded until something touches
+    /// them" true for the plugins a user has installed but is not
+    /// using.
+    #[test]
+    fn only_plugins_with_a_docked_restored_panel_are_named() {
+        use codepp_core::dock::{DockLayout, DockPanel, DockSide};
+
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+
+        // Nothing restored: nothing to load.
+        assert!(shell.modules_with_restored_panels().is_empty());
+
+        let shown =
+            codepp_core::dock::intern_plugin_panel("NppExec.dll", "Console").expect("intern shown");
+        let hidden =
+            codepp_core::dock::intern_plugin_panel("Other.dll", "Panel").expect("intern hidden");
+
+        let mut layout = DockLayout::new();
+        layout.set_initial_side(shown, DockSide::Bottom);
+        layout.show(shown);
+        // A built-in panel alongside, to prove it contributes no
+        // module — it has no plugin to load.
+        layout.show(DockPanel::DocMap);
+        // `hidden` is shown and then closed, which is the state of a
+        // panel the user had open earlier in the session and shut
+        // before quitting: it survives in the layout's remembered
+        // table, so this proves the walk reads *groups* rather than
+        // every panel the layout has heard of.
+        layout.set_initial_side(hidden, DockSide::Left);
+        layout.show(hidden);
+        layout.hide(hidden);
+        assert!(!layout.is_visible(hidden), "precondition: it is closed");
+        shell.set_dock_session(Some(layout.to_session()));
+
+        let modules = shell.modules_with_restored_panels();
+        // Normalised through `module_key`, so the `.dll` is gone and
+        // the comparison against a discovered plugin's filename is
+        // case- and extension-insensitive.
+        assert_eq!(modules, vec!["nppexec".to_string()]);
+    }
+
+    /// Two panels from one plugin name it once: the load loop asks
+    /// repeatedly and a duplicate would be a wasted pass.
+    #[test]
+    fn one_plugin_with_two_restored_panels_is_named_once() {
+        use codepp_core::dock::{DockLayout, DockSide};
+
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+
+        let a = codepp_core::dock::intern_plugin_panel("Twin.dll", "A").expect("intern a");
+        let b = codepp_core::dock::intern_plugin_panel("Twin.dll", "B").expect("intern b");
+        let mut layout = DockLayout::new();
+        layout.set_initial_side(a, DockSide::Bottom);
+        layout.set_initial_side(b, DockSide::Bottom);
+        layout.show(a);
+        layout.show(b);
+        shell.set_dock_session(Some(layout.to_session()));
+
+        assert_eq!(
+            shell.modules_with_restored_panels(),
+            vec!["twin".to_string()]
+        );
     }
 
     /// `restored_dock_layout` precedence: a persisted `<dock>`

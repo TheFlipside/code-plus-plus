@@ -36,6 +36,7 @@ RED = "#E53935"      # close / stop / record
 ORANGE = "#FB8C00"   # paste / highlight
 YELLOW = "#FBC02D"   # folder
 GRAY = "#90A4AE"     # secondary lines
+PURPLE = "#8E24AA"   # plugin / extension
 
 SVG_OPEN = (
     '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" '
@@ -500,6 +501,28 @@ ICONS["save-macro"] = (
     f'stroke="{INK}" stroke-width="1.1"/>'
     f'<path d="M12.5 18 H18.5 M12.5 20 H17" '
     f'stroke="{INK}" stroke-width="0.9"/>'
+)
+
+
+# ---------- Generic plugin panel (dock tab fallback) -------------------------
+
+# The tab-bar glyph for a plugin dock panel whose plugin supplied no
+# `tTbData.h_icon_tab`. A jigsaw piece is the near-universal "plugin"
+# metaphor, and it has to survive being the *only* thing on an
+# inactive tab: those show an icon and no label, so this is what
+# distinguishes "some plugin's panel" from the workspace folder and
+# the document map beside it.
+#
+# One knob and one socket rather than two knobs — the asymmetry is
+# what still reads as a jigsaw piece once it is scaled to 16px.
+ICONS["plugin-panel"] = (
+    f'<path d="M4 4 H9 A3 3 0 0 1 15 4 H20 V9 '
+    f'A3 3 0 0 1 20 15 V20 H4 V15 A3 3 0 0 0 4 9 Z" '
+    f'fill="{PURPLE}" stroke="{INK}" stroke-width="1.5" '
+    f'stroke-linejoin="round"/>'
+    # a highlight along the top-left so the flat fill has some form
+    f'<path d="M6 17.5 V6 H8.5" stroke="#FAFAFA" stroke-width="1.1" '
+    f'opacity="0.55" fill="none"/>'
 )
 
 

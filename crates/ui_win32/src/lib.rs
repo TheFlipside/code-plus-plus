@@ -174,14 +174,15 @@ use windows::Win32::Foundation::{
 };
 use windows::Win32::Graphics::Gdi::{
     AlphaBlend, BeginPaint, BitBlt, ClientToScreen, CreateCompatibleBitmap, CreateCompatibleDC,
-    CreateFontIndirectW, CreatePen, CreateSolidBrush, DeleteDC, DeleteObject, DrawTextW, EndPaint,
-    EnumFontFamiliesExW, FillRect, GetDC, GetMonitorInfoW, GetStockObject, GetSysColor,
-    GetSysColorBrush, InvalidateRect, LineTo, MonitorFromWindow, MoveToEx, Polygon, ReleaseDC,
-    ScreenToClient, SelectObject, SetBkColor, SetBkMode, SetTextColor, UpdateWindow, AC_SRC_ALPHA,
-    AC_SRC_OVER, BLENDFUNCTION, COLOR_3DFACE, COLOR_WINDOW, DEFAULT_CHARSET, DEFAULT_GUI_FONT,
-    DT_END_ELLIPSIS, DT_NOPREFIX, DT_SINGLELINE, DT_VCENTER, FW_BOLD, HBITMAP, HBRUSH, HDC, HFONT,
-    HGDIOBJ, LOGFONTW, MONITORINFO, MONITOR_DEFAULTTONEAREST, NULL_BRUSH, PAINTSTRUCT, PS_SOLID,
-    SRCCOPY, TEXTMETRICW, TRANSPARENT,
+    CreateDIBSection, CreateFontIndirectW, CreatePen, CreateSolidBrush, DeleteDC, DeleteObject,
+    DrawTextW, EndPaint, EnumFontFamiliesExW, FillRect, GetDC, GetMonitorInfoW, GetStockObject,
+    GetSysColor, GetSysColorBrush, InvalidateRect, LineTo, MonitorFromWindow, MoveToEx, Polygon,
+    ReleaseDC, ScreenToClient, SelectObject, SetBkColor, SetBkMode, SetTextColor, UpdateWindow,
+    AC_SRC_ALPHA, AC_SRC_OVER, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, BLENDFUNCTION, COLOR_3DFACE,
+    COLOR_WINDOW, DEFAULT_CHARSET, DEFAULT_GUI_FONT, DIB_RGB_COLORS, DT_END_ELLIPSIS, DT_NOPREFIX,
+    DT_SINGLELINE, DT_VCENTER, FW_BOLD, HBITMAP, HBRUSH, HDC, HFONT, HGDIOBJ, LOGFONTW,
+    MONITORINFO, MONITOR_DEFAULTTONEAREST, NULL_BRUSH, PAINTSTRUCT, PS_SOLID, SRCCOPY, TEXTMETRICW,
+    TRANSPARENT,
 };
 use windows::Win32::Storage::FileSystem::{
     GetFileVersionInfoSizeW, GetFileVersionInfoW, VerQueryValueW, VS_FIXEDFILEINFO,
@@ -1238,6 +1239,15 @@ struct DockEntry {
     /// addresses dialogs by this id.
     #[allow(dead_code)]
     dlg_id: i32,
+    /// The plugin's own tab icon, converted once at registration
+    /// from `tTbData.h_icon_tab` into the premultiplied-BGRA bitmap
+    /// the tab bar blits.
+    ///
+    /// `None` when the plugin set no `DWS_ICONTAB`, passed a null
+    /// icon, or the conversion failed; the tab then falls back to a
+    /// generic glyph. Owned by the host — the plugin keeps its
+    /// `HICON`, this bitmap is ours and is deleted at teardown.
+    tab_icon: Option<HBITMAP>,
     /// Snapshot of `tTbData.u_mask` at registration time.
     ///
     /// The `DWS_DF_CONT_*` nibble is acted on, but from
@@ -1546,11 +1556,15 @@ struct WindowState {
     dock_drag: Option<dock_panels::DockDrag>,
     /// In-flight side-splitter drag, if any.
     dock_side_drag: Option<dock_panels::DockSideDrag>,
-    /// Tab-bar icons (24 px premultiplied-BGRA DIBs), indexed
-    /// workspace = 0, docmap = 1 — the same `assets/icons/` art
-    /// the toolbar's quick-action buttons use, per the feature
-    /// spec.
-    dock_tab_icons: [HBITMAP; 2],
+    /// Tab-bar icons (24 px premultiplied-BGRA DIBs), indexed by
+    /// [`dock_panels::panel_icon_index`]: workspace = 0, docmap = 1,
+    /// generic plugin = 2 — the same `assets/icons/` art the
+    /// toolbar's quick-action buttons use, per the feature spec.
+    ///
+    /// The plugin entry is a *fallback*. A plugin that supplied a
+    /// `tTbData.h_icon_tab` gets its own artwork instead, converted
+    /// once at registration — see [`DockEntry::tab_icon`].
+    dock_tab_icons: [HBITMAP; 3],
 
     // --- Workspace panel content (Phase 4.6 m1+) ---
     //
@@ -3462,8 +3476,18 @@ impl UiPlatform for Win32Ui {
             // plugin can register at `setInfo` time without anything
             // appearing.
             let _ = ShowWindow(h_client, SW_HIDE);
+            // Converted now rather than per paint: `DrawIconEx`
+            // into a DIB plus a premultiply pass is far too much for
+            // every tab-bar repaint, and the `HICON` is only
+            // guaranteed live for the duration of this call.
+            let tab_icon = if params.u_mask & codepp_plugin_host::DWS_ICONTAB != 0 {
+                icon_to_tab_bitmap(HICON(params.h_icon_tab))
+            } else {
+                None
+            };
             dialogs.push(DockEntry {
                 panel,
+                tab_icon,
                 tb_data: params.tb_data,
                 h_client,
                 name: params.name,
@@ -4587,7 +4611,7 @@ unsafe fn fire_queued_notifications(hwnd: HWND) {
 
 /// The delivery half of [`fire_queued_notifications`], without the
 /// dialog flush. Only `WM_DESTROY` calls this directly: it drains the
-/// last notifications between the session save and `NPPN_SHUTDOWN`,
+/// last notifications after `NPPN_SHUTDOWN` and the session save,
 /// where a modal would run a nested pump on a window that is being
 /// torn down.
 ///
@@ -17836,6 +17860,8 @@ pub fn run(initial_path: Option<PathBuf>, perf: codepp_core::perf::Perf) -> Resu
                 .unwrap_or_default(),
             toolbar::png_to_hbitmap(include_bytes!("../../../assets/icons/document-map.png"))
                 .unwrap_or_default(),
+            toolbar::png_to_hbitmap(include_bytes!("../../../assets/icons/plugin-panel.png"))
+                .unwrap_or_default(),
         ];
         // Miniature Scintilla view inside the docmap panel body.
         // Bound to the active tab's document via
@@ -18600,6 +18626,26 @@ pub fn run(initial_path: Option<PathBuf>, perf: codepp_core::perf::Perf) -> Resu
         // `<workspace>` / `<docmap>` fields) and reconcile the
         // native windows to it.
         apply_saved_dock(main_hwnd);
+        // A restored plugin panel is a group with no content window
+        // until the plugin that owns it registers one, and a plugin
+        // registers nothing until it is loaded. Load exactly those —
+        // not every discovered plugin, so DESIGN.md §8's lazy-load
+        // constraint still holds for the ones the arrangement does
+        // not name — and the registration that follows fills the
+        // group through the reconciler's `dock_dirty` path.
+        //
+        // After `apply_saved_dock`, because the set is read from the
+        // restored layout; before the pump, so the panel is there on
+        // the first paint rather than appearing a moment later.
+        load_plugins_where(
+            main_hwnd,
+            NppData {
+                npp_handle: main_hwnd.0,
+                scintilla_main_handle: scintilla_hwnd.0,
+                scintilla_second_handle: core::ptr::null_mut(),
+            },
+            PluginLoadScope::RestoredPanels,
+        );
         // Seed the map view with the active tab's document so
         // the miniature view isn't blank on first paint. Runs
         // regardless of the map's visibility — the panel might be
@@ -19997,6 +20043,25 @@ fn dock_frame_title(name: &str, module_name: &str) -> String {
 /// the host — is bounded inside `PluginHost`, whose latch answers
 /// "nothing pending" while a load is outstanding.
 unsafe fn load_pending_plugins(hwnd: HWND, npp_data: NppData) {
+    unsafe { load_plugins_where(hwnd, npp_data, PluginLoadScope::All) };
+}
+
+/// Which plugins a [`load_plugins_where`] pass is allowed to load.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PluginLoadScope {
+    /// Every discovered plugin — what the lazy triggers in §6.4 do
+    /// once the user reaches for the Plugins menu or a plugin hotkey.
+    All,
+    /// Only the plugins owning a dock panel the restored session had
+    /// open. The startup pass: without it a restored plugin panel is
+    /// a group with nothing in it, because the plugin that supplies
+    /// the content window has not been loaded and nothing will load
+    /// it until the user opens a menu they have no reason to connect
+    /// with the empty band they are looking at.
+    RestoredPanels,
+}
+
+unsafe fn load_plugins_where(hwnd: HWND, npp_data: NppData, scope: PluginLoadScope) {
     // `PluginCallGuard` used to do two jobs here. Declining a
     // plugin's re-entrant `NPPM_*` was the bug; suppressing the
     // `WM_APP_WAKE` drain was a side effect worth keeping, because
@@ -20012,7 +20077,10 @@ unsafe fn load_pending_plugins(hwnd: HWND, npp_data: NppData) {
     // the same reason.
     let _freeze = DrainFreeze::new(hwnd);
     loop {
-        let pending = unsafe { state_from_hwnd(hwnd) }.and_then(|s| s.shell.next_plugin_to_load());
+        let pending = unsafe { state_from_hwnd(hwnd) }.and_then(|s| match scope {
+            PluginLoadScope::All => s.shell.next_plugin_to_load(),
+            PluginLoadScope::RestoredPanels => s.shell.next_restored_panel_plugin_to_load(),
+        });
         let Some(pending) = pending else { break };
         // No borrow held: `setInfo` and `getFuncsArray` run here, and
         // anything they send the host is answered for real.
@@ -22753,6 +22821,198 @@ unsafe fn hide_plugin_panel(main_hwnd: HWND, panel: DockPanel) {
     });
     if changed {
         unsafe { dock_panels::apply_dock_layout(main_hwnd) };
+    }
+}
+
+/// Render an `HICON` into the premultiplied-BGRA bitmap the dock
+/// tab bar blits with `AlphaBlend`.
+///
+/// The tab bar's own two glyphs are decoded from PNGs that are
+/// already in that form; a plugin hands us an `HICON` instead, so it
+/// is drawn into a top-down 32-bit DIB and the pixels are
+/// premultiplied by hand — `AlphaBlend` with `AC_SRC_ALPHA` requires
+/// that, and `DrawIconEx` does not do it.
+///
+/// Drawn straight at the tab's icon size so Windows does the scaling
+/// against whichever image in the icon is the best match, rather than
+/// us resampling a 32×32 down to 16×16 afterwards.
+///
+/// `None` for a null icon or any GDI failure — the caller falls back
+/// to a generic glyph, which is a tab that looks plain rather than a
+/// tab that is missing.
+///
+/// # Safety
+///
+/// `hicon` must be a valid icon handle or null. UI thread only.
+unsafe fn icon_to_tab_bitmap(hicon: HICON) -> Option<HBITMAP> {
+    if hicon.is_invalid() {
+        return None;
+    }
+    let size = dock_panels::DOCK_TAB_ICON_PX;
+    let info = BITMAPINFO {
+        bmiHeader: BITMAPINFOHEADER {
+            biSize: u32::try_from(core::mem::size_of::<BITMAPINFOHEADER>()).ok()?,
+            biWidth: size,
+            // Negative height selects a top-down DIB, so the byte
+            // order matches what `blit_icon` expects.
+            biHeight: -size,
+            biPlanes: 1,
+            biBitCount: 32,
+            biCompression: BI_RGB.0,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let mut bits: *mut core::ffi::c_void = core::ptr::null_mut();
+    unsafe {
+        let screen = GetDC(None);
+        if screen.is_invalid() {
+            return None;
+        }
+        let dib = CreateDIBSection(
+            Some(screen),
+            &raw const info,
+            DIB_RGB_COLORS,
+            &raw mut bits,
+            None,
+            0,
+        );
+        let mem = CreateCompatibleDC(Some(screen));
+        ReleaseDC(None, screen);
+        let Ok(dib) = dib else {
+            if !mem.is_invalid() {
+                let _ = DeleteDC(mem);
+            }
+            return None;
+        };
+        if mem.is_invalid() || bits.is_null() {
+            let _ = DeleteObject(HGDIOBJ(dib.0));
+            return None;
+        }
+        let old = SelectObject(mem, HGDIOBJ(dib.0));
+        let drawn = DrawIconEx(mem, 0, 0, hicon, size, size, 0, None, DI_NORMAL).is_ok();
+        SelectObject(mem, old);
+        let _ = DeleteDC(mem);
+        if !drawn {
+            let _ = DeleteObject(HGDIOBJ(dib.0));
+            return None;
+        }
+        // Premultiply in place. An icon with no alpha channel at all
+        // comes back fully transparent under this, which would blit
+        // as nothing — so a run that is entirely zero-alpha is taken
+        // as "no alpha information" and forced opaque, which is what
+        // a legacy 24-bit icon means.
+        let count = (size * size) as usize;
+        let px = core::slice::from_raw_parts_mut(bits.cast::<[u8; 4]>(), count);
+        if px.iter().all(|p| p[3] == 0) {
+            for p in px.iter_mut() {
+                p[3] = 0xFF;
+            }
+        } else {
+            for p in px.iter_mut() {
+                let a = u32::from(p[3]);
+                for c in &mut p[..3] {
+                    *c = u8::try_from(u32::from(*c) * a / 255).unwrap_or(*c);
+                }
+            }
+        }
+        Some(dib)
+    }
+}
+
+/// Tell every loaded plugin the app is shutting down, exactly once.
+///
+/// Captures the panel state the session save will persist, then
+/// delivers `NPPN_BEFORESHUTDOWN` and `NPPN_SHUTDOWN`.
+///
+/// **Called from `WM_CLOSE`, and the timing is the point.** A plugin
+/// that persists whether its dock panel was open asks Win32 at this
+/// moment, and `IsWindowVisible` is false for every descendant of a
+/// hidden window — so delivering at `WM_DESTROY`, after Windows has
+/// hidden the frame, tells every plugin its panel was closed. That is
+/// not a hypothetical: the real `NppExec` writes `[Console] Visible=0`
+/// and comes back with its console shut, where Notepad++ restores it.
+///
+/// Latched rather than called from one place, because the window can
+/// be destroyed without a `WM_CLOSE` — `ID_FILE_EXIT` does exactly
+/// that, and a plugin may call `DestroyWindow` itself — and a lost
+/// shutdown notification costs a plugin its saved state. `WM_DESTROY`
+/// therefore calls this too; whichever arrives first wins and the
+/// other is a no-op.
+///
+/// The capture runs *before* the notifications so the persisted
+/// layout is the one the user had, not whatever a plugin left behind
+/// while tearing itself down.
+///
+/// **A plugin that destroys the window from its own handler is
+/// newly reachable, and costs that session's save.** Running from
+/// `WM_CLOSE` means the window has not entered Windows' destroy
+/// sequence yet, so a `beNotified` that calls `DestroyWindow`
+/// re-enters `main_wnd_proc`'s `WM_DESTROY` arm synchronously — with
+/// this function's `PluginCallGuard` still armed, so every
+/// `state_from_hwnd` in that nested pass answers `None` and the
+/// session save, timer cleanup and GDI teardown are all skipped.
+/// Windows sends `WM_DESTROY` once, so the outer frame gets no
+/// second chance at them: the user's tabs and dock layout are not
+/// written, silently.
+///
+/// What *is* defended against is the memory-safety half: the
+/// `WindowState` reclaim in that arm now declines while a plugin
+/// call is on the stack, so the nested pass cannot free the state
+/// the outer frame is still inside. See the comment there.
+///
+/// The save is left unfixed rather than papered over. Persisting
+/// from here instead would mean writing `session.xml` before the
+/// plugins are told — and the backups a save takes are not free to
+/// repeat — so closing it properly means restructuring teardown
+/// around a "teardown already ran" latch rather than moving one
+/// call. The trigger is a plugin closing an application that is
+/// already closing, which no plugin in the test matrix does.
+unsafe fn notify_plugins_of_shutdown(hwnd: HWND) {
+    thread_local! {
+        static DONE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    }
+    if DONE.with(|d| d.replace(true)) {
+        return;
+    }
+    unsafe {
+        sync_workspace_state_to_shell(hwnd);
+        sync_docmap_state_to_shell(hwnd);
+        sync_dock_state_to_shell(hwnd);
+        // Both notifications are dispatched synchronously (via
+        // `notify_plugins`, not the deferred queue) so they reach the
+        // plugin at a moment when its own windows still exist, which
+        // is the whole reason this function is called from
+        // `WM_CLOSE`. Anything a plugin queues from inside them lands
+        // in `pending_notifications` and is drained by the
+        // `deliver_queued_notifications` call in `WM_DESTROY`.
+        //
+        // A re-entrant `NPPM_*` from inside these two handlers is
+        // **declined**, and that is the guard's cost rather than a
+        // side effect — §7.4's notification work left
+        // `PluginCallGuard` armed on exactly this pair because the
+        // teardown around it cannot drop its borrows first. A plugin
+        // querying the host from `beNotified(NPPN_SHUTDOWN)` reads a
+        // plausible 0 / -1 / false, not live session data. (An
+        // earlier version of this comment claimed the opposite; the
+        // guard two lines below has always said otherwise.)
+        //
+        // Code++'s delivery model means a plugin cannot veto
+        // shutdown (the upstream contract allows that; our queue is
+        // one-way), so `NPPN_BEFORESHUTDOWN` is informational.
+        //
+        // The `PluginCallGuard` stops a plugin's re-entrant
+        // `SendMessage` materializing a second `&mut WindowState`;
+        // the `catch_unwind` keeps a host-internal panic from
+        // unwinding across the `extern "system"` wnd_proc frame.
+        for notification in [Notification::BeforeShutdown, Notification::Shutdown] {
+            if let Some(state) = state_from_hwnd(hwnd) {
+                let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    let _guard = PluginCallGuard::enter();
+                    state.shell.notify_plugins(notification, hwnd.0);
+                }));
+            }
+        }
     }
 }
 
@@ -26717,6 +26977,28 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                 FillRect(hdc, &raw const rect, editor_border_brush());
                 LRESULT(1)
             }
+            WM_CLOSE => {
+                // Tell the plugins the app is closing **here**, not
+                // from `WM_DESTROY`, because a plugin asked at
+                // `WM_DESTROY` time can no longer see its own panel.
+                //
+                // `WM_DESTROY` arrives after Windows has already
+                // hidden the frame, and `IsWindowVisible` walks the
+                // ancestor chain — so a plugin whose dock panel is on
+                // screen is told it is hidden. Measured with the real
+                // NppExec, whose console carried `WS_VISIBLE` on its
+                // own window while `IsWindowVisible` answered false
+                // because the main window no longer did; it persisted
+                // "console hidden" and came back closed on the next
+                // launch, which is not what Notepad++ does. At
+                // `WM_CLOSE` the window is still up and the answer is
+                // the true one.
+                //
+                // Destruction is then left to `DefWindowProc`, which
+                // is what turns a `WM_CLOSE` into a `DestroyWindow`.
+                notify_plugins_of_shutdown(hwnd);
+                DefWindowProcW(hwnd, msg, wparam, lparam)
+            }
             WM_DESTROY => {
                 // Persist the session before tearing down. Pull live
                 // text/cursor through the editor while it still
@@ -26730,38 +27012,15 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                 // reaching into a torn-down tree HWND is UB.
                 let _ = KillTimer(Some(hwnd), AUTOSAVE_TIMER_ID);
                 let _ = KillTimer(Some(hwnd), WORKSPACE_UNFOLD_TIMER_ID);
-                // Fire NPPN_BEFORESHUTDOWN before any host-side
-                // teardown. Plugins use this hook to save their
-                // own state alongside the host's session save.
-                // Code++'s queue-deferred delivery model means a
-                // plugin response cannot veto shutdown (the
-                // upstream contract allows that, but the queue
-                // is one-way), so this is informational only.
-                //
-                // Dispatched synchronously (via `notify_plugins`,
-                // not `fire_queued_notifications`) so a plugin's
-                // `beNotified(BEFORESHUTDOWN)` handler can still
-                // call back into NPPM messages that need live
-                // session data — `Shell.tabs`, the
-                // file-watcher state, the editor handle. Any
-                // notifications a plugin queues from inside its
-                // BEFORESHUTDOWN handler land in
-                // `pending_notifications` and get drained by the
-                // `fire_queued_notifications` call further down.
-                if let Some(state) = state_from_hwnd(hwnd) {
-                    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                        let _guard = PluginCallGuard::enter();
-                        state
-                            .shell
-                            .notify_plugins(Notification::BeforeShutdown, hwnd.0);
-                    }));
-                }
-                // Capture workspace + docmap panel state into the
-                // shell's session cache BEFORE the shutdown save
-                // runs — same rationale as the autosave path above.
-                sync_workspace_state_to_shell(hwnd);
-                sync_docmap_state_to_shell(hwnd);
-                sync_dock_state_to_shell(hwnd);
+                // Normally already done by `WM_CLOSE`; latched, so
+                // this is the fallback for a route that destroys the
+                // window without one — `DestroyWindow` called
+                // directly, by us or by a plugin. The panel-visibility
+                // answer a plugin gets here is the wrong one (see the
+                // `WM_CLOSE` arm), which is exactly why that arm
+                // exists; losing the notification entirely would be
+                // worse than delivering it late.
+                notify_plugins_of_shutdown(hwnd);
                 if let Some(state) = state_from_hwnd(hwnd) {
                     let (shell, mut ui) = state.split();
                     // catch_unwind for the same reason as
@@ -26797,24 +27056,6 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                     }
                 }
 
-                // Fire NPPN_SHUTDOWN to every loaded plugin while the
-                // WindowState (and the PluginHost it owns) still
-                // exists. The PluginCallGuard prevents a plugin's
-                // beNotified from materializing a second
-                // &mut WindowState via re-entrant SendMessage; the
-                // catch_unwind keeps a host-internal panic from
-                // unwinding across the extern "system" wnd_proc.
-                if let Some(state) = state_from_hwnd(hwnd) {
-                    // Guard inside the catch_unwind closure so the
-                    // nested-guard assert (if it ever fired) is
-                    // caught here. Same pattern as
-                    // `fire_queued_notifications`.
-                    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                        let _guard = PluginCallGuard::enter();
-                        state.shell.notify_plugins(Notification::Shutdown, hwnd.0);
-                    }));
-                }
-
                 // Free the toolbar's image list. The OS would
                 // reclaim it at process exit anyway, but explicit
                 // teardown matches the project's "leak nothing on
@@ -26828,8 +27069,10 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                 // leak the imagelist on shutdown.
                 //
                 // Detach the imagelist from the toolbar *before*
-                // destroying it — `NPPN_SHUTDOWN` fires immediately
-                // above, and a plugin's handler is allowed to call
+                // destroying it — `NPPN_SHUTDOWN` has already been
+                // delivered by this point (from `WM_CLOSE`, or from
+                // the fallback at the top of this arm), and a
+                // plugin's handler is allowed to call
                 // `RedrawWindow` / `UpdateWindow` on top-level UI
                 // (not banned by the ABI). With the imagelist
                 // detached first, even a worst-case re-paint hits
@@ -26858,6 +27101,21 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                     }
                     if !state.tab_save_red_hbm.is_invalid() {
                         let _ = DeleteObject(state.tab_save_red_hbm.into());
+                    }
+                    for bmp in state.dock_tab_icons {
+                        if !bmp.is_invalid() {
+                            let _ = DeleteObject(bmp.into());
+                        }
+                    }
+                    // And every plugin tab icon we converted at
+                    // registration. The plugin owns the `HICON` it
+                    // gave us; these bitmaps are the host's own copy
+                    // (see `DockEntry::tab_icon`), so they are ours
+                    // to delete — same rationale as the two above.
+                    for entry in &*state.dock_dialogs {
+                        if let Some(bmp) = entry.tab_icon {
+                            let _ = DeleteObject(bmp.into());
+                        }
                     }
                 }
 
@@ -26889,8 +27147,33 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                 // `state_from_hwnd` (GWLP_USERDATA == 0), so any late
                 // plugin SendMessage during teardown is safely
                 // dispatched as DefWindowProcW.
+                //
+                // **Freeing is skipped while a plugin call is on the
+                // stack, and that asymmetry is the point.** Every
+                // other cleanup block in this arm reaches its state
+                // through `state_from_hwnd`, which declines under
+                // `PluginCallGuard`; this one went straight to the
+                // raw pointer, so it was the single step a nested
+                // teardown could complete. A plugin that calls
+                // `DestroyWindow` from its own shutdown handler —
+                // ABI-legal, and newly reachable now that the
+                // notification is delivered before the window is
+                // being torn down — re-enters here with the guard
+                // armed, and would free `WindowState` out from under
+                // the frame that is still inside the delivery.
+                //
+                // That is not a use-after-free *today*, because
+                // `Shell::notify_plugins` snapshots the `beNotified`
+                // pointers into an owned `Vec` and touches no host
+                // state once a plugin is running. But nothing pins
+                // that, and an ordinary refactor of the delivery loop
+                // would turn it into one silently. Leaking the box on
+                // this path costs nothing — `PostQuitMessage` is two
+                // lines below and the process is on its way out — and
+                // it makes the safety local instead of borrowed from
+                // a function three crates away.
                 let raw = SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
-                if raw != 0 {
+                if raw != 0 && !PLUGIN_CALL_ACTIVE.load(Ordering::Acquire) {
                     let _ = Box::from_raw(raw as *mut WindowState);
                 }
                 PostQuitMessage(0);
@@ -30328,6 +30611,109 @@ mod plugin_staging_guards {
 }
 
 #[cfg(test)]
+#[cfg(test)]
+mod shutdown_timing_guards {
+    //! A plugin that persists whether its dock panel was open asks
+    //! Win32 at `NPPN_SHUTDOWN` time, and `IsWindowVisible` is false
+    //! for every descendant of a hidden window. Deliver from
+    //! `WM_DESTROY` — after Windows has hidden the frame — and every
+    //! such plugin is told its panel was closed, and comes back
+    //! closed. Measured against the real `NppExec`, which wrote
+    //! `[Console] Visible=0` for a console that was plainly on
+    //! screen.
+    //!
+    //! Both orderings compile, neither is visible in a diff of the
+    //! function that moved, and the symptom appears one launch later
+    //! in a plugin's own config file. So they are pinned here.
+
+    use super::plugin_reentry_guards::{code_only, fn_body, production_src};
+
+    /// The notification goes out from `WM_CLOSE`, while the window is
+    /// still up. `WM_DESTROY` keeps a call too — `ID_FILE_EXIT`
+    /// destroys the window directly, and a plugin may call
+    /// `DestroyWindow` itself — but it is the fallback, not the
+    /// route.
+    #[test]
+    fn the_shutdown_notification_is_sent_from_wm_close() {
+        let src = code_only(production_src());
+        let close = src
+            .find("WM_CLOSE => {")
+            .expect("the main window's WM_CLOSE arm is gone");
+        let destroy = src
+            .find("WM_DESTROY => {")
+            .expect("the main window's WM_DESTROY arm is gone");
+        let call = "notify_plugins_of_shutdown(hwnd);";
+        let first = src[close..destroy].find(call).expect(
+            "WM_CLOSE no longer tells the plugins the app is closing; \
+                     a plugin asked at WM_DESTROY time is told its panel is hidden, \
+                     because the frame is already hidden by then",
+        );
+        assert!(
+            close + first < destroy,
+            "the WM_CLOSE call moved out of the WM_CLOSE arm"
+        );
+        assert!(
+            src[destroy..].contains(call),
+            "WM_DESTROY no longer carries the fallback call; a close route that \
+             skips WM_CLOSE (ID_FILE_EXIT, a plugin's own DestroyWindow) would \
+             lose the shutdown notification entirely"
+        );
+    }
+
+    /// The panel-state capture runs *before* the plugins are told,
+    /// so what is persisted is the arrangement the user had rather
+    /// than whatever a plugin left while tearing itself down.
+    #[test]
+    fn the_layout_is_captured_before_the_plugins_are_told() {
+        let body = code_only(&fn_body(production_src(), "notify_plugins_of_shutdown"));
+        let capture = body
+            .find("sync_dock_state_to_shell(hwnd);")
+            .expect("the dock capture is gone from the shutdown path");
+        let notify = body
+            .find("notify_plugins(notification, hwnd.0)")
+            .expect("the shutdown notification is gone");
+        assert!(
+            capture < notify,
+            "the plugins are told before the layout is captured; a plugin that \
+             hides its panel from its handler would have that persisted instead \
+             of the arrangement the user left"
+        );
+    }
+
+    /// The `WindowState` reclaim declines while a plugin call is on
+    /// the stack.
+    ///
+    /// It is the only cleanup step in `WM_DESTROY` that does not
+    /// reach its state through `state_from_hwnd`, so it is the only
+    /// one a nested teardown — a plugin calling `DestroyWindow` from
+    /// its own shutdown handler — can complete. Ungated, it frees
+    /// `WindowState` under the frame still delivering the
+    /// notification. That is inert only because `notify_plugins`
+    /// snapshots the entry points and touches no host state
+    /// afterwards, which is a fact about another crate and is exactly
+    /// the kind a refactor changes without noticing.
+    #[test]
+    fn the_state_reclaim_declines_during_a_plugin_call() {
+        let src = code_only(production_src());
+        assert!(
+            src.contains("if raw != 0 && !PLUGIN_CALL_ACTIVE.load(Ordering::Acquire) {"),
+            "the WindowState reclaim no longer checks for an in-flight plugin call;              a plugin that destroys the window from its shutdown handler would free              the state the outer frame is still inside"
+        );
+    }
+
+    /// Latched, so no close route can deliver it twice.
+    #[test]
+    fn the_shutdown_notification_is_latched() {
+        let body = code_only(&fn_body(production_src(), "notify_plugins_of_shutdown"));
+        assert!(
+            body.contains("DONE.with(|d| d.replace(true))"),
+            "the once-only latch is gone; a window closed through WM_CLOSE would \
+             tell every plugin twice, once more from the WM_DESTROY fallback"
+        );
+    }
+}
+
+#[cfg(test)]
 mod plugin_load_borrow_guards {
     //! The rule this backend just learned: no `WindowState` borrow may
     //! be held while a plugin's own entry points run. Holding one
@@ -30345,7 +30731,7 @@ mod plugin_load_borrow_guards {
     /// would restore the bug exactly.
     #[test]
     fn the_load_loop_holds_no_plugin_call_guard() {
-        let body = code_only(&fn_body(production_src(), "load_pending_plugins"));
+        let body = code_only(&fn_body(production_src(), "load_plugins_where"));
         assert!(
             !body.contains("PluginCallGuard"),
             "the load loop arms PluginCallGuard again; a plugin's setInfo query \
@@ -30368,7 +30754,7 @@ mod plugin_load_borrow_guards {
     /// the borrow across the plugin.
     #[test]
     fn the_load_runs_between_the_borrows() {
-        let whole = code_only(&fn_body(production_src(), "load_pending_plugins"));
+        let whole = code_only(&fn_body(production_src(), "load_plugins_where"));
         // Only the loop matters: the tail after it runs with no
         // plugin call ahead of it, so a binding there is harmless.
         // Brace-matched rather than cut at a marker, because the tail

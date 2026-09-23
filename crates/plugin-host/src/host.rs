@@ -591,17 +591,36 @@ impl PluginHost {
     /// gets depends on how many `FuncItem`s its predecessors
     /// published.
     pub fn next_pending_load(&mut self) -> Option<PendingLoad> {
+        self.next_pending_load_in(None)
+    }
+
+    /// [`Self::next_pending_load`], restricted to a set of module
+    /// keys (`codepp_core::shortcuts::module_key` spelling).
+    ///
+    /// `None` means "any plugin", which is what the lazy triggers in
+    /// §6.4 want. A set is what the startup restore wants: a panel
+    /// the user had docked last session needs *its* plugin loaded and
+    /// nobody else's, so the §8 constraint — no plugin loaded until
+    /// something touches it — still holds for the other thirty-nine a
+    /// user may have installed.
+    pub fn next_pending_load_in(&mut self, only: Option<&[String]>) -> Option<PendingLoad> {
         if self.load_in_progress {
             // A nested loader — see the field doc. Answering here
             // would duplicate a command-id range.
             return None;
         }
         let cmd_id_base = self.next_cmd_id;
-        let (idx, plugin) = self
-            .plugins
-            .iter()
-            .enumerate()
-            .find(|(_, p)| !p.is_loaded() && p.failed_reason().is_none() && !p.disabled)?;
+        let (idx, plugin) = self.plugins.iter().enumerate().find(|(_, p)| {
+            if p.is_loaded() || p.failed_reason().is_some() || p.disabled {
+                return false;
+            }
+            only.is_none_or(|keys| {
+                p.path
+                    .file_name()
+                    .map(|n| codepp_core::shortcuts::module_key(&n.to_string_lossy()))
+                    .is_some_and(|k| keys.contains(&k))
+            })
+        })?;
         let pending = PendingLoad {
             idx,
             path: plugin.path.clone(),

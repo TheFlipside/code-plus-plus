@@ -389,11 +389,13 @@ fn panel_icon_index(panel: DockPanel) -> usize {
     match panel {
         DockPanel::Workspace => 0,
         DockPanel::DocMap => 1,
-        // No per-plugin artwork: a plugin's `tTbData.h_icon_tab` is
-        // an `HICON` it owns, and the tab strip blits from a shared
-        // image list. Reusing the document-map glyph is a placeholder
-        // a plugin icon would replace.
-        DockPanel::Plugin(_) => 1,
+        // A plugin that supplied its own `tTbData.h_icon_tab` never
+        // reaches here — `DockEntry::tab_icon` wins. This is the
+        // fallback for one that did not, and it earns a glyph of its
+        // own rather than borrowing the document map's: an inactive
+        // tab shows the icon and nothing else, so two panels sharing
+        // one is two tabs the user cannot tell apart.
+        DockPanel::Plugin(_) => 2,
     }
 }
 
@@ -905,17 +907,34 @@ unsafe fn on_group_size(ghwnd: HWND) {
 unsafe fn paint_group(ghwnd: HWND) {
     unsafe {
         let snapshot = group_snapshot(ghwnd);
-        // Icon bitmaps live on the main state; grab them in the
-        // same brief borrow.
-        let icons = snapshot
+        // Icon bitmaps live on the main state; grab them, and the
+        // per-plugin ones, in the same brief borrow.
+        let (icons, plugin_icons) = snapshot
             .as_ref()
-            .and_then(|(main, _)| state_from_hwnd(*main).map(|state| state.dock_tab_icons));
+            .and_then(|(main, _)| state_from_hwnd(*main))
+            .map_or((None, Vec::new()), |state| {
+                (
+                    Some(state.dock_tab_icons),
+                    // Empty for the overwhelmingly common case of a
+                    // group holding only built-in panels, so the
+                    // allocation is skipped on most repaints.
+                    if state.dock_dialogs.is_empty() {
+                        Vec::new()
+                    } else {
+                        state
+                            .dock_dialogs
+                            .iter()
+                            .filter_map(|e| e.tab_icon.map(|bmp| (e.panel, bmp)))
+                            .collect()
+                    },
+                )
+            });
         let mut ps = PAINTSTRUCT::default();
         let hdc = BeginPaint(ghwnd, &raw mut ps);
         if let Some((_, snap)) = snapshot {
             let mut rc = RECT::default();
             let _ = GetClientRect(ghwnd, &raw mut rc);
-            draw_group_chrome(hdc, ghwnd, rc.right, rc.bottom, &snap, icons);
+            draw_group_chrome(hdc, ghwnd, rc.right, rc.bottom, &snap, icons, &plugin_icons);
         }
         let _ = EndPaint(ghwnd, &raw const ps);
     }
@@ -927,7 +946,8 @@ unsafe fn draw_group_chrome(
     w: i32,
     h: i32,
     snap: &GroupSnapshot,
-    icons: Option<[HBITMAP; 2]>,
+    icons: Option<[HBITMAP; 3]>,
+    plugin_icons: &[(DockPanel, HBITMAP)],
 ) {
     unsafe {
         let font = HFONT(GetStockObject(DEFAULT_GUI_FONT).0);
@@ -994,13 +1014,19 @@ unsafe fn draw_group_chrome(
                     FillRect(hdc, &raw const tab_rc, GetSysColorBrush(COLOR_WINDOW));
                 }
                 let icon_y = bar_top + (DOCK_TAB_BAR_H - DOCK_TAB_ICON_PX) / 2;
-                if let Some(icons) = icons {
-                    blit_icon(
-                        hdc,
-                        icons[panel_icon_index(*panel)],
-                        tx + DOCK_TAB_PAD,
-                        icon_y,
-                    );
+                // A plugin's own icon wins over the built-in glyph.
+                // It is what tells two plugin panels apart at all: an
+                // inactive tab is icon-only, so without this every
+                // plugin tab in a group looks identical (and looks
+                // like the Document Map, which is the placeholder
+                // they all shared).
+                let bitmap = plugin_icons
+                    .iter()
+                    .find(|(p, _)| p == panel)
+                    .map(|(_, bmp)| *bmp)
+                    .or_else(|| icons.map(|i| i[panel_icon_index(*panel)]));
+                if let Some(bitmap) = bitmap {
+                    blit_icon(hdc, bitmap, tx + DOCK_TAB_PAD, icon_y);
                 }
                 if i == snap.active {
                     let mut label: Vec<u16> = panel.title().encode_utf16().collect();
