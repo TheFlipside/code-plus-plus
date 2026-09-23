@@ -207,11 +207,16 @@ enum PluginState {
 /// the load itself run with no host borrow held — its fields stay
 /// private.
 pub struct LoadedPlugin {
-    /// The `DynLib`'s job is to keep the underlying DLL mapped: when
-    /// `LoadedPlugin` drops, `lib` drops, which calls `FreeLibrary`
-    /// and unloads the plugin. Clippy does not count `Drop` as a
-    /// field-read, so the field appears unread to dead-code analysis;
-    /// the allow attribute documents the intentional ownership.
+    /// The `DynLib`'s job is to keep the underlying DLL mapped for
+    /// as long as the plugin is loaded. Clippy does not count `Drop`
+    /// as a field-read, so the field appears unread to dead-code
+    /// analysis; the allow attribute documents the intentional
+    /// ownership.
+    ///
+    /// **Its `Drop` — which would `FreeLibrary` — is deliberately
+    /// never reached.** `PluginHost::drop` destructures this struct
+    /// and `mem::forget`s the library; see that impl for why
+    /// unloading a plugin at teardown crashes the host.
     #[allow(dead_code)]
     lib: DynLib,
     set_info: SetInfoFn,
@@ -277,9 +282,11 @@ pub const PLUGIN_ALLOC_MARKER_LIMIT: i32 = 32;
 /// through `Shell` to enumerate, load, dispatch.
 pub struct PluginHost {
     /// Every discovered plugin. **Entries are never removed and a
-    /// loaded plugin is never unloaded** while the host lives — only
-    /// `PluginHost`'s own drop releases the DLLs. The UI relies on
-    /// that: `crate::dispatch::NotifyTargets` snapshots the loaded
+    /// loaded plugin is never unloaded** — not while the host lives,
+    /// and not by the host's own drop either, which deliberately
+    /// leaks the libraries rather than `FreeLibrary`ing them (see
+    /// `impl Drop for PluginHost`). The UI relies on the first half
+    /// of that: `crate::dispatch::NotifyTargets` snapshots the loaded
     /// plugins' `beNotified` pointers and calls them after the borrow
     /// on this host has been dropped. A future unload / hot-reload
     /// path must invalidate those snapshots first.
@@ -731,6 +738,74 @@ impl PluginHost {
             }
         }
         None
+    }
+}
+
+impl Drop for PluginHost {
+    /// **Deliberately does not unload the plugin libraries.**
+    ///
+    /// `DynLib`'s own `Drop` calls `FreeLibrary`, and running it here
+    /// — at process teardown, which is the only place a `PluginHost`
+    /// is dropped — crashes the host. Measured rather than reasoned
+    /// about: with the real `NppExec` loaded, Code++ exited
+    /// `0xC0000005` (`STATUS_ACCESS_VIOLATION`) every time, and
+    /// skipping the `FreeLibrary` made it exit `0` every time, with
+    /// no other change.
+    ///
+    /// The reason is that a host cannot know what a plugin still has
+    /// alive. Unmapping the library leaves any window whose `WNDPROC`
+    /// lives in it, any `SetTimer` callback, any thread, any hook and
+    /// any TLS destructor pointing at addresses that are no longer
+    /// mapped — and Windows keeps delivering to them. Our own dock
+    /// frames make one instance of that certain rather than likely:
+    /// they are *owned* by the main window, so Win32 destroys them
+    /// after the main window's `WM_DESTROY` returns, which is after
+    /// this drop runs, and destroying a frame destroys the plugin's
+    /// client window with it. But `NppExec` crashes without registering
+    /// a dock at all, so enumerating the cases is not a strategy.
+    ///
+    /// What is lost by not unloading: nothing the OS does not do a
+    /// moment later. The process is exiting; every mapping goes with
+    /// it. `NPPN_SHUTDOWN` still fires (from each backend's
+    /// `WM_DESTROY`, while everything is still mapped), so a plugin
+    /// still gets its documented chance to save state.
+    ///
+    /// This is the one place the host deviates from DESIGN.md §6.4's
+    /// "on exit: `NPPN_SHUTDOWN` → unload", and §6.4 records why.
+    ///
+    /// Applied on every platform, but **measured only on Windows** —
+    /// the repro needs a real third-party plugin and there is no
+    /// Linux or macOS runner on the development host. The POSIX
+    /// analogue of the hazard is real (an `atexit` handler, a
+    /// pthread TLS destructor or a signal handler registered by a
+    /// `dlclose`d `.so`), so the unconditional choice is the
+    /// conservative one rather than a verified one.
+    ///
+    /// **The leak is per drop, not per process**, and nothing here
+    /// enforces that a `PluginHost` is dropped only at exit — an
+    /// assertion to that effect was tried and removed, because the
+    /// test suite legitimately builds and drops many hosts in one
+    /// process and it fired on all of them. Each backend builds
+    /// exactly one `Shell`, so the invariant holds today by
+    /// construction. A future hot-reload or restart-without-exit path
+    /// would make this leak per cycle and unbounded, silently; such a
+    /// path needs a real unload story (drain the plugin's windows and
+    /// timers first, then `FreeLibrary`) rather than this.
+    fn drop(&mut self) {
+        for plugin in &mut self.plugins {
+            let state = std::mem::replace(&mut plugin.state, PluginState::Pending);
+            if let PluginState::Loaded(loaded) = state {
+                // Leak *only* the library. The rest of `LoadedPlugin`
+                // — the cached `FuncItem`s, the shortcut defaults,
+                // the name — is ordinary host-owned heap with no
+                // relationship to the unmapped-module hazard, so it
+                // drops normally. Destructuring rather than
+                // `mem::forget`ing the whole value is what keeps the
+                // leak to the thing the reasoning is actually about.
+                let LoadedPlugin { lib, .. } = loaded;
+                std::mem::forget(lib);
+            }
+        }
     }
 }
 

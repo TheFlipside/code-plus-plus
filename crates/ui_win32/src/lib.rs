@@ -229,18 +229,19 @@ use windows::Win32::UI::WindowsAndMessaging::{
     DeleteMenu, DestroyAcceleratorTable, DestroyIcon, DestroyMenu, DestroyWindow, DispatchMessageW,
     DrawIconEx, DrawMenuBar, EnableMenuItem, EndDialog, GetClientRect, GetCursorPos, GetDlgItem,
     GetMenu, GetMenuItemCount, GetMenuItemID, GetMenuItemInfoW, GetMessageW, GetParent, GetSubMenu,
-    GetWindowLongPtrW, GetWindowRect, GetWindowTextLengthW, GetWindowTextW, InsertMenuW,
-    IsDialogMessageW, IsWindow, IsWindowVisible, KillTimer, LoadCursorW, LoadIconW, LoadImageW,
-    MessageBoxW, MoveWindow, PostMessageW, PostQuitMessage, RegisterClassExW, RemoveMenu,
-    SendMessageW, SetCursor, SetLayeredWindowAttributes, SetMenu, SetMenuItemInfoW, SetParent,
-    SetTimer, SetWindowLongPtrW, SetWindowPos, SetWindowTextW, ShowWindow, TrackPopupMenu,
-    TranslateAcceleratorW, TranslateMessage, ACCEL, ACCEL_VIRT_FLAGS, BM_GETCHECK, BM_SETCHECK,
-    BN_CLICKED, BS_AUTOCHECKBOX, BS_AUTORADIOBUTTON, BS_DEFPUSHBUTTON, BS_OWNERDRAW, BS_PUSHBUTTON,
+    GetWindowLongPtrW, GetWindowRect, GetWindowTextLengthW, GetWindowTextW,
+    GetWindowThreadProcessId, InsertMenuW, IsChild, IsDialogMessageW, IsWindow, IsWindowVisible,
+    KillTimer, LoadCursorW, LoadIconW, LoadImageW, MessageBoxW, MoveWindow, PostMessageW,
+    PostQuitMessage, RegisterClassExW, RemoveMenu, SendMessageW, SetCursor,
+    SetLayeredWindowAttributes, SetMenu, SetMenuItemInfoW, SetParent, SetTimer, SetWindowLongPtrW,
+    SetWindowPos, SetWindowTextW, ShowWindow, TrackPopupMenu, TranslateAcceleratorW,
+    TranslateMessage, ACCEL, ACCEL_VIRT_FLAGS, BM_GETCHECK, BM_SETCHECK, BN_CLICKED,
+    BS_AUTOCHECKBOX, BS_AUTORADIOBUTTON, BS_DEFPUSHBUTTON, BS_OWNERDRAW, BS_PUSHBUTTON,
     CBS_AUTOHSCROLL, CBS_DROPDOWN, CB_ADDSTRING, CB_RESETCONTENT, CB_SETEDITSEL, CREATESTRUCTW,
     CS_HREDRAW, CS_VREDRAW, CW_USEDEFAULT, DC_HASDEFID, DI_NORMAL, DM_GETDEFID, DWLP_MSGRESULT,
     ES_AUTOHSCROLL, ES_NUMBER, ES_READONLY, FALT, FCONTROL, FSHIFT, FVIRTKEY, GWLP_USERDATA,
-    GWL_EXSTYLE, HACCEL, HICON, HMENU, IDCANCEL, IDC_ARROW, IDC_HAND, IDC_SIZENS, IDNO, IDOK,
-    IDYES, IMAGE_ICON, LR_DEFAULTCOLOR, LWA_ALPHA, MB_ICONQUESTION, MB_ICONWARNING, MB_OK,
+    GWL_EXSTYLE, GWL_STYLE, HACCEL, HICON, HMENU, IDCANCEL, IDC_ARROW, IDC_HAND, IDC_SIZENS, IDNO,
+    IDOK, IDYES, IMAGE_ICON, LR_DEFAULTCOLOR, LWA_ALPHA, MB_ICONQUESTION, MB_ICONWARNING, MB_OK,
     MB_OKCANCEL, MB_YESNO, MB_YESNOCANCEL, MENUITEMINFOW, MENU_ITEM_FLAGS, MFS_CHECKED,
     MFS_UNCHECKED, MFT_RADIOCHECK, MFT_RIGHTJUSTIFY, MFT_SEPARATOR, MF_BYCOMMAND, MF_BYPOSITION,
     MF_CHECKED, MF_ENABLED, MF_GRAYED, MF_POPUP, MF_SEPARATOR, MF_STRING, MF_UNCHECKED, MIIM_FTYPE,
@@ -252,9 +253,11 @@ use windows::Win32::UI::WindowsAndMessaging::{
     WM_HSCROLL, WM_INITDIALOG, WM_INITMENUPOPUP, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE,
     WM_MOUSEWHEEL, WM_NCCREATE, WM_NCDESTROY, WM_NOTIFY, WM_PAINT, WM_PRINTCLIENT, WM_QUIT,
     WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SETCURSOR, WM_SETFOCUS, WM_SETFONT, WM_SETREDRAW,
-    WM_SETTINGCHANGE, WM_SIZE, WM_TIMER, WNDCLASSEXW, WS_BORDER, WS_CHILD, WS_CLIPCHILDREN,
-    WS_EX_CLIENTEDGE, WS_EX_CONTROLPARENT, WS_EX_LAYERED, WS_EX_TOOLWINDOW, WS_GROUP, WS_HSCROLL,
-    WS_OVERLAPPEDWINDOW, WS_POPUP, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
+    WM_SETTINGCHANGE, WM_SIZE, WM_TIMER, WNDCLASSEXW, WS_BORDER, WS_CAPTION, WS_CHILD,
+    WS_CLIPCHILDREN, WS_EX_APPWINDOW, WS_EX_CLIENTEDGE, WS_EX_CONTROLPARENT, WS_EX_DLGMODALFRAME,
+    WS_EX_LAYERED, WS_EX_STATICEDGE, WS_EX_TOOLWINDOW, WS_EX_WINDOWEDGE, WS_GROUP, WS_HSCROLL,
+    WS_MAXIMIZEBOX, WS_MINIMIZEBOX, WS_OVERLAPPEDWINDOW, WS_POPUP, WS_SYSMENU, WS_TABSTOP,
+    WS_THICKFRAME, WS_VISIBLE, WS_VSCROLL,
 };
 
 // --- Built-in menu command ids ----------------------------------------
@@ -670,6 +673,48 @@ const FIF_DOCK_CLASS: PCWSTR = w!("CodePlusPlusFifDock");
 /// plugin's `h_client` after `NPPM_DMMREGASDCKDLG`. One frame is
 /// created per registered docking dialog; `Scintilla_RegisterClasses`
 /// and friends already prove the lazy-register-via-OnceLock pattern.
+/// A plugin docking dialog's window style, rewritten for life as a
+/// child of a host dock frame.
+///
+/// Adds `WS_CHILD` and clears every bit that draws non-client
+/// furniture. Everything else the plugin asked for is preserved —
+/// `WS_VISIBLE` in particular, since clearing it would hide the panel
+/// the user just asked to see.
+fn dock_client_style(style: u32) -> u32 {
+    (style & !DOCK_CLIENT_DROPPED_STYLES) | WS_CHILD.0
+}
+
+/// The extended-style half of [`dock_client_style`].
+fn dock_client_ex_style(ex_style: u32) -> u32 {
+    ex_style & !DOCK_CLIENT_DROPPED_EX_STYLES
+}
+
+/// Window styles stripped from a plugin's docking dialog when the
+/// host adopts it as a child of a dock frame.
+///
+/// Everything here draws non-client furniture or makes the window
+/// behave like a top-level one. Left in place they produce the
+/// double-chrome a user sees as "a window inside a window, with two
+/// close buttons" — the outer frame ours, the inner one the plugin's.
+const DOCK_CLIENT_DROPPED_STYLES: u32 = WS_POPUP.0
+    | WS_CAPTION.0
+    | WS_THICKFRAME.0
+    | WS_SYSMENU.0
+    | WS_MINIMIZEBOX.0
+    | WS_MAXIMIZEBOX.0;
+
+/// Extended styles stripped alongside [`DOCK_CLIENT_DROPPED_STYLES`].
+///
+/// These are easy to forget because the ordinary styles are the ones
+/// that look like "the frame", but each of these draws its own border
+/// *inside* the frame the host already painted.
+const DOCK_CLIENT_DROPPED_EX_STYLES: u32 = WS_EX_DLGMODALFRAME.0
+    | WS_EX_WINDOWEDGE.0
+    | WS_EX_CLIENTEDGE.0
+    | WS_EX_STATICEDGE.0
+    | WS_EX_APPWINDOW.0
+    | WS_EX_TOOLWINDOW.0;
+
 const DOCK_FRAME_CLASS: PCWSTR = w!("CodePlusPlusDockFrame");
 const FIF_SPLITTER_CLASS: PCWSTR = w!("CodePlusPlusFifSplitter");
 /// Window class for the "Folder as Workspace" left-side panel.
@@ -3104,12 +3149,73 @@ impl UiPlatform for Win32Ui {
                 );
                 return false;
             }
-            // Reject duplicate registrations of the same h_client.
+            // The host's main window: the owner the frame will get,
+            // and the root of the window tree the checks below use to
+            // recognise our own windows.
+            //
+            // Bail if `GetParent` fails: a null owner would make the
+            // frame unowned, breaking the "Win32 destroys the frame
+            // when the main window dies" invariant and leaking the
+            // frame plus the re-parented h_client. Same early-return
+            // pattern as the rest of the file's
+            // `GetParent(self.tab_hwnd)` call sites.
+            let main_hwnd_owner = match GetParent(self.tab_hwnd) {
+                Ok(p) if !p.is_invalid() => p,
+                _ => {
+                    tracing::warn!("NPPM_DMMREGASDCKDLG: GetParent(tab_hwnd) returned no owner");
+                    return false;
+                }
+            };
+            // Refuse a handle that is not the plugin's own window to
+            // offer.
+            //
+            // `h_client` arrives unauthenticated: `IsWindow` says the
+            // handle is live, not whose it is. The host then
+            // re-parents it *and*, since the double-chrome fix,
+            // rewrites its window styles — so a plugin bug (a stale
+            // handle, the wrong variable, a threading mistake) would
+            // silently strip the caption off some other window and
+            // swallow it into a dock frame. Against a *malicious*
+            // plugin this check buys nothing, and is not meant to:
+            // a plugin runs in-process with the whole Win32 API and
+            // needs no help from us to call `SetParent`. It is here
+            // so an ordinary bug fails loudly and attributably
+            // instead of corrupting a window nobody can trace.
+            //
+            // Two rules. Same process, because a cross-process
+            // `SetParent` between same-integrity windows generally
+            // succeeds and would reach another application entirely.
+            // And nothing already inside our own window tree — the
+            // main window itself, the Scintilla views, the tab strip,
+            // the toolbar, the status bar, a previously-registered
+            // dock client — which `IsChild` covers in one call.
+            let mut client_pid = 0u32;
+            let _ = GetWindowThreadProcessId(h_client, Some(&raw mut client_pid));
+            if client_pid != std::process::id() {
+                tracing::warn!(
+                    h = h_client.0 as usize,
+                    "NPPM_DMMREGASDCKDLG: h_client belongs to another process"
+                );
+                return false;
+            }
+            if h_client == main_hwnd_owner || IsChild(main_hwnd_owner, h_client).as_bool() {
+                tracing::warn!(
+                    h = h_client.0 as usize,
+                    "NPPM_DMMREGASDCKDLG: h_client is one of the host's own windows"
+                );
+                return false;
+            }
+            // Reject duplicate registrations of the same h_client,
+            // and any frame the host already created — registering a
+            // frame as its own client would nest it inside itself.
             // Walking the Vec is O(n) but n is small (typically
             // <= 4 docks per session) and this is the only
             // call-site that grows it.
             let dialogs = &mut *self.dock_dialogs;
-            if dialogs.iter().any(|e| e.h_client.0 == h_client.0) {
+            if dialogs
+                .iter()
+                .any(|e| e.h_client.0 == h_client.0 || e.frame_hwnd.0 == h_client.0)
+            {
                 tracing::warn!(
                     h = h_client.0 as usize,
                     "NPPM_DMMREGASDCKDLG: h_client already registered"
@@ -3152,21 +3258,6 @@ impl UiPlatform for Win32Ui {
             // forgetful plugins). WS_EX_TOOLWINDOW keeps the
             // frame off the taskbar — these are accessory
             // panels, not standalone documents.
-            //
-            // Bail if `GetParent` fails: a null owner would make
-            // the frame unowned, breaking the "Win32 destroys
-            // the frame when the main window dies" invariant
-            // and leaking the frame plus the re-parented
-            // h_client. Same early-return pattern as the rest
-            // of the file's `GetParent(self.tab_hwnd)` call
-            // sites.
-            let main_hwnd_owner = match GetParent(self.tab_hwnd) {
-                Ok(p) if !p.is_invalid() => p,
-                _ => {
-                    tracing::warn!("NPPM_DMMREGASDCKDLG: GetParent(tab_hwnd) returned no owner");
-                    return false;
-                }
-            };
             let frame = match CreateWindowExW(
                 WS_EX_TOOLWINDOW,
                 DOCK_FRAME_CLASS,
@@ -3220,6 +3311,41 @@ impl UiPlatform for Win32Ui {
                 let _ = DestroyWindow(frame);
                 return false;
             }
+            // Make `h_client` look like the child it now is.
+            //
+            // `SetParent` changes the parent; it does not change the
+            // window's *styles*. A plugin creates its docking dialog
+            // as a top-level or popup window with its own caption,
+            // system menu and resizing border — that is what it looks
+            // like before a host adopts it — so re-parenting alone
+            // leaves the user staring at two title bars and two close
+            // buttons, the outer one ours and the inner one the
+            // plugin's, with the inner frame drawn in the plain
+            // non-client style because it is no longer a top-level
+            // window. Reported on the real NppExec, and it is what a
+            // docking host is for: `WS_CHILD` on, every frame bit off.
+            //
+            // The extended bits matter as much as the ordinary ones:
+            // `WS_EX_DLGMODALFRAME` and the edge styles each draw
+            // their own border inside the frame we already drew.
+            //
+            // `SetWindowPos` with `SWP_FRAMECHANGED` is required —
+            // without it the non-client area keeps its cached size
+            // and the caption stays on screen until something else
+            // forces a recalculation.
+            let style = GetWindowLongPtrW(h_client, GWL_STYLE) as u32;
+            SetWindowLongPtrW(h_client, GWL_STYLE, dock_client_style(style) as isize);
+            let ex = GetWindowLongPtrW(h_client, GWL_EXSTYLE) as u32;
+            SetWindowLongPtrW(h_client, GWL_EXSTYLE, dock_client_ex_style(ex) as isize);
+            let _ = SetWindowPos(
+                h_client,
+                None,
+                0,
+                0,
+                0,
+                0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED,
+            );
             // Resize h_client to the frame's client area
             // immediately so the first paint shows it filling
             // the client area; subsequent WM_SIZE on the frame
@@ -30241,6 +30367,136 @@ mod plugin_load_borrow_guards {
             !src.contains("load_blocking("),
             "a UI backend must never use `PluginHost::load_blocking` — it holds \
              the borrow across the plugin's entry points, which is the bug"
+        );
+    }
+}
+
+#[cfg(test)]
+mod dock_client_style_tests {
+    //! A plugin's docking dialog arrives styled as the top-level
+    //! window it was before the host adopted it. Left that way it
+    //! draws its own caption and border inside ours — "a window
+    //! inside a window, with two close buttons", as it was reported
+    //! against the real `NppExec`.
+
+    use super::plugin_reentry_guards::{code_only, fn_body, production_src};
+    use super::{dock_client_ex_style, dock_client_style};
+
+    /// The styles `NppExec`'s console actually had, read off the live
+    /// window: `WS_POPUP | WS_VISIBLE | WS_CAPTION | WS_SYSMENU |
+    /// WS_THICKFRAME` (`0x94CC_004C`, dialog bits included).
+    const NPPEXEC_CONSOLE_STYLE: u32 = 0x94CC_004C;
+
+    /// Every bit the transform is supposed to clear, set at once.
+    ///
+    /// The realistic fixture above is the wrong input for the
+    /// *clearing* assertions: it does not carry `WS_MINIMIZEBOX` or
+    /// `WS_MAXIMIZEBOX`, so asserting those are absent afterwards
+    /// passes whether or not the transform drops them. Checked by
+    /// mutation — removing either flag from
+    /// `DOCK_CLIENT_DROPPED_STYLES` left the test green. A synthetic
+    /// input is what makes each assertion able to fail.
+    const EVERY_FRAME_STYLE: u32 = 0x8000_0000 // WS_POPUP
+        | 0x00C0_0000 // WS_CAPTION (WS_BORDER | WS_DLGFRAME)
+        | 0x0004_0000 // WS_THICKFRAME
+        | 0x0008_0000 // WS_SYSMENU
+        | 0x0002_0000 // WS_MINIMIZEBOX
+        | 0x0001_0000 // WS_MAXIMIZEBOX
+        | 0x1000_0000; // WS_VISIBLE, which must survive
+
+    #[test]
+    fn a_dock_client_keeps_nothing_that_draws_a_frame() {
+        let out = dock_client_style(EVERY_FRAME_STYLE);
+        for (bit, name) in [
+            (0x8000_0000u32, "WS_POPUP"),
+            (0x00C0_0000, "WS_CAPTION"),
+            (0x0004_0000, "WS_THICKFRAME"),
+            (0x0008_0000, "WS_SYSMENU"),
+            (0x0002_0000, "WS_MINIMIZEBOX"),
+            (0x0001_0000, "WS_MAXIMIZEBOX"),
+        ] {
+            // Precondition first: an assertion about a bit the input
+            // never carried proves nothing.
+            assert_ne!(
+                EVERY_FRAME_STYLE & bit,
+                0,
+                "{name} missing from the fixture"
+            );
+            assert_eq!(out & bit, 0, "{name} survived; it draws its own chrome");
+        }
+        assert_ne!(out & 0x4000_0000, 0, "WS_CHILD was not set");
+        // And the real window agrees.
+        let live = dock_client_style(NPPEXEC_CONSOLE_STYLE);
+        assert_eq!(
+            live & (0x8000_0000 | 0x00C0_0000 | 0x0004_0000 | 0x0008_0000),
+            0
+        );
+    }
+
+    /// Stripping too much is the other way to get this wrong: clear
+    /// `WS_VISIBLE` and the panel the user just opened stays blank.
+    #[test]
+    fn a_dock_client_keeps_what_the_plugin_asked_for() {
+        let out = dock_client_style(NPPEXEC_CONSOLE_STYLE);
+        assert_ne!(out & 0x1000_0000, 0, "WS_VISIBLE was cleared");
+        // A plugin's own bits below the frame styles are untouched.
+        assert_eq!(out & 0x0000_00FF, NPPEXEC_CONSOLE_STYLE & 0x0000_00FF);
+    }
+
+    /// The extended styles are the ones easy to forget, because the
+    /// ordinary styles are what "the frame" looks like — but each of
+    /// these draws a border inside the frame the host already painted.
+    #[test]
+    fn the_extended_frame_styles_go_too() {
+        // Same reasoning as `EVERY_FRAME_STYLE`: the earlier fixture
+        // for this test omitted `WS_EX_STATICEDGE`, so its assertion
+        // about that flag could not fail.
+        let every = 0x0000_0001u32 // WS_EX_DLGMODALFRAME
+            | 0x0000_0080 // WS_EX_TOOLWINDOW
+            | 0x0000_0100 // WS_EX_WINDOWEDGE
+            | 0x0000_0200 // WS_EX_CLIENTEDGE
+            | 0x0002_0000 // WS_EX_STATICEDGE
+            | 0x0004_0000 // WS_EX_APPWINDOW
+            | 0x0000_0010; // WS_EX_ACCEPTFILES, which must survive
+        let out = dock_client_ex_style(every);
+        for (bit, name) in [
+            (0x0000_0001u32, "WS_EX_DLGMODALFRAME"),
+            (0x0000_0100, "WS_EX_WINDOWEDGE"),
+            (0x0000_0200, "WS_EX_CLIENTEDGE"),
+            (0x0002_0000, "WS_EX_STATICEDGE"),
+            (0x0004_0000, "WS_EX_APPWINDOW"),
+            (0x0000_0080, "WS_EX_TOOLWINDOW"),
+        ] {
+            assert_ne!(every & bit, 0, "{name} missing from the fixture");
+            assert_eq!(out & bit, 0, "{name} survived");
+        }
+        assert_ne!(
+            out & 0x0000_0010,
+            0,
+            "an unrelated extended style was cleared"
+        );
+    }
+
+    /// Order matters and is invisible: restyling before `SetParent`
+    /// is undone by the reparent, and `SetWindowPos` with
+    /// `SWP_FRAMECHANGED` is what makes Windows recompute the
+    /// non-client area — without it the caption stays on screen until
+    /// something else forces it.
+    #[test]
+    fn the_restyle_follows_the_reparent_and_forces_a_frame_change() {
+        let body = code_only(&fn_body(production_src(), "register_dock_dialog"));
+        let reparent = body
+            .find("SetParent(h_client")
+            .expect("the dock client is no longer re-parented");
+        let restyle = body
+            .find("dock_client_style(")
+            .expect("the dock client is no longer restyled; it will draw its own caption");
+        let framechange = body
+            .find("SWP_FRAMECHANGED")
+            .expect("no SWP_FRAMECHANGED; the stripped caption stays on screen");
+        assert!(
+            reparent < restyle && restyle < framechange,
+            "restyle must follow the reparent and precede the frame change"
         );
     }
 }
