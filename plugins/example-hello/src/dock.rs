@@ -272,17 +272,47 @@ mod win {
                 Some(0)
             }
             sdk::WM_NOTIFY => {
-                // DMN_CLOSE arrives here, as an ordinary WM_NOTIFY
+                // The DMN_* codes arrive here, as ordinary WM_NOTIFYs
                 // on this window, because that is how Notepad++
-                // delivers it — a plugin that waited for it in
-                // `beNotified` would wait forever. `hwndFrom` is the
-                // host's frame and `idFrom` is 0, so the code is the
-                // only field worth reading.
+                // delivers them — a plugin that waited for them in
+                // `beNotified` would wait forever.
                 let nmhdr = lparam as *const SciNotifyHeader;
-                // SAFETY: per the WM_NOTIFY contract, `lparam` is a
-                // pointer to at least an NMHDR, live for this call.
-                if !nmhdr.is_null() && unsafe { (*nmhdr).code } == sdk::DMN_CLOSE {
-                    sdk::set_status("Example Hello: panel closed (DMN_CLOSE received)");
+                if !nmhdr.is_null() {
+                    // SAFETY: per the WM_NOTIFY contract, `lparam` is
+                    // a pointer to at least an NMHDR, live for this
+                    // call.
+                    let (from, code) = unsafe { ((*nmhdr).hwnd_from, (*nmhdr).code) };
+                    // All three come from the host's *main* window,
+                    // and are accepted only from there — the way
+                    // Notepad++'s docking-dialog template checks it,
+                    // which is what makes this demo a test of the field
+                    // and not only of the code: a host sending these
+                    // from anywhere else reaches the template-built
+                    // plugins that make up most of the ecosystem not at
+                    // all.
+                    if from != sdk::npp_handle() {
+                        return Some(0);
+                    }
+                    // Switch on the low word: DMN_DOCK and DMN_FLOAT
+                    // carry their container number in the high one.
+                    match code & 0xFFFF {
+                        sdk::DMN_CLOSE => {
+                            sdk::set_status("Example Hello: panel closed (DMN_CLOSE received)");
+                        }
+                        sdk::DMN_DOCK => {
+                            sdk::set_status(&format!(
+                                "Example Hello: panel docked (DMN_DOCK, container {})",
+                                code >> 16
+                            ));
+                        }
+                        sdk::DMN_FLOAT => {
+                            sdk::set_status(&format!(
+                                "Example Hello: panel floating (DMN_FLOAT, container {})",
+                                code >> 16
+                            ));
+                        }
+                        _ => {}
+                    }
                 }
                 Some(0)
             }

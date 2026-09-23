@@ -335,24 +335,34 @@ cursors fall back to system defaults. Cosmetic; not a build problem.
 
 ## 5. Common Tasks After Setup
 
-### Add or change an `NPPM_*` / `NPPN_*` constant
+### Add or change an `NPPM_*` / `NPPN_*` / docking constant
 
-Verify the number against Notepad++'s published header, mechanically:
+Verify the number against Notepad++'s published headers, mechanically:
 
 ```sh
 python tools/npp-abi-check/check.py
 ```
 
 It fetches upstream's `Notepad_plus_msgs.h` and diffs both places
-Code++ declares the ABI — `crates/plugin-host/src/dispatch.rs` and
-`plugins/nppcompat-headers/Notepad_plus_msgs.h` — reporting any name
-whose number disagrees. `--header <path>` compares against a local
-copy for an offline run.
+Code++ declares the message ABI — `crates/plugin-host/src/dispatch.rs`
+and `plugins/nppcompat-headers/Notepad_plus_msgs.h` — reporting any
+name whose number disagrees. A second pass fetches upstream's
+`Docking.h` and `dockingResource.h` and diffs the docking constants
+(`DMN_*`, `DWS_*`, `CONT_*`, `DOCKCONT_MAX`) in
+`plugins/nppcompat-headers/Docking.h`, `crates/plugin-host/src/ffi.rs`
+and `crates/plugin-sdk/src/lib.rs`. For an offline run pass local
+copies with `--header`, `--docking-header` and `--docking-resource`.
 
-This is not optional diligence. Six numbers were wrong for two
-phases, three of them landing on *other* real Notepad++ messages, and
-the in-repo lock test could not see it because it pins the Rust
-constants against the same hand-written literals. A wrong number is
+This is not optional diligence. Six message numbers were wrong for
+two phases, three of them landing on *other* real Notepad++ messages,
+and the in-repo lock test could not see it because it pins the Rust
+constants against the same hand-written literals. The docking family
+then turned out to have drifted the same way — `DMN_FIRST` was
+`0x1000` against upstream's 1050, so no `DMN_*` the host sent was
+recognisable — because the checker did not read the docking headers
+yet. An in-tree plugin compiled against the same constants cannot
+catch this; only a comparison with upstream (or a probe plugin
+loaded into a real Notepad++) can. A wrong number is
 not an unanswered message — it is a different message answered
 confidently. See DESIGN.md §7.4.
 

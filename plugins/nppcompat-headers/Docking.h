@@ -58,6 +58,14 @@ extern "C" {
  * a plugin that keeps its tTbData as a member of its dialog object
  * (the usual shape) already satisfies it.
  *
+ * pszModuleName must be the plugin's own DLL file name INCLUDING the
+ * ".dll" extension — what Notepad++'s own header requires, because it
+ * persists that string and uses it to find the plugin again on the
+ * next start. dlgID is the index of the plugin's FuncItem that opens
+ * this panel, for the same reason. A plugin that sets either
+ * differently works under Code++ but will not have its panel restored
+ * by Notepad++.
+ *
  * Code++ field support: hClient, pszName, dlgID, uMask,
  * pszModuleName are honoured. A registered panel is an ordinary
  * dock panel — it docks to any side, floats, shares a container
@@ -71,21 +79,22 @@ extern "C" {
  * bands. It applies only until the user moves the panel; from then
  * on the remembered position wins.
  *
- * rcFloat, iPrevCont, hIconTab and pszAddInfo are stored but not
- * yet acted on: the host decides the floating rectangle itself,
- * a torn-off panel opens at a third of the main window, and a tab
- * carries the host's own glyph rather than hIconTab.
+ * hIconTab is drawn on the panel's tab when uMask carries
+ * DWS_ICONTAB; without it the tab carries a generic plugin glyph.
+ * rcFloat, iPrevCont and pszAddInfo are stored but not yet acted
+ * on: the host decides the floating rectangle itself, and a
+ * torn-off panel opens at a third of the main window.
  */
 typedef struct tTbData_ {
     HWND        hClient;        /* plugin's docking-dialog HWND */
     const TCHAR *pszName;       /* display title (also the lookup name) */
-    int         dlgID;          /* plugin's own dialog id (see DMN_* below) */
+    int         dlgID;          /* index of the FuncItem that opens this panel */
     UINT        uMask;          /* DWS_* flags (see below) */
     HICON       hIconTab;       /* optional title-bar icon (NULL if none) */
     const TCHAR *pszAddInfo;    /* extra info shown in the title bar */
     RECT        rcFloat;        /* preferred floating position */
     int         iPrevCont;      /* previous container id (CONT_*) */
-    const TCHAR *pszModuleName; /* plugin DLL filename without extension */
+    const TCHAR *pszModuleName; /* the plugin's DLL file name, e.g. L"MyPlugin.dll" */
 } tTbData;
 
 /* Container ids, used in iPrevCont and packed into DWS_DF_CONT_* */
@@ -93,6 +102,7 @@ typedef struct tTbData_ {
 #define CONT_RIGHT  1
 #define CONT_TOP    2
 #define CONT_BOTTOM 3
+#define DOCKCONT_MAX 4  /* first number a floating container can have */
 
 /* DWS_* — Docking Window Style flags packed into tTbData.uMask.
  *
@@ -108,7 +118,7 @@ typedef struct tTbData_ {
 #define DWS_ICONTAB         0x00000001  /* hIconTab visible on the tab strip */
 #define DWS_ICONBAR         0x00000002  /* hIconTab visible in the title bar */
 #define DWS_ADDINFO         0x00000004  /* pszAddInfo visible in title bar */
-#define DWS_USEOWNDARKMODE  0x01000000  /* honour plugin's own dark-mode rendering */
+#define DWS_USEOWNDARKMODE  0x00000008  /* plugin renders its own dark mode */
 
 #define DWS_DF_CONT_LEFT    (CONT_LEFT   << 28)  /* 0x00000000 */
 #define DWS_DF_CONT_RIGHT   (CONT_RIGHT  << 28)  /* 0x10000000 */
@@ -118,36 +128,71 @@ typedef struct tTbData_ {
 
 /* DMN_* — notifications about a docked dialog.
  *
- * These do NOT go through beNotified. The host sends DMN_CLOSE as an
- * ordinary WM_NOTIFY to the plugin's own hClient window procedure:
+ * These do NOT go through beNotified. Each is an ordinary WM_NOTIFY
+ * sent to the plugin's own hClient window procedure:
  *
- *   wParam       0
- *   lParam       NMHDR*
- *   nmhdr.code   DMN_CLOSE
- *   nmhdr.hwndFrom  the host's group container (NOT the main window)
+ *   wParam          0
+ *   lParam          NMHDR*
+ *   nmhdr.code      MAKELONG(DMN_xxx, container)
+ *   nmhdr.hwndFrom  the host's MAIN window (the one in NppData)
  *   nmhdr.idFrom    0
  *
- * That is Notepad++'s shape, field for field, so a plugin written
- * against the upstream headers needs no change. Note in particular
- * that idFrom is 0 rather than tTbData.dlgID: a plugin receives the
- * notification on the very window it registered, so there is nothing
- * to disambiguate.
+ * That is Notepad++'s shape, field for field, measured against
+ * Notepad++ 8.9.6 with a probe plugin loaded into both hosts — so a
+ * plugin written against the upstream headers needs no change. Two
+ * details a plugin relies on without noticing:
+ *
+ *   - Switch on LOWORD(nmhdr.code). The high word carries the
+ *     container number for DMN_DOCK and DMN_FLOAT, so comparing the
+ *     whole code fails for every panel docked anywhere but the left.
+ *   - hwndFrom is the main window for all three. Notepad++'s
+ *     docking-dialog template ignores a WM_NOTIFY whose hwndFrom is
+ *     not the main window it was initialised with.
  *
  * DMN_CLOSE fires when the user closes the panel from the X on its
- * group's caption. The panel is hidden, never destroyed: hClient
- * stays alive, its position is remembered, and a later NPPM_DMMSHOW
- * reopens it there — so a plugin should treat DMN_CLOSE as "the user
- * hid me" and update its own menu state, not as a teardown signal.
- * Upstream sends it before hiding, and so does Code++.
+ * group's caption; the high word is 0. The panel is hidden, never
+ * destroyed: hClient stays alive, its position is remembered, and a
+ * later NPPM_DMMSHOW reopens it there — so a plugin should treat
+ * DMN_CLOSE as "the user hid me" and update its own menu state, not
+ * as a teardown signal. Sent before the panel hides, as upstream does.
  *
- * DMN_DOCK / DMN_FLOAT are not sent yet. The host does move panels
- * between docked and floating, so these are the next two to wire;
- * a plugin must not depend on them today.
+ * DMN_DOCK / DMN_FLOAT tell the plugin which container its panel is
+ * in. For DMN_DOCK the high word is the CONT_* value of the side the
+ * panel is docked to — the same numbering DWS_DF_CONT_* uses on the
+ * way in. For DMN_FLOAT it is a number >= DOCKCONT_MAX identifying
+ * the floating window, which carries no meaning a plugin can act on.
+ * Sent once when the panel is registered, naming the container it
+ * will open in, and again whenever it moves to a different container:
+ * docked to floating, floating to docked, one side to another, or one
+ * floating window to another. Moving between two panels on the same
+ * side is not a container change (a side is one container), and
+ * neither is hiding and re-showing a panel — so neither sends
+ * anything.
+ *
+ * One deliberate difference from Notepad++: docking a floating panel
+ * back by double-clicking its caption, Notepad++ sends DMN_FLOAT
+ * (with the docked side's number) rather than DMN_DOCK. Code++ sends
+ * DMN_DOCK whenever the panel ends up docked. And one timing
+ * difference, in one case only: a panel registered from INSIDE a
+ * DMN_DOCK / DMN_FLOAT handler is told its container after that
+ * handler returns, not before its own NPPM_DMMREGASDCKDLG returns.
+ * The host queues notices raised during a delivery rather than
+ * nesting them, so a plugin cannot drive the host's stack arbitrarily
+ * deep; every notice is still delivered, in order.
+ *
+ * DMN_SWITCHIN, DMN_SWITCHOFF and DMN_FLOATDROPPED are declared for
+ * completeness and are NOT sent yet. Notepad++ sends them from the
+ * panel's container (not the main window) as tabs are switched and
+ * containers are rearranged; a plugin must not depend on them under
+ * Code++ today.
  */
-#define DMN_FIRST 0x1000
-#define DMN_CLOSE (DMN_FIRST + 1)  /* user closed the dialog (panel hidden) */
-#define DMN_DOCK  (DMN_FIRST + 2)  /* dialog moved from floating to docked */
-#define DMN_FLOAT (DMN_FIRST + 3)  /* dialog moved from docked to floating */
+#define DMN_FIRST        1050
+#define DMN_CLOSE        (DMN_FIRST + 1)  /* user closed the panel (panel hidden) */
+#define DMN_DOCK         (DMN_FIRST + 2)  /* panel is docked; HIWORD(code) = CONT_* */
+#define DMN_FLOAT        (DMN_FIRST + 3)  /* panel is floating; HIWORD(code) >= 4 */
+#define DMN_SWITCHIN     (DMN_FIRST + 4)  /* not sent by Code++ yet */
+#define DMN_SWITCHOFF    (DMN_FIRST + 5)  /* not sent by Code++ yet */
+#define DMN_FLOATDROPPED (DMN_FIRST + 6)  /* not sent by Code++ yet */
 
 #ifdef __cplusplus
 } /* extern "C" */

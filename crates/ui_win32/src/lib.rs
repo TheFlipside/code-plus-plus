@@ -1227,8 +1227,10 @@ struct DockEntry {
     /// sink like any other — same split the workspace tree and
     /// the find-in-files dock make.
     name: String,
-    /// Plugin DLL filename without extension; the optional
-    /// disambiguator for the two-arg form of
+    /// The plugin's `pszModuleName`, verbatim — by upstream's
+    /// contract its DLL file name *including* `.dll`, though a
+    /// plugin may send anything and this is only ever compared, never
+    /// parsed. The optional disambiguator for the two-arg form of
     /// `NPPM_DMMGETPLUGINHWNDBYNAME`.
     module_name: String,
     /// `tTbData.dlg_id`, kept verbatim. It is deliberately *not*
@@ -1254,11 +1256,28 @@ struct DockEntry {
     /// `params.u_mask` at the moment of registration — see
     /// [`dock_side_from_u_mask`] — because it seeds a *first*
     /// position and re-reading it later would override wherever the
-    /// user has since put the panel. So nothing reads this copy back
-    /// yet; it is kept for `DWS_ICONTAB` and for the `DMN_DOCK` /
-    /// `DMN_FLOAT` notifications the headers describe as not-yet-sent.
+    /// user has since put the panel. `DWS_ICONTAB` is likewise read
+    /// from `params` at registration. Nothing reads this copy back;
+    /// it is kept so the registration a plugin made stays inspectable
+    /// in a debugger next to the rest of its `tTbData`.
     #[allow(dead_code)]
     u_mask: u32,
+    /// The container this plugin was last told its panel is in,
+    /// through `DMN_DOCK` / `DMN_FLOAT`. `None` until the first
+    /// reconcile after registration, which is what makes that
+    /// reconcile send the registration-time notification upstream
+    /// sends from `createDockableDlg`.
+    ///
+    /// Written by the reconciler *before* the notification goes out,
+    /// not after. A plugin's handler runs with no borrow held and may
+    /// send `NPPM_DMMSHOW` / `NPPM_DMMHIDE` back, which reconciles
+    /// again from inside the delivery loop; recording first is what
+    /// makes that nested pass see the transition as already told
+    /// rather than telling it a second time. It does not bound the
+    /// round trip by itself — a handler that registers a *new* panel
+    /// gives the nested pass something new to send — and the queue in
+    /// `dock_panels::deliver_container_notices` is what does.
+    dmn_container: Option<codepp_core::dock::DockContainer>,
 }
 
 /// State of Notepad++'s "Begin/End Select" feature — see
@@ -3494,6 +3513,7 @@ impl UiPlatform for Win32Ui {
                 module_name: params.module_name,
                 dlg_id: params.dlg_id,
                 u_mask: params.u_mask,
+                dmn_container: None,
             });
             // Seed where the panel will land the first time it is
             // shown, from the plugin's own `DWS_DF_CONT_*`
@@ -20123,14 +20143,16 @@ thread_local! {
 ///
 /// `DMN_CLOSE` is delivered with `SendMessageW`, which on Win32 is a
 /// same-thread call straight into the plugin's window procedure —
-/// not a queued message. A plugin's handler knows its own frame
-/// (`nmhdr.hwndFrom` *is* the frame, and it arrives in the very
-/// notification) and may send `WM_CLOSE` back at it, which re-enters
-/// this proc and sends `DMN_CLOSE` again. Without a latch that
-/// recurses until the guard page faults — and a stack overflow is a
-/// hardware exception, so neither this proc's `catch_unwind` nor the
-/// plugin's own catches it. Four ABI-legal lines in a plugin would
-/// take the host down.
+/// not a queued message. When this latch was written the notification
+/// carried the panel's own frame in `nmhdr.hwndFrom`, and a handler
+/// sending `WM_CLOSE` back at it re-entered the close and sent
+/// `DMN_CLOSE` again, recursing until the guard page faulted — a
+/// hardware exception neither side's `catch_unwind` catches. It now
+/// carries the main window, as upstream's does, and nothing routes a
+/// group window's `WM_CLOSE` to the panel close, so that exact route is
+/// gone; the latch stays because anything that can re-enter the close
+/// from inside the handler reopens the same recursion, and the cost of
+/// keeping it is one flag.
 ///
 /// The latch is a plain flag rather than a depth count, and it is
 /// per *thread* rather than per frame: a close nested inside any
@@ -22755,8 +22777,9 @@ unsafe fn panel_for_client(
 /// open.
 ///
 /// Delivery is upstream's shape, not a choice: a plain `WM_NOTIFY` to
-/// the plugin's own `h_client`, `wParam` 0, `nmhdr.hwndFrom` the
-/// host's container, `nmhdr.idFrom` 0. See `plugins/nppcompat-headers/Docking.h`.
+/// the plugin's own `h_client`, `wParam` 0, `nmhdr.hwndFrom` the main
+/// window, `nmhdr.idFrom` 0 — measured against Notepad++ 8.9.6. See
+/// `plugins/nppcompat-headers/Docking.h`.
 ///
 /// # Safety
 ///
@@ -22767,37 +22790,27 @@ unsafe fn hide_plugin_panel(main_hwnd: HWND, panel: DockPanel) {
     // only be answered if nothing is borrowed — the same discipline
     // the plugin load follows.
     let target = unsafe { state_from_hwnd(main_hwnd) }.and_then(|state| {
-        let client = state
+        state
             .dock_dialogs
             .iter()
             .find(|e| e.panel == panel)
-            .map(|e| e.h_client)?;
-        let group = state.dock_layout.group_of(panel).map(|g| g.id);
-        Some((client, group))
+            .map(|e| e.h_client)
     });
-    if let Some((h_client, group)) = target {
-        // The container the notification says it came from: the
-        // group's own window when the panel is in one, else the main
-        // window. A plugin that compares `hwndFrom` gets something
-        // meaningful either way.
-        let from = group
-            .and_then(|id| {
-                unsafe { state_from_hwnd(main_hwnd) }.and_then(|s| {
-                    s.dock_groups
-                        .iter()
-                        .find(|gw| gw.id == id)
-                        .map(|gw| gw.hwnd)
-                })
-            })
-            .unwrap_or(main_hwnd);
+    if let Some(h_client) = target {
         // `_guard` bounds the round trip: a plugin's handler may close
         // the panel again, and without the latch that recurses until
         // the stack faults — a hardware exception no `catch_unwind`
         // catches. See `DmnCloseGuard`.
         let reentry_guard = DmnCloseGuard::enter();
         if reentry_guard.is_some() && unsafe { IsWindow(Some(h_client)) }.as_bool() {
+            // From the main window. An earlier version sent the
+            // group's container here, on the strength of a reading of
+            // upstream's source; measuring Notepad++ showed the main
+            // window — which is also the only sender its
+            // docking-dialog template accepts, so that version was a
+            // notification template-built plugins never heard.
             let nmhdr = NMHDR {
-                hwndFrom: from,
+                hwndFrom: main_hwnd,
                 idFrom: 0,
                 code: codepp_plugin_host::DMN_CLOSE,
             };
@@ -30573,6 +30586,11 @@ mod dock_dialog_tests {
         assert!(
             arm.contains("idFrom: 0"),
             "upstream sends idFrom = 0; carrying dlg_id here would diverge silently"
+        );
+        assert!(
+            arm.contains("hwndFrom: main_hwnd,"),
+            "upstream sends DMN_CLOSE from the main window, and the docking-dialog template \
+             drops it from anywhere else — measured, see DESIGN.md §7.4"
         );
     }
 }

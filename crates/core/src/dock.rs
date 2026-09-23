@@ -379,6 +379,51 @@ pub enum DockLocation {
     Floating(DockRect),
 }
 
+/// Which *container* a panel is in, in the sense a Notepad++ plugin
+/// is told about through `DMN_DOCK` / `DMN_FLOAT`.
+///
+/// Upstream's docking manager has exactly one container per side,
+/// plus one per floating window. Code++'s model is finer than that —
+/// a side can hold several stacked groups — so a docked panel's
+/// container is its *side*, and moving between two groups on one side
+/// is not a container change. That is also what upstream does when a
+/// tab is dragged between two panels sharing its one bottom
+/// container: nothing, because nothing about where the panel is
+/// docked has changed.
+///
+/// A floating panel's container is its group, identified by the
+/// group's id while the panel is on screen. A hidden panel whose
+/// remembered spot is floating has no group — it gets a fresh one
+/// when it is shown again — so it is `Floating(None)`, which
+/// [`Self::is_same`] treats as matching any floating container. That
+/// is what keeps a hide-then-show of a floating panel from reading as
+/// a move: upstream hides a panel inside its container and shows it
+/// back there, and tells the plugin nothing.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DockContainer {
+    Docked(DockSide),
+    Floating(Option<u32>),
+}
+
+impl DockContainer {
+    /// Whether a panel moving from `self` to `other` has changed
+    /// container — the edge `DMN_DOCK` / `DMN_FLOAT` are sent on.
+    ///
+    /// Plain equality except for the one case the type exists for: a
+    /// floating container that has no group yet (a hidden panel)
+    /// matches any floating container, because the group it will get
+    /// on show is a new identity for the same place.
+    #[must_use]
+    pub fn is_same(self, other: DockContainer) -> bool {
+        match (self, other) {
+            (DockContainer::Docked(a), DockContainer::Docked(b)) => a == b,
+            (DockContainer::Floating(Some(a)), DockContainer::Floating(Some(b))) => a == b,
+            (DockContainer::Floating(_), DockContainer::Floating(_)) => true,
+            _ => false,
+        }
+    }
+}
+
 /// A group of one or more panels sharing one window slot. The
 /// panels are tabs; `active` picks the visible one. Invariants
 /// (upheld by every `DockLayout` mutation, checked by
@@ -570,6 +615,50 @@ impl DockLayout {
     pub fn is_active(&self, panel: DockPanel) -> bool {
         self.group_of(panel)
             .is_some_and(|g| g.active_panel() == panel)
+    }
+
+    /// The container `panel` is in, or — if it is hidden — the one
+    /// the next [`Self::show`] would put it in.
+    ///
+    /// Answering for a hidden panel is what lets a host tell a plugin
+    /// where its panel lives at *registration*, before anything is on
+    /// screen, the way upstream does. The precedence is exactly
+    /// `show`'s: a visible panel's own group, then a remembered
+    /// location, then a registration-supplied side, then the panel's
+    /// default side. If the two ever disagree, a plugin is told one
+    /// container at registration and silently lands in another, so a
+    /// test pins them against each other.
+    #[must_use]
+    pub fn container_of(&self, panel: DockPanel) -> DockContainer {
+        if let Some(group) = self.group_of(panel) {
+            return match group.location {
+                DockLocation::Side(side) => DockContainer::Docked(side),
+                DockLocation::Floating(_) => DockContainer::Floating(Some(group.id)),
+            };
+        }
+        if let Some(location) = self.remembered_for(panel) {
+            return match location {
+                DockLocation::Side(side) => DockContainer::Docked(side),
+                DockLocation::Floating(_) => DockContainer::Floating(None),
+            };
+        }
+        DockContainer::Docked(
+            self.initial_side_for(panel)
+                .unwrap_or_else(|| panel.default_side()),
+        )
+    }
+
+    /// Position of floating group `id` among the floating groups, in
+    /// creation order; `None` if it is not a floating group.
+    ///
+    /// Upstream numbers its floating containers after the four docked
+    /// ones and reports that number to the plugin, so a host that
+    /// wants to report *a* number needs an ordinal rather than a group
+    /// id, which is unbounded and would not fit the 16 bits the
+    /// notification carries it in.
+    #[must_use]
+    pub fn floating_ordinal(&self, id: u32) -> Option<usize> {
+        self.floating_groups().position(|g| g.id == id)
     }
 
     /// Groups docked on `side`, in stack order.
@@ -1462,6 +1551,164 @@ mod tests {
 
     fn mid() -> DockRect {
         DockRect::new(0, 0, 1000, 700)
+    }
+
+    /// `container_of` answers for a hidden panel with where `show`
+    /// will actually put it. A host tells a plugin its container at
+    /// registration from this, before anything is on screen, so if the
+    /// two ever disagree the plugin is told one place and lands in
+    /// another. Every branch of `show`'s precedence is checked against
+    /// the real `show`.
+    #[test]
+    fn container_of_a_hidden_panel_predicts_where_show_puts_it() {
+        let fresh = intern_plugin_panel("ctr-fresh.dll", "Fresh").expect("intern");
+        let sided = intern_plugin_panel("ctr-sided.dll", "Sided").expect("intern");
+        let docked = intern_plugin_panel("ctr-docked.dll", "Docked").expect("intern");
+        let floated = intern_plugin_panel("ctr-float.dll", "Floated").expect("intern");
+        let mut l = DockLayout::new();
+        l.set_initial_side(sided, DockSide::Top);
+        l.show(docked);
+        l.move_panel(docked, DropTarget::Side(DockSide::Right));
+        l.hide(docked);
+        l.show(floated);
+        l.move_panel(
+            floated,
+            DropTarget::Floating(DockRect::new(10, 10, 300, 200)),
+        );
+        l.hide(floated);
+
+        for panel in [
+            fresh,
+            sided,
+            docked,
+            floated,
+            DockPanel::Workspace,
+            DockPanel::DocMap,
+        ] {
+            assert!(!l.is_visible(panel), "precondition: {panel:?} hidden");
+            let predicted = l.container_of(panel);
+            l.show(panel);
+            let actual = l.container_of(panel);
+            assert!(
+                predicted.is_same(actual),
+                "{panel:?}: predicted {predicted:?}, show put it in {actual:?}"
+            );
+        }
+        // And the predictions were the specific ones each branch
+        // stands for, not all "bottom" by coincidence.
+        assert_eq!(
+            l.container_of(fresh),
+            DockContainer::Docked(DockSide::Bottom)
+        );
+        assert_eq!(l.container_of(sided), DockContainer::Docked(DockSide::Top));
+        assert_eq!(
+            l.container_of(docked),
+            DockContainer::Docked(DockSide::Right)
+        );
+        assert!(matches!(
+            l.container_of(floated),
+            DockContainer::Floating(Some(_))
+        ));
+    }
+
+    /// The sameness rule is the whole policy for when `DMN_DOCK` /
+    /// `DMN_FLOAT` fire: a spurious "true" loses a notification, a
+    /// spurious "false" sends one for a panel that did not move.
+    #[test]
+    fn container_sameness_is_side_for_docked_and_group_for_floating() {
+        use DockContainer::{Docked, Floating};
+        assert!(Docked(DockSide::Left).is_same(Docked(DockSide::Left)));
+        assert!(!Docked(DockSide::Left).is_same(Docked(DockSide::Bottom)));
+        assert!(!Docked(DockSide::Left).is_same(Floating(Some(3))));
+        assert!(!Floating(None).is_same(Docked(DockSide::Left)));
+        assert!(Floating(Some(3)).is_same(Floating(Some(3))));
+        assert!(!Floating(Some(3)).is_same(Floating(Some(4))));
+        // A hidden floating panel is the same place as whichever group
+        // it comes back in.
+        assert!(Floating(None).is_same(Floating(Some(9))));
+        assert!(Floating(Some(9)).is_same(Floating(None)));
+    }
+
+    /// The moves that are, and are not, a change of container.
+    #[test]
+    fn container_changes_track_upstream_container_edges() {
+        let a = intern_plugin_panel("edge-a.dll", "Edge A").expect("intern");
+        let b = intern_plugin_panel("edge-b.dll", "Edge B").expect("intern");
+        let mut l = DockLayout::new();
+        l.set_initial_side(a, DockSide::Bottom);
+        l.set_initial_side(b, DockSide::Bottom);
+        l.show(a);
+        l.show(b);
+
+        // Tearing a tab off into a second band on the *same* side is
+        // not a container change — a side is one container.
+        let before = l.container_of(a);
+        l.move_panel(a, DropTarget::Side(DockSide::Bottom));
+        assert!(before.is_same(l.container_of(a)));
+
+        // Docked to floating is.
+        let before = l.container_of(a);
+        l.move_panel(a, DropTarget::Floating(DockRect::new(0, 0, 300, 200)));
+        let floating = l.container_of(a);
+        assert!(!before.is_same(floating));
+
+        // Moving the floating group around is not.
+        let gid = l.group_of(a).expect("A visible").id;
+        l.set_floating_rect(gid, DockRect::new(50, 50, 300, 200));
+        assert!(floating.is_same(l.container_of(a)));
+
+        // Hiding and re-showing a floating panel is not, even though
+        // it comes back in a group with a new id. Compared step by
+        // step, the way a host does it — against the container it
+        // last recorded, which while the panel is hidden is the
+        // group-less `Floating(None)`. A *direct* comparison of the
+        // old group with the new one would say "moved", and that is
+        // correct for the case it describes: a panel dragged from one
+        // floating window into another.
+        l.hide(a);
+        let hidden = l.container_of(a);
+        assert_eq!(hidden, DockContainer::Floating(None));
+        assert!(floating.is_same(hidden));
+        l.show(a);
+        assert_ne!(
+            l.group_of(a).expect("A visible").id,
+            gid,
+            "precondition: new group"
+        );
+        assert!(hidden.is_same(l.container_of(a)));
+        assert!(
+            !floating.is_same(l.container_of(a)),
+            "two live floating groups differ"
+        );
+
+        // Floating back into a docked group is.
+        let bgid = l.group_of(b).expect("B visible").id;
+        let before = l.container_of(a);
+        l.move_panel(a, DropTarget::IntoGroup(bgid));
+        assert!(!before.is_same(l.container_of(a)));
+        assert_eq!(l.container_of(a), DockContainer::Docked(DockSide::Bottom));
+    }
+
+    #[test]
+    fn floating_ordinal_counts_floating_groups_only() {
+        let a = intern_plugin_panel("ord-a.dll", "Ord A").expect("intern");
+        let b = intern_plugin_panel("ord-b.dll", "Ord B").expect("intern");
+        let mut l = DockLayout::new();
+        l.show(DockPanel::Workspace);
+        l.show(a);
+        l.show(b);
+        l.move_panel(a, DropTarget::Floating(DockRect::new(0, 0, 300, 200)));
+        l.move_panel(b, DropTarget::Floating(DockRect::new(40, 40, 300, 200)));
+        let ga = l.group_of(a).expect("A").id;
+        let gb = l.group_of(b).expect("B").id;
+        let gw = l.group_of(DockPanel::Workspace).expect("W").id;
+        assert_eq!(l.floating_ordinal(ga), Some(0));
+        assert_eq!(l.floating_ordinal(gb), Some(1));
+        assert_eq!(
+            l.floating_ordinal(gw),
+            None,
+            "a docked group has no floating ordinal"
+        );
     }
 
     /// Two plugins asking for the same `DWS_DF_CONT_*` side become

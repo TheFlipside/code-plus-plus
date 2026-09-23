@@ -364,8 +364,10 @@ pub struct TbData {
     /// `NPPM_DMMVIEWOTHERTAB`. Plugin owns the buffer; host reads
     /// on every UPDATEDISPINFO and on lookup.
     pub psz_name: *const u16,
-    /// Carried in `nmhdr.idFrom` for any future `DMN_*`
-    /// notification routed back to the plugin.
+    /// Index of the plugin's `FuncItem` that opens this panel —
+    /// upstream's convention, which Notepad++ relies on to reopen a
+    /// panel at startup. Not what any `DMN_*` carries in `idFrom`
+    /// (that is 0).
     pub dlg_id: i32,
     /// Bit-mask of `DWS_*` flags.
     pub u_mask: u32,
@@ -384,7 +386,9 @@ pub struct TbData {
     /// nibble instead, and everything after that from where the
     /// user last put it.
     pub i_prev_cont: i32,
-    /// Plugin DLL filename without extension. Used by
+    /// The plugin's DLL file name, extension included
+    /// (`"MyPlugin.dll"`) — upstream's contract, since Notepad++
+    /// persists the string and finds the plugin again by it. Used by
     /// `GETPLUGINHWNDBYNAME`'s second argument (the optional
     /// module-name disambiguator). Plugin owns the buffer.
     pub psz_module_name: *const u16,
@@ -401,8 +405,10 @@ pub const DWS_ICONTAB: u32 = 0x0000_0001;
 pub const DWS_ICONBAR: u32 = 0x0000_0002;
 /// `pszAddInfo` is shown in the title bar.
 pub const DWS_ADDINFO: u32 = 0x0000_0004;
-/// Plugin draws its own dark-mode chrome.
-pub const DWS_USEOWNDARKMODE: u32 = 0x0100_0000;
+/// Plugin draws its own dark-mode chrome. Upstream's value is
+/// `0x0000_0008`; this was `0x0100_0000` until
+/// `tools/npp-abi-check` learned to read the docking headers.
+pub const DWS_USEOWNDARKMODE: u32 = 0x0000_0008;
 
 /// Default-container nibble: opens floating.
 pub const DWS_DF_FLOATING: u32 = 0x8000_0000;
@@ -417,21 +423,35 @@ pub const DWS_DF_CONT_BOTTOM: u32 = 0x3000_0000;
 
 // --- DMN_* dock notifications ----------------------------------------
 //
-// Sent in `SciNotifyHeader.code`. `id_from` is the registered
-// `tTbData.dlg_id`; `hwnd_from` is the host frame's HWND.
+// Not delivered through `beNotified`. Each is a plain `WM_NOTIFY` sent
+// to the plugin's own `h_client`: `wParam` 0, `id_from` 0, `hwnd_from`
+// the main window, and `code` = `MAKELONG(DMN_xxx, container)` —
+// upstream's shape, measured against Notepad++ 8.9.6 with a probe
+// plugin loaded into both hosts. `plugins/nppcompat-headers/Docking.h`
+// states the contract a plugin author reads.
 
-/// First DMN_* code. Notifications below this floor are reserved.
-pub const DMN_FIRST: u32 = 0x1000;
+/// First DMN_* code: 1050, as upstream defines it. It was `0x1000`
+/// until this was measured, which made every `DMN_*` this host sent a
+/// number no plugin built against the upstream headers recognises.
+pub const DMN_FIRST: u32 = 1050;
 /// User closed the panel from its group's caption ✕ (the panel is
 /// hidden, the plugin's HWND stays alive).
 pub const DMN_CLOSE: u32 = DMN_FIRST + 1;
-/// Dialog has been docked into a container. Not sent yet — the host
-/// does move panels between docked and floating, so this and
-/// [`DMN_FLOAT`] are the next two to wire, and a plugin must not
-/// depend on them today.
+/// The panel is docked. Sent in the low word of `code`, with the
+/// side's `CONT_*` number in the high word — at registration, and on
+/// every move into a different container.
 pub const DMN_DOCK: u32 = DMN_FIRST + 2;
-/// Docked dialog has been floated. Not sent yet — see [`DMN_DOCK`].
+/// The panel is floating. Low word of `code`, with a floating
+/// container number (4 and up) in the high word. See [`DMN_DOCK`].
 pub const DMN_FLOAT: u32 = DMN_FIRST + 3;
+/// A panel's tab became the active one. Not sent by this host yet;
+/// Notepad++ sends it from the panel's container window.
+pub const DMN_SWITCHIN: u32 = DMN_FIRST + 4;
+/// A panel's tab stopped being the active one. Not sent yet; see
+/// [`DMN_SWITCHIN`].
+pub const DMN_SWITCHOFF: u32 = DMN_FIRST + 5;
+/// Not sent yet; see [`DMN_SWITCHIN`].
+pub const DMN_FLOATDROPPED: u32 = DMN_FIRST + 6;
 
 #[cfg(test)]
 mod tests {

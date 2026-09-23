@@ -274,12 +274,28 @@ pub const NPPM_DMMVIEWOTHERTAB: u32 = NPPMSG + 35;
 pub const NPPM_DMMUPDATEDISPINFO: u32 = NPPMSG + 32;
 
 /// `DMN_CLOSE` — the user closed a docked panel. Delivered as a
-/// plain `WM_NOTIFY` to the plugin's **own dialog HWND**, not
-/// through `beNotified`: `nmhdr.hwndFrom` is the host's frame,
+/// plain `WM_NOTIFY` to the plugin's **own dialog HWND**, not through
+/// `beNotified`: `nmhdr.hwndFrom` is the host's main window,
 /// `nmhdr.idFrom` is 0, and the `wParam` is 0. That is the upstream
-/// Notepad++ shape, which is the only one a plugin built against
-/// the public headers listens for.
-pub const DMN_CLOSE: u32 = 0x1000 + 1;
+/// Notepad++ shape, which is the only one a plugin built against the
+/// public headers listens for. Compare `code & 0xFFFF`: the `DMN_*`
+/// family carries data in the high word.
+///
+/// The `DMN_*` numbers start at 1050, as upstream's do. This SDK had
+/// them at `0x1000`, which the host matched — so the in-tree plugins
+/// agreed with Code++ and with nothing else.
+pub const DMN_CLOSE: u32 = 1050 + 1;
+
+/// `DMN_DOCK` — the panel is docked. Delivered like [`DMN_CLOSE`],
+/// with the side's container number (`CONT_LEFT` 0 … `CONT_BOTTOM` 3)
+/// in the high word of `nmhdr.code`. Sent at registration and on
+/// every move into a different container.
+pub const DMN_DOCK: u32 = 1050 + 2;
+
+/// `DMN_FLOAT` — the panel is floating. Same delivery as
+/// [`DMN_DOCK`]; the high word is a floating container number (4 and
+/// up).
+pub const DMN_FLOAT: u32 = 1050 + 3;
 
 /// `WM_NOTIFY` — the Win32 message [`DMN_CLOSE`] arrives on.
 /// Declared here so a plugin needn't pull in a Win32 binding crate
@@ -708,5 +724,7 @@ mod abi_lock {
     #[test]
     fn sdk_dmn_close_matches_the_host() {
         assert_eq!(super::DMN_CLOSE, codepp_plugin_host::DMN_CLOSE);
+        assert_eq!(super::DMN_DOCK, codepp_plugin_host::DMN_DOCK);
+        assert_eq!(super::DMN_FLOAT, codepp_plugin_host::DMN_FLOAT);
     }
 }
