@@ -33,6 +33,7 @@
 //! a caller bug this module cannot detect.
 
 use crate::session::{DockGroupSession, DockPanelSession, DockRememberSession, DockSession};
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 /// Thickness of the resize splitter between a docked band and the
 /// editor cell, in pixels. Matches the 4-px value the fixed
@@ -135,11 +136,43 @@ pub const MAX_PLUGIN_PANELS: usize = 64;
 ///
 /// [`MAX_PLUGIN_PANELS`] bounds how many identities can be leaked;
 /// this bounds how large one can be, which matters because
-/// [`DockPanel::from_persist_key`] interns straight from
+/// `DockPanel::from_persist_key` interns straight from
 /// `session.xml` — a file the user can edit and a crash can
 /// truncate. Generous against any real module filename or panel
 /// title, so it never rejects something legitimate.
 pub const MAX_PLUGIN_PANEL_FIELD_LEN: usize = 256;
+
+/// How many distinct plugin panels one restored session may name: half
+/// of [`MAX_PLUGIN_PANELS`].
+///
+/// Every plugin panel a session names is interned when the session is
+/// read, and the interning table is process-wide and never shrinks.
+/// Unbounded, a hand-edited or damaged `session.xml` naming 64 made-up
+/// panels would fill it, and every real plugin's `NPPM_DMMREGASDCKDLG`
+/// would be refused for the rest of the process. Half leaves room for
+/// registrations that no session can take, and a real session names a
+/// handful. Panels in groups are admitted before remembered ones, so
+/// what an unusually long history loses past the bound is a remembered
+/// position; only a session naming more open plugin panels than the
+/// bound itself would lose an open one, and then the ones it names last.
+///
+/// The bound is on the process, not on one read: every identity created
+/// from persisted text is charged to `RESTORED_PLUGIN_PANELS`, under
+/// the table's own lock, so no number of reads — of the same session or
+/// another — takes more. An identity already in the table (registered by
+/// its plugin, or created by an earlier read) takes no slot and is not
+/// charged, which is also what keeps repeated reads of one session
+/// resolving the same panels.
+pub const MAX_RESTORED_PLUGIN_PANELS: usize = MAX_PLUGIN_PANELS / 2;
+
+/// How many plugin-panel identities persisted text has created in this
+/// process — the budget [`MAX_RESTORED_PLUGIN_PANELS`] bounds.
+///
+/// Process-wide and never reset, so it is shared by every test in a
+/// test binary: a test that restores new plugin panels should pass a
+/// budget of its own to `DockLayout::from_session_budgeted` rather than
+/// spend this one through [`DockLayout::from_session`].
+static RESTORED_PLUGIN_PANELS: AtomicUsize = AtomicUsize::new(0);
 
 /// Intern `(module, name)` into a [`DockPanel::Plugin`].
 ///
@@ -154,15 +187,41 @@ pub const MAX_PLUGIN_PANEL_FIELD_LEN: usize = 256;
 ///
 /// A `|` in either half is refused too: it is the separator
 /// [`DockPanel::persist_key`] joins them with, so a name carrying one
-/// would round-trip back through [`DockPanel::from_persist_key`] as a
+/// would round-trip back through `DockPanel::from_persist_key` as a
 /// *different* split — a panel able to collide with another plugin's
 /// identity by choosing its own title.
+///
+/// And so is any character the display policy rejects
+/// ([`crate::display::is_display_hostile`]): the name is what every
+/// caption and tab label draws, so a bidi override or a control
+/// character in it reaches the chrome. Registration sanitizes a
+/// plugin's text before it gets here, which is why nothing legitimate
+/// is lost — what this refuses is a key read back from a hand-edited
+/// `session.xml`, which `DockPanel::from_persist_key` interns raw. One
+/// check at the one place identities are made covers both routes.
 #[must_use]
 pub fn intern_plugin_panel(module: &str, name: &str) -> Option<DockPanel> {
+    intern_plugin_panel_with(module, name, || true)
+}
+
+/// [`intern_plugin_panel`], asking `may_create` — under the table's lock
+/// — before it creates a *new* identity. An identity already in the
+/// table resolves without asking: it takes no slot.
+///
+/// The lock is not reentrant, so `may_create` must not intern anything
+/// itself: a closure that reached back into the table would deadlock
+/// every dock-panel operation on the thread, live registrations
+/// included. Counting against a budget is what it is for.
+fn intern_plugin_panel_with(
+    module: &str,
+    name: &str,
+    may_create: impl FnOnce() -> bool,
+) -> Option<DockPanel> {
     let usable = |s: &str| {
         !s.is_empty()
             && s.len() <= MAX_PLUGIN_PANEL_FIELD_LEN
             && !s.contains(PLUGIN_PANEL_SEPARATOR)
+            && !s.chars().any(crate::display::is_display_hostile)
     };
     if !usable(module) || !usable(name) {
         return None;
@@ -171,7 +230,7 @@ pub fn intern_plugin_panel(module: &str, name: &str) -> Option<DockPanel> {
     if let Some(found) = panels.iter().find(|p| p.module == module && p.name == name) {
         return Some(DockPanel::Plugin(found));
     }
-    if panels.len() >= MAX_PLUGIN_PANELS {
+    if panels.len() >= MAX_PLUGIN_PANELS || !may_create() {
         return None;
     }
     let ident: &'static PluginPanelIdent = Box::leak(Box::new(PluginPanelIdent {
@@ -181,6 +240,13 @@ pub fn intern_plugin_panel(module: &str, name: &str) -> Option<DockPanel> {
     }));
     panels.push(ident);
     Some(DockPanel::Plugin(ident))
+}
+
+/// A plugin panel's persisted key split into its module and name, with
+/// nothing interned. `None` for any other key.
+fn plugin_key_parts(key: &str) -> Option<(&str, &str)> {
+    key.strip_prefix(PLUGIN_PANEL_KEY_PREFIX)?
+        .split_once(PLUGIN_PANEL_SEPARATOR)
 }
 
 /// Prefix distinguishing a plugin panel's `session.xml` key from the
@@ -263,14 +329,19 @@ impl DockPanel {
     /// — which is the normal case, since plugins load on first touch
     /// and the layout is restored at startup. The panel simply has no
     /// content window until its plugin registers.
+    ///
+    /// It interns *without* charging [`MAX_RESTORED_PLUGIN_PANELS`]'s
+    /// budget, so persisted text must not come through here: a restore
+    /// goes through [`DockLayout::from_session`], which routes every
+    /// plugin key through the budget and hands this function only the
+    /// host's own keys. Crate-private so no other crate can bypass that.
     #[must_use]
-    pub fn from_persist_key(key: &str) -> Option<DockPanel> {
+    pub(crate) fn from_persist_key(key: &str) -> Option<DockPanel> {
         match key {
             "workspace" => Some(DockPanel::Workspace),
             "docmap" => Some(DockPanel::DocMap),
             other => {
-                let rest = other.strip_prefix(PLUGIN_PANEL_KEY_PREFIX)?;
-                let (module, name) = rest.split_once(PLUGIN_PANEL_SEPARATOR)?;
+                let (module, name) = plugin_key_parts(other)?;
                 intern_plugin_panel(module, name)
             }
         }
@@ -561,6 +632,15 @@ pub struct DockLayout {
     /// stacked bands. Not persisted: it is re-seeded from each
     /// plugin's `tTbData.u_mask` at every registration.
     initial_side: Vec<(DockPanel, DockSide)>,
+    /// The command that opens each plugin panel: `tTbData.dlgID`, the
+    /// index of the plugin's own `FuncItem` that shows it. Persisted
+    /// with the panel, because it is how the panel comes back — at the
+    /// next start the host runs that command for every plugin panel
+    /// that was open, which is what Notepad++ does (measured: it runs
+    /// `FuncItem[dlgID]` between `NPPN_TBMODIFICATION` and
+    /// `NPPN_READY`). Re-seeded at every registration, so the plugin's
+    /// current value wins over a persisted one.
+    open_commands: Vec<(DockPanel, i32)>,
     /// Next group id. Monotonic, never reused within a session (and
     /// re-seeded past every persisted id on load).
     next_id: u32,
@@ -573,6 +653,7 @@ impl Default for DockLayout {
             side_size: DEFAULT_SIDE_SIZE,
             remembered: Vec::new(),
             initial_side: Vec::new(),
+            open_commands: Vec::new(),
             next_id: 1,
         }
     }
@@ -727,6 +808,87 @@ impl DockLayout {
         self.initial_side.push((panel, side));
     }
 
+    /// Record the command that opens plugin `panel` — its
+    /// `tTbData.dlgID`. Ignored for the host's own panels, which have
+    /// no plugin command. A negative index names no `FuncItem` and is
+    /// not recorded.
+    pub fn set_open_command(&mut self, panel: DockPanel, command: i32) {
+        if !matches!(panel, DockPanel::Plugin(_)) {
+            return;
+        }
+        self.open_commands.retain(|(p, _)| *p != panel);
+        if command >= 0 {
+            self.open_commands.push((panel, command));
+        }
+    }
+
+    /// The command recorded for plugin `panel`, if any.
+    #[must_use]
+    pub fn open_command_for(&self, panel: DockPanel) -> Option<i32> {
+        self.open_commands
+            .iter()
+            .find(|(p, _)| *p == panel)
+            .map(|(_, c)| *c)
+    }
+
+    /// Every plugin panel the layout has open — in a group, docked or
+    /// floating — in group then tab order.
+    ///
+    /// The set a load pass restores: a hidden panel is not brought
+    /// back, just as Notepad++ restores only the panels it recorded as
+    /// visible. The command for each is looked up separately, with
+    /// [`Self::open_command_for`], and later — once the plugins have had
+    /// `NPPN_TBMODIFICATION` — so a registration made there has already
+    /// re-recorded it and the plugin's current `dlgID` wins over a
+    /// persisted one.
+    #[must_use]
+    pub fn open_plugin_panels(&self) -> Vec<DockPanel> {
+        self.groups
+            .iter()
+            .flat_map(|g| g.panels.iter().copied())
+            .filter(|p| matches!(p, DockPanel::Plugin(_)))
+            .collect()
+    }
+
+    /// Each group's front tab, as `(group id, active panel)` in group
+    /// order. Paired with [`Self::restore_fronts`].
+    #[must_use]
+    pub fn fronts(&self) -> Vec<(u32, DockPanel)> {
+        self.groups
+            .iter()
+            .map(|g| (g.id, g.active_panel()))
+            .collect()
+    }
+
+    /// Make each recorded panel its group's front tab again, where that
+    /// group still exists and still holds it; returns whether anything
+    /// changed.
+    ///
+    /// For putting back the tabs a user left in front after something
+    /// else has brought others forward — restoring plugin panels does,
+    /// because each one comes back through its plugin's "show" command
+    /// and a show makes its panel the front tab. Notepad++ re-applies
+    /// each container's saved front tab after those commands for the
+    /// same reason. A group that has since gone, or a panel that has
+    /// since moved to another, is left alone: the record describes one
+    /// arrangement, and imposing it on a different one would be a
+    /// guess.
+    pub fn restore_fronts(&mut self, fronts: &[(u32, DockPanel)]) -> bool {
+        let mut changed = false;
+        for &(id, panel) in fronts {
+            let Some(group) = self.groups.iter_mut().find(|g| g.id == id) else {
+                continue;
+            };
+            if let Some(i) = group.panels.iter().position(|p| *p == panel) {
+                if group.active != i {
+                    group.active = i;
+                    changed = true;
+                }
+            }
+        }
+        changed
+    }
+
     fn initial_side_for(&self, panel: DockPanel) -> Option<DockSide> {
         self.initial_side
             .iter()
@@ -809,6 +971,7 @@ impl DockLayout {
             .retain(|(p, _)| !matches!(p, DockPanel::Plugin(_)));
         self.initial_side
             .retain(|(p, _)| !matches!(p, DockPanel::Plugin(_)));
+        self.open_commands.clear();
         self.debug_assert_invariants();
     }
 
@@ -1070,6 +1233,7 @@ impl DockLayout {
                             .iter()
                             .map(|p| DockPanelSession {
                                 kind: p.persist_key().to_string(),
+                                cmd: self.open_command_for(*p),
                             })
                             .collect(),
                     }
@@ -1108,6 +1272,20 @@ impl DockLayout {
     ///     guess for where the user wanted it).
     #[must_use]
     pub fn from_session(session: &DockSession) -> DockLayout {
+        Self::from_session_budgeted(session, &RESTORED_PLUGIN_PANELS, MAX_RESTORED_PLUGIN_PANELS)
+    }
+
+    /// [`Self::from_session`], charging each plugin identity it creates
+    /// to `budget` and refusing one once `cap` is reached. Parameters so
+    /// a test can reach the bound with a budget of its own, without
+    /// interning the dozens of identities the real one takes — the table
+    /// is process-wide, and filling it would starve every sibling test
+    /// of the ability to intern one.
+    fn from_session_budgeted(
+        session: &DockSession,
+        budget: &AtomicUsize,
+        cap: usize,
+    ) -> DockLayout {
         let mut layout = DockLayout::new();
         for (side, saved) in [
             (DockSide::Left, session.left),
@@ -1132,24 +1310,49 @@ impl DockLayout {
                     DockSide::from_persist_key(side).map(DockLocation::Side)
                 }
             };
+        // Naming a plugin panel interns it, so a panel not in the table
+        // yet is charged to the budget and refused once the budget is
+        // spent — see `MAX_RESTORED_PLUGIN_PANELS`. Groups are read before
+        // remembered panels, so remembered positions are refused before
+        // any open panel is; within each, it goes in document order.
+        let admit = |kind: &str| -> Option<DockPanel> {
+            let Some((module, name)) = plugin_key_parts(kind) else {
+                return DockPanel::from_persist_key(kind);
+            };
+            intern_plugin_panel_with(module, name, || {
+                // Relaxed: this runs under the table's lock, which
+                // already orders it against every other charge.
+                budget
+                    .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |spent| {
+                        (spent < cap).then_some(spent + 1)
+                    })
+                    .is_ok()
+            })
+        };
         let mut seen: Vec<DockPanel> = Vec::new();
         for g in &session.groups {
             let Some(location) = parse_location(&g.side, g.x, g.y, g.w, g.h) else {
                 continue;
             };
-            let panels: Vec<DockPanel> = g
-                .panels
-                .iter()
-                .filter_map(|p| DockPanel::from_persist_key(&p.kind))
-                .filter(|p| {
-                    if seen.contains(p) {
-                        false
-                    } else {
-                        seen.push(*p);
-                        true
-                    }
-                })
-                .collect();
+            let mut panels: Vec<DockPanel> = Vec::new();
+            for saved in &g.panels {
+                let Some(panel) = admit(&saved.kind) else {
+                    continue;
+                };
+                if seen.contains(&panel) {
+                    continue;
+                }
+                seen.push(panel);
+                panels.push(panel);
+                if let Some(command) = saved.cmd {
+                    // Filtered like every other field read from a
+                    // hand-editable file: `set_open_command` keeps only
+                    // a plugin panel's non-negative index, and an index
+                    // naming no command resolves to nothing when the
+                    // host looks it up.
+                    layout.set_open_command(panel, command);
+                }
+            }
             if panels.is_empty() {
                 continue;
             }
@@ -1163,7 +1366,7 @@ impl DockLayout {
             });
         }
         for r in &session.remembered {
-            let Some(panel) = DockPanel::from_persist_key(&r.kind) else {
+            let Some(panel) = admit(&r.kind) else {
                 continue;
             };
             if layout.is_visible(panel) {
@@ -1551,6 +1754,263 @@ mod tests {
 
     fn mid() -> DockRect {
         DockRect::new(0, 0, 1000, 700)
+    }
+
+    /// The command that opens a plugin panel survives `session.xml`
+    /// — it is what brings the panel back — and only a plugin panel's
+    /// non-negative index is kept, whatever the file says.
+    #[test]
+    fn a_plugin_panels_open_command_round_trips_through_the_session() {
+        let console = intern_plugin_panel("cmd-a.dll", "Console").expect("intern");
+        let notes = intern_plugin_panel("cmd-b.dll", "Notes").expect("intern");
+        let mut l = DockLayout::new();
+        l.show(console);
+        l.show(notes);
+        l.set_open_command(console, 5);
+        l.set_open_command(DockPanel::Workspace, 7);
+        let session = l.to_session();
+        let saved: Vec<(String, Option<i32>)> = session
+            .groups
+            .iter()
+            .flat_map(|g| g.panels.iter().map(|p| (p.kind.clone(), p.cmd)))
+            .collect();
+        assert!(saved.contains(&(console.persist_key().to_string(), Some(5))));
+        assert!(saved.contains(&(notes.persist_key().to_string(), None)));
+        assert!(
+            !saved.iter().any(|(k, c)| k == "workspace" && c.is_some()),
+            "a host panel has no plugin command to record"
+        );
+        let back = DockLayout::from_session(&session);
+        assert_eq!(back.open_command_for(console), Some(5));
+        assert_eq!(back.open_command_for(notes), None);
+
+        // A hand-edited negative index names no FuncItem.
+        let mut edited = session.clone();
+        for g in &mut edited.groups {
+            for p in &mut g.panels {
+                if p.cmd.is_some() {
+                    p.cmd = Some(-3);
+                }
+            }
+        }
+        assert_eq!(
+            DockLayout::from_session(&edited).open_command_for(console),
+            None
+        );
+    }
+
+    /// Restoring panels shows each through its plugin's own command,
+    /// which brings it to the front; the tabs the user left in front
+    /// go back in front afterwards — but only where the arrangement
+    /// the record describes still stands.
+    #[test]
+    fn restore_fronts_puts_back_each_groups_front_tab() {
+        let a = intern_plugin_panel("front-a.dll", "A").expect("intern");
+        let b = intern_plugin_panel("front-b.dll", "B").expect("intern");
+        let c = intern_plugin_panel("front-c.dll", "C").expect("intern");
+        let mut l = DockLayout::new();
+        for p in [a, b] {
+            l.set_initial_side(p, DockSide::Bottom);
+            l.show(p);
+        }
+        l.set_initial_side(c, DockSide::Left);
+        l.show(c);
+        l.activate(a);
+        let fronts = l.fronts();
+        let bottom = l.group_of(a).expect("a is docked").id;
+        assert!(fronts.contains(&(bottom, a)));
+
+        // The restore's show commands bring the last-shown tab forward.
+        l.show(a);
+        l.show(b);
+        assert_eq!(l.group_of(a).expect("docked").active_panel(), b);
+        assert!(l.restore_fronts(&fronts));
+        assert_eq!(l.group_of(a).expect("docked").active_panel(), a);
+        assert!(!l.restore_fronts(&fronts), "nothing left to change");
+
+        // A panel that has since moved to another group is not made
+        // that group's front on the old record's say-so...
+        let left = l.group_of(c).expect("c is docked").id;
+        l.move_panel(a, DropTarget::IntoGroup(left));
+        l.activate(c);
+        assert!(!l.restore_fronts(&fronts));
+        assert_eq!(l.group_of(c).expect("docked").active_panel(), c);
+        assert_eq!(l.group_of(b).expect("docked").active_panel(), b);
+        // ...and a group that has gone is skipped.
+        l.hide(a);
+        l.hide(c);
+        assert!(!l.restore_fronts(&fronts));
+    }
+
+    /// What a restore brings back: the plugin panels that are open, in
+    /// group then tab order — a panel with no recorded command included,
+    /// since whether it has one is decided later — and never a hidden
+    /// panel, which Notepad++ does not restore either, nor one of the
+    /// host's own.
+    #[test]
+    fn open_plugin_panels_lists_only_open_plugin_panels() {
+        let console = intern_plugin_panel("rst-a.dll", "A").expect("intern");
+        let notes = intern_plugin_panel("rst-b.dll", "B").expect("intern");
+        let closed = intern_plugin_panel("rst-c.dll", "C").expect("intern");
+        let unrecorded = intern_plugin_panel("rst-d.dll", "D").expect("intern");
+        let mut layout = DockLayout::new();
+        for (panel, side) in [
+            (console, DockSide::Bottom),
+            (notes, DockSide::Bottom),
+            (closed, DockSide::Left),
+        ] {
+            layout.set_initial_side(panel, side);
+            layout.show(panel);
+        }
+        layout.show(unrecorded);
+        layout.show(DockPanel::DocMap);
+        layout.set_open_command(console, 1);
+        layout.set_open_command(notes, 3);
+        layout.set_open_command(closed, 0);
+        layout.hide(closed);
+        let open = layout.open_plugin_panels();
+        assert!(open.contains(&unrecorded));
+        assert!(!open.contains(&closed), "a hidden panel is not restored");
+        assert!(
+            !open.contains(&DockPanel::DocMap),
+            "a host panel has no plugin command"
+        );
+        let recorded: Vec<DockPanel> = open.into_iter().filter(|p| *p != unrecorded).collect();
+        assert_eq!(recorded, vec![console, notes], "group then tab order");
+
+        // Dropping plugin panels (the backends that cannot host them)
+        // forgets their commands too.
+        layout.drop_plugin_panels();
+        assert!(layout.open_plugin_panels().is_empty());
+        assert_eq!(layout.open_command_for(console), None);
+    }
+
+    /// A plugin panel's name is what its caption and tab draw, so text
+    /// the display policy rejects is refused where identities are made.
+    /// Registration sanitizes first; a `session.xml` key does not, and
+    /// this is the only thing standing between a hand-edited one and a
+    /// bidi override in the chrome.
+    #[test]
+    fn a_display_hostile_plugin_identity_is_refused() {
+        assert_eq!(intern_plugin_panel("spoof.dll", "Inv\u{202E}exe.pdf"), None);
+        assert_eq!(intern_plugin_panel("spoof\u{0}.dll", "Name"), None);
+        assert_eq!(intern_plugin_panel("spoof.dll", "Two\nLines"), None);
+        assert_eq!(
+            DockPanel::from_persist_key("plugin:spoof.dll|Inv\u{202E}exe.pdf"),
+            None
+        );
+        // What registration substitutes for such a character passes.
+        assert!(intern_plugin_panel("spoof.dll", "Inv\u{FFFD}exe.pdf").is_some());
+
+        // A session naming one restores without it, and keeps the rest.
+        let session = DockSession {
+            groups: vec![DockGroupSession {
+                side: "bottom".into(),
+                panels: vec![
+                    DockPanelSession {
+                        kind: "plugin:spoof.dll|Inv\u{202E}exe.pdf".into(),
+                        cmd: Some(1),
+                    },
+                    DockPanelSession {
+                        kind: "docmap".into(),
+                        cmd: None,
+                    },
+                ],
+                ..DockGroupSession::default()
+            }],
+            ..DockSession::default()
+        };
+        let restored = DockLayout::from_session(&session);
+        assert!(restored.open_plugin_panels().is_empty());
+        assert!(restored.is_visible(DockPanel::DocMap));
+    }
+
+    /// Persisted text cannot fill the panel table: past the bound a key
+    /// it names is not interned at all, so registration keeps room — and
+    /// the bound is on the process, so a second read of another session
+    /// finds it spent. Driven through a budget of its own with a bound of
+    /// two, because the table is process-wide.
+    #[test]
+    fn a_restored_session_cannot_fill_the_panel_table() {
+        let interned = |module: &str| {
+            PLUGIN_PANELS
+                .lock()
+                .expect("table")
+                .iter()
+                .any(|p| p.module == module)
+        };
+        let group_panel = |kind: &str| DockPanelSession {
+            kind: kind.into(),
+            cmd: None,
+        };
+        let session = DockSession {
+            groups: vec![DockGroupSession {
+                side: "bottom".into(),
+                panels: vec![
+                    group_panel("plugin:cap-a.dll|A"),
+                    group_panel("plugin:cap-b.dll|B"),
+                    group_panel("plugin:cap-c.dll|C"),
+                    group_panel("docmap"),
+                ],
+                ..DockGroupSession::default()
+            }],
+            remembered: vec![
+                DockRememberSession {
+                    kind: "plugin:cap-a.dll|A".into(),
+                    side: "left".into(),
+                    ..DockRememberSession::default()
+                },
+                DockRememberSession {
+                    kind: "plugin:cap-d.dll|D".into(),
+                    side: "left".into(),
+                    ..DockRememberSession::default()
+                },
+            ],
+            ..DockSession::default()
+        };
+        let budget = AtomicUsize::new(0);
+        let restored = DockLayout::from_session_budgeted(&session, &budget, 2);
+        let names: Vec<&str> = restored
+            .open_plugin_panels()
+            .iter()
+            .map(|p| p.title())
+            .collect();
+        assert_eq!(names, vec!["A", "B"], "groups are admitted first, in order");
+        assert!(
+            restored.is_visible(DockPanel::DocMap),
+            "host panels are not counted"
+        );
+        assert!(
+            !interned("cap-c.dll"),
+            "a key past the bound must not be interned"
+        );
+        assert!(!interned("cap-d.dll"), "nor a remembered one");
+
+        // A later read — of a different session — finds the budget spent:
+        // a new panel is refused, while one already in the table still
+        // resolves, because it takes no slot.
+        let later = DockSession {
+            groups: vec![DockGroupSession {
+                side: "left".into(),
+                panels: vec![
+                    group_panel("plugin:cap-e.dll|E"),
+                    group_panel("plugin:cap-a.dll|A"),
+                ],
+                ..DockGroupSession::default()
+            }],
+            ..DockSession::default()
+        };
+        let again = DockLayout::from_session_budgeted(&later, &budget, 2);
+        let names: Vec<&str> = again
+            .open_plugin_panels()
+            .iter()
+            .map(|p| p.title())
+            .collect();
+        assert_eq!(names, vec!["A"]);
+        assert!(
+            !interned("cap-e.dll"),
+            "the bound is on the process, not one read"
+        );
     }
 
     /// `container_of` answers for a hidden panel with where `show`
@@ -2359,9 +2819,11 @@ mod tests {
                     panels: vec![
                         DockPanelSession {
                             kind: "workspace".into(),
+                            cmd: None,
                         },
                         DockPanelSession {
                             kind: "hologram".into(),
+                            cmd: None,
                         },
                     ],
                 },
@@ -2374,6 +2836,7 @@ mod tests {
                     active: 0,
                     panels: vec![DockPanelSession {
                         kind: "docmap".into(),
+                        cmd: None,
                     }],
                 },
                 DockGroupSession {
@@ -2385,6 +2848,7 @@ mod tests {
                     active: 0,
                     panels: vec![DockPanelSession {
                         kind: "workspace".into(),
+                        cmd: None,
                     }],
                 },
             ],

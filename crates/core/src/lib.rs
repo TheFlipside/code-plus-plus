@@ -4,6 +4,7 @@
 //! code. It is unit-testable without an OS event loop. See DESIGN.md
 //! §2.2 and §5.1–§5.2.
 
+pub mod display;
 pub mod dock;
 pub mod encoding;
 pub mod eol;

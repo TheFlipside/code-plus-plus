@@ -23,6 +23,14 @@
 //!    `DMN_CLOSE`, which arrives here as an ordinary `WM_NOTIFY` on
 //!    this window — *not* through `beNotified` — and the panel
 //!    reports it on the status bar.
+//! 4. **Quitting with a panel open and starting again** brings it
+//!    back, and the two panels come back two different ways. The
+//!    first is registered from `NPPN_TBMODIFICATION`, so its window
+//!    is there before anything else happens. The second is only ever
+//!    registered from its own menu command, the way `NppExec`'s
+//!    console is — and it still comes back, because the host runs
+//!    that command at startup: `tTbData.dlgID` names it, and
+//!    Notepad++ restores every panel that way.
 //!
 //! Windows-only: `h_client` is an HWND, and `register_dock_dialog`
 //! is defaulted (and so declines) on the GTK and Cocoa backends. The
@@ -152,7 +160,10 @@ mod win {
     // is shorter than the array — so they double as `psz_*` buffers.
 
     const CLASS_NAME: [u16; sdk::MENU_TITLE_LENGTH] = sdk::menu_label(b"CodeppExampleHelloPanel");
-    const MODULE_NAME: [u16; sdk::MENU_TITLE_LENGTH] = sdk::menu_label(b"example_hello");
+    /// `tTbData.pszModuleName`: the plugin's own DLL file name,
+    /// extension included, which is the Notepad++ convention and what
+    /// the host matches a restored panel to its plugin by.
+    const MODULE_NAME: [u16; sdk::MENU_TITLE_LENGTH] = sdk::menu_label(b"example_hello.dll");
     const TITLE_A: [u16; sdk::MENU_TITLE_LENGTH] = sdk::menu_label(b"Example Hello Panel");
     const TITLE_B: [u16; sdk::MENU_TITLE_LENGTH] =
         sdk::menu_label(b"Example Hello Panel (renamed)");
@@ -175,7 +186,8 @@ mod win {
     static TB_DATA: SyncCell<TbData> = SyncCell::new(TbData {
         h_client: core::ptr::null_mut(),
         psz_name: core::ptr::null(),
-        dlg_id: 0,
+        // The command that opens this panel — see the constant.
+        dlg_id: crate::imp::CMD_SHOW_DOCK_PANEL,
         // Both demo panels ask for the *bottom container*, which is
         // what `DWS_DF_CONT_*` names (see the SDK's re-export). Two
         // panels naming the same one become two tabs of a single dock
@@ -218,7 +230,7 @@ mod win {
     static TB_DATA_2: SyncCell<TbData> = SyncCell::new(TbData {
         h_client: core::ptr::null_mut(),
         psz_name: core::ptr::null(),
-        dlg_id: 1,
+        dlg_id: crate::imp::CMD_SHOW_SECOND_DOCK_PANEL,
         // The same container as the first panel — see there.
         u_mask: sdk::DWS_DF_CONT_BOTTOM,
         h_icon_tab: core::ptr::null_mut(),
@@ -489,19 +501,20 @@ mod win {
         panel
     }
 
-    /// Register both panels with the docking manager, showing
-    /// neither. Called from `NPPN_TBMODIFICATION`, which is the
+    /// Register the first panel with the docking manager, without
+    /// showing it. Called from `NPPN_TBMODIFICATION`, which is the
     /// moment the ABI sets aside for it.
     ///
-    /// The timing is the point rather than an implementation detail.
-    /// The host restores its dock arrangement from `session.xml`
-    /// before any plugin loads, so a panel the user had docked last
-    /// session already has a group waiting and is missing only its
-    /// content window; registering here fills it the moment the
-    /// plugin loads. Registering on the menu click instead — which an
-    /// earlier version of this file did — leaves that group visibly
-    /// empty until the user clicks an item they have no reason to
-    /// connect with it.
+    /// The second panel is deliberately *not* registered here: it is
+    /// registered only by its own menu command, which is how many real
+    /// plugins do it (`NppExec`'s console among them). The two together
+    /// are the demo for how the host brings a panel back. Both come
+    /// back after a restart — the first because its window exists by
+    /// the time the host looks, the second because the host runs
+    /// `FuncItem[dlgID]` for every panel that was open, which is what
+    /// Notepad++ does and what a lazily-registering plugin relies on.
+    /// Either way the host runs the command, so the plugin's own state
+    /// ends up the same as if the user had clicked.
     pub fn register_panels() {
         let a = register_one(
             &PANEL,
@@ -510,14 +523,7 @@ mod win {
             TITLE_A.as_ptr(),
             &REGISTERED,
         );
-        let b = register_one(
-            &PANEL_2,
-            LABEL_TEXT_2.as_ptr(),
-            &TB_DATA_2,
-            TITLE_2.as_ptr(),
-            &REGISTERED_2,
-        );
-        if a.is_null() || b.is_null() {
+        if a.is_null() {
             sdk::set_status("Example Hello: the host refused a dock registration");
         }
     }

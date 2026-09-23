@@ -548,9 +548,16 @@ fn load_pending_plugins() {
     // The active buffer is read per plugin, at delivery — see
     // `LoadNotifications::deliver` — under a borrow that ends before
     // that plugin runs.
-    notices.deliver(data.npp_handle, || {
-        with_state(|st| st.shell.active_buffer_id()).flatten()
-    });
+    //
+    // No panel restore: `NPPM_DMMREGASDCKDLG` carries an `HWND`, so
+    // this backend hosts no plugin panel, and the dock restore's
+    // `drop_plugin_panels` removes any a Windows-written session
+    // names before the layout is applied. Nothing to bring back.
+    notices.deliver(
+        data.npp_handle,
+        || with_state(|st| st.shell.active_buffer_id()).flatten(),
+        || {},
+    );
 }
 
 /// Lazy-load every pending plugin, then rebuild the Plugins menu from

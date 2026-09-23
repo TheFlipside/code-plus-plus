@@ -741,7 +741,7 @@ impl PluginHost {
             notices.push(ready);
         }
         // No buffer to announce: a harness owns no documents.
-        notices.deliver(npp_data.npp_handle, || None);
+        notices.deliver(npp_data.npp_handle, || None, || {});
         Ok(())
     }
 
@@ -916,6 +916,19 @@ impl PluginReady {
 /// `NPPN_BUFFERACTIVATED` rely on. It goes only to the plugins this
 /// pass loaded — the rest already saw that activation.
 ///
+/// Between `NPPN_TBMODIFICATION` and that activation, Notepad++ also
+/// brings back the dock panels the last session left open, and it does
+/// so by running each one's own menu command — `FuncItem[dlgID]` of the
+/// plugin that registered it — rather than by showing a window it
+/// already has. Measured the same way: a probe plugin whose panel was
+/// open at quit sees its "show panel" command invoked at the next
+/// start, after `NPPN_TBMODIFICATION` and before `NPPN_READY`, even
+/// when it had registered that panel itself a moment earlier. A plugin
+/// that only registers its panel from that command depends on it, and
+/// every plugin's menu check and "is my panel open" state is set by it.
+/// [`Self::deliver`] leaves the slot to its caller, because what a
+/// panel is and how a command is dispatched are the backend's.
+///
 /// **Deliver with no host borrow held.** A plugin's handler may send
 /// `NPPM_*` straight back, and it can only be answered if nothing is
 /// borrowed.
@@ -936,9 +949,18 @@ impl LoadNotifications {
         self.plugins.is_empty()
     }
 
-    /// Broadcast `NPPN_TBMODIFICATION`, then `NPPN_BUFFERACTIVATED`
-    /// for the active buffer, then `NPPN_READY`, each to every plugin
-    /// in load order before the next begins.
+    /// Broadcast `NPPN_TBMODIFICATION`, then run `restore_panels`, then
+    /// broadcast `NPPN_BUFFERACTIVATED` for the active buffer, then
+    /// `NPPN_READY` — each broadcast reaching every plugin in load
+    /// order before the next begins. Does nothing, the hook included,
+    /// when the pass loaded no plugin.
+    ///
+    /// `restore_panels` is where the caller brings back the dock panels
+    /// these plugins had open — see the type's docs for why it sits
+    /// there. It runs with plugin code on both sides of it, so it must
+    /// take no borrow the caller holds. A panic in it is contained: it
+    /// is host code, and a host bug must not cost every plugin its
+    /// `NPPN_READY`, which is what finishes a plugin's initialisation.
     ///
     /// `active_buffer` is asked afresh for each plugin, just before its
     /// `NPPN_BUFFERACTIVATED`, and that plugin's is skipped when it
@@ -951,9 +973,20 @@ impl LoadNotifications {
     /// either way; this keeps the synthetic one from being false in
     /// between.) The callback must take no borrow the caller holds —
     /// it is called with plugin code before and after it.
-    pub fn deliver(&self, npp_handle: crate::ffi::Hwnd, active_buffer: impl Fn() -> Option<usize>) {
+    pub fn deliver(
+        &self,
+        npp_handle: crate::ffi::Hwnd,
+        active_buffer: impl Fn() -> Option<usize>,
+        restore_panels: impl FnOnce(),
+    ) {
+        if self.plugins.is_empty() {
+            return;
+        }
         for ready in &self.plugins {
             ready.notify(npp_handle, NPPN_TBMODIFICATION, 0);
+        }
+        if catch_unwind(AssertUnwindSafe(restore_panels)).is_err() {
+            tracing::warn!("restoring plugin dock panels panicked; continuing to NPPN_READY");
         }
         for ready in &self.plugins {
             if let Some(buffer) = active_buffer() {
@@ -1780,13 +1813,21 @@ mod load_order_tests {
         notices.push(ready(plugin_a));
         notices.push(ready(plugin_b));
 
+        // `'*'` marks the panel-restore slot, which Notepad++ runs
+        // after every plugin has had NPPN_TBMODIFICATION — where panels
+        // are registered — and before any hears NPPN_READY.
         SEEN.lock().expect("recorder lock").clear();
-        notices.deliver(core::ptr::null_mut(), || Some(7));
+        notices.deliver(
+            core::ptr::null_mut(),
+            || Some(7),
+            || SEEN.lock().expect("recorder lock").push(('*', 0, 0)),
+        );
         assert_eq!(
             *SEEN.lock().expect("recorder lock"),
             vec![
                 ('a', NPPN_TBMODIFICATION, 0),
                 ('b', NPPN_TBMODIFICATION, 0),
+                ('*', 0, 0),
                 ('a', NPPN_BUFFERACTIVATED, 7),
                 ('b', NPPN_BUFFERACTIVATED, 7),
                 ('a', NPPN_READY, 0),
@@ -1797,7 +1838,7 @@ mod load_order_tests {
         // No buffer to announce: the activation is skipped, the rest
         // keeps its order.
         SEEN.lock().expect("recorder lock").clear();
-        notices.deliver(core::ptr::null_mut(), || None);
+        notices.deliver(core::ptr::null_mut(), || None, || {});
         assert_eq!(
             *SEEN.lock().expect("recorder lock"),
             vec![
@@ -1813,10 +1854,14 @@ mod load_order_tests {
         // the plugins after it announced a buffer that is gone.
         SEEN.lock().expect("recorder lock").clear();
         let asked = std::cell::Cell::new(0usize);
-        notices.deliver(core::ptr::null_mut(), || {
-            asked.set(asked.get() + 1);
-            Some(10 + asked.get())
-        });
+        notices.deliver(
+            core::ptr::null_mut(),
+            || {
+                asked.set(asked.get() + 1);
+                Some(10 + asked.get())
+            },
+            || {},
+        );
         let activations: Vec<(char, usize)> = SEEN
             .lock()
             .expect("recorder lock")
@@ -1825,6 +1870,25 @@ mod load_order_tests {
             .map(|(who, _, id)| (*who, *id))
             .collect();
         assert_eq!(activations, vec![('a', 11), ('b', 12)]);
+
+        // A restore that panics is host code failing, and must not
+        // cost the plugins the NPPN_READY that finishes their init.
+        SEEN.lock().expect("recorder lock").clear();
+        notices.deliver(core::ptr::null_mut(), || None, || panic!("restore failed"));
+        assert_eq!(
+            *SEEN.lock().expect("recorder lock"),
+            vec![
+                ('a', NPPN_TBMODIFICATION, 0),
+                ('b', NPPN_TBMODIFICATION, 0),
+                ('a', NPPN_READY, 0),
+                ('b', NPPN_READY, 0),
+            ]
+        );
+
+        // A pass that loaded nothing restores nothing.
+        let ran = std::cell::Cell::new(false);
+        LoadNotifications::default().deliver(core::ptr::null_mut(), || Some(1), || ran.set(true));
+        assert!(!ran.get(), "an empty pass ran the panel restore");
     }
 
     /// A plugin's four init entry points are called in

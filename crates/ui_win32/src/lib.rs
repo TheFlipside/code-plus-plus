@@ -3538,6 +3538,14 @@ impl UiPlatform for Win32Ui {
             if let Some(side) = dock_side_from_u_mask(params.u_mask) {
                 (*self.dock_layout).set_initial_side(panel, side);
             }
+            // And record the command that opens it — `dlgID` is the
+            // index of the plugin's own `FuncItem` that shows this
+            // panel. It is persisted with the panel, and at the next
+            // start the host runs it to bring the panel back, which is
+            // how Notepad++ restores every plugin panel. Re-recorded
+            // on every registration, so the value the plugin gives now
+            // wins over whatever an older session saved.
+            (*self.dock_layout).set_open_command(panel, params.dlg_id);
             // A restored layout can already name this panel — the
             // arrangement is persisted by key and comes back before
             // any plugin loads, so its group has been sitting there
@@ -20275,37 +20283,181 @@ unsafe fn load_plugins_where(hwnd: HWND, npp_data: NppData, scope: PluginLoadSco
     // show them), its menu installed, the accelerator table rebuilt
     // so its chords fire. Notepad++ has all of that done before it
     // sends the first notification.
-    let state_gone = unsafe { state_from_hwnd(hwnd) }
-        .map(|state| {
-            state.shell.after_plugin_loads();
-            unsafe {
-                install_plugin_menus(
-                    state.plugin_menu,
-                    &mut state.plugin_submenus,
-                    &state.shell,
-                    &loaded_now,
-                );
-                refresh_plugin_accels(state);
-            }
-        })
-        .is_none();
-    if state_gone {
+    //
+    // The same borrow notes which dock panels these plugins had open,
+    // and every group's front tab — before any of them runs and can
+    // change either. That is the arrangement the restore below brings
+    // back.
+    let restore = unsafe { state_from_hwnd(hwnd) }.map(|state| {
+        state.shell.after_plugin_loads();
+        unsafe {
+            install_plugin_menus(
+                state.plugin_menu,
+                &mut state.plugin_submenus,
+                &state.shell,
+                &loaded_now,
+            );
+            refresh_plugin_accels(state);
+        }
+        PanelRestore::capture(state, &loaded_now)
+    });
+    if restore.is_none() {
         tracing::error!(
             "lost the window state after a plugin load pass; its menus were not installed"
         );
     }
+    let restore = restore.unwrap_or_default();
     let _ = unsafe { DrawMenuBar(hwnd) };
     // Then the notifications, with no borrow held — a plugin that
     // queries the host from `NPPN_READY` is doing something ordinary.
     // Delivered even if the state went away above: these plugins are
     // loaded, and a plugin that never hears READY never finishes its
     // own initialisation. The active buffer is read per plugin, under
-    // a borrow that ends before that plugin runs.
+    // a borrow that ends before that plugin runs. Between the toolbar
+    // notice and READY, the panels these plugins had open come back —
+    // see `restore_plugin_panels`.
     let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        notices.deliver(npp_data.npp_handle, || {
-            unsafe { state_from_hwnd(hwnd) }.and_then(|s| s.shell.active_buffer_id())
-        });
+        notices.deliver(
+            npp_data.npp_handle,
+            || unsafe { state_from_hwnd(hwnd) }.and_then(|s| s.shell.active_buffer_id()),
+            || unsafe { restore_plugin_panels(hwnd, &restore) },
+        );
     }));
+    // Only now, after READY: a plugin may register its panel from
+    // there, and one that does must not find it already closed.
+    unsafe { close_unregistered_restored_panels(hwnd, &restore) };
+}
+
+/// What a load pass needs to bring back the dock panels its plugins
+/// had open. Captured before any of those plugins is notified — see
+/// [`load_plugins_where`].
+#[derive(Default)]
+struct PanelRestore {
+    /// The open plugin panels owned by the plugins this pass loaded,
+    /// in group then tab order.
+    panels: Vec<DockPanel>,
+    /// Every group's front tab as the pass began.
+    fronts: Vec<(u32, DockPanel)>,
+}
+
+impl PanelRestore {
+    fn capture(state: &WindowState, loaded: &[usize]) -> Self {
+        Self {
+            panels: state
+                .shell
+                .panels_owned_by(&state.dock_layout.open_plugin_panels(), loaded),
+            fronts: state.dock_layout.fronts(),
+        }
+    }
+}
+
+/// Bring back the dock panels a load pass's plugins had open, the way
+/// Notepad++ does: by running each one's own menu command.
+///
+/// A panel's `tTbData.dlgID` is the index of the plugin's `FuncItem`
+/// that shows it, recorded at registration and persisted with the
+/// panel. Running that command is the only restore that works for
+/// every plugin. Many register their panel only from that command —
+/// `NppExec`'s console among them — so without it a restored group
+/// waits for a window nobody will ever supply; and a plugin keeps its
+/// own "is my panel open" state and its menu check in that command, so
+/// even a panel whose window already exists comes back half-restored
+/// if the plugin never hears it. Measured against Notepad++ 8.9.6: it
+/// runs the command for every panel it recorded open, even one the
+/// plugin registered itself a moment earlier, between
+/// `NPPN_TBMODIFICATION` and `NPPN_READY` — which is where
+/// `LoadNotifications::deliver` calls this.
+///
+/// Each command goes out as the `WM_COMMAND` a click on that menu item
+/// sends, so it takes exactly the path a click takes. Resolved under a
+/// borrow that ends before the first one is sent, and sent with none
+/// held: it is the plugin's own code, and it talks back to the host.
+///
+/// Each show brings its panel to the front of its group, so the tabs
+/// the user had in front are put back in front afterwards — which
+/// Notepad++ also does.
+///
+/// # Safety
+///
+/// `hwnd` must be the main window. UI thread only.
+unsafe fn restore_plugin_panels(hwnd: HWND, restore: &PanelRestore) {
+    if restore.panels.is_empty() {
+        return;
+    }
+    let commands: Vec<u16> = unsafe { state_from_hwnd(hwnd) }
+        .map(|state| {
+            let mut out: Vec<u16> = Vec::new();
+            for &panel in &restore.panels {
+                let id = state
+                    .dock_layout
+                    .open_command_for(panel)
+                    .and_then(|index| state.shell.panel_open_command_id(panel, index))
+                    .and_then(|cmd| u16::try_from(cmd).ok());
+                // One command can open several panels; a second run of
+                // a toggle would close what the first opened.
+                if let Some(id) = id.filter(|id| !out.contains(id)) {
+                    out.push(id);
+                }
+            }
+            out
+        })
+        .unwrap_or_default();
+    for &cmd in &commands {
+        tracing::debug!(cmd, "restoring a plugin panel by running its command");
+        unsafe {
+            SendMessageW(
+                hwnd,
+                WM_COMMAND,
+                Some(WPARAM(usize::from(cmd))),
+                Some(LPARAM(0)),
+            );
+        }
+    }
+    if commands.is_empty() {
+        return;
+    }
+    let changed = unsafe { state_from_hwnd(hwnd) }
+        .is_some_and(|state| state.dock_layout.restore_fronts(&restore.fronts));
+    if changed {
+        unsafe { dock_panels::apply_dock_layout(hwnd) };
+    }
+}
+
+/// Close each restored panel whose plugin loaded, was told to restore
+/// it, heard `NPPN_READY` — and still never supplied a window.
+///
+/// Such a panel is a group with a caption and nothing in it, and
+/// nothing is going to fill it this session. Closing it (the layout
+/// remembers where it was) is the honest outcome, and it is also what
+/// the user would see under Notepad++, which has no container for a
+/// panel that was never registered. The plugin may have renamed the
+/// panel, stopped offering it, or declined for a reason of its own.
+///
+/// # Safety
+///
+/// `hwnd` must be the main window. UI thread only.
+unsafe fn close_unregistered_restored_panels(hwnd: HWND, restore: &PanelRestore) {
+    if restore.panels.is_empty() {
+        return;
+    }
+    let changed = unsafe { state_from_hwnd(hwnd) }.is_some_and(|state| {
+        let mut changed = false;
+        for &panel in &restore.panels {
+            let registered = state.dock_dialogs.iter().any(|e| e.panel == panel);
+            if !registered && state.dock_layout.is_visible(panel) {
+                tracing::warn!(
+                    panel = panel.persist_key(),
+                    "a restored plugin panel was never registered by its plugin; closing it"
+                );
+                state.dock_layout.hide(panel);
+                changed = true;
+            }
+        }
+        changed
+    });
+    if changed {
+        unsafe { dock_panels::apply_dock_layout(hwnd) };
+    }
 }
 
 thread_local! {
@@ -30083,9 +30235,6 @@ mod plugin_reentry_guards {
         );
     }
 
-    /// `body` with every `//` line comment removed, so a guard matches
-    /// the construct and not a mention of it in a comment — the pitfall
-    /// DESIGN.md §7.2 records for the m3c and m4d guards.
     /// Byte index of the `;` that ends the statement starting at
     /// `from` — the first one at bracket depth zero, so a `;` inside a
     /// closure body does not count. What lets a guard say "this call
@@ -30106,6 +30255,9 @@ mod plugin_reentry_guards {
         panic!("no statement end after byte {from}");
     }
 
+    /// `body` with every `//` line comment removed, so a guard matches
+    /// the construct and not a mention of it in a comment — the pitfall
+    /// DESIGN.md §7.2 records for the m3c and m4d guards.
     pub(super) fn code_only(body: &str) -> String {
         body.lines()
             .map(|l| l.split("//").next().unwrap_or(""))
@@ -31026,7 +31178,7 @@ mod plugin_load_borrow_guards {
         use super::plugin_reentry_guards::statement_end;
         let body = code_only(&fn_body(production_src(), "load_plugins_where"));
         let tail = body
-            .find("let state_gone = unsafe { state_from_hwnd(hwnd) }")
+            .find("let restore = unsafe { state_from_hwnd(hwnd) }")
             .expect("the pass no longer does its bookkeeping under one borrow after the loop");
         let install = body
             .find("install_plugin_menus(")
@@ -31059,6 +31211,96 @@ mod plugin_load_borrow_guards {
             1,
             "a plugin is notified from somewhere other than the one batch delivery — \
              one at a time from inside the loop is how this used to be"
+        );
+    }
+
+    /// Restoring a plugin's dock panels is part of the load pass, in
+    /// Notepad++'s place for it, and in three steps whose order a diff
+    /// cannot show: the arrangement is noted under the bookkeeping
+    /// borrow, before any plugin runs; the panels are restored from
+    /// inside the batch delivery, which is what puts them between the
+    /// toolbar notice and READY; and a panel still missing its window
+    /// is closed only after READY, where a plugin may yet register it.
+    #[test]
+    fn plugin_panels_are_restored_inside_the_load_pass() {
+        use super::plugin_reentry_guards::statement_end;
+        let body = code_only(&fn_body(production_src(), "load_plugins_where"));
+        let tail = body
+            .find("let restore = unsafe { state_from_hwnd(hwnd) }")
+            .expect("the bookkeeping borrow after the loop");
+        let capture = body
+            .find("PanelRestore::capture(state, &loaded_now)")
+            .expect("the pass no longer notes the panels its plugins had open");
+        assert!(
+            tail < capture && capture < statement_end(&body, tail),
+            "the arrangement must be noted under the bookkeeping borrow, before any plugin runs"
+        );
+        let deliver = body.find("notices.deliver(").expect("the batch delivery");
+        let deliver_end = statement_end(&body, deliver);
+        let hook = body
+            .find("restore_plugin_panels(hwnd, &restore)")
+            .expect("the delivery no longer restores the plugins' panels");
+        assert!(
+            deliver < hook && hook < deliver_end,
+            "the panels must be restored from inside the delivery — between the toolbar \
+             notice and READY — not before or after it"
+        );
+        let close = body
+            .find("close_unregistered_restored_panels(hwnd, &restore)")
+            .expect("a restored panel that never gets a window is no longer closed");
+        assert!(
+            close > deliver_end,
+            "an unregistered panel must be closed only after READY, where its plugin may \
+             still register it"
+        );
+    }
+
+    /// The restore runs each panel's command with no state borrowed —
+    /// it is the plugin's own code, and it talks back — and through
+    /// the `WM_COMMAND` a menu click sends, so it takes the click's
+    /// path. And registration is what records the command at all.
+    #[test]
+    fn plugin_panel_commands_run_with_no_borrow_held() {
+        use super::plugin_reentry_guards::statement_end;
+        let body = code_only(&fn_body(production_src(), "restore_plugin_panels"));
+        for binding in ["let Some(state)", "let state =", "let Some(st)"] {
+            assert!(
+                !body.contains(binding),
+                "`{binding}` would keep the state borrowed across a plugin command"
+            );
+        }
+        let resolve = body
+            .find("let commands: Vec<u16> = unsafe { state_from_hwnd(hwnd) }")
+            .expect("the commands are no longer resolved under their own borrow");
+        let resolved = statement_end(&body, resolve);
+        assert!(
+            body[resolve..resolved].contains("panel_open_command_id("),
+            "the commands are no longer resolved through the plugin's own FuncItems"
+        );
+        let send = body
+            .find("SendMessageW(")
+            .expect("the commands are no longer sent");
+        assert!(
+            send > resolved,
+            "a command is sent while the borrow that resolved it is still live"
+        );
+        assert!(
+            body[send..statement_end(&body, send)].contains("WM_COMMAND"),
+            "the restore no longer goes out as the WM_COMMAND a menu click sends"
+        );
+        let fronts = body
+            .find("restore_fronts(&restore.fronts)")
+            .expect("the tabs the user had in front are no longer put back");
+        assert!(
+            fronts > send,
+            "the front tabs must be put back after the commands run"
+        );
+
+        let register = code_only(&fn_body(production_src(), "register_dock_dialog"));
+        assert!(
+            register.contains("set_open_command(panel, params.dlg_id)"),
+            "registration no longer records the command that opens the panel, so nothing \
+             would be restored"
         );
     }
 

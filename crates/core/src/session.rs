@@ -360,6 +360,13 @@ pub struct DockPanelSession {
     /// The panel's stable key — see `dock::DockPanel::persist_key`.
     #[serde(rename = "@kind", default)]
     pub kind: String,
+    /// For a plugin panel: the index of the plugin's `FuncItem` that
+    /// opens it (`tTbData.dlgID`), which the host runs at the next
+    /// start to bring the panel back — Notepad++'s restore. Absent for
+    /// the host's own panels and for a plugin panel whose command was
+    /// never recorded.
+    #[serde(rename = "@cmd", skip_serializing_if = "Option::is_none", default)]
+    pub cmd: Option<i32>,
 }
 
 /// A hidden panel's remembered location.
@@ -1431,9 +1438,11 @@ mod tests {
                         panels: vec![
                             DockPanelSession {
                                 kind: "workspace".into(),
+                                cmd: None,
                             },
                             DockPanelSession {
                                 kind: "docmap".into(),
+                                cmd: None,
                             },
                         ],
                     },
@@ -1446,6 +1455,7 @@ mod tests {
                         active: 0,
                         panels: vec![DockPanelSession {
                             kind: "docmap".into(),
+                            cmd: None,
                         }],
                     },
                 ],

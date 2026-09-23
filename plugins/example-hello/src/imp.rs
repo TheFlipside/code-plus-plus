@@ -47,6 +47,27 @@ const fn make_plugin_name() -> [u16; 14] {
 /// host's side.
 const FUNCS_COUNT: usize = 5;
 
+/// Index of "Show Dock Panel" in [`FUNCS`] — the first panel's
+/// `tTbData.dlgID`.
+///
+/// `dlgID` is not an arbitrary identifier: it names the menu command
+/// that opens the panel, and the host *runs that command* at startup
+/// to bring back a panel the user left open, exactly as Notepad++
+/// does. So it has to be the index of a command that shows the panel.
+/// Getting it wrong is not cosmetic — an index of 0 would run "Insert
+/// Hello" into the user's buffer on every start. Named here, next to
+/// the array it indexes, and pinned by a test against it.
+///
+/// Windows-only outside tests, like the panels that use it: the other
+/// platforms' docking module is a stub with nothing to register.
+#[cfg(any(target_os = "windows", test))]
+pub(crate) const CMD_SHOW_DOCK_PANEL: i32 = 1;
+
+/// Index of "Show Second Dock Panel" in [`FUNCS`] — the second
+/// panel's `tTbData.dlgID`. See [`CMD_SHOW_DOCK_PANEL`].
+#[cfg(any(target_os = "windows", test))]
+pub(crate) const CMD_SHOW_SECOND_DOCK_PANEL: i32 = 3;
+
 /// The plugin's contributed menu items. `cmd_id` is written by the
 /// host during load; we leave it 0 in the static initialiser per
 /// the ABI contract.
@@ -116,8 +137,9 @@ pub extern "C" fn getFuncsArray(nb: *mut i32) -> *mut FuncItem {
 
 /// `beNotified`: dispatch on `nmhdr.code`.
 ///
-/// `NPPN_TBMODIFICATION` is where the two dock panels are registered
-/// — see [`crate::dock::register_panels`].
+/// `NPPN_TBMODIFICATION` is where the first dock panel is registered
+/// — see [`crate::dock::register_panels`], which also says why the
+/// second one deliberately is not.
 ///
 /// The other event example-hello handles is `NPPN_FILEBEFORECLOSE`,
 /// and it handles it the way real Notepad++ plugins do — by calling
@@ -137,11 +159,10 @@ pub extern "C" fn beNotified(notification: *const SCNotification) {
     // that stays live for the duration of this synchronous call.
     let header = unsafe { &(*notification).nmhdr };
     match header.code {
-        // The docking manager is up: register both panels now, the
-        // way a real plugin does. Registration is what hands the host
-        // the content window for a panel the user had docked last
-        // session — do it on the menu click instead and the restored
-        // group sits empty until they happen to click.
+        // The docking manager is up: register the first panel now.
+        // The second is left to its own menu command, which the host
+        // runs at startup when that panel was open — see
+        // `register_panels`.
         sdk::NPPN_TBMODIFICATION => crate::dock::register_panels(),
         sdk::NPPN_FILEBEFORECLOSE => match sdk::buffer_path(header.id_from) {
             Some(path) => sdk::set_status(&format!("Closing: {path}")),
@@ -208,4 +229,29 @@ extern "C" fn plugin_cmd_show_second_dock_panel() {
 /// panel's tab onto the other first and this switches the visible tab.
 extern "C" fn plugin_cmd_view_other_dock_tab() {
     crate::dock::view_other_tab();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn name_at(index: i32) -> String {
+        // SAFETY: nothing else touches `FUNCS` in a unit test; the host
+        // that writes `cmd_id` into it is not running.
+        let funcs = unsafe { &*FUNCS.get() };
+        let raw = &funcs[usize::try_from(index).expect("non-negative")].item_name;
+        let len = raw.iter().position(|&c| c == 0).unwrap_or(raw.len());
+        String::from_utf16_lossy(&raw[..len])
+    }
+
+    /// The host runs `FuncItem[dlgID]` to restore a panel, so each
+    /// panel's `dlgID` must be the index of the command that shows it.
+    #[test]
+    fn each_panels_dlg_id_names_its_show_command() {
+        assert_eq!(name_at(CMD_SHOW_DOCK_PANEL), "Show Dock Panel");
+        assert_eq!(
+            name_at(CMD_SHOW_SECOND_DOCK_PANEL),
+            "Show Second Dock Panel"
+        );
+    }
 }

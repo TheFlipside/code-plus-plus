@@ -1182,70 +1182,12 @@ impl Default for Tab {
 /// in a `String`.
 pub const DISPLAY_NAME_MAX_CHARS: usize = 260;
 
-/// True for characters that must never reach UI chrome verbatim.
-///
-/// Filenames are attacker-influenced: a plugin can pick one via
-/// `NPPM_DOOPEN`, and a user can be induced to open a file out of an
-/// untrusted archive. Non-Windows filesystems reachable from Windows
-/// (WSL, Samba, sync tools) happily store names that `CreateFileW` on
-/// native storage would refuse. Four classes cause real harm:
-///
-///   - **C0 controls and DEL, and the C1 range.** An embedded U+0000
-///     silently truncates `SetWindowTextW` / `SB_SETTEXTW` on Win32 and
-///     `gtk_window_set_title` on GTK, so the chrome names a *different*
-///     file than the one that is open — which invites the user to save,
-///     delete, or run the wrong one. TAB forges Win32's
-///     accelerator-hint column. U+0085 NEL is a mandatory line break to
-///     Uniscribe/DirectWrite and Pango alike.
-///   - **Line and paragraph separators** (U+2028/U+2029). Same
-///     mandatory-break treatment per UAX #14: they split a single-line
-///     label across several visual lines and corrupt a segmented status
-///     bar's layout.
-///   - **Bidi marks, embeddings, overrides and isolates.** U+202E and
-///     friends flip visible order so a label stops matching its path —
-///     the classic `photo_gnp.exe` → `photo_exe.png` spoof (CWE-451).
-///   - **Invisible zero-width characters** (ZWSP, word joiner, BOM). A
-///     decoy `notes.txt␣ZWSP␣` renders pixel-identical to a genuine
-///     `notes.txt` tab while being a different file.
-///
-/// **U+200C ZWNJ and U+200D ZWJ are deliberately *not* listed, and that
-/// is a real residual risk, not a free win.** Both do genuine
-/// orthographic work — ZWNJ in Persian and Indic scripts, ZWJ in every
-/// multi-person emoji sequence — so neutralising them visibly corrupts
-/// legitimate filenames. But the cost of keeping them is honest: a bare
-/// ZWJ between two Latin letters, where no ligature rule applies, has
-/// no visible effect in most fonts, which makes `report␣ZWJ␣.txt`
-/// indistinguishable on screen from `report.txt` — exactly the collision
-/// U+200B is filtered to prevent. The trade is "certain corruption of
-/// real names" against "a narrower version of a spoof we otherwise
-/// block", and it went the way it did because the first harm is
-/// unconditional. Closing it properly means context-aware handling
-/// (preserve only when adjacent to a joining or combining script),
-/// which is worth doing if this class ever shows up in practice.
-///
-/// The invisible-character list is also a denylist, so it trails
-/// Unicode by construction: `Cf`-category codepoints such as the Tag
-/// block (U+E0000–U+E007F) reproduce the same primitive. Keying off the
-/// `Cf` general category with ZWNJ/ZWJ as named carve-outs would be
-/// self-updating, at the cost of a Unicode-table dependency.
-fn is_display_hostile(c: char) -> bool {
-    matches!(c,
-        // C0 controls (NUL, TAB, LF, CR, …), DEL, and C1 (incl. NEL).
-        '\u{0000}'..='\u{001F}' | '\u{007F}'..='\u{009F}'
-        // Zero-width space, word joiner, and the BOM as ZWNBSP.
-        | '\u{200B}' | '\u{2060}' | '\u{FEFF}'
-        // Bidi. This is the complete `Bidi_Control=Yes` set minus
-        // nothing: ALM, the two directional marks, the embeddings and
-        // overrides, and the isolates — twelve codepoints. ALM is the
-        // weakest of them (it steers neutrals locally rather than
-        // reversing a span) but it is invisible and in the class, so
-        // leaving it out would make the set arbitrary.
-        | '\u{061C}'
-        | '\u{200E}' | '\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}'
-        // Line and paragraph separators.
-        | '\u{2028}' | '\u{2029}'
-    )
-}
+// The display-character classifier lives in `core`, below every UI
+// crate and below this one, so an identity built from persisted text
+// can be refused where it is constructed (see
+// `codepp_core::display`). The substitution helpers below wrap it,
+// so there is still one list.
+use codepp_core::display::is_display_hostile;
 
 /// Replacement for a character [`is_display_hostile`] rejects.
 ///
@@ -3143,7 +3085,9 @@ impl Shell {
     ///     if let Some(r) = ready { notices.push(r); }                 // not yet
     /// }
     /// { borrow(); shell.after_plugin_loads(); /* + install menus */ }
-    /// notices.deliver(npp_handle, || { borrow(); shell.active_buffer_id() });  // no borrow
+    /// notices.deliver(npp_handle,                                      // no borrow
+    ///     || { borrow(); shell.active_buffer_id() },
+    ///     || { /* run each open panel's command: panel_open_command_id */ });
     /// ```
     ///
     /// Committing each result before asking for the next is required,
@@ -3202,6 +3146,108 @@ impl Shell {
             }
         }
         out
+    }
+
+    /// The registry index of the one discovered plugin a plugin
+    /// panel's module name identifies.
+    ///
+    /// The match is the panel's registered module name
+    /// (`tTbData.pszModuleName`, which a Notepad++ plugin sets to its
+    /// own DLL's file name) against each plugin's file name, both
+    /// through `module_key` — the same match
+    /// [`Self::modules_with_restored_panels`] loads by. `Err(n)` when it
+    /// does not identify exactly one plugin: `n == 0` when none is
+    /// installed, `n > 1` when several are. The second is reachable,
+    /// because discovery accepts both `plugins/X.dll` and
+    /// `plugins/X/X.dll`, so two copies of a plugin — or two unrelated
+    /// plugins with one file name — can sit side by side; picking one
+    /// by discovery order would run one's command for a panel the other
+    /// registered.
+    fn panel_owner(&self, panel: codepp_core::dock::DockPanel) -> Result<usize, usize> {
+        let Some(module) = panel.plugin_module() else {
+            return Err(0);
+        };
+        let key = codepp_core::shortcuts::module_key(module);
+        let owners: Vec<usize> = self
+            .plugins
+            .iter()
+            .enumerate()
+            .filter(|(_, p)| codepp_core::shortcuts::module_key(&p.filename()) == key)
+            .map(|(idx, _)| idx)
+            .collect();
+        match owners.as_slice() {
+            [only] => Ok(*only),
+            _ => Err(owners.len()),
+        }
+    }
+
+    /// The plugin panels in `panels` that belong to one of the loaded
+    /// plugins at registry indices `loaded` — a load pass's
+    /// `PendingLoad::idx`es — in the order given.
+    ///
+    /// A panel whose name more than one installed plugin answers to is
+    /// left out, with a warning: restoring it would mean running a
+    /// command of a plugin chosen by discovery order. See
+    /// [`Self::panel_owner`].
+    #[must_use]
+    pub fn panels_owned_by(
+        &self,
+        panels: &[codepp_core::dock::DockPanel],
+        loaded: &[usize],
+    ) -> Vec<codepp_core::dock::DockPanel> {
+        panels
+            .iter()
+            .copied()
+            .filter(|&panel| match self.panel_owner(panel) {
+                Ok(idx) => {
+                    loaded.contains(&idx)
+                        && self
+                            .plugins
+                            .iter()
+                            .nth(idx)
+                            .is_some_and(codepp_plugin_host::PluginInfo::is_loaded)
+                }
+                Err(owners) => {
+                    if owners > 1 {
+                        tracing::warn!(
+                            panel = panel.persist_key(),
+                            owners,
+                            "several installed plugins share this panel's module name; \
+                             not restoring it"
+                        );
+                    }
+                    false
+                }
+            })
+            .collect()
+    }
+
+    /// The command id that runs `FuncItem[index]` of the one loaded
+    /// plugin owning `panel`. Given a plugin panel's `tTbData.dlgID`,
+    /// that is the command that opens it — and it is the same id a
+    /// click on that menu item dispatches, so a backend restoring the
+    /// panel runs it exactly as the user would have.
+    ///
+    /// Resolved against the plugin [`Self::panel_owner`] names, never
+    /// "the first loaded plugin with that name", so it cannot answer
+    /// with another plugin's command. `None` for one of the host's own
+    /// panels, a name no single installed plugin answers to, a plugin
+    /// that is not loaded, a negative or out-of-range index, or a
+    /// separator slot.
+    #[must_use]
+    pub fn panel_open_command_id(
+        &self,
+        panel: codepp_core::dock::DockPanel,
+        index: i32,
+    ) -> Option<i32> {
+        let owner = self.panel_owner(panel).ok()?;
+        let plugin = self.plugins.iter().nth(owner)?;
+        if !plugin.is_loaded() {
+            return None;
+        }
+        let func = plugin.func_items()?.get(usize::try_from(index).ok()?)?;
+        func.p_func?;
+        Some(func.cmd_id)
     }
 
     /// Record one [`Self::next_plugin_to_load`] outcome. Returns the
@@ -12242,6 +12288,158 @@ mod tests {
         // contract that method upholds in production).
         shell.invalidate_plugin_chord_index();
         assert_eq!(shell.match_plugin_chord(true, false, false, 0x48), None);
+    }
+
+    /// Restoring a panel runs a command, so both halves of the
+    /// mapping refuse anything that is not a loaded plugin's own
+    /// command: a host panel, a negative index, and — the case that
+    /// matters — a plugin that is discovered but not loaded.
+    #[test]
+    fn panel_restore_mapping_requires_a_loaded_plugin() {
+        let (shell, _dir) = shell_with_fake_plugins(&["cprestore_pending"]);
+        let ext = codepp_platform::PLUGIN_EXTENSION;
+        let panel = codepp_core::dock::intern_plugin_panel(
+            &format!("cprestore_pending.{ext}"),
+            "Pending Panel",
+        )
+        .expect("intern");
+        let host = codepp_core::dock::DockPanel::Workspace;
+        assert!(
+            shell.panels_owned_by(&[panel, host], &[0]).is_empty(),
+            "a plugin that is not loaded owns nothing a pass can restore"
+        );
+        assert_eq!(shell.panel_open_command_id(panel, 0), None);
+        assert_eq!(shell.panel_open_command_id(panel, -1), None);
+        assert_eq!(shell.panel_open_command_id(host, 0), None);
+    }
+
+    /// The built `example_hello.dll`, or `None` when it has not been
+    /// built (`cargo test -p codepp-shell` does not build it).
+    #[cfg(target_os = "windows")]
+    fn built_example_hello() -> Option<std::path::PathBuf> {
+        std::env::current_exe()
+            .ok()
+            .and_then(|exe| Some(exe.parent()?.parent()?.join("example_hello.dll")))
+            .filter(|p| p.is_file())
+    }
+
+    /// Load every discovered plugin, returning the registry indices
+    /// that loaded. Null handles: a plugin only stores them in
+    /// `setInfo`, and nothing here delivers a notification or runs a
+    /// command that would make it send one.
+    #[cfg(target_os = "windows")]
+    fn load_every_plugin(shell: &mut Shell) -> Vec<usize> {
+        let npp_data = codepp_plugin_host::NppData {
+            npp_handle: core::ptr::null_mut(),
+            scintilla_main_handle: core::ptr::null_mut(),
+            scintilla_second_handle: core::ptr::null_mut(),
+        };
+        let mut loaded = Vec::new();
+        while let Some(pending) = shell.next_plugin_to_load() {
+            let result = codepp_plugin_host::execute_load(&pending, npp_data, None);
+            if shell.commit_plugin_load(&pending, result).is_some() {
+                loaded.push(pending.idx);
+            }
+        }
+        loaded
+    }
+
+    /// Against the real `example_hello.dll`: a pass owns exactly its
+    /// own plugin's panels, and each panel's `dlgID` resolves to the
+    /// command a click on that menu item sends — which, for the demo
+    /// plugin, is also the check that its `dlgID`s name its two "show"
+    /// commands rather than "Insert Hello".
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn panel_restore_mapping_against_the_real_example_hello() {
+        let Some(dll) = built_example_hello() else {
+            eprintln!(
+                "skipping: example_hello.dll not built. Run `cargo build -p codepp-example-hello`."
+            );
+            return;
+        };
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        // Staged under a name of its own: discovery applies the real
+        // profile's `disabled.txt`, and a developer who has switched
+        // the demo plugin off in the Plugin Manager would otherwise
+        // see this test fail for a reason that has nothing to do with
+        // it. The loader does not care what the file is called.
+        std::fs::copy(&dll, dir.path().join("cprestore_hello.dll")).unwrap();
+        assert_eq!(shell.discover_plugins(dir.path()).unwrap(), 1);
+        let loaded = load_every_plugin(&mut shell);
+        assert_eq!(loaded, vec![0], "example_hello did not load");
+
+        let (_, funcs) = shell.plugin_menu_entry(0).expect("menu entry");
+        let name_of = |i: usize| {
+            let raw = &funcs[i].item_name;
+            String::from_utf16_lossy(&raw[..raw.iter().position(|&c| c == 0).unwrap_or(raw.len())])
+        };
+        let first =
+            codepp_core::dock::intern_plugin_panel("cprestore_hello.dll", "Example Hello Panel")
+                .expect("intern");
+        let second =
+            codepp_core::dock::intern_plugin_panel("cprestore_hello.dll", "Example Hello Notes")
+                .expect("intern");
+        let stranger =
+            codepp_core::dock::intern_plugin_panel("not_loaded.dll", "Elsewhere").expect("intern");
+        assert_eq!(
+            shell.panels_owned_by(&[first, stranger, second], &loaded),
+            vec![first, second]
+        );
+        assert!(shell.panels_owned_by(&[first], &[]).is_empty());
+        // The demo's `dlgID`s, and what they must name.
+        for (panel, dlg_id, label) in [
+            (first, 1, "Show Dock Panel"),
+            (second, 3, "Show Second Dock Panel"),
+        ] {
+            assert_eq!(name_of(dlg_id as usize), label);
+            assert_eq!(
+                shell.panel_open_command_id(panel, dlg_id),
+                Some(funcs[dlg_id as usize].cmd_id)
+            );
+        }
+        assert_eq!(
+            shell.panel_open_command_id(first, i32::try_from(funcs.len()).unwrap()),
+            None
+        );
+        assert_eq!(shell.panel_open_command_id(stranger, 1), None);
+    }
+
+    /// Two installed copies answering to one name — the flat
+    /// `plugins/X.dll` beside the staged `plugins/X/X.dll`, which
+    /// discovery accepts both of — make the name identify nothing, and
+    /// the restore refuses it rather than run one copy's command for a
+    /// panel the other registered. Both copies are real and loaded, so
+    /// only the ambiguity can be what refuses.
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn a_panel_name_two_installed_plugins_share_restores_nothing() {
+        let Some(dll) = built_example_hello() else {
+            eprintln!(
+                "skipping: example_hello.dll not built. Run `cargo build -p codepp-example-hello`."
+            );
+            return;
+        };
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::copy(&dll, dir.path().join("cpdup_hello.dll")).unwrap();
+        std::fs::create_dir(dir.path().join("cpdup_hello")).unwrap();
+        std::fs::copy(&dll, dir.path().join("cpdup_hello").join("cpdup_hello.dll")).unwrap();
+        assert_eq!(shell.discover_plugins(dir.path()).unwrap(), 2);
+        let loaded = load_every_plugin(&mut shell);
+        assert_eq!(
+            loaded.len(),
+            2,
+            "both copies must load for this to test anything"
+        );
+        let panel =
+            codepp_core::dock::intern_plugin_panel("cpdup_hello.dll", "Example Hello Panel")
+                .expect("intern");
+        assert!(shell.panels_owned_by(&[panel], &loaded).is_empty());
+        assert_eq!(shell.panel_open_command_id(panel, 1), None);
     }
 
     #[test]

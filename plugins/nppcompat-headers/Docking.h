@@ -62,9 +62,19 @@ extern "C" {
  * ".dll" extension — what Notepad++'s own header requires, because it
  * persists that string and uses it to find the plugin again on the
  * next start. dlgID is the index of the plugin's FuncItem that opens
- * this panel, for the same reason. A plugin that sets either
- * differently works under Code++ but will not have its panel restored
- * by Notepad++.
+ * this panel, for the same reason: a panel that was open when the host
+ * last quit is brought back by the host RUNNING FuncItem[dlgID] at the
+ * next start — after NPPN_TBMODIFICATION, before NPPN_READY, and even
+ * if the plugin registered the panel itself in between. Both Code++
+ * and Notepad++ do this. So dlgID must name a command that shows this
+ * panel, and never an unrelated one, which would run on every start.
+ * A toggle works when it goes by the plugin's own record of whether
+ * the panel is open, starting closed — and when the plugin leaves
+ * showing the panel at startup to that run: register it from
+ * NPPN_TBMODIFICATION if you like, but a plugin that also shows it
+ * there has its toggle close it again a moment later. A plugin that
+ * sets either field differently still works, but its panel is not
+ * restored.
  *
  * Code++ field support: hClient, pszName, dlgID, uMask,
  * pszModuleName are honoured. A registered panel is an ordinary

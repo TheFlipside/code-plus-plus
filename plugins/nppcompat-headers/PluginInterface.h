@@ -160,11 +160,14 @@ typedef struct FuncItem_ {
  *   3. Once all of them are loaded, their menu items are installed
  *      (_init2Check applied), and then — each notification reaching
  *      every one of those plugins before the next begins:
- *        NPPN_TBMODIFICATION, then NPPN_BUFFERACTIVATED for the
- *        current buffer, then NPPN_READY.
+ *        NPPN_TBMODIFICATION; then, for each of their dock panels
+ *        that was open when the host last quit, that panel's own
+ *        command FuncItem[tTbData.dlgID] is run, as if clicked (see
+ *        Docking.h); then NPPN_BUFFERACTIVATED for the current
+ *        buffer; then NPPN_READY.
  *      A plugin can therefore tick its own menu items from either
  *      handler, and is told READY only after every plugin of its
- *      batch has had TBMODIFICATION.
+ *      batch has had TBMODIFICATION and its panels are back.
  *   4. beNotified() is called for every NPPN_ / SCN_ notification
  *      delivered while the plugin is loaded.
  *   5. messageProc() is called for plugin-targeted Win32 messages
