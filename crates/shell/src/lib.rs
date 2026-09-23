@@ -3134,19 +3134,27 @@ impl Shell {
     /// can drop its own state borrow:
     ///
     /// ```text
+    /// let mut notices = LoadNotifications::default();
     /// loop {
     ///     let pending = { borrow(); shell.next_plugin_to_load() };   // borrow dropped
     ///     let Some(p) = pending else { break };
     ///     let loaded = execute_load(&p, npp_data, dispatch);          // no borrow
     ///     let ready = { borrow(); shell.commit_plugin_load(&p, loaded) };
-    ///     if let Some(r) = ready { r.deliver(npp_handle); }           // no borrow
+    ///     if let Some(r) = ready { notices.push(r); }                 // not yet
     /// }
-    /// { borrow(); shell.after_plugin_loads(); }
+    /// { borrow(); shell.after_plugin_loads(); /* + install menus */ }
+    /// notices.deliver(npp_handle, || { borrow(); shell.active_buffer_id() });  // no borrow
     /// ```
     ///
     /// Committing each result before asking for the next is required,
     /// not stylistic: a plugin's command-id base depends on how many
-    /// `FuncItem`s its predecessors published.
+    /// `FuncItem`s its predecessors published. **Delivering once, after
+    /// the loop, is required too**: it is Notepad++'s order — every
+    /// plugin loaded and its menu built before any is told
+    /// `NPPN_TBMODIFICATION`, then `NPPN_READY` — and a per-plugin
+    /// delivery inside the loop is exactly the reversed, interleaved
+    /// order this used to have. See
+    /// `codepp_plugin_host::LoadNotifications`.
     pub fn next_plugin_to_load(&mut self) -> Option<PendingLoad> {
         self.plugins.next_pending_load()
     }
@@ -3212,6 +3220,16 @@ impl Shell {
                 None
             }
         }
+    }
+
+    /// The buffer id a load pass announces in its synthetic
+    /// `NPPN_BUFFERACTIVATED` (see
+    /// `codepp_plugin_host::LoadNotifications`): the active tab's id —
+    /// the same value `NPPM_GETCURRENTBUFFERID` answers with — or
+    /// `None` when there is no active tab to announce.
+    #[must_use]
+    pub fn active_buffer_id(&self) -> Option<usize> {
+        self.active().and_then(|t| usize::try_from(t.id).ok())
     }
 
     /// Run once after a load loop finishes.
@@ -3515,6 +3533,18 @@ impl Shell {
                     Some((p.display_label(), funcs))
                 }
             })
+    }
+
+    /// One loaded plugin's menu entry — display label and `FuncItem`s
+    /// — by its registry index (`PendingLoad::idx`). A load pass uses
+    /// this to install the menus of exactly the plugins it loaded.
+    /// `None` for a plugin that is not loaded, or one contributing no
+    /// items (a `beNotified`-only plugin gets no submenu).
+    #[must_use]
+    pub fn plugin_menu_entry(&self, idx: usize) -> Option<(String, &[FuncItem])> {
+        let plugin = self.plugins.iter().nth(idx)?;
+        let funcs = plugin.func_items()?;
+        (!funcs.is_empty()).then(|| (plugin.display_label(), funcs))
     }
 
     /// Find the plugin callback registered for menu-command id

@@ -27,9 +27,9 @@
  *
  * Plugins are responsible for #defining UNICODE / _UNICODE before
  * including this header, so TCHAR resolves to wchar_t. Code++ on
- * Windows passes wide strings throughout; an ANSI plugin (isUnicode()
- * returning FALSE) is supported in principle but not exercised by
- * Phase 3 — Code++ ships no ANSI conversion shims.
+ * Windows passes wide strings throughout, so an ANSI plugin (isUnicode()
+ * returning FALSE) is refused at load, before any other entry point
+ * runs — as Notepad++ refuses it.
  */
 
 #include <windows.h>
@@ -125,7 +125,7 @@ typedef void (*PFUNCPLUGINCMD)(void);
  *                     should leave this 0 in the static initializer.
  *   _init2Check     — if TRUE, the menu item starts in the checked state
  *                     (a checkmark glyph). Plugins toggle subsequently
- *                     via NPPM_SETMENUITEMCHECK.
+ *                     via NPPM_SETMENUITEMCHECK. Honoured on Windows.
  *   _pShKey         — optional accelerator. Heap-allocated by the plugin
  *                     (typically `new ShortcutKey{...}`); ownership stays
  *                     with the plugin and survives until SHUTDOWN.
@@ -143,22 +143,33 @@ typedef struct FuncItem_ {
  * translation unit; the dllexport attribute makes them visible to
  * Code++'s GetProcAddress lookups.
  *
- * Lifecycle (Code++ Phase 3, matching Notepad++):
+ * Lifecycle — Notepad++'s order, measured with a probe plugin loaded
+ * into both hosts:
  *
  *   1. Code++ enumerates plugin DLLs in the plugins folder; each DLL
  *      stays unloaded.
- *   2. On first user touch (Plugins menu open, hotkey, etc.) the DLL
- *      is mapped, the six entry points are resolved, then:
- *        a) setInfo(NppData) — host hands over its window handles.
+ *   2. On first user touch (Plugins menu open, a hotkey the plugin
+ *      owns, or a dock panel of its restored from the last session)
+ *      every pending plugin is loaded. For each, the DLL is mapped,
+ *      the six entry points are resolved, then:
+ *        a) isUnicode() — FALSE refuses the plugin; nothing else runs.
  *        b) getName() — returns the menu-bar label for this plugin.
- *        c) getFuncsArray() — returns the menu entries.
- *      Code++ then installs the menu items, assigns each a _cmdID,
- *      and fires NPPN_READY.
- *   3. beNotified() is called for every NPPN_ / SCN_ notification
+ *        c) setInfo(NppData) — host hands over its window handles.
+ *        d) getFuncsArray() — returns the menu entries; each gets its
+ *           _cmdID.
+ *   3. Once all of them are loaded, their menu items are installed
+ *      (_init2Check applied), and then — each notification reaching
+ *      every one of those plugins before the next begins:
+ *        NPPN_TBMODIFICATION, then NPPN_BUFFERACTIVATED for the
+ *        current buffer, then NPPN_READY.
+ *      A plugin can therefore tick its own menu items from either
+ *      handler, and is told READY only after every plugin of its
+ *      batch has had TBMODIFICATION.
+ *   4. beNotified() is called for every NPPN_ / SCN_ notification
  *      delivered while the plugin is loaded.
- *   4. messageProc() is called for plugin-targeted Win32 messages
+ *   5. messageProc() is called for plugin-targeted Win32 messages
  *      that aren't NPPN/SCN notifications.
- *   5. NPPN_SHUTDOWN fires before the DLL is unloaded.
+ *   6. NPPN_SHUTDOWN fires at exit. The DLL is not unloaded.
  *
  * Plugins must not perform expensive work in setInfo or getName —
  * those run synchronously on the UI thread.

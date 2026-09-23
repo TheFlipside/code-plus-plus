@@ -2048,23 +2048,6 @@ mod tests {
         );
     }
 
-    /// Byte index of the `;` that ends the statement starting at
-    /// `from` — the first one at bracket depth zero, so a `;` inside a
-    /// closure body does not count. Brackets inside string literals
-    /// would confuse it; the statements it is pointed at have none.
-    fn statement_end(src: &str, from: usize) -> usize {
-        let mut depth = 0i32;
-        for (i, c) in src[from..].char_indices() {
-            match c {
-                '(' | '{' | '[' => depth += 1,
-                ')' | '}' | ']' => depth -= 1,
-                ';' if depth == 0 => return from + i,
-                _ => {}
-            }
-        }
-        panic!("no statement end after byte {from}");
-    }
-
     /// The plugin's handler for `DMN_DOCK` / `DMN_FLOAT` / `DMN_CLOSE`
     /// runs inside the send, and may send `NPPM_*` straight back. That
     /// is answered only if no `WindowState` borrow is live across the
@@ -2081,7 +2064,7 @@ mod tests {
     /// accept.
     #[test]
     fn no_state_borrow_is_held_across_a_dock_notification() {
-        use crate::plugin_reentry_guards::{code_only, fn_body, production_src};
+        use crate::plugin_reentry_guards::{code_only, fn_body, production_src, statement_end};
 
         let dock_src = include_str!("dock_panels.rs");
         let dock_src = &dock_src[..dock_src.find("#[cfg(test)]").expect("test module")];

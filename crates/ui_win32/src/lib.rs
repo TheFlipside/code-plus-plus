@@ -1443,11 +1443,26 @@ struct WindowState {
     /// out of this map. Empty once every cached-shortcut plugin
     /// has been loaded.
     plugin_shortcut_shims: std::collections::HashMap<u16, (String, u32)>,
-    /// HMENU for the per-plugin submenu under "Plugins". Plugins query
-    /// this via `NPPM_GETMENUHANDLE(NPPPLUGINMENU)` to add their menu
-    /// items. Populated lazily on the first `WM_INITMENUPOPUP` for
-    /// this submenu (DESIGN.md §6.4 lazy-load contract).
+    /// HMENU of the "Plugins" popup. Plugins query this via
+    /// `NPPM_GETMENUHANDLE(NPPPLUGINMENU)` to add their menu items.
+    /// Built at startup with only its fixed tail (Plugin Manager, Open
+    /// Plugin Folder); each plugin's submenu is inserted above that
+    /// tail by the load pass that loads it — see
+    /// [`install_plugin_menus`].
     plugin_menu: HMENU,
+    /// The per-plugin submenus inserted into [`Self::plugin_menu`] so
+    /// far, keyed by the plugin's registry index. What lets a later
+    /// load pass insert a newly loaded plugin in registry order —
+    /// before the first installed submenu of a later plugin — without
+    /// ever rebuilding the menu, which would throw away every check
+    /// mark a plugin had set on its items.
+    ///
+    /// Only ever used to *find* a position, against the live menu: an
+    /// entry whose submenu a plugin has since deleted is left stale and
+    /// simply never matches. Anything that starts trusting it for more
+    /// than that must prune such entries first — a stale `HMENU` value
+    /// can be reused by a later menu.
+    plugin_submenus: Vec<(usize, HMENU)>,
     /// Set once the lazy-load + menu-population dance has run for
     /// `plugin_menu`. Subsequent `WM_INITMENUPOPUP` for the same
     /// menu skip the work; we never reload plugins after the first
@@ -6472,11 +6487,12 @@ fn build_main_menu() -> windows::core::Result<BuiltMenuBar> {
         )?;
         AppendMenuW(bar, MF_POPUP, run_menu.0 as usize, w!("R&un"))?;
 
-        // ----- Plugins ----- (populated lazily by `populate_plugin_menu`
-        // on first WM_INITMENUPOPUP; the HMENU is alive from now on
-        // so plugins that query NPPM_GETMENUHANDLE before the popup
-        // get a real handle.)
+        // ----- Plugins ----- (each plugin's submenu is inserted above
+        // this fixed tail by the load pass that loads it; the HMENU is
+        // alive from now on so plugins that query NPPM_GETMENUHANDLE
+        // before the popup get a real handle.)
         let plugin_menu = CreateMenu()?;
+        append_plugins_menu_tail(plugin_menu);
         AppendMenuW(bar, MF_POPUP, plugin_menu.0 as usize, w!("&Plugins"))?;
 
         // ----- Window ----- (rebuilt every WM_INITMENUPOPUP from
@@ -7646,15 +7662,12 @@ unsafe fn handle_plugin_shortcut_shim(hwnd: HWND, shim_id: u16) {
     };
     // Lazy-load every pending plugin, with no state borrow held
     // across the plugin's own entry points — see
-    // `load_pending_plugins`.
+    // `load_pending_plugins`. The pass also installs the plugins'
+    // menus and rebuilds the accelerator table, so the chord that
+    // fired under a shim id now binds to the plugin's real cmd id
+    // (and leaves the shim map): a second press dispatches directly,
+    // and NPPM_GETSHORTCUTBYCMDID sees the binding under its real id.
     unsafe { load_pending_plugins(hwnd, npp_data) };
-    // Rebuild the accelerator table: the chord that fired under a
-    // shim id now binds to the plugin's real cmd id (and leaves the
-    // shim map), so a second press dispatches directly and
-    // NPPM_GETSHORTCUTBYCMDID sees the binding under its real id.
-    if let Some(state) = unsafe { state_from_hwnd(hwnd) } {
-        unsafe { refresh_plugin_accels(state) };
-    }
     // Resolve the real command and post it, so the ordinary plugin
     // WM_COMMAND arm dispatches it with no borrow held.
     let real_cmd = (unsafe { state_from_hwnd(hwnd) })
@@ -7676,93 +7689,152 @@ unsafe fn handle_plugin_shortcut_shim(hwnd: HWND, shim_id: u16) {
     }
 }
 
-/// Append loaded-plugin `FuncItems` onto the per-plugin submenu after
-/// a successful lazy-load round. Each plugin gets its own popup
-/// submenu under the top-level "Plugins" entry, with the plugin's
-/// own getName output as the label.
+/// Install the menus of the plugins one load pass loaded — and only
+/// those — into the "Plugins" popup.
+///
+/// Runs **before** the pass delivers `NPPN_TBMODIFICATION` and
+/// `NPPN_READY`, which is Notepad++'s order: measured with a probe
+/// plugin, every item of every plugin already exists when either
+/// notification arrives. Plugins rely on it — a plugin ticks its own
+/// item from those handlers (`NppExec` ticks its show-console item
+/// from `NPPN_READY` when it restores its console), through
+/// `NPPM_SETMENUITEMCHECK` or straight through the menu handle — and
+/// both reach the live `HMENU`, so a tick sent before the item exists
+/// is lost. Building the menus after the notifications, as this
+/// backend used to, lost every one.
+///
+/// Incremental rather than a rebuild for the same reason: a rebuild
+/// would throw away the check marks plugins loaded earlier had set.
+/// Each submenu goes in registry order, above the fixed tail, and a
+/// plugin already installed is never installed twice.
 ///
 /// # Safety
 ///
 /// Caller must invoke this on the UI thread that owns `plugin_menu`.
-/// `CreateMenu`/`AppendMenuW` do not re-enter our `wnd_proc`.
-unsafe fn populate_plugin_menu(plugin_menu: HMENU, shell: &Shell) {
-    for (plugin_name, funcs) in shell.loaded_plugin_funcs() {
-        // One popup submenu per plugin so users see "Plugins → MyPlugin
-        // → Item". Matches Notepad++'s layout.
-        // SAFETY: CreateMenu just allocates a new HMENU; no aliasing
-        // concerns.
-        let submenu = match unsafe { CreateMenu() } {
-            Ok(m) => m,
-            Err(e) => {
-                tracing::warn!(plugin = ?plugin_name, error = ?e, "CreateMenu failed");
-                continue;
-            }
-        };
-        for func in funcs {
-            // N++ FuncItem ABI convention: a NULL `_pFunc` marks a menu
-            // separator. The item_name for such an entry is a
-            // placeholder the plugin does not expect to see rendered
-            // (mimeTools, for example, writes a sentinel string there);
-            // dispatching MF_STRING with that label is the visible bug.
-            if func.p_func.is_none() {
-                if let Err(e) = unsafe { AppendMenuW(submenu, MF_SEPARATOR, 0, PCWSTR::null()) } {
-                    tracing::warn!(plugin = ?plugin_name, error = ?e, "AppendMenuW (separator) failed");
-                }
-                continue;
-            }
-            // Build an owned label: sanitize the plugin's item name
-            // (it is third-party data — an embedded `\t` would forge
-            // a fake shortcut column, and control chars corrupt the
-            // menu, the same reasons `sanitize_menu_label` exists for
-            // recent-files entries), then append the persisted
-            // shortcut as its own `\t<chord>` suffix when the chord
-            // actually fires (`plugin_shortcut_label_for_cmd_id`
-            // returns `None` for a policy-refused or dedupe-losing
-            // chord, so the menu never advertises a dead key).
-            let name = sanitize_menu_label(&funcitem_name_to_string(&func.item_name));
-            let mut text = name;
-            if let Some(sc) = shell.plugin_shortcut_label_for_cmd_id(func.cmd_id) {
-                text.push('\t');
-                text.push_str(&sc);
-            }
-            let label_w: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
-            // `cmd_id` is i32 (signed) but AppendMenuW expects usize.
-            // Plugin cmd_ids are always positive (assigned from
-            // PLUGIN_CMD_ID_BASE = 50000), so the cast is value-preserving.
-            let id = func.cmd_id as usize;
-            // SAFETY: `submenu` is the HMENU we just created;
-            // `label_w` is a local null-terminated wide string that
-            // outlives the call (AppendMenuW copies it).
-            if let Err(e) = unsafe { AppendMenuW(submenu, MF_STRING, id, PCWSTR(label_w.as_ptr())) }
-            {
-                tracing::warn!(plugin = ?plugin_name, error = ?e, "AppendMenuW (item) failed");
-            }
+/// `CreateMenu` / `AppendMenuW` / `InsertMenuW` do not re-enter our
+/// `wnd_proc`.
+unsafe fn install_plugin_menus(
+    plugin_menu: HMENU,
+    installed: &mut Vec<(usize, HMENU)>,
+    shell: &Shell,
+    loaded: &[usize],
+) {
+    for &idx in loaded {
+        if installed.iter().any(|(i, _)| *i == idx) {
+            continue;
         }
-        // Attach the submenu to the parent "Plugins" popup.
-        let plugin_label_w: Vec<u16> = plugin_name
-            .encode_utf16()
-            .chain(std::iter::once(0))
-            .collect();
-        // SAFETY: `plugin_menu` is the parent HMENU passed in;
-        // `plugin_label_w` is a local wide string that lives for the
-        // duration of this call (AppendMenuW copies the label).
-        if let Err(e) = unsafe {
-            AppendMenuW(
-                plugin_menu,
-                MF_POPUP,
-                submenu.0 as usize,
-                PCWSTR(plugin_label_w.as_ptr()),
-            )
-        } {
-            tracing::warn!(plugin = ?plugin_name, error = ?e, "AppendMenuW (popup) failed");
+        let Some((plugin_name, funcs)) = shell.plugin_menu_entry(idx) else {
+            continue;
+        };
+        let Some(submenu) = (unsafe {
+            build_plugin_submenu(funcs, |cmd_id| {
+                shell.plugin_shortcut_label_for_cmd_id(cmd_id)
+            })
+        }) else {
+            tracing::warn!(plugin = ?plugin_name, "CreateMenu failed");
+            continue;
+        };
+        if let Err(e) =
+            unsafe { insert_plugin_submenu(plugin_menu, installed, idx, submenu, &plugin_name) }
+        {
+            tracing::warn!(plugin = ?plugin_name, error = ?e, "InsertMenuW (plugin submenu) failed");
+            let _ = unsafe { DestroyMenu(submenu) };
         }
     }
-    // Append the Plugin Manager entry at the bottom of the menu,
-    // separated from the per-plugin submenus by a divider —
-    // matches Notepad++'s layout (per-plugin entries on top, then
-    // separator, then "Plugin Admin..."). Always appended, even
-    // when no plugins are loaded, so the user can reach the
-    // manager to re-enable plugins they previously disabled.
+}
+
+/// Insert plugin `idx`'s `submenu`, labelled `label`, at its place in
+/// the "Plugins" popup (see [`plugin_submenu_position`]) and record it
+/// in `installed`.
+///
+/// # Errors
+///
+/// `InsertMenuW` failed; nothing is recorded and the caller still owns
+/// `submenu`.
+///
+/// # Safety
+///
+/// UI thread; both menus must be live.
+unsafe fn insert_plugin_submenu(
+    plugin_menu: HMENU,
+    installed: &mut Vec<(usize, HMENU)>,
+    idx: usize,
+    submenu: HMENU,
+    label: &str,
+) -> windows::core::Result<()> {
+    let position = unsafe { plugin_submenu_position(plugin_menu, installed, idx) };
+    // The label is the plugin's own `getName`, so it goes through the
+    // same filter as its item labels and every other plugin string that
+    // reaches the chrome: a bidi override would reorder the entry a
+    // user decides to click on, and a `\t` would forge a shortcut
+    // column. The old whole-menu build passed it through raw.
+    let label_w: Vec<u16> = sanitize_menu_label(label)
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect();
+    // SAFETY: `plugin_menu` is the live Plugins popup; `label_w`
+    // outlives the call (InsertMenuW copies it).
+    unsafe {
+        InsertMenuW(
+            plugin_menu,
+            position,
+            MF_BYPOSITION | MF_POPUP,
+            submenu.0 as usize,
+            PCWSTR(label_w.as_ptr()),
+        )
+    }?;
+    installed.push((idx, submenu));
+    Ok(())
+}
+
+/// Where plugin `idx`'s submenu goes in the "Plugins" popup: in front
+/// of the first installed submenu of a *later* plugin, else just above
+/// the fixed tail, else at the end.
+///
+/// Positions are found by looking, not counted: a plugin may add items
+/// of its own to this popup through `NPPM_GETMENUHANDLE`, so "the
+/// n-th submenu is at position n" does not hold once one has run.
+///
+/// # Safety
+///
+/// UI thread; `plugin_menu` must be a live menu.
+unsafe fn plugin_submenu_position(
+    plugin_menu: HMENU,
+    installed: &[(usize, HMENU)],
+    idx: usize,
+) -> u32 {
+    let count = u32::try_from(unsafe { GetMenuItemCount(Some(plugin_menu)) }.max(0)).unwrap_or(0);
+    for pos in 0..count {
+        let Ok(pos_i32) = i32::try_from(pos) else {
+            break;
+        };
+        let sub = unsafe { GetSubMenu(plugin_menu, pos_i32) };
+        if !sub.is_invalid() && installed.iter().any(|(i, h)| *i > idx && *h == sub) {
+            return pos;
+        }
+    }
+    for pos in 0..count {
+        let Ok(pos_i32) = i32::try_from(pos) else {
+            break;
+        };
+        if unsafe { GetMenuItemID(plugin_menu, pos_i32) } == u32::from(ID_PLUGINS_ADMIN) {
+            // The separator the tail starts with sits right above.
+            return pos.saturating_sub(1);
+        }
+    }
+    count
+}
+
+/// The "Plugins" popup's fixed tail: a separator, "Plugin Manager…"
+/// and "Open Plugin Folder" — Notepad++'s layout, per-plugin submenus
+/// above, the host's own entries below. Present from startup, so the
+/// manager is reachable before any plugin loads (and to re-enable one
+/// a user disabled).
+///
+/// # Safety
+///
+/// UI thread; `plugin_menu` must be a live menu.
+unsafe fn append_plugins_menu_tail(plugin_menu: HMENU) {
     let _ = unsafe { AppendMenuW(plugin_menu, MF_SEPARATOR, 0, PCWSTR::null()) };
     let _ = unsafe {
         AppendMenuW(
@@ -7780,6 +7852,73 @@ unsafe fn populate_plugin_menu(plugin_menu: HMENU, shell: &Shell) {
             w!("&Open Plugin Folder"),
         )
     };
+}
+
+/// One plugin's submenu, built from its `FuncItem`s. `shortcut_for`
+/// supplies the `\t<chord>` suffix for a command id, when the chord
+/// actually fires.
+///
+/// `FuncItem._init2Check` is honoured — the item starts checked — as
+/// Notepad++ does, measured with the same probe. It was read nowhere
+/// before, so a plugin asking for an item to start checked never got
+/// it.
+///
+/// # Safety
+///
+/// UI thread. The returned menu is owned by the caller until it is
+/// inserted into a parent.
+unsafe fn build_plugin_submenu(
+    funcs: &[codepp_plugin_host::FuncItem],
+    shortcut_for: impl Fn(i32) -> Option<String>,
+) -> Option<HMENU> {
+    // SAFETY: CreateMenu just allocates a new HMENU; no aliasing
+    // concerns.
+    let submenu = unsafe { CreateMenu() }.ok()?;
+    for func in funcs {
+        // N++ FuncItem ABI convention: a NULL `_pFunc` marks a menu
+        // separator. The item_name for such an entry is a
+        // placeholder the plugin does not expect to see rendered
+        // (mimeTools, for example, writes a sentinel string there);
+        // dispatching MF_STRING with that label is the visible bug.
+        if func.p_func.is_none() {
+            if let Err(e) = unsafe { AppendMenuW(submenu, MF_SEPARATOR, 0, PCWSTR::null()) } {
+                tracing::warn!(error = ?e, "AppendMenuW (separator) failed");
+            }
+            continue;
+        }
+        // Build an owned label: sanitize the plugin's item name
+        // (it is third-party data — an embedded `\t` would forge
+        // a fake shortcut column, and control chars corrupt the
+        // menu, the same reasons `sanitize_menu_label` exists for
+        // recent-files entries), then append the persisted
+        // shortcut as its own `\t<chord>` suffix when the chord
+        // actually fires (`plugin_shortcut_label_for_cmd_id`
+        // returns `None` for a policy-refused or dedupe-losing
+        // chord, so the menu never advertises a dead key).
+        let name = sanitize_menu_label(&funcitem_name_to_string(&func.item_name));
+        let mut text = name;
+        if let Some(sc) = shortcut_for(func.cmd_id) {
+            text.push('\t');
+            text.push_str(&sc);
+        }
+        let label_w: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
+        // `cmd_id` is i32 (signed) but AppendMenuW expects usize.
+        // Plugin cmd_ids are always positive (assigned from
+        // PLUGIN_CMD_ID_BASE = 50000), so the cast is value-preserving.
+        let id = func.cmd_id as usize;
+        // SAFETY: `submenu` is the HMENU we just created;
+        // `label_w` is a local null-terminated wide string that
+        // outlives the call (AppendMenuW copies it).
+        let flags = if func.init2_check != 0 {
+            MF_STRING | MF_CHECKED
+        } else {
+            MF_STRING
+        };
+        if let Err(e) = unsafe { AppendMenuW(submenu, flags, id, PCWSTR(label_w.as_ptr())) } {
+            tracing::warn!(error = ?e, "AppendMenuW (item) failed");
+        }
+    }
+    Some(submenu)
 }
 
 /// Write `text` into status-bar part `part_index`. Centralizes the
@@ -18299,6 +18438,7 @@ pub fn run(initial_path: Option<PathBuf>, perf: codepp_core::perf::Perf) -> Resu
             main_menu: menubar,
             plugin_menu,
             plugins_menu_initialized: false,
+            plugin_submenus: Vec::new(),
             file_menu: menus.file_menu,
             file_menu_recent_count: 0,
             edit_menu: menus.edit_menu,
@@ -20096,6 +20236,10 @@ unsafe fn load_plugins_where(hwnd: HWND, npp_data: NppData, scope: PluginLoadSco
     // buffer, a modal popping. GTK and Cocoa take the same guard for
     // the same reason.
     let _freeze = DrainFreeze::new(hwnd);
+    // Every plugin this pass loads is notified together, after the
+    // loop, in Notepad++'s order — see `LoadNotifications`.
+    let mut notices = codepp_plugin_host::LoadNotifications::default();
+    let mut loaded_now: Vec<usize> = Vec::new();
     loop {
         let pending = unsafe { state_from_hwnd(hwnd) }.and_then(|s| match scope {
             PluginLoadScope::All => s.shell.next_plugin_to_load(),
@@ -20120,17 +20264,48 @@ unsafe fn load_plugins_where(hwnd: HWND, npp_data: NppData, scope: PluginLoadSco
             );
             break;
         };
-        // Also with no borrow held — a plugin that queries the host
-        // from NPPN_READY is doing something ordinary.
         if let Some(ready) = ready {
-            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                ready.deliver(npp_data.npp_handle);
-            }));
+            notices.push(ready);
+            loaded_now.push(pending.idx);
         }
     }
-    if let Some(state) = unsafe { state_from_hwnd(hwnd) } {
-        state.shell.after_plugin_loads();
+    // Everything a plugin may look at from its notification handlers
+    // is put in place first, under one borrow that ends with this
+    // statement: its shortcut defaults absorbed (so the menu labels
+    // show them), its menu installed, the accelerator table rebuilt
+    // so its chords fire. Notepad++ has all of that done before it
+    // sends the first notification.
+    let state_gone = unsafe { state_from_hwnd(hwnd) }
+        .map(|state| {
+            state.shell.after_plugin_loads();
+            unsafe {
+                install_plugin_menus(
+                    state.plugin_menu,
+                    &mut state.plugin_submenus,
+                    &state.shell,
+                    &loaded_now,
+                );
+                refresh_plugin_accels(state);
+            }
+        })
+        .is_none();
+    if state_gone {
+        tracing::error!(
+            "lost the window state after a plugin load pass; its menus were not installed"
+        );
     }
+    let _ = unsafe { DrawMenuBar(hwnd) };
+    // Then the notifications, with no borrow held — a plugin that
+    // queries the host from `NPPN_READY` is doing something ordinary.
+    // Delivered even if the state went away above: these plugins are
+    // loaded, and a plugin that never hears READY never finishes its
+    // own initialisation. The active buffer is read per plugin, under
+    // a borrow that ends before that plugin runs.
+    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        notices.deliver(npp_data.npp_handle, || {
+            unsafe { state_from_hwnd(hwnd) }.and_then(|s| s.shell.active_buffer_id())
+        });
+    }));
 }
 
 thread_local! {
@@ -26718,26 +26893,12 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                     // across this `extern "system"` frame. Win32 needs
                     // no dispatch callback: its plugins route
                     // `SendMessage` through the OS message pump.
+                    //
+                    // The pass installs each loaded plugin's submenu
+                    // into this very popup before it is shown, and
+                    // redraws the bar, so the items appear on this
+                    // open.
                     load_pending_plugins(hwnd, npp_data);
-                    // Populate the menu from loaded plugins. We rebuild
-                    // the FuncItem list inside a borrow, then call
-                    // AppendMenuW for each entry; AppendMenuW does
-                    // not re-enter our wnd_proc, so the borrow can
-                    // span the population.
-                    if let Some(state) = state_from_hwnd(hwnd) {
-                        populate_plugin_menu(state.plugin_menu, &state.shell);
-                        // The menu-open load may have absorbed new
-                        // plugin-shortcut defaults; rebuild the accel
-                        // table so their chords bind to real cmd ids
-                        // (any pre-load shim entries drop out). Cheap
-                        // and idempotent — a no-op when nothing changed.
-                        refresh_plugin_accels(state);
-                        // Force the menu bar to redraw so the user
-                        // sees the populated submenu on this very
-                        // open (without a redraw, the items only
-                        // appear after the popup re-displays).
-                        let _ = DrawMenuBar(hwnd);
-                    }
                 }
                 // Refresh dynamic state on the four state-driven
                 // submenus (View toggles, Encoding/Language radios,
@@ -27863,11 +28024,12 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
 ///
 /// That refusal is the cost of the guard, not a side effect, so it is
 /// armed **only** where a plugin runs inside a borrow that cannot be
-/// dropped first: the lazy load (`setInfo` / `getFuncsArray` and the
-/// per-plugin `NPPN_READY` it fires), the `WM_DESTROY` shutdown pair,
-/// the system dark-mode re-broadcast, and the Replace-in-Files
-/// document cycle (which uses it against `SCN_MODIFIED` rather than a
-/// plugin). Queued notifications, the close path's synchronous
+/// dropped first: the `WM_DESTROY` shutdown pair, the system dark-mode
+/// re-broadcast, and the Replace-in-Files document cycle (which uses
+/// it against `SCN_MODIFIED` rather than a plugin). The lazy load was
+/// on this list until it was split into phases; its entry points and
+/// its load-time notifications now run with no borrow held either.
+/// Queued notifications, the close path's synchronous
 /// `NPPN_FILEBEFORECLOSE` announcement and plugin menu commands run
 /// with **no** borrow held and **no** guard — they snapshot what they
 /// need under a borrow and call the plugin after it ends — so a
@@ -29924,6 +30086,26 @@ mod plugin_reentry_guards {
     /// `body` with every `//` line comment removed, so a guard matches
     /// the construct and not a mention of it in a comment — the pitfall
     /// DESIGN.md §7.2 records for the m3c and m4d guards.
+    /// Byte index of the `;` that ends the statement starting at
+    /// `from` — the first one at bracket depth zero, so a `;` inside a
+    /// closure body does not count. What lets a guard say "this call
+    /// happens after that borrow *ends*" rather than merely "after it
+    /// begins", which a call moved inside the borrowing closure would
+    /// also satisfy. Brackets inside string literals would confuse it;
+    /// the statements it is pointed at have none.
+    pub(crate) fn statement_end(src: &str, from: usize) -> usize {
+        let mut depth = 0i32;
+        for (i, c) in src[from..].char_indices() {
+            match c {
+                '(' | '{' | '[' => depth += 1,
+                ')' | '}' | ']' => depth -= 1,
+                ';' if depth == 0 => return from + i,
+                _ => {}
+            }
+        }
+        panic!("no statement end after byte {from}");
+    }
+
     pub(super) fn code_only(body: &str) -> String {
         body.lines()
             .map(|l| l.split("//").next().unwrap_or(""))
@@ -30831,6 +31013,55 @@ mod plugin_load_borrow_guards {
         );
     }
 
+    /// Notepad++ has every loaded plugin's menu built before it sends
+    /// the first load-time notification, and plugins act on that: they
+    /// tick their own items from `NPPN_TBMODIFICATION` and
+    /// `NPPN_READY`. A tick sent to an item that does not exist yet is
+    /// silently lost — measured, every one of them was, while this
+    /// backend built the menus afterwards. So the install (and the
+    /// accelerator refresh that makes a plugin's chords fire) must
+    /// finish, and its borrow end, before the notifications go out.
+    #[test]
+    fn plugin_menus_are_installed_before_the_load_notifications() {
+        use super::plugin_reentry_guards::statement_end;
+        let body = code_only(&fn_body(production_src(), "load_plugins_where"));
+        let tail = body
+            .find("let state_gone = unsafe { state_from_hwnd(hwnd) }")
+            .expect("the pass no longer does its bookkeeping under one borrow after the loop");
+        let install = body
+            .find("install_plugin_menus(")
+            .expect("the pass no longer installs the plugins' menus");
+        let accels = body
+            .find("refresh_plugin_accels(state)")
+            .expect("the pass no longer rebuilds the accelerator table");
+        let deliver = body
+            .find("notices.deliver(")
+            .expect("the pass no longer delivers the load-time notifications");
+        assert!(
+            tail < install && install < deliver && accels < deliver,
+            "a plugin would be notified before its menu or its shortcuts exist"
+        );
+        let tail_end = statement_end(&body, tail);
+        assert!(
+            deliver > tail_end,
+            "the notifications are delivered inside the borrow that installed the menus"
+        );
+        // One broadcast, not one per something: a `deliver` wrapped in a
+        // loop would still be a single occurrence of the call.
+        for looping in ["for ", "while ", "loop {"] {
+            assert!(
+                !body[tail_end..deliver].contains(looping),
+                "the load-time notifications are delivered from inside a loop again"
+            );
+        }
+        assert_eq!(
+            body.matches(".deliver(").count(),
+            1,
+            "a plugin is notified from somewhere other than the one batch delivery — \
+             one at a time from inside the loop is how this used to be"
+        );
+    }
+
     /// Both lazy-load triggers go through the one loop. A second,
     /// open-coded load site is how this would come back.
     #[test]
@@ -30848,6 +31079,195 @@ mod plugin_load_borrow_guards {
             "a UI backend must never use `PluginHost::load_blocking` — it holds \
              the borrow across the plugin's entry points, which is the bug"
         );
+    }
+}
+
+#[cfg(test)]
+mod plugin_menu_tests {
+    //! The Plugins popup, built with real menus (`CreateMenu` needs no
+    //! window), so the order and the check marks are Windows' own
+    //! answer rather than a model of it.
+
+    use super::*;
+    use windows::Win32::UI::WindowsAndMessaging::{DeleteMenu, GetMenuState, GetMenuStringW};
+
+    fn func(
+        label: &str,
+        cmd_id: i32,
+        init2_check: i32,
+        command: bool,
+    ) -> codepp_plugin_host::FuncItem {
+        extern "C" fn noop() {}
+        let mut item_name = [0u16; codepp_plugin_host::MENU_TITLE_LENGTH];
+        for (dst, src) in item_name.iter_mut().zip(label.encode_utf16()) {
+            *dst = src;
+        }
+        codepp_plugin_host::FuncItem {
+            item_name,
+            p_func: command.then_some(noop as codepp_plugin_host::PluginCmd),
+            cmd_id,
+            init2_check,
+            p_sh_key: core::ptr::null_mut(),
+        }
+    }
+
+    fn labels(menu: HMENU) -> Vec<String> {
+        let n = unsafe { GetMenuItemCount(Some(menu)) };
+        (0..n)
+            .map(|i| {
+                let mut buf = [0u16; 128];
+                let len = unsafe {
+                    GetMenuStringW(
+                        menu,
+                        u32::try_from(i).unwrap_or(0),
+                        Some(&mut buf),
+                        MF_BYPOSITION,
+                    )
+                };
+                let text = String::from_utf16_lossy(&buf[..usize::try_from(len).unwrap_or(0)]);
+                if text.is_empty() {
+                    "----".to_string()
+                } else {
+                    text
+                }
+            })
+            .collect()
+    }
+
+    /// `_init2Check` starts the item checked, a null `_pFunc` is a
+    /// separator, and a live chord is appended as the shortcut column.
+    #[test]
+    fn a_plugin_submenu_honours_init2check_separators_and_shortcuts() {
+        let funcs = [
+            func("Checked", 50_000, 1, true),
+            func("unused", 50_001, 0, false),
+            func("Plain", 50_002, 0, true),
+        ];
+        let sub = unsafe {
+            build_plugin_submenu(&funcs, |id| {
+                (id == 50_002).then(|| "Ctrl+Alt+P".to_string())
+            })
+        }
+        .expect("CreateMenu");
+        assert_eq!(labels(sub), vec!["Checked", "----", "Plain\tCtrl+Alt+P"]);
+        let state = |id: u32| unsafe { GetMenuState(sub, id, MF_BYCOMMAND) };
+        assert_ne!(
+            state(50_000) & MF_CHECKED.0,
+            0,
+            "_init2Check was not honoured"
+        );
+        assert_eq!(
+            state(50_002) & MF_CHECKED.0,
+            0,
+            "an item started checked without asking"
+        );
+        let _ = unsafe { DestroyMenu(sub) };
+    }
+
+    /// The edges the position helper degrades through rather than
+    /// fails at: an empty popup, a popup whose fixed tail a plugin has
+    /// removed, and a submenu a plugin deleted after it was installed —
+    /// whose stale record must not stop the next plugin being placed.
+    #[test]
+    fn plugin_submenu_position_degrades_gracefully() {
+        // Empty popup, no tail: first slot.
+        let empty = unsafe { CreateMenu() }.expect("CreateMenu");
+        assert_eq!(unsafe { plugin_submenu_position(empty, &[], 0) }, 0);
+        let _ = unsafe { DestroyMenu(empty) };
+
+        // No tail, a plugin's own items only: the end.
+        let bare = unsafe { CreateMenu() }.expect("CreateMenu");
+        for label in [w!("Mine 1"), w!("Mine 2")] {
+            unsafe { AppendMenuW(bare, MF_STRING, 9_000, label) }.expect("AppendMenuW");
+        }
+        assert_eq!(unsafe { plugin_submenu_position(bare, &[], 0) }, 2);
+        let _ = unsafe { DestroyMenu(bare) };
+
+        // A submenu deleted out from under its record.
+        let plugins = unsafe { CreateMenu() }.expect("CreateMenu");
+        unsafe { append_plugins_menu_tail(plugins) };
+        let mut installed: Vec<(usize, HMENU)> = Vec::new();
+        let p5 = unsafe { CreateMenu() }.expect("CreateMenu");
+        unsafe { insert_plugin_submenu(plugins, &mut installed, 5, p5, "P5") }
+            .expect("InsertMenuW");
+        unsafe { DeleteMenu(plugins, 0, MF_BYPOSITION) }.expect("DeleteMenu");
+        let p3 = unsafe { CreateMenu() }.expect("CreateMenu");
+        unsafe { insert_plugin_submenu(plugins, &mut installed, 3, p3, "P3") }
+            .expect("InsertMenuW");
+        assert_eq!(
+            labels(plugins),
+            vec!["P3", "----", "&Plugin Manager...", "&Open Plugin Folder"]
+        );
+        let _ = unsafe { DestroyMenu(plugins) };
+    }
+
+    /// Submenus installed by separate load passes, in any order, land
+    /// in registry order above the fixed tail — including when a
+    /// plugin has put an item of its own into the popup, which is why
+    /// the position is found by looking rather than counted.
+    #[test]
+    fn plugin_submenus_keep_registry_order_across_passes() {
+        let plugins = unsafe { CreateMenu() }.expect("CreateMenu");
+        unsafe { append_plugins_menu_tail(plugins) };
+        let mut installed: Vec<(usize, HMENU)> = Vec::new();
+        let install = |installed: &mut Vec<(usize, HMENU)>, idx: usize| {
+            let sub = unsafe { CreateMenu() }.expect("CreateMenu");
+            unsafe { insert_plugin_submenu(plugins, installed, idx, sub, &format!("P{idx}")) }
+                .expect("InsertMenuW");
+        };
+        // A restored panel's plugin at startup...
+        install(&mut installed, 3);
+        // ...a plugin's own item at the top of the popup...
+        unsafe { InsertMenuW(plugins, 0, MF_BYPOSITION | MF_STRING, 9_999, w!("Foreign")) }
+            .expect("InsertMenuW");
+        // ...then the rest on first open, out of order.
+        for idx in [5, 0, 4, 1] {
+            install(&mut installed, idx);
+        }
+        // A plugin's own name is third-party text: a bidi override and
+        // a tab (which would forge a shortcut column) are neutralised.
+        let hostile = unsafe { CreateMenu() }.expect("CreateMenu");
+        unsafe {
+            insert_plugin_submenu(
+                plugins,
+                &mut installed,
+                9,
+                hostile,
+                "Evil\u{202E}txt.exe\tCtrl+S",
+            )
+        }
+        .expect("InsertMenuW");
+        let shown = labels(plugins);
+        let hostile_label = shown
+            .iter()
+            .find(|l| l.starts_with("Evil"))
+            .expect("the hostile plugin's submenu");
+        assert!(
+            !hostile_label.contains('\u{202E}') && !hostile_label.contains('\t'),
+            "a plugin name reached the menu unsanitized: {hostile_label:?}"
+        );
+        let at = shown
+            .iter()
+            .position(|l| l.starts_with("Evil"))
+            .expect("position");
+        unsafe { DeleteMenu(plugins, u32::try_from(at).expect("u32"), MF_BYPOSITION) }
+            .expect("DeleteMenu");
+        installed.retain(|(i, _)| *i != 9);
+        assert_eq!(
+            labels(plugins),
+            vec![
+                "Foreign",
+                "P0",
+                "P1",
+                "P3",
+                "P4",
+                "P5",
+                "----",
+                "&Plugin Manager...",
+                "&Open Plugin Folder",
+            ]
+        );
+        let _ = unsafe { DestroyMenu(plugins) };
     }
 }
 

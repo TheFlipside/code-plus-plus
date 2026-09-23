@@ -511,6 +511,9 @@ fn load_pending_plugins() {
     let _freeze = crate::DrainFreeze::new();
     let data = npp_data();
     let dispatch: Option<HostDispatchFn> = Some(plugin_dispatch);
+    // Every plugin this pass loads is notified together, after the
+    // loop, in Notepad++'s order — see `LoadNotifications`.
+    let mut notices = codepp_plugin_host::LoadNotifications::default();
     while let Some(pending) = with_state(|st| st.shell.next_plugin_to_load()).flatten() {
         // No borrow held: `setInfo` runs here and its `NPPM_*` are
         // answered for real. The `catch_unwind` is not about the
@@ -532,10 +535,22 @@ fn load_pending_plugins() {
             break;
         };
         if let Some(ready) = ready {
-            ready.deliver(data.npp_handle);
+            notices.push(ready);
         }
     }
     with_state(|st| st.shell.after_plugin_loads());
+    // No borrow held: a plugin that queries the host from
+    // `NPPN_READY` is doing something ordinary. This backend's plugin
+    // menu is rebuilt by the caller afterwards, which is not the
+    // Win32 order — but a plugin cannot reach this menu at all here
+    // (`NPPM_GETMENUHANDLE` answers NULL and `NPPM_SETMENUITEMCHECK`
+    // is not implemented), so when it is built is not observable.
+    // The active buffer is read per plugin, at delivery — see
+    // `LoadNotifications::deliver` — under a borrow that ends before
+    // that plugin runs.
+    notices.deliver(data.npp_handle, || {
+        with_state(|st| st.shell.active_buffer_id()).flatten()
+    });
 }
 
 /// Lazy-load every pending plugin, then rebuild the Plugins menu from

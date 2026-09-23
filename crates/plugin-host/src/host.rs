@@ -21,7 +21,7 @@ use std::path::{Path, PathBuf};
 
 use codepp_platform::{has_plugin_extension, DynLib};
 
-use crate::dispatch::{NPPN_READY, NPPN_TBMODIFICATION};
+use crate::dispatch::{NPPN_BUFFERACTIVATED, NPPN_READY, NPPN_TBMODIFICATION};
 use crate::ffi::{
     BeNotifiedFn, FuncItem, GetFuncsArrayFn, GetNameFn, IsUnicodeFn, MessageProcFn, NppData,
     SCNotification, SciNotifyHeader, SetInfoFn, ShortcutKey,
@@ -631,14 +631,16 @@ impl PluginHost {
     }
 
     /// Record the outcome of an [`execute_load`], and hand back the
-    /// notifications the caller must deliver **after** dropping the
-    /// host borrow.
+    /// plugin's handle for the notifications the caller must deliver
+    /// **after** dropping the host borrow — collected into a
+    /// [`LoadNotifications`] with every other plugin the same pass
+    /// loads, and delivered once the pass is over.
     ///
-    /// `NPPN_READY` and `NPPN_TBMODIFICATION` are delivered by the
-    /// caller rather than here for the same reason `setInfo` is: a
-    /// plugin that queries the host from `NPPN_READY` (its config
-    /// directory, the version) is doing something ordinary, and it
-    /// can only be answered if nothing is borrowed.
+    /// They are delivered by the caller rather than here for the same
+    /// reason `setInfo` is: a plugin that queries the host from
+    /// `NPPN_READY` (its config directory, the version) is doing
+    /// something ordinary, and it can only be answered if nothing is
+    /// borrowed.
     ///
     /// The `Ok(None)` arm is unreachable today — a successful load
     /// always yields a `PluginReady`. It exists so a future load that
@@ -698,7 +700,8 @@ impl PluginHost {
     /// Load one plugin end to end in a single call.
     ///
     /// **Not for a UI backend.** This holds the host borrow across
-    /// the plugin's `setInfo`, `getFuncsArray` and `NPPN_READY`,
+    /// the plugin's `setInfo`, `getFuncsArray` and its load-time
+    /// notifications,
     /// which is precisely what the three-phase API
     /// ([`Self::next_pending_load`] → [`execute_load`] →
     /// [`Self::commit_load`]) exists to avoid: a plugin that
@@ -733,10 +736,12 @@ impl PluginHost {
             cmd_id_base: self.next_cmd_id,
         };
         let loaded = execute_load(&pending, npp_data, dispatch);
-        let ready = self.commit_load(&pending, loaded)?;
-        if let Some(ready) = ready {
-            ready.deliver(npp_data.npp_handle);
+        let mut notices = LoadNotifications::default();
+        if let Some(ready) = self.commit_load(&pending, loaded)? {
+            notices.push(ready);
         }
+        // No buffer to announce: a harness owns no documents.
+        notices.deliver(npp_data.npp_handle, || None);
         Ok(())
     }
 
@@ -844,8 +849,8 @@ pub struct PendingLoad {
 
 /// A freshly-loaded plugin's `beNotified`, handed back by
 /// [`PluginHost::commit_load`] so the caller can fire the load-time
-/// notifications with no host borrow held. See
-/// [`PluginReady::deliver`].
+/// notifications with no host borrow held. Collect one per plugin a
+/// load pass commits into a [`LoadNotifications`], which delivers them.
 #[derive(Clone, Debug)]
 pub struct PluginReady {
     /// Only for the log line on a panicking handler.
@@ -854,46 +859,109 @@ pub struct PluginReady {
 }
 
 impl PluginReady {
-    /// Fire `NPPN_READY` then `NPPN_TBMODIFICATION` at this plugin.
+    fn notify(&self, npp_handle: crate::ffi::Hwnd, code: u32, id_from: usize) {
+        let sci = SCNotification {
+            nmhdr: SciNotifyHeader {
+                hwnd_from: npp_handle,
+                id_from,
+                code,
+            },
+            ..SCNotification::default()
+        };
+        // SAFETY: `be_notified` came from a successful resolve in
+        // `execute_load`, its library is still mapped (plugins are
+        // never unloaded before the host drops), and the
+        // `SCNotification` is `#[repr(C)]` and lives on this stack
+        // frame through the synchronous call.
+        let result = catch_unwind(AssertUnwindSafe(|| unsafe {
+            (self.be_notified)(&raw const sci);
+        }));
+        if result.is_err() {
+            // Same warn-on-panic posture as `notify_all`: the caller
+            // is told the load succeeded either way, so a plugin that
+            // dies during its own init would otherwise be invisible.
+            tracing::warn!(path = ?self.path, code = code, "plugin panicked in beNotified");
+        }
+    }
+}
+
+/// The load-time notifications owed to every plugin one load pass
+/// committed, delivered in Notepad++'s startup order.
+///
+/// That order was measured rather than assumed: a probe plugin loaded
+/// twice into a real Notepad++ 8.9.6 sees every plugin loaded first,
+/// then — with every plugin's menu already built — `NPPN_TBMODIFICATION`
+/// broadcast to all of them, then `NPPN_BUFFERACTIVATED` for the
+/// buffer the session opened on, then `NPPN_READY` to all of them.
+/// Code++ used to send each plugin `NPPN_READY` and then
+/// `NPPN_TBMODIFICATION`, one plugin at a time, straight after its
+/// own load — reversed, and interleaved with the next plugin's load.
+///
+/// Why the order matters to a plugin: `NPPN_TBMODIFICATION` is where
+/// it registers toolbar icons and dock panels, and `NPPN_READY` is
+/// where it acts on them — shows a panel it registered, sets the
+/// state of a button it added — so READY arriving first means acting
+/// on things that do not exist yet. And a plugin handling `NPPN_READY`
+/// may message another (`NPPM_MSGTOPLUGIN`), which Notepad++
+/// guarantees is loaded by then because READY is a broadcast that
+/// follows every load.
+///
+/// The `NPPN_BUFFERACTIVATED` is Code++'s one deliberate synthesis.
+/// Under Notepad++ a plugin always sees the active buffer activated
+/// before READY, because the session opens after plugins load; under
+/// Code++'s lazy loading that activation happened before the plugin
+/// existed. Announcing the buffer that is active *now* gives a plugin
+/// the same "I have seen the current buffer" state it would have had,
+/// which is what plugins that key per-buffer state on
+/// `NPPN_BUFFERACTIVATED` rely on. It goes only to the plugins this
+/// pass loaded — the rest already saw that activation.
+///
+/// **Deliver with no host borrow held.** A plugin's handler may send
+/// `NPPM_*` straight back, and it can only be answered if nothing is
+/// borrowed.
+#[derive(Clone, Debug, Default)]
+pub struct LoadNotifications {
+    plugins: Vec<PluginReady>,
+}
+
+impl LoadNotifications {
+    /// Add one plugin, in load order.
+    pub fn push(&mut self, ready: PluginReady) {
+        self.plugins.push(ready);
+    }
+
+    /// Whether the pass loaded nothing.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.plugins.is_empty()
+    }
+
+    /// Broadcast `NPPN_TBMODIFICATION`, then `NPPN_BUFFERACTIVATED`
+    /// for the active buffer, then `NPPN_READY`, each to every plugin
+    /// in load order before the next begins.
     ///
-    /// N++ broadcasts READY once after all static plugins finish
-    /// initialising; Code++ loads lazily, so per-plugin delivery at
-    /// load time is the closest equivalent — each plugin sees READY
-    /// the moment it is actually ready to handle host messages, never
-    /// twice, and a plugin loaded later does not re-broadcast at its
-    /// already-initialised peers. TBMODIFICATION immediately follows,
-    /// which is N++'s order and the window in which a plugin
-    /// registers toolbar icons.
-    ///
-    /// **Call this with no host borrow held.** That is the whole
-    /// point of the type: a plugin's handler may send `NPPM_*` back
-    /// at the host, and it can only be answered if nothing is
-    /// borrowed.
-    pub fn deliver(&self, npp_handle: crate::ffi::Hwnd) {
-        for code in [NPPN_READY, NPPN_TBMODIFICATION] {
-            let sci = SCNotification {
-                nmhdr: SciNotifyHeader {
-                    hwnd_from: npp_handle,
-                    id_from: 0,
-                    code,
-                },
-                ..SCNotification::default()
-            };
-            // SAFETY: `be_notified` came from a successful resolve in
-            // `execute_load`, its library is still mapped (plugins are
-            // never unloaded before the host drops), and the
-            // `SCNotification` is `#[repr(C)]` and lives on this stack
-            // frame through the synchronous call.
-            let result = catch_unwind(AssertUnwindSafe(|| unsafe {
-                (self.be_notified)(&raw const sci);
-            }));
-            if result.is_err() {
-                // Same warn-on-panic posture as `notify_all`: the
-                // caller is told the load succeeded either way, so a
-                // plugin that dies during its own init would
-                // otherwise be invisible.
-                tracing::warn!(path = ?self.path, code = code, "plugin panicked in beNotified");
+    /// `active_buffer` is asked afresh for each plugin, just before its
+    /// `NPPN_BUFFERACTIVATED`, and that plugin's is skipped when it
+    /// answers `None`. Not a snapshot, because the handlers run with no
+    /// borrow held and may change what is active: a plugin that closes
+    /// the active tab from its `NPPN_TBMODIFICATION` would otherwise
+    /// have every later plugin told about a buffer that no longer
+    /// exists. (The close queues a real `NPPN_BUFFERACTIVATED` for
+    /// the tab that replaces it, so each plugin still ends on the truth
+    /// either way; this keeps the synthetic one from being false in
+    /// between.) The callback must take no borrow the caller holds —
+    /// it is called with plugin code before and after it.
+    pub fn deliver(&self, npp_handle: crate::ffi::Hwnd, active_buffer: impl Fn() -> Option<usize>) {
+        for ready in &self.plugins {
+            ready.notify(npp_handle, NPPN_TBMODIFICATION, 0);
+        }
+        for ready in &self.plugins {
+            if let Some(buffer) = active_buffer() {
+                ready.notify(npp_handle, NPPN_BUFFERACTIVATED, buffer);
             }
+        }
+        for ready in &self.plugins {
+            ready.notify(npp_handle, NPPN_READY, 0);
         }
     }
 }
@@ -993,6 +1061,92 @@ fn install_dispatch(lib: &DynLib, dispatch: Option<crate::ffi::HostDispatchFn>, 
     unsafe { set_dispatch(Some(dispatch)) };
 }
 
+/// Run a freshly mapped plugin's four init entry points, in
+/// Notepad++'s order, and return its name and its raw `FuncItem` array.
+///
+/// The order — isUnicode, getName, setInfo, getFuncsArray — was
+/// measured with a probe plugin loaded into a real Notepad++. Code++
+/// used to call setInfo first and never called isUnicode at all. Each
+/// FFI call is wrapped in `catch_unwind` so a Rust-authored plugin that
+/// panics doesn't unwind across the C ABI (that's UB; DESIGN.md §6.5).
+/// C++ plugins that throw past their own ABI are out of scope — broken
+/// in Notepad++ too.
+///
+/// An ANSI plugin is refused before any other entry point runs, which
+/// is also what Notepad++ does (it stops at the same call and reports
+/// the DLL as failed to load). The host hands plugins UTF-16
+/// everywhere — menu labels, paths, every `NPPM_*` string — so an ANSI
+/// plugin could only ever misread them.
+///
+/// `accepted` runs between the isUnicode check and getName — once the
+/// plugin is known to be loadable, before any more of it runs.
+///
+/// A refused plugin's library is freed when its `DynLib` drops, as on
+/// every failed load — which is also what Notepad++ does with it. That
+/// is the one place the host unloads a plugin; the "never unload"
+/// policy (DESIGN.md §6.4) is about a plugin that initialised, whose
+/// windows, threads and hooks may outlive a `FreeLibrary`. A plugin
+/// refused here has run its `DllMain` and `isUnicode` and nothing else.
+fn run_init_entry_points(
+    is_unicode: IsUnicodeFn,
+    get_name: GetNameFn,
+    set_info: SetInfoFn,
+    get_funcs_array: GetFuncsArrayFn,
+    npp_data: NppData,
+    accepted: impl FnOnce(),
+) -> Result<(String, *mut FuncItem, i32), String> {
+    let unicode = catch_unwind(AssertUnwindSafe(|| {
+        // SAFETY: is_unicode has the C ABI declared in
+        // PluginInterface.h and takes no arguments.
+        unsafe { is_unicode() }
+    }))
+    .map_err(|_| "plugin panicked in isUnicode".to_string())?;
+    if unicode == 0 {
+        return Err(
+            "isUnicode returned FALSE: an ANSI plugin, which a Unicode host cannot load"
+                .to_string(),
+        );
+    }
+    accepted();
+
+    // getName — wide-char string the host displays in the menu.
+    let name = catch_unwind(AssertUnwindSafe(|| {
+        // SAFETY: pointer is documented to remain valid for the
+        // plugin's lifetime (per PluginInterface.h). We copy the
+        // bytes into an owned String immediately so we don't hold
+        // the pointer past this call.
+        unsafe {
+            let p = get_name();
+            if p.is_null() {
+                "<unnamed>".to_string()
+            } else {
+                wide_to_string(p)
+            }
+        }
+    }))
+    .map_err(|_| "plugin panicked in getName".to_string())?;
+
+    // setInfo — the plugin stashes the host handles before it is
+    // asked for its menu items.
+    catch_unwind(AssertUnwindSafe(|| {
+        // SAFETY: set_info has the C ABI declared in
+        // PluginInterface.h; npp_data is a valid #[repr(C)] NppData
+        // by construction.
+        unsafe { set_info(npp_data) }
+    }))
+    .map_err(|_| "plugin panicked in setInfo".to_string())?;
+
+    // getFuncsArray — plugin returns a pointer to its menu items.
+    let mut count: i32 = 0;
+    let raw = catch_unwind(AssertUnwindSafe(|| {
+        // SAFETY: get_funcs_array signature declared in ffi; count
+        // is a valid out-pointer.
+        unsafe { get_funcs_array(&raw mut count) }
+    }))
+    .map_err(|_| "plugin panicked in getFuncsArray".to_string())?;
+    Ok((name, raw, count))
+}
+
 fn load_inner(
     path: &Path,
     npp_data: NppData,
@@ -1042,50 +1196,19 @@ fn load_inner(
         )
     };
 
-    // Install the host's message-routing callback *before* setInfo, so
-    // the plugin's `SendMessage` transport is live for every message it
-    // could send once initialised (NPPN_READY's beNotified, menu
-    // commands).
-    install_dispatch(&lib, dispatch, path);
-
-    // setInfo first — plugin stashes the host handles before we ask
-    // it for menu items. Wrap each FFI call in `catch_unwind` so a
-    // Rust-authored plugin that panics doesn't unwind across the C
-    // ABI (that's UB; DESIGN.md §6.5). C++ plugins that throw past
-    // their own ABI are out of scope — broken in Notepad++ too.
-    catch_unwind(AssertUnwindSafe(|| {
-        // SAFETY: set_info has the C ABI declared in
-        // PluginInterface.h; npp_data is a valid #[repr(C)] NppData
-        // by construction.
-        unsafe { set_info(npp_data) }
-    }))
-    .map_err(|_| "plugin panicked in setInfo".to_string())?;
-
-    // getName — wide-char string the host displays in the menu.
-    let name = catch_unwind(AssertUnwindSafe(|| {
-        // SAFETY: pointer is documented to remain valid for the
-        // plugin's lifetime (per PluginInterface.h). We copy the
-        // bytes into an owned String immediately so we don't hold
-        // the pointer past this call.
-        unsafe {
-            let p = get_name();
-            if p.is_null() {
-                "<unnamed>".to_string()
-            } else {
-                wide_to_string(p)
-            }
-        }
-    }))
-    .map_err(|_| "plugin panicked in getName".to_string())?;
-
-    // getFuncsArray — plugin returns a pointer to its menu items.
-    let mut count: i32 = 0;
-    let raw = catch_unwind(AssertUnwindSafe(|| {
-        // SAFETY: get_funcs_array signature declared in ffi; count
-        // is a valid out-pointer.
-        unsafe { get_funcs_array(&raw mut count) }
-    }))
-    .map_err(|_| "plugin panicked in getFuncsArray".to_string())?;
+    // The host's message-routing callback goes in once the plugin has
+    // passed isUnicode, and before anything else of it runs, so its
+    // `SendMessage` transport is live for every message it could send
+    // (NPPN_READY's beNotified, menu commands) — and a plugin refused
+    // as ANSI is never handed a live route into the host at all.
+    let (name, raw, count) = run_init_entry_points(
+        is_unicode,
+        get_name,
+        set_info,
+        get_funcs_array,
+        npp_data,
+        || install_dispatch(&lib, dispatch, path),
+    )?;
     // Cap implausible counts (see `MAX_FUNCITEMS` at the top of
     // this function for rationale).
     if count > MAX_FUNCITEMS {
@@ -1606,6 +1729,143 @@ mod load_split_tests {
         assert_eq!(
             second.cmd_id_base, first.cmd_id_base,
             "a failed load must not consume command ids"
+        );
+    }
+}
+
+/// The load-time lifecycle order, on every platform: it is shared by
+/// all three backends, so a test that ran only on Windows would leave
+/// the GTK and Cocoa order unguarded.
+#[cfg(test)]
+mod load_order_tests {
+    use super::*;
+
+    use std::sync::Mutex;
+
+    /// `(plugin, code, id_from)` in the order the recorders saw them.
+    static SEEN: Mutex<Vec<(char, u32, usize)>> = Mutex::new(Vec::new());
+
+    fn record(who: char, sci: *const SCNotification) {
+        // SAFETY: `LoadNotifications` hands a live `SCNotification`.
+        let h = unsafe { &(*sci).nmhdr };
+        SEEN.lock()
+            .expect("recorder lock")
+            .push((who, h.code, h.id_from));
+    }
+    unsafe extern "C" fn plugin_a(sci: *const SCNotification) {
+        record('a', sci);
+    }
+    unsafe extern "C" fn plugin_b(sci: *const SCNotification) {
+        record('b', sci);
+    }
+
+    fn ready(be_notified: crate::ffi::BeNotifiedFn) -> PluginReady {
+        PluginReady {
+            path: PathBuf::from("recorder"),
+            be_notified,
+        }
+    }
+
+    /// Notepad++'s startup order, as measured: each notification is a
+    /// broadcast that reaches every plugin before the next one starts,
+    /// and TBMODIFICATION comes first — the reverse of what Code++
+    /// used to send, one plugin at a time.
+    ///
+    /// Both cases run in one test because the recorder is a process
+    /// global and libtest runs tests in parallel.
+    #[test]
+    fn load_notifications_broadcast_in_notepad_plus_plus_order() {
+        let mut notices = LoadNotifications::default();
+        assert!(notices.is_empty());
+        notices.push(ready(plugin_a));
+        notices.push(ready(plugin_b));
+
+        SEEN.lock().expect("recorder lock").clear();
+        notices.deliver(core::ptr::null_mut(), || Some(7));
+        assert_eq!(
+            *SEEN.lock().expect("recorder lock"),
+            vec![
+                ('a', NPPN_TBMODIFICATION, 0),
+                ('b', NPPN_TBMODIFICATION, 0),
+                ('a', NPPN_BUFFERACTIVATED, 7),
+                ('b', NPPN_BUFFERACTIVATED, 7),
+                ('a', NPPN_READY, 0),
+                ('b', NPPN_READY, 0),
+            ]
+        );
+
+        // No buffer to announce: the activation is skipped, the rest
+        // keeps its order.
+        SEEN.lock().expect("recorder lock").clear();
+        notices.deliver(core::ptr::null_mut(), || None);
+        assert_eq!(
+            *SEEN.lock().expect("recorder lock"),
+            vec![
+                ('a', NPPN_TBMODIFICATION, 0),
+                ('b', NPPN_TBMODIFICATION, 0),
+                ('a', NPPN_READY, 0),
+                ('b', NPPN_READY, 0),
+            ]
+        );
+
+        // The active buffer is asked for per plugin, at delivery: a
+        // handler that changes it (closing the tab, say) must not leave
+        // the plugins after it announced a buffer that is gone.
+        SEEN.lock().expect("recorder lock").clear();
+        let asked = std::cell::Cell::new(0usize);
+        notices.deliver(core::ptr::null_mut(), || {
+            asked.set(asked.get() + 1);
+            Some(10 + asked.get())
+        });
+        let activations: Vec<(char, usize)> = SEEN
+            .lock()
+            .expect("recorder lock")
+            .iter()
+            .filter(|(_, code, _)| *code == NPPN_BUFFERACTIVATED)
+            .map(|(who, _, id)| (*who, *id))
+            .collect();
+        assert_eq!(activations, vec![('a', 11), ('b', 12)]);
+    }
+
+    /// A plugin's four init entry points are called in
+    /// Notepad++'s order, refusing an ANSI plugin before any of the
+    /// others run. A source scan, because observing the order needs a
+    /// real DLL that records it — the probe the order was measured
+    /// with lives outside the tree.
+    #[test]
+    fn init_entry_points_are_called_in_notepad_plus_plus_order() {
+        let src = include_str!("host.rs");
+        let body = &src[src
+            .find("fn run_init_entry_points(")
+            .expect("run_init_entry_points")..];
+        let body = &body[..body.find("\nfn ").unwrap_or(body.len())];
+        // Code only, so a call named in a comment cannot stand in for
+        // the call itself.
+        let body = body
+            .lines()
+            .map(|l| l.split("//").next().unwrap_or(""))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let at = |call: &str| {
+            body.find(call)
+                .unwrap_or_else(|| panic!("run_init_entry_points no longer calls {call}"))
+        };
+        let (unicode, name, info, funcs) = (
+            at("unsafe { is_unicode() }"),
+            at("let p = get_name();"),
+            at("unsafe { set_info(npp_data) }"),
+            at("unsafe { get_funcs_array(&raw mut count) }"),
+        );
+        assert!(
+            unicode < name && name < info && info < funcs,
+            "the entry points are no longer called isUnicode, getName, setInfo, getFuncsArray"
+        );
+        let refusal = at("if unicode == 0 {");
+        let routed = at("accepted();");
+        assert!(
+            unicode < refusal && refusal < routed && routed < name,
+            "an ANSI plugin must be refused before any other entry point runs, \
+             and before it is given a route into the host"
         );
     }
 }

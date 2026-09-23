@@ -32,7 +32,7 @@
 //! ```
 //!
 //! Separators are encoded as `FuncItem { p_func: None, .. }` — the
-//! host's `populate_plugin_menu` renders any entry with no callback
+//! host's `build_plugin_submenu` renders any entry with no callback
 //! as `MF_SEPARATOR` (see `ui_win32/src/lib.rs` near
 //! `if func.p_func.is_none()`).
 //!
