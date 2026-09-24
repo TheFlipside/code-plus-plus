@@ -62,7 +62,10 @@ fn cppconverter_loads_and_publishes_two_func_items() {
     };
 
     let staging = tempfile::tempdir().unwrap();
-    let staged = staging.path().join("cppconverter.dll");
+    // Notepad++'s layout, the only one discovery loads.
+    let staged_dir = staging.path().join("cppconverter");
+    std::fs::create_dir(&staged_dir).expect("create the plugin's folder");
+    let staged = staged_dir.join("cppconverter.dll");
     std::fs::copy(&dll, &staged).expect("copy cppconverter.dll into staging dir");
 
     let mut host = PluginHost::new();

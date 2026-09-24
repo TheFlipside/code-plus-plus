@@ -146,8 +146,12 @@ typedef struct FuncItem_ {
  * Lifecycle — Notepad++'s order, measured with a probe plugin loaded
  * into both hosts:
  *
- *   1. Code++ enumerates plugin DLLs in the plugins folder; each DLL
- *      stays unloaded.
+ *   1. Code++ enumerates plugin DLLs in the plugins folder, in
+ *      Notepad++'s layout and no other: plugins\<name>\<name>.dll,
+ *      the folder and file names matched regardless of case. A DLL
+ *      placed directly in the plugins folder, one a level deeper, and
+ *      anything in plugins\config are not loaded — nor by Notepad++.
+ *      Each DLL stays unloaded.
  *   2. On first user touch (Plugins menu open, a hotkey the plugin
  *      owns, or a dock panel of its restored from the last session)
  *      every pending plugin is loaded. For each, the DLL is mapped,

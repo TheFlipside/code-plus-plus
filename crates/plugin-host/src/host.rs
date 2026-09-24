@@ -19,7 +19,7 @@
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
 
-use codepp_platform::{has_plugin_extension, DynLib};
+use codepp_platform::{has_plugin_extension, DynLib, PLUGIN_EXTENSION};
 
 use crate::dispatch::{NPPN_BUFFERACTIVATED, NPPN_READY, NPPN_TBMODIFICATION};
 use crate::ffi::{
@@ -111,11 +111,22 @@ impl PluginInfo {
     /// cannot produce.
     #[must_use]
     pub fn filename(&self) -> String {
-        self.path
-            .file_name()
-            .and_then(|s| s.to_str())
-            .unwrap_or("")
-            .to_string()
+        file_name_of(&self.path)
+    }
+
+    /// The name this plugin answers to — its file name through
+    /// `codepp_core::shortcuts::module_key` — which is what every
+    /// record keyed on a plugin compares by: `shortcuts.xml`, a dock
+    /// panel's module, and discovery's refusal of a second plugin
+    /// under a name already registered.
+    ///
+    /// Compare plugins by this and nothing else. Discovery guarantees
+    /// one plugin per name only under this normalisation, so a lookup
+    /// that normalised differently could reach a plugin discovery
+    /// never checked against the rest.
+    #[must_use]
+    pub fn module_key(&self) -> String {
+        module_key_of(&self.path)
     }
 
     /// `beNotified` entry point if loaded. The dispatcher (next
@@ -408,84 +419,133 @@ impl PluginHost {
         Some(start)
     }
 
-    /// Enumerate plugin candidates in `dir`. Each `*.dll` becomes a
+    /// Enumerate plugin candidates in `dir`. Each becomes a
     /// `PluginInfo` in the `Pending` state — the file is **not** yet
     /// `LoadLibrary`'d. Returns the count discovered.
     ///
     /// A non-existent directory is not an error; it's the first-run
-    /// case. The scan walks **two** subdirectory levels deep so all
-    /// three of these layouts are picked up:
+    /// case.
     ///
-    ///   plugins/<name>.dll                       (depth 0)
-    ///   plugins/<name>/<name>.dll                (depth 1, the
-    ///                                             Notepad++ default)
-    ///   plugins/<name>/<archdir>/<name>.dll      (depth 2, the
-    ///                                             `NppExec` /
-    ///                                             `ComparePlus`
-    ///                                             64-bit layout)
+    /// **The layout is Notepad++'s, and only Notepad++'s:
+    /// `plugins/<name>/<name>.<ext>`.** Measured against Notepad++
+    /// 8.9.6 with one probe DLL copied into every layout this function
+    /// has ever accepted, it loads a plugin only from a folder holding
+    /// a file named after that folder, with the case of the two free
+    /// to differ. It does not load a DLL placed directly in `plugins/`,
+    /// one a level deeper (`plugins/X/x64/X.dll`), one whose name
+    /// differs from its folder's, or anything in the `Config` folder,
+    /// where plugins keep their settings. Code++ used to accept the
+    /// first two as well, and the flat one meant a profile holding an
+    /// old `plugins/X.dll` beside the staged `plugins/X/X.dll` loaded
+    /// the plugin twice: two submenus, two sets of load-time
+    /// notifications, and every record keyed on a plugin's file name —
+    /// `disabled.txt`, `shortcuts.xml`, a dock panel's module —
+    /// answering to both. A DLL left directly in the folder is logged
+    /// rather than loaded, so someone whose plugin has stopped loading
+    /// can find out why.
     ///
-    /// At depth ≥ 1 the candidate's filename stem must match the
-    /// plugin's directory name (`is_plugin_dll`). Without that filter
-    /// a plugin's bundled dependencies (e.g. `ComparePlus` shipping
-    /// `git2.dll` and `sqlite3.dll` under `libs/`) would be picked up
-    /// as plugins themselves, fed to `LoadLibraryW` at first-touch
-    /// load, and either fail entry-point resolution noisily (best
-    /// case) or run their `DllMain` and bring foreign DLL state into
-    /// the host process (worst case). The N++ convention this filter
-    /// mirrors is the same protection.
+    /// Looking only at the file named after its folder also keeps a
+    /// plugin's own dependencies out of the registry: `ComparePlus`
+    /// ships `git2.dll` and `sqlite3.dll` under
+    /// `plugins/ComparePlus/libs/`, and loading those as plugins would
+    /// run their `DllMain` in the host for nothing.
     ///
-    /// Symlinks: `is_dir()`/`is_file()` follow symlinks, so a
-    /// directory symlink in the plugins folder is enumerated. On
-    /// Windows symlink creation requires `SeCreateSymbolicLinkPrivilege`
-    /// by default, so this is low-severity. Phase 5 (Linux/macOS,
-    /// where symlink creation is unprivileged) will need to validate
-    /// resolved paths stay within `dir` or use `O_NOFOLLOW`.
+    /// **At most one plugin per name.** Everything downstream keys on a
+    /// plugin's file name through `codepp_core::shortcuts::module_key`,
+    /// so a second plugin answering to a name already registered is
+    /// refused, with a warning, and the first keeps it. On Windows the
+    /// layout makes that unreachable, because folder names are unique
+    /// there regardless of case; but a case-sensitive file system can
+    /// hold `Foo/` beside `foo/`, and `module_key` reads `libfoo.so` and
+    /// `foo.so` as one name. Folders are visited in a fixed order (see
+    /// `sorted_entries`), so which one wins does not depend on how the
+    /// file system happens to list a directory. A second call over the
+    /// same folder registers nothing new, for the same reason.
+    ///
+    /// **Links are followed, deliberately.** `is_dir()` and `is_file()`
+    /// resolve symlinks and junctions, so a plugin folder — or the file
+    /// in it — may be a link to somewhere outside `dir`, and the plugin
+    /// it reaches is recorded and later loaded. That is an accepted
+    /// risk, not a gap waiting on a check. Placing a link here takes
+    /// write access to the plugins folder, which already lets anyone
+    /// put a real DLL here, so refusing links would stop nothing an
+    /// attacker needs — and it would break the ordinary way to develop
+    /// a plugin, which is to link its build output into the folder.
+    /// Unprivileged symlink creation on Linux and macOS changes neither
+    /// half of that.
+    ///
+    /// The same access covers the gap between discovery and the load.
+    /// Discovery records a path and the load resolves it afresh, which
+    /// can be much later — loading is lazy, so a plugin nothing touches
+    /// is resolved only when something finally does — and whatever sits
+    /// at the path by then is what loads. Swapping it takes the same
+    /// write access as replacing the file outright. All of this assumes
+    /// the plugins folder belongs to the user running Code++, as
+    /// `%APPDATA%\Code++\plugins` and its equivalents do; a folder
+    /// writable across a trust boundary would need its own analysis.
     ///
     /// # Errors
     ///
-    /// Currently the recursive `discover_walk` absorbs every
-    /// read-dir failure (matching the "no plugins folder yet"
-    /// first-run case), so this signature is `Result` mostly for
-    /// forward-compat with a future stricter mode. Today it
-    /// always returns `Ok`.
+    /// Currently every read-dir failure is absorbed (matching the "no
+    /// plugins folder yet" first-run case), so this signature is
+    /// `Result` mostly for forward-compat with a future stricter mode.
+    /// Today it always returns `Ok`.
     pub fn discover(&mut self, dir: &Path) -> std::io::Result<usize> {
         // No `exists()` pre-check: a separate stat-then-open opens a
         // TOCTOU window where an attacker who can swap `dir` for a
         // symlink between the check and the `read_dir` call could
         // redirect enumeration into a directory of their choosing,
         // with the recorded paths later fed to `LoadLibraryW` at
-        // first-touch load. `discover_walk` already treats a
+        // first-touch load. `sorted_entries` already treats a
         // missing-directory `read_dir` failure as "no entries"
         // (matching the first-run case), so the redundant pre-check
         // adds the race without buying anything.
         let mut found = 0usize;
-        self.discover_walk(dir, 0, 2, &mut found);
+        for path in sorted_entries(dir) {
+            if path.is_dir() {
+                if is_plugin_config_dir(&path) {
+                    continue;
+                }
+                if let Some(file) = plugin_file_in(&path) {
+                    if self.register_discovered(file) {
+                        found += 1;
+                    }
+                }
+            } else if path.is_file() && has_plugin_extension(&path) {
+                tracing::warn!(
+                    path = ?path,
+                    "not loading a plugin placed directly in the plugins folder; \
+                     Notepad++'s layout, and the only one loaded, is plugins/<name>/<name>"
+                );
+            }
+        }
         Ok(found)
     }
 
-    fn discover_walk(&mut self, dir: &Path, depth: u32, max_depth: u32, found: &mut usize) {
-        let Ok(entries) = std::fs::read_dir(dir) else {
-            return;
-        };
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_file() && has_plugin_extension(&path) && is_plugin_dll(&path, depth) {
-                self.plugins.push(PluginInfo {
-                    path,
-                    name: None,
-                    state: PluginState::Pending,
-                    // Default to enabled at discovery time. The
-                    // shell sweeps `apply_disabled_list` over the
-                    // registry once enumeration finishes, flipping
-                    // `disabled = true` for any DLL whose filename
-                    // appears in `disabled.txt`.
-                    disabled: false,
-                });
-                *found += 1;
-            } else if path.is_dir() && depth < max_depth {
-                self.discover_walk(&path, depth + 1, max_depth, found);
-            }
+    /// Record `path` as a pending plugin, unless a plugin already
+    /// registered answers to the same name — see [`Self::discover`].
+    /// Returns whether it was recorded.
+    fn register_discovered(&mut self, path: PathBuf) -> bool {
+        let key = module_key_of(&path);
+        if let Some(first) = self.plugins.iter().find(|p| p.module_key() == key) {
+            tracing::warn!(
+                path = ?path,
+                first = ?first.path,
+                "another installed plugin already answers to this name; not loading this one"
+            );
+            return false;
         }
+        self.plugins.push(PluginInfo {
+            path,
+            name: None,
+            state: PluginState::Pending,
+            // Default to enabled at discovery time. The shell sweeps
+            // `apply_disabled_list` over the registry once
+            // enumeration finishes, flipping `disabled = true` for any
+            // DLL whose filename appears in `disabled.txt`.
+            disabled: false,
+        });
+        true
     }
 
     /// Total number of plugins (any state).
@@ -517,12 +577,10 @@ impl PluginHost {
     /// or missing file → empty set → all plugins enabled.
     pub fn apply_disabled_list(&mut self, disabled_filenames: &[String]) {
         for plugin in &mut self.plugins {
-            let basename = plugin
-                .path
-                .file_name()
-                .and_then(|s| s.to_str())
-                .unwrap_or("");
-            plugin.disabled = disabled_filenames.iter().any(|d| filenames_eq(d, basename));
+            let basename = plugin.filename();
+            plugin.disabled = disabled_filenames
+                .iter()
+                .any(|d| filenames_eq(d, &basename));
         }
     }
 
@@ -614,12 +672,7 @@ impl PluginHost {
             if p.is_loaded() || p.failed_reason().is_some() || p.disabled {
                 return false;
             }
-            only.is_none_or(|keys| {
-                p.path
-                    .file_name()
-                    .map(|n| codepp_core::shortcuts::module_key(&n.to_string_lossy()))
-                    .is_some_and(|k| keys.contains(&k))
-            })
+            only.is_none_or(|keys| keys.contains(&p.module_key()))
         })?;
         let pending = PendingLoad {
             idx,
@@ -1338,47 +1391,101 @@ unsafe fn snapshot_shortcut_key(p: *mut ShortcutKey) -> Option<ShortcutKey> {
     Some(key)
 }
 
-/// Decide whether a `*.dll` candidate found at `depth` in the plugins
-/// tree is actually a plugin or a bundled dependency. The Notepad++
-/// convention is:
+/// The entries of `dir`, in a fixed order: by upper-cased file name,
+/// ties broken by the name itself.
 ///
-/// * **depth 0** (`plugins/X.dll`): always a plugin. Code++ allows this
-///   layout for convenience even though stock N++ requires the per-
-///   plugin subdirectory.
-/// * **depth 1** (`plugins/X/Y.dll`): plugin only when `Y == X`. The
-///   stem must match the parent directory. This rejects bundled
-///   dependencies (`plugins/X/libs/git2.dll` → `plugins/X/libs/`,
-///   stem "git2" ≠ parent "libs").
-/// * **depth 2** (`plugins/X/<arch>/Y.dll`): plugin only when `Y == X`,
-///   i.e. the stem must match the *grandparent* directory (the
-///   plugin name), not the immediate `<arch>` parent. This is the
-///   `NppExec` / `ComparePlus` 64-bit layout.
+/// NTFS already enumerates a directory in that order (for ASCII
+/// names), so on Windows this is the order `read_dir` gives and the
+/// order plugins have always loaded in; elsewhere it replaces an order
+/// that belongs to the file system — hash order on ext4 — with one
+/// that does not. It matters because the first plugin to claim a name
+/// keeps it ([`PluginHost::discover`]), and load order is also
+/// command-id order and Plugins-menu order.
 ///
-/// Returns false on any path that lacks the parent / grandparent
-/// component the rule needs (defensive — `read_dir` shouldn't produce
-/// such paths but the parent component is `Option`-typed).
-fn is_plugin_dll(path: &Path, depth: u32) -> bool {
-    let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else {
-        return false;
+/// An unreadable or missing directory has no entries: the first-run
+/// case of a plugins folder that does not exist yet.
+fn sorted_entries(dir: &Path) -> Vec<PathBuf> {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return Vec::new();
     };
-    // Case-insensitive comparison: NTFS is case-insensitive by
-    // default, so a plugin named "ComparePlus" might be returned by
-    // read_dir as "Compareplus" or any other casing depending on
-    // how it was created. ASCII case-insensitive is enough — plugin
-    // names in the wild are ASCII. `dir_matches_stem` is `Fn` (no
-    // captured state moved on call) so additional match arms below
-    // can call it without consuming it.
-    let dir_matches_stem = |dir: Option<&Path>| -> bool {
-        dir.and_then(|p| p.file_name())
-            .and_then(|n| n.to_str())
-            .is_some_and(|n| n.eq_ignore_ascii_case(stem))
-    };
-    match depth {
-        0 => true,
-        1 => dir_matches_stem(path.parent()),
-        2 => dir_matches_stem(path.parent().and_then(|p| p.parent())),
-        _ => false,
+    let mut paths: Vec<PathBuf> = entries.flatten().map(|e| e.path()).collect();
+    order_entries(&mut paths);
+    paths
+}
+
+/// Sort `paths` into [`sorted_entries`] order. Apart from reading the
+/// directory so it can be tested on any file system — NTFS would
+/// hand a test the right order whether or not this ran.
+///
+/// Upper-cased with Unicode's mapping, not the ASCII-only folding
+/// identity uses (`module_key`), on purpose: this imitates NTFS, whose
+/// upcase table covers far more than ASCII, so Windows keeps the order
+/// it always had for a non-ASCII name too. The two cannot disagree on
+/// anything identity decides — names that are one plugin under
+/// `module_key` differ only in ASCII case or a `lib` prefix, and sort
+/// the same way under either mapping — so this only orders plugins
+/// that are different anyway.
+fn order_entries(paths: &mut [PathBuf]) {
+    paths.sort_by_cached_key(|p| {
+        let name = p
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        (name.to_uppercase(), name)
+    });
+}
+
+/// Whether `path` is the plugins folder's `config` directory, which
+/// is where plugins keep their settings (`NPPM_GETPLUGINSCONFIGDIR`
+/// points there) and never a plugin, whatever it holds. Notepad++
+/// skips its `Config` folder by name — measured: a
+/// `plugins/Config/Config.dll` is not loaded.
+fn is_plugin_config_dir(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|n| n.to_str())
+        .is_some_and(|n| n.eq_ignore_ascii_case("config"))
+}
+
+/// The plugin in plugin folder `dir`: the file named after the
+/// folder, `<name>.<ext>`, or `None` if there is none.
+///
+/// Notepad++ builds that path from the folder name and lets the file
+/// system resolve it, so the case of the file's name is free to differ
+/// from the folder's; this does the same, and so returns the path
+/// spelled the way the folder is. A case-sensitive file system does
+/// not resolve it that way, so there the folder is searched for a file
+/// whose name matches ignoring ASCII case, and the first in
+/// [`sorted_entries`] order is taken.
+fn plugin_file_in(dir: &Path) -> Option<PathBuf> {
+    let name = dir.file_name()?.to_str()?;
+    let exact = dir.join(format!("{name}.{PLUGIN_EXTENSION}"));
+    if exact.is_file() {
+        return Some(exact);
     }
+    sorted_entries(dir).into_iter().find(|p| {
+        p.is_file()
+            && has_plugin_extension(p)
+            && p.file_stem()
+                .and_then(|s| s.to_str())
+                .is_some_and(|s| s.eq_ignore_ascii_case(name))
+    })
+}
+
+/// `path`'s final component as text, or empty if it has none. Lossy,
+/// so a name that is not valid Unicode still has a stable spelling.
+/// The single conversion behind [`PluginInfo::filename`] and
+/// [`module_key_of`], which is what keeps a plugin's recorded name and
+/// its identity from ever disagreeing.
+fn file_name_of(path: &Path) -> String {
+    path.file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default()
+}
+
+/// A plugin file's identity, the one every record keyed on a plugin's
+/// file name compares by — see [`PluginInfo::module_key`].
+fn module_key_of(path: &Path) -> String {
+    codepp_core::shortcuts::module_key(&file_name_of(path))
 }
 
 /// Decode a null-terminated wide-char string (`*const u16`) into an
@@ -1407,13 +1514,12 @@ unsafe fn wide_to_string(mut p: *const u16) -> String {
     String::from_utf16_lossy(&units)
 }
 
-// These tests were authored against Windows discovery (`.dll` filenames,
-// the stem-matches-dirname walk) and stay Windows-only for now — they
-// exercise platform-neutral logic, but parametrising the 23 hardcoded
-// `.dll` fixtures on `PLUGIN_EXTENSION` is a tracked follow-up. The
-// Linux load path (including the new dispatch handshake) is covered
-// end-to-end by the GTK plugin demo, and `has_plugin_extension` is
-// already tested per-OS in `codepp-platform`.
+// Windows-only: these load real (or deliberately broken) `.dll`s and
+// use `.dll`-named fixtures. Discovery, which is platform-neutral file
+// logic, has its own module below that runs everywhere. The Linux load
+// path (including the dispatch handshake) is covered end-to-end by the
+// GTK plugin demo, and `has_plugin_extension` is tested per-OS in
+// `codepp-platform`.
 #[cfg(all(test, target_os = "windows"))]
 mod tests {
     use super::*;
@@ -1438,173 +1544,14 @@ mod tests {
     }
 
     #[test]
-    fn discover_missing_dir_is_zero() {
-        let mut host = PluginHost::new();
-        let n = host
-            .discover(&PathBuf::from("definitely-not-a-real-plugin-dir-12345"))
-            .unwrap();
-        assert_eq!(n, 0);
-        assert!(host.is_empty());
-    }
-
-    #[test]
-    fn discover_empty_dir_is_zero() {
-        let dir = tempfile::tempdir().unwrap();
-        let mut host = PluginHost::new();
-        let n = host.discover(dir.path()).unwrap();
-        assert_eq!(n, 0);
-        assert!(host.is_empty());
-    }
-
-    #[test]
-    fn discover_skips_non_dlls() {
-        let dir = tempfile::tempdir().unwrap();
-        std::fs::write(dir.path().join("readme.txt"), "ignore me").unwrap();
-        std::fs::write(dir.path().join("data.json"), "{}").unwrap();
-
-        let mut host = PluginHost::new();
-        host.discover(dir.path()).unwrap();
-        assert!(host.is_empty());
-    }
-
-    #[test]
-    fn discover_finds_top_level_dlls() {
-        let dir = tempfile::tempdir().unwrap();
-        // Create empty files with .dll extensions; we don't try to load
-        // them in this test — discovery is filesystem-only.
-        std::fs::write(dir.path().join("plugin-a.dll"), b"not a real dll").unwrap();
-        std::fs::write(dir.path().join("plugin-b.dll"), b"also not real").unwrap();
-        std::fs::write(dir.path().join("notes.md"), b"skip me").unwrap();
-
-        let mut host = PluginHost::new();
-        let n = host.discover(dir.path()).unwrap();
-        assert_eq!(n, 2);
-        let names: std::collections::HashSet<_> = host
-            .iter()
-            .map(|p| p.path.file_name().unwrap().to_string_lossy().into_owned())
-            .collect();
-        assert!(names.contains("plugin-a.dll"));
-        assert!(names.contains("plugin-b.dll"));
-    }
-
-    #[test]
-    fn discover_finds_subdir_dlls() {
-        let dir = tempfile::tempdir().unwrap();
-        let sub_a = dir.path().join("plugin-a");
-        std::fs::create_dir(&sub_a).unwrap();
-        std::fs::write(sub_a.join("plugin-a.dll"), b"x").unwrap();
-
-        let sub_b = dir.path().join("plugin-b");
-        std::fs::create_dir(&sub_b).unwrap();
-        std::fs::write(sub_b.join("plugin-b.dll"), b"x").unwrap();
-
-        let mut host = PluginHost::new();
-        let n = host.discover(dir.path()).unwrap();
-        assert_eq!(n, 2);
-    }
-
-    #[test]
-    fn discover_finds_depth2_dlls() {
-        // NppExec / ComparePlugin layout:
-        //   plugins/<name>/<archdir>/<name>.dll
-        let dir = tempfile::tempdir().unwrap();
-        let plugin_dir = dir.path().join("nppexec");
-        let arch_dir = plugin_dir.join("nppexec64");
-        std::fs::create_dir_all(&arch_dir).unwrap();
-        std::fs::write(arch_dir.join("nppexec.dll"), b"x").unwrap();
-
-        let mut host = PluginHost::new();
-        let n = host.discover(dir.path()).unwrap();
-        assert_eq!(n, 1);
-        assert_eq!(
-            host.iter().next().unwrap().path.file_name().unwrap(),
-            "nppexec.dll"
-        );
-    }
-
-    #[test]
-    fn discover_rejects_bundled_deps_in_libs_subdir() {
-        // ComparePlus ships its libs (git2.dll, sqlite3.dll) under
-        // plugins/<plugin>/libs/. Without the filename-stem-matches-
-        // dirname filter, those would be enumerated as plugins
-        // themselves and fed to LoadLibraryW, which can crash the
-        // process if the bundled DLL's DllMain runs unexpected
-        // code or its later setInfo lookup hits a name collision.
-        let dir = tempfile::tempdir().unwrap();
-        let plugin_dir = dir.path().join("ComparePlus");
-        let libs = plugin_dir.join("libs");
-        std::fs::create_dir_all(&libs).unwrap();
-        std::fs::write(plugin_dir.join("ComparePlus.dll"), b"x").unwrap();
-        std::fs::write(libs.join("git2.dll"), b"x").unwrap();
-        std::fs::write(libs.join("sqlite3.dll"), b"x").unwrap();
-
-        let mut host = PluginHost::new();
-        let n = host.discover(dir.path()).unwrap();
-        assert_eq!(n, 1, "only ComparePlus.dll should be a plugin");
-        assert_eq!(
-            host.iter().next().unwrap().path.file_name().unwrap(),
-            "ComparePlus.dll"
-        );
-    }
-
-    #[test]
-    fn discover_rejects_misnamed_dll_under_plugin_dir() {
-        // plugins/Foo/Bar.dll — stem "Bar" doesn't match parent
-        // "Foo", so it's a bundled dependency, not the plugin entry.
-        let dir = tempfile::tempdir().unwrap();
-        let plugin_dir = dir.path().join("Foo");
-        std::fs::create_dir(&plugin_dir).unwrap();
-        std::fs::write(plugin_dir.join("Bar.dll"), b"x").unwrap();
-
-        let mut host = PluginHost::new();
-        let n = host.discover(dir.path()).unwrap();
-        assert_eq!(n, 0);
-    }
-
-    #[test]
-    fn discover_accepts_case_mismatched_dll_name() {
-        // NTFS is case-insensitive; the user might have a directory
-        // "ComparePlus" containing "compareplus.dll" or vice versa.
-        // The filter uses ASCII case-insensitive comparison so the
-        // same plugin layout works regardless of how the casing
-        // landed in read_dir output.
-        let dir = tempfile::tempdir().unwrap();
-        let plugin_dir = dir.path().join("ComparePlus");
-        std::fs::create_dir(&plugin_dir).unwrap();
-        std::fs::write(plugin_dir.join("compareplus.dll"), b"x").unwrap();
-
-        let mut host = PluginHost::new();
-        let n = host.discover(dir.path()).unwrap();
-        assert_eq!(n, 1);
-    }
-
-    #[test]
-    fn discover_does_not_recurse_past_depth2() {
-        // Anything at depth 3+ is skipped — we don't want to walk
-        // arbitrary trees.
-        let dir = tempfile::tempdir().unwrap();
-        let deep = dir.path().join("a").join("b").join("c");
-        std::fs::create_dir_all(&deep).unwrap();
-        std::fs::write(deep.join("too-deep.dll"), b"x").unwrap();
-
-        let mut host = PluginHost::new();
-        let n = host.discover(dir.path()).unwrap();
-        assert_eq!(n, 0);
-    }
-
-    #[test]
-    fn pending_plugin_falls_back_to_filename() {
-        let dir = tempfile::tempdir().unwrap();
-        std::fs::write(dir.path().join("my-plugin.dll"), b"x").unwrap();
-        let mut host = PluginHost::new();
-        host.discover(dir.path()).unwrap();
-        assert_eq!(host.iter().next().unwrap().display_label(), "my-plugin");
-    }
-
-    #[test]
     fn load_invalid_dll_marks_failed() {
         let dir = tempfile::tempdir().unwrap();
-        std::fs::write(dir.path().join("not-a-dll.dll"), b"this isn't a real dll").unwrap();
+        std::fs::create_dir(dir.path().join("not-a-dll")).unwrap();
+        std::fs::write(
+            dir.path().join("not-a-dll").join("not-a-dll.dll"),
+            b"this isn't a real dll",
+        )
+        .unwrap();
         let mut host = PluginHost::new();
         host.discover(dir.path()).unwrap();
 
@@ -1707,6 +1654,308 @@ mod tests {
         // burning any markers — the alloc is atomic.
         assert_eq!(host.allocate_marker(8), None);
         assert_eq!(host.allocate_marker(1), Some(25));
+    }
+}
+
+/// Discovery, on every platform. It is file-system logic shared by all
+/// three backends, so the fixtures use each platform's own plugin
+/// extension rather than the `.dll` names the Windows-only module
+/// above is written with.
+#[cfg(test)]
+mod discovery_tests {
+    use super::*;
+
+    /// `name.<ext>` with this platform's plugin extension.
+    fn plugin_file(name: &str) -> String {
+        format!("{name}.{PLUGIN_EXTENSION}")
+    }
+
+    /// An empty file at `dir/rel`, creating the folders on the way.
+    /// Discovery records paths without mapping anything, so an empty
+    /// file is a complete "installed, not yet loaded" plugin.
+    fn touch(dir: &Path, rel: &str) {
+        let path = dir.join(rel);
+        std::fs::create_dir_all(path.parent().expect("a parent")).unwrap();
+        std::fs::write(path, b"").unwrap();
+    }
+
+    /// What `host` discovered under `dir`, relative and `/`-separated,
+    /// in registry order.
+    fn found(host: &PluginHost, dir: &Path) -> Vec<String> {
+        host.iter()
+            .map(|p| {
+                p.path
+                    .strip_prefix(dir)
+                    .expect("under the plugins folder")
+                    .to_string_lossy()
+                    .replace('\\', "/")
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_missing_folder_holds_no_plugins() {
+        let mut host = PluginHost::new();
+        let n = host
+            .discover(&PathBuf::from("definitely-not-a-real-plugin-dir-12345"))
+            .unwrap();
+        assert_eq!(n, 0);
+        assert!(host.is_empty());
+    }
+
+    #[test]
+    fn an_empty_folder_holds_no_plugins() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut host = PluginHost::new();
+        assert_eq!(host.discover(dir.path()).unwrap(), 0);
+        assert!(host.is_empty());
+    }
+
+    /// Notepad++'s layout: a folder holding a file named after it.
+    /// Nothing else in the folder, or beside it, is a plugin.
+    #[test]
+    fn a_plugin_is_the_file_named_after_its_folder() {
+        let dir = tempfile::tempdir().unwrap();
+        touch(dir.path(), &format!("alpha/{}", plugin_file("alpha")));
+        touch(dir.path(), &format!("beta/{}", plugin_file("beta")));
+        touch(dir.path(), "alpha/readme.txt");
+        touch(dir.path(), "notes.md");
+        let mut host = PluginHost::new();
+        assert_eq!(host.discover(dir.path()).unwrap(), 2);
+        assert_eq!(
+            found(&host, dir.path()),
+            [
+                format!("alpha/{}", plugin_file("alpha")),
+                format!("beta/{}", plugin_file("beta")),
+            ]
+        );
+    }
+
+    /// Each layout Code++ used to accept beside Notepad++'s, plus the
+    /// one it never did. Measured against Notepad++ 8.9.6 with one
+    /// probe DLL copied into all of them: it loads none.
+    #[test]
+    fn layouts_notepad_plus_plus_does_not_load_are_not_loaded() {
+        let dir = tempfile::tempdir().unwrap();
+        // Directly in the plugins folder.
+        touch(dir.path(), &plugin_file("flat"));
+        // A level below the plugin's own folder.
+        touch(dir.path(), &format!("arch/x64/{}", plugin_file("arch")));
+        // Named differently from its folder.
+        touch(dir.path(), &format!("mismatch/{}", plugin_file("other")));
+        // Deeper still.
+        touch(dir.path(), &format!("a/b/c/{}", plugin_file("c")));
+        let mut host = PluginHost::new();
+        assert_eq!(host.discover(dir.path()).unwrap(), 0);
+        assert!(host.is_empty());
+    }
+
+    /// The profile this was found on: an old copy of a plugin left
+    /// directly in the plugins folder, beside the staged one. It used
+    /// to load as a second plugin; now only the staged one does.
+    #[test]
+    fn a_flat_copy_beside_the_staged_plugin_is_not_a_second_plugin() {
+        let dir = tempfile::tempdir().unwrap();
+        touch(dir.path(), &plugin_file("hello"));
+        touch(dir.path(), &format!("hello/{}", plugin_file("hello")));
+        let mut host = PluginHost::new();
+        assert_eq!(host.discover(dir.path()).unwrap(), 1);
+        assert_eq!(
+            found(&host, dir.path()),
+            [format!("hello/{}", plugin_file("hello"))]
+        );
+    }
+
+    /// `ComparePlus` ships its own libraries under `libs/`. Loading
+    /// them as plugins would run their `DllMain` in the host for
+    /// nothing, and nothing below a plugin's folder is looked at.
+    #[test]
+    fn a_plugins_own_dependencies_are_not_plugins() {
+        let dir = tempfile::tempdir().unwrap();
+        touch(
+            dir.path(),
+            &format!("ComparePlus/{}", plugin_file("ComparePlus")),
+        );
+        touch(
+            dir.path(),
+            &format!("ComparePlus/libs/{}", plugin_file("git2")),
+        );
+        touch(
+            dir.path(),
+            &format!("ComparePlus/libs/{}", plugin_file("sqlite3")),
+        );
+        let mut host = PluginHost::new();
+        assert_eq!(host.discover(dir.path()).unwrap(), 1);
+        assert_eq!(
+            found(&host, dir.path()),
+            [format!("ComparePlus/{}", plugin_file("ComparePlus"))]
+        );
+    }
+
+    /// Notepad++ lets the file system resolve the name it builds from
+    /// the folder, so the case of the two may differ.
+    #[test]
+    fn the_file_may_differ_from_its_folder_in_case() {
+        let dir = tempfile::tempdir().unwrap();
+        touch(
+            dir.path(),
+            &format!("ComparePlus/{}", plugin_file("compareplus")),
+        );
+        let mut host = PluginHost::new();
+        assert_eq!(host.discover(dir.path()).unwrap(), 1);
+    }
+
+    /// The folder plugins keep their settings in is never a plugin,
+    /// whatever it holds — Notepad++ skips its `Config` folder by
+    /// name (measured).
+    #[test]
+    fn the_config_folder_is_never_a_plugin() {
+        let dir = tempfile::tempdir().unwrap();
+        touch(dir.path(), &format!("Config/{}", plugin_file("Config")));
+        touch(dir.path(), &format!("real/{}", plugin_file("real")));
+        let mut host = PluginHost::new();
+        assert_eq!(host.discover(dir.path()).unwrap(), 1);
+        assert_eq!(
+            found(&host, dir.path()),
+            [format!("real/{}", plugin_file("real"))]
+        );
+    }
+
+    /// The order itself, on a list the file system never touched: by
+    /// upper-cased name — `_` sorts after letters, as NTFS has it — with
+    /// the name itself breaking a tie.
+    #[test]
+    fn entries_are_ordered_by_upper_cased_name() {
+        let mut paths: Vec<PathBuf> = ["zeta", "a_b", "Ab", "ab", "Mid"]
+            .iter()
+            .map(PathBuf::from)
+            .collect();
+        order_entries(&mut paths);
+        let names: Vec<String> = paths
+            .iter()
+            .map(|p| p.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(names, ["Ab", "ab", "a_b", "Mid", "zeta"]);
+    }
+
+    /// Folders are registered by upper-cased name whatever order the
+    /// file system lists them in — the order NTFS already uses, and
+    /// the one that decides which plugin keeps a contested name.
+    #[test]
+    fn plugins_are_registered_in_a_fixed_order() {
+        let dir = tempfile::tempdir().unwrap();
+        for name in ["gamma", "Alpha", "beta"] {
+            touch(dir.path(), &format!("{name}/{}", plugin_file(name)));
+        }
+        let mut host = PluginHost::new();
+        host.discover(dir.path()).unwrap();
+        assert_eq!(
+            found(&host, dir.path()),
+            [
+                format!("Alpha/{}", plugin_file("Alpha")),
+                format!("beta/{}", plugin_file("beta")),
+                format!("gamma/{}", plugin_file("gamma")),
+            ]
+        );
+    }
+
+    /// One plugin per name. Everything downstream keys on a plugin's
+    /// file name through `module_key`, so a second path answering to
+    /// a name already registered is refused, whatever folder it is in.
+    #[test]
+    fn a_second_plugin_answering_to_a_registered_name_is_refused() {
+        let mut host = PluginHost::new();
+        assert!(host.register_discovered(PathBuf::from("one").join(plugin_file("Foo"))));
+        assert!(!host.register_discovered(PathBuf::from("two").join(plugin_file("foo"))));
+        assert!(host.register_discovered(PathBuf::from("three").join(plugin_file("bar"))));
+        assert_eq!(host.len(), 2);
+        assert_eq!(
+            host.iter().next().expect("first").path,
+            PathBuf::from("one").join(plugin_file("Foo")),
+            "the first plugin to claim a name keeps it"
+        );
+    }
+
+    /// A second discovery of the same folder finds every plugin
+    /// already registered and adds none.
+    #[test]
+    fn discovering_a_folder_twice_registers_nothing_new() {
+        let dir = tempfile::tempdir().unwrap();
+        touch(dir.path(), &format!("alpha/{}", plugin_file("alpha")));
+        let mut host = PluginHost::new();
+        assert_eq!(host.discover(dir.path()).unwrap(), 1);
+        assert_eq!(host.discover(dir.path()).unwrap(), 0);
+        assert_eq!(host.len(), 1);
+    }
+
+    /// `module_key` reads `libfoo.so` and `foo.so` as one name — it
+    /// undoes Cargo's `cdylib` prefix — so a Unix plugins folder can
+    /// hold two plugins answering to one name in the right layout.
+    #[cfg(unix)]
+    #[test]
+    fn a_lib_prefixed_twin_is_not_a_second_plugin() {
+        let dir = tempfile::tempdir().unwrap();
+        touch(dir.path(), &format!("foo/{}", plugin_file("foo")));
+        touch(dir.path(), &format!("libfoo/{}", plugin_file("libfoo")));
+        let mut host = PluginHost::new();
+        assert_eq!(host.discover(dir.path()).unwrap(), 1);
+        assert_eq!(
+            found(&host, dir.path()),
+            [format!("foo/{}", plugin_file("foo"))]
+        );
+    }
+
+    /// A case-sensitive file system can hold two folders whose names
+    /// differ only in case; they answer to one name.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn folders_differing_only_in_case_are_one_plugin() {
+        let dir = tempfile::tempdir().unwrap();
+        touch(dir.path(), &format!("Foo/{}", plugin_file("Foo")));
+        touch(dir.path(), &format!("foo/{}", plugin_file("foo")));
+        let mut host = PluginHost::new();
+        assert_eq!(host.discover(dir.path()).unwrap(), 1);
+        assert_eq!(
+            found(&host, dir.path()),
+            [format!("Foo/{}", plugin_file("Foo"))]
+        );
+    }
+
+    /// A plugin's recorded name and its identity come from one
+    /// conversion of its file name, so they cannot disagree — not even
+    /// for a name that is not valid Unicode, which only a Unix file
+    /// system can hold. Discovery keys a plugin by `module_key`, and
+    /// every lookup keyed on its file name must reach the same answer:
+    /// one that dropped such a name to "" instead would stop matching
+    /// the plugin discovery registered.
+    #[cfg(unix)]
+    #[test]
+    fn a_plugins_file_name_and_identity_come_from_one_conversion() {
+        use std::os::unix::ffi::OsStrExt;
+        let name = std::ffi::OsStr::from_bytes(b"caf\xe9.so");
+        let plugin = PluginInfo {
+            path: Path::new("/plugins/caf").join(name),
+            name: None,
+            state: PluginState::Pending,
+            disabled: false,
+        };
+        assert!(!plugin.filename().is_empty(), "a lossy spelling, not none");
+        assert_eq!(
+            plugin.module_key(),
+            codepp_core::shortcuts::module_key(&plugin.filename())
+        );
+    }
+
+    #[test]
+    fn a_pending_plugin_is_labelled_by_its_file_stem() {
+        let dir = tempfile::tempdir().unwrap();
+        touch(
+            dir.path(),
+            &format!("my-plugin/{}", plugin_file("my-plugin")),
+        );
+        let mut host = PluginHost::new();
+        host.discover(dir.path()).unwrap();
+        assert_eq!(host.iter().next().unwrap().display_label(), "my-plugin");
     }
 }
 

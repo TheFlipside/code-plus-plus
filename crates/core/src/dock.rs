@@ -506,9 +506,12 @@ impl DockContainer {
 ///   * `active < panels.len()`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DockGroup {
-    /// Session-stable identity. Monotonically allocated, never
-    /// reused — the same "key on ids, not indices or pointers"
-    /// rule the tab strip's arm/commit fix established (§7.4).
+    /// Session-stable identity: allocated in increasing order and never
+    /// handed out while anything still names it (see
+    /// `DockLayout::alloc_id`) — the same "key on ids, not indices or
+    /// pointers" rule the tab strip's arm/commit fix established
+    /// (§7.4). Not persisted: a restored layout numbers its groups
+    /// afresh.
     pub id: u32,
     pub location: DockLocation,
     /// Tab order, left to right.
@@ -524,6 +527,65 @@ impl DockGroup {
         // Invariant: active < panels.len() and panels non-empty.
         self.panels[self.active.min(self.panels.len().saturating_sub(1))]
     }
+}
+
+/// A plugin panel that is open in the layout but that no plugin can
+/// supply this session, and where it was when it was set aside — see
+/// [`DockLayout::park`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Parked {
+    panel: DockPanel,
+    /// The group the panel was in. Still in the layout while that
+    /// group holds other panels; gone if the panel was its last.
+    group: u32,
+    /// Where that group was when the panel left it, for recreating
+    /// the group if it has gone.
+    location: DockLocation,
+    /// The group's index in the group list when the panel left it.
+    group_pos: usize,
+    /// The panel's tab index in the group when it left.
+    index: usize,
+    /// If the panel was its group's front tab and other tabs stayed
+    /// behind, the one that took over the front. The panel takes the
+    /// front back only while that one still has it — i.e. unless the
+    /// user has since brought another tab forward. Re-pointed at the
+    /// tab on screen when the rest of the layout is put back and parked
+    /// again around it.
+    front_after: Option<DockPanel>,
+}
+
+/// Put `parked`'s panel back into `groups`: into group `id` if it is
+/// there, at its old tab index (clamped) and taking the front back if
+/// it is owed it; otherwise as a new one-panel group `id` at the
+/// parked location, at its old place in the list.
+///
+/// Shared by [`DockLayout::to_session`], which rebuilds the layout a
+/// parked panel belongs to on a copy, and [`DockLayout::through_parked`],
+/// which does it for real. Both put panels back in the reverse of the
+/// order they were parked, the only order in which each record's
+/// positions still mean what they did.
+fn restore_parked(groups: &mut Vec<DockGroup>, parked: &Parked, id: u32) {
+    if let Some(group) = groups.iter_mut().find(|g| g.id == id) {
+        let front = group.active_panel();
+        let at = parked.index.min(group.panels.len());
+        group.panels.insert(at, parked.panel);
+        group.active = if parked.front_after == Some(front) {
+            at
+        } else {
+            group.panels.iter().position(|p| *p == front).unwrap_or(at)
+        };
+        return;
+    }
+    let at = parked.group_pos.min(groups.len());
+    groups.insert(
+        at,
+        DockGroup {
+            id,
+            location: parked.location,
+            panels: vec![parked.panel],
+            active: 0,
+        },
+    );
 }
 
 /// What is being dragged: a single panel (grabbed by its tab) or a
@@ -641,8 +703,13 @@ pub struct DockLayout {
     /// `NPPN_READY`). Re-seeded at every registration, so the plugin's
     /// current value wins over a persisted one.
     open_commands: Vec<(DockPanel, i32)>,
-    /// Next group id. Monotonic, never reused within a session (and
-    /// re-seeded past every persisted id on load).
+    /// Open plugin panels no plugin can supply this session, in the
+    /// order they were parked — see [`Self::park`]. Out of every
+    /// group, so nothing presents them; written back where they were
+    /// by [`Self::to_session`].
+    parked: Vec<Parked>,
+    /// The next group id to try. Counts up from 1 and wraps past
+    /// `u32::MAX`; [`Self::alloc_id`] skips any id still in use.
     next_id: u32,
 }
 
@@ -654,6 +721,7 @@ impl Default for DockLayout {
             remembered: Vec::new(),
             initial_side: Vec::new(),
             open_commands: Vec::new(),
+            parked: Vec::new(),
             next_id: 1,
         }
     }
@@ -704,17 +772,30 @@ impl DockLayout {
     /// Answering for a hidden panel is what lets a host tell a plugin
     /// where its panel lives at *registration*, before anything is on
     /// screen, the way upstream does. The precedence is exactly
-    /// `show`'s: a visible panel's own group, then a remembered
-    /// location, then a registration-supplied side, then the panel's
-    /// default side. If the two ever disagree, a plugin is told one
-    /// container at registration and silently lands in another, so a
-    /// test pins them against each other.
+    /// `show`'s: a visible panel's own group, then where a parked
+    /// panel would come back, then a remembered location, then a
+    /// registration-supplied side, then the panel's default side. If
+    /// the two ever disagree, a plugin is told one container at
+    /// registration and silently lands in another, so a test pins them
+    /// against each other.
     #[must_use]
     pub fn container_of(&self, panel: DockPanel) -> DockContainer {
+        let of_group = |group: &DockGroup| match group.location {
+            DockLocation::Side(side) => DockContainer::Docked(side),
+            DockLocation::Floating(_) => DockContainer::Floating(Some(group.id)),
+        };
         if let Some(group) = self.group_of(panel) {
-            return match group.location {
-                DockLocation::Side(side) => DockContainer::Docked(side),
-                DockLocation::Floating(_) => DockContainer::Floating(Some(group.id)),
+            return of_group(group);
+        }
+        if let Some(parked) = self.parked.iter().find(|p| p.panel == panel) {
+            // Back into its group if that is still there, else into a
+            // new group where its was — exactly what `unpark` does.
+            return match self.group(parked.group) {
+                Some(group) => of_group(group),
+                None => match parked.location {
+                    DockLocation::Side(side) => DockContainer::Docked(side),
+                    DockLocation::Floating(_) => DockContainer::Floating(None),
+                },
             };
         }
         if let Some(location) = self.remembered_for(panel) {
@@ -777,10 +858,27 @@ impl DockLayout {
         self.side_size[side.index()] = px.clamp(MIN_DOCK_BAND_PX, MAX_DOCK_BAND_PX);
     }
 
+    /// A group id nothing holds: not a live group's, and not the one a
+    /// parked panel's record names, which is where that panel comes
+    /// back.
+    ///
+    /// Ids count up, so in practice none is reused — but they wrap past
+    /// `u32::MAX`, which a plugin showing and hiding one panel in a
+    /// tight loop reaches in minutes (the security audit measured about
+    /// four), and an id handed out twice lets an operation aimed at one
+    /// group land on another. So an id still in use is skipped. The
+    /// loop ends: one id per group and one per parked panel can be in
+    /// use, a hundred-odd of four billion.
     fn alloc_id(&mut self) -> u32 {
-        let id = self.next_id;
-        self.next_id = self.next_id.wrapping_add(1).max(1);
-        id
+        loop {
+            let id = self.next_id;
+            self.next_id = self.next_id.wrapping_add(1).max(1);
+            let in_use =
+                self.groups.iter().any(|g| g.id == id) || self.parked.iter().any(|p| p.group == id);
+            if !in_use {
+                return id;
+            }
+        }
     }
 
     fn remember(&mut self, panel: DockPanel, location: DockLocation) {
@@ -850,6 +948,220 @@ impl DockLayout {
             .collect()
     }
 
+    /// The panels [`Self::park`] has set aside, in the order it did.
+    #[must_use]
+    pub fn parked_panels(&self) -> Vec<DockPanel> {
+        self.parked.iter().map(|p| p.panel).collect()
+    }
+
+    /// Whether `panel` is parked.
+    #[must_use]
+    pub fn is_parked(&self, panel: DockPanel) -> bool {
+        self.parked.iter().any(|p| p.panel == panel)
+    }
+
+    /// Take open plugin panels out of view for this session without
+    /// closing them; returns whether anything was parked.
+    ///
+    /// For a panel whose plugin cannot supply it: not installed,
+    /// disabled, or failed to load. Leaving it in its group shows a
+    /// caption with nothing under it for the whole session, and
+    /// closing it — [`Self::hide`] — records it closed, so it would not
+    /// come back when the plugin does. Notepad++ does neither.
+    /// Measured against 8.9.6 with its plugin removed, a panel it had
+    /// saved open shows nothing, and the saved record is written back
+    /// unchanged, so the panel returns the next time the plugin is
+    /// installed.
+    ///
+    /// A parked panel is in no group, so nothing presents it and no
+    /// backend needs to know it exists. [`Self::to_session`] writes it
+    /// back where it was — into its group, at its tab position, in
+    /// front if it was and no other tab has been brought forward since,
+    /// or as its own group where its group was if that has gone — so a
+    /// session in which nothing is touched saves exactly the layout it
+    /// loaded. [`Self::unpark`] puts it back for real, and
+    /// [`Self::show`] does so first.
+    ///
+    /// Only open plugin panels are parked; anything else in `panels`
+    /// is ignored.
+    pub fn park(&mut self, panels: &[DockPanel]) -> bool {
+        let mut changed = false;
+        for &panel in panels {
+            if !matches!(panel, DockPanel::Plugin(_)) {
+                continue;
+            }
+            let Some(group_pos) = self.groups.iter().position(|g| g.panels.contains(&panel)) else {
+                continue;
+            };
+            let group = &self.groups[group_pos];
+            let (group_id, location) = (group.id, group.location);
+            let was_front = group.active_panel() == panel;
+            let Some(index) = group.panels.iter().position(|p| *p == panel) else {
+                continue;
+            };
+            self.remove_panel(panel);
+            let front_after = if was_front {
+                self.group(group_id).map(DockGroup::active_panel)
+            } else {
+                None
+            };
+            self.parked.push(Parked {
+                panel,
+                group: group_id,
+                location,
+                group_pos,
+                index,
+                front_after,
+            });
+            changed = true;
+        }
+        self.debug_assert_invariants();
+        changed
+    }
+
+    /// Put parked panels back where they were; returns whether any came
+    /// back. `panels` not parked are ignored.
+    ///
+    /// For a panel whose plugin has become able to supply it
+    /// mid-session — re-enabled in the Plugin Manager and then loaded.
+    /// Each comes back to its place in the layout [`Self::to_session`]
+    /// saves: into its group if that is still there, else into a group
+    /// recreated where its was, under a fresh id that every panel still
+    /// parked from that group then follows.
+    ///
+    /// The result does not depend on the order panels come back in.
+    /// Two plugins whose panels shared a group can be re-enabled on
+    /// different days and their tabs still come back in their old
+    /// order, with the old one in front; two groups that had gone come
+    /// back in their old places among the rest. Nothing else on screen
+    /// moves: every other tab keeps its place, and every group keeps
+    /// the tab it has in front unless a panel coming back is owed it.
+    pub fn unpark(&mut self, panels: &[DockPanel]) -> bool {
+        let release: Vec<DockPanel> = panels
+            .iter()
+            .copied()
+            .filter(|&panel| self.is_parked(panel))
+            .collect();
+        if release.is_empty() {
+            return false;
+        }
+        self.through_parked(&release, |_| ());
+        true
+    }
+
+    /// Run `edit` on the whole layout — every parked panel back where
+    /// it belongs, as [`Self::to_session`] saves it — then park again
+    /// each panel that was parked and is still open, except those in
+    /// `release`. This is how a parked panel is put back, closed or
+    /// moved.
+    ///
+    /// A parked panel's record places it relative to its group as that
+    /// was when the panel left, which is only right once the panels
+    /// parked after it are back: the reverse of the order they were
+    /// parked, as `to_session` restores them. Put back on its own, into
+    /// a group still missing panels parked before it, a panel lands in
+    /// the wrong place — two parked from one group and put back in the
+    /// order they were parked came back in the opposite order, three
+    /// with the last in front came back with the first in front, and a
+    /// group that had gone came back in another's place in the stack.
+    /// Putting every one back first, then parking the rest again,
+    /// leaves each record describing the layout as it now is.
+    ///
+    /// Parking the rest again would hand each group's front to
+    /// whichever neighbour the removal rule picks, so a group on screen
+    /// keeps the tab it had in front — unless a released panel is its
+    /// front in the whole layout, being owed it — and the panel owed
+    /// that group's front is re-pointed to take it back from that tab.
+    fn through_parked<R>(&mut self, release: &[DockPanel], edit: impl FnOnce(&mut Self) -> R) -> R {
+        let shown = self.fronts();
+        let order = self.parked_panels();
+        // The groups that had gone, by the id their panels' records still
+        // name. Each comes back below under that id — which nothing else
+        // holds, since `alloc_id` skips it — for the length of this call;
+        // one that stays gets an id of its own at the end.
+        let mut gone: Vec<u32> = self
+            .parked
+            .iter()
+            .map(|r| r.group)
+            .filter(|&id| self.group(id).is_none())
+            .collect();
+        gone.sort_unstable();
+        gone.dedup();
+        for record in std::mem::take(&mut self.parked).iter().rev() {
+            restore_parked(&mut self.groups, record, record.group);
+        }
+        let result = edit(self);
+        let whole = self.fronts();
+        let again: Vec<DockPanel> = order
+            .into_iter()
+            .filter(|&panel| !release.contains(&panel) && self.is_visible(panel))
+            .collect();
+        self.park(&again);
+        for (id, front) in shown {
+            if whole
+                .iter()
+                .any(|&(group, panel)| group == id && release.contains(&panel))
+            {
+                continue;
+            }
+            let Some(group) = self.groups.iter_mut().find(|g| g.id == id) else {
+                continue;
+            };
+            let Some(i) = group.panels.iter().position(|p| *p == front) else {
+                continue;
+            };
+            let displaced = group.active_panel();
+            if displaced == front {
+                continue;
+            }
+            group.active = i;
+            // Parking the rest again handed the front down a chain of
+            // panels ending at `displaced`; the last of them takes it
+            // back from `front` now instead. At most one record names
+            // `displaced`, and it is that one: every record here was made
+            // by the single `park` call above, into a list the restore
+            // had emptied, and within one call the front passes only to
+            // a tab that keeps it until it is removed itself — which
+            // `displaced`, still on screen, never was.
+            let mut owed = self
+                .parked
+                .iter_mut()
+                .filter(|r| r.group == id && r.front_after == Some(displaced));
+            if let Some(record) = owed.next() {
+                record.front_after = Some(front);
+            }
+            debug_assert!(
+                owed.next().is_none(),
+                "two parked records owe their front to {displaced:?}"
+            );
+        }
+        // A group that had gone and now holds a released panel stays: it
+        // is a new group on screen, so it takes a fresh id, and the panels
+        // still parked from it follow. One that came back for the call
+        // alone has gone again under the id its records name and spent
+        // none, so a call costs one id per group that stays, however many
+        // panels are parked.
+        let staying: Vec<u32> = self
+            .groups
+            .iter()
+            .map(|g| g.id)
+            .filter(|id| gone.contains(id))
+            .collect();
+        for old in staying {
+            let fresh = self.alloc_id();
+            if let Some(group) = self.groups.iter_mut().find(|g| g.id == old) {
+                group.id = fresh;
+            }
+            for record in &mut self.parked {
+                if record.group == old {
+                    record.group = fresh;
+                }
+            }
+        }
+        self.debug_assert_invariants();
+        result
+    }
+
     /// Each group's front tab, as `(group id, active panel)` in group
     /// order. Paired with [`Self::restore_fronts`].
     #[must_use]
@@ -916,7 +1228,17 @@ impl DockLayout {
             .expect("position found above");
         group.panels.remove(pi);
         if group.panels.is_empty() {
+            let id = group.id;
             self.groups.remove(gi);
+            // A panel parked from this group keeps the place the group
+            // last had, which is where it comes back if nothing else
+            // takes the group's place first.
+            for parked in &mut self.parked {
+                if parked.group == id {
+                    parked.location = location;
+                    parked.group_pos = gi;
+                }
+            }
         } else {
             // Keep the active index pointing at a live tab. If the
             // removed tab *was* the active one, fall to its left
@@ -972,14 +1294,17 @@ impl DockLayout {
         self.initial_side
             .retain(|(p, _)| !matches!(p, DockPanel::Plugin(_)));
         self.open_commands.clear();
+        self.parked.clear();
         self.debug_assert_invariants();
     }
 
     /// Show `panel`. Already visible → just make it the active tab
     /// of its group (a "show" on an open-but-behind panel reveals
-    /// it). Hidden → reopen at its remembered location, or the
-    /// panel's default side on first ever open.
+    /// it). Parked → back where it was, then to the front. Hidden →
+    /// reopen at its remembered location, or the panel's default side
+    /// on first ever open.
     pub fn show(&mut self, panel: DockPanel) {
+        self.unpark(&[panel]);
         if self.is_visible(panel) {
             self.activate(panel);
             return;
@@ -1011,8 +1336,16 @@ impl DockLayout {
     }
 
     /// Hide `panel`, remembering where it was so the next
-    /// [`Self::show`] reopens there.
+    /// [`Self::show`] reopens there. A parked panel is closed too: it
+    /// stops being written back as open.
     pub fn hide(&mut self, panel: DockPanel) {
+        if self.is_parked(panel) {
+            // Closed from its place in the whole layout, like any open
+            // panel, so it is remembered there and the panels parked
+            // around it keep theirs.
+            self.through_parked(&[], |layout| layout.hide(panel));
+            return;
+        }
         if let Some(location) = self.remove_panel(panel) {
             self.remember(panel, location);
         }
@@ -1071,6 +1404,21 @@ impl DockLayout {
     /// own group is a no-op beyond activation (dropping a tab back
     /// where it came from is the cancel gesture).
     pub fn move_panel(&mut self, panel: DockPanel, target: DropTarget) {
+        if self.is_parked(panel) {
+            // Nothing on screen drags a parked panel. One moved by any
+            // other route is placed explicitly, so it is no longer owed
+            // its old spot: it moves from its place in the whole layout
+            // and is not parked again. A drop onto a group that does
+            // not exist leaves it parked, as it leaves anything else
+            // where it was.
+            if let DropTarget::IntoGroup(gid) = target {
+                if self.group(gid).is_none() {
+                    return;
+                }
+            }
+            self.through_parked(&[panel], |layout| layout.move_panel(panel, target));
+            return;
+        }
         match target {
             DropTarget::IntoGroup(gid) => {
                 if self.group_of(panel).is_some_and(|g| g.id == gid) {
@@ -1161,6 +1509,13 @@ impl DockLayout {
                 if let Some(i) = target_group.panels.iter().position(|p| *p == active_panel) {
                     target_group.active = i;
                 }
+                // A panel parked from the dragged group goes where its
+                // tabs went.
+                for parked in &mut self.parked {
+                    if parked.group == id {
+                        parked.group = other;
+                    }
+                }
             }
         }
         self.debug_assert_invariants();
@@ -1191,6 +1546,11 @@ impl DockLayout {
                 *loc = DockLocation::Floating(clamp_float_into(r, area));
             }
         }
+        for parked in &mut self.parked {
+            if let DockLocation::Floating(r) = parked.location {
+                parked.location = DockLocation::Floating(clamp_float_into(r, area));
+            }
+        }
     }
 
     /// Serialise for `session.xml`. Everything the model owns is
@@ -1199,8 +1559,20 @@ impl DockLayout {
     /// panels (so "close the panel, restart, reopen" lands where
     /// the user had it — the behaviour the fixed panels' persisted
     /// widths already promised).
+    ///
+    /// Parked panels are written as open, where they were — see
+    /// [`Self::park`]. They are put back on a copy in the reverse of
+    /// the order they were parked, which undoes the parking exactly
+    /// for a group nothing else has touched.
     #[must_use]
     pub fn to_session(&self) -> DockSession {
+        let mut groups = self.groups.clone();
+        for parked in self.parked.iter().rev() {
+            // A recreated group keeps the id it had: ids are not
+            // persisted, none is reused, and it is what lets another
+            // panel parked from the same group find it here.
+            restore_parked(&mut groups, parked, parked.group);
+        }
         let location_attrs = |loc: DockLocation| match loc {
             DockLocation::Side(s) => (s.persist_key().to_string(), None, None, None, None),
             DockLocation::Floating(r) => (
@@ -1216,8 +1588,7 @@ impl DockLayout {
             right: Some(self.side_size(DockSide::Right)),
             top: Some(self.side_size(DockSide::Top)),
             bottom: Some(self.side_size(DockSide::Bottom)),
-            groups: self
-                .groups
+            groups: groups
                 .iter()
                 .map(|g| {
                     let (side, x, y, w, h) = location_attrs(g.location);
@@ -1424,13 +1795,32 @@ impl DockLayout {
         #[cfg(debug_assertions)]
         {
             let mut seen: Vec<DockPanel> = Vec::new();
+            let mut ids: Vec<u32> = Vec::new();
             for g in &self.groups {
+                // Everything that addresses a group does it by id, so two
+                // sharing one would send an operation to the wrong group —
+                // what `alloc_id` exists to prevent.
+                assert!(!ids.contains(&g.id), "two groups share id {}", g.id);
+                ids.push(g.id);
                 assert!(!g.panels.is_empty(), "empty group {} survived", g.id);
                 assert!(g.active < g.panels.len(), "active out of range in {}", g.id);
                 for p in &g.panels {
                     assert!(!seen.contains(p), "panel {p:?} in two groups");
                     seen.push(*p);
                 }
+            }
+            for parked in &self.parked {
+                assert!(
+                    matches!(parked.panel, DockPanel::Plugin(_)),
+                    "host panel {:?} parked",
+                    parked.panel
+                );
+                assert!(
+                    !seen.contains(&parked.panel),
+                    "panel {:?} both parked and in a group, or parked twice",
+                    parked.panel
+                );
+                seen.push(parked.panel);
             }
         }
     }
@@ -1885,6 +2275,614 @@ mod tests {
         assert_eq!(layout.open_command_for(console), None);
     }
 
+    /// Six plugin panels, placed each way a parked panel has to be put
+    /// back from: in front of a host panel, both tabs of a group of
+    /// their own stacked under another, behind a host panel, alone in
+    /// a docked band, and alone in a float. Each has an open command
+    /// but one, so the commands' survival is checked too.
+    fn parking_fixture() -> (DockSession, [DockPanel; 6]) {
+        let panels = [
+            intern_plugin_panel("park-1.dll", "One").expect("intern"),
+            intern_plugin_panel("park-2.dll", "Two").expect("intern"),
+            intern_plugin_panel("park-3.dll", "Three").expect("intern"),
+            intern_plugin_panel("park-4.dll", "Four").expect("intern"),
+            intern_plugin_panel("park-5.dll", "Five").expect("intern"),
+            intern_plugin_panel("park-6.dll", "Six").expect("intern"),
+        ];
+        let entry = |kind: &str, cmd: Option<i32>| DockPanelSession {
+            kind: kind.into(),
+            cmd,
+        };
+        let key = |i: usize| panels[i].persist_key();
+        let group = |side: &str, active: usize, panels: Vec<DockPanelSession>| DockGroupSession {
+            side: side.into(),
+            active,
+            panels,
+            ..DockGroupSession::default()
+        };
+        let session = DockSession {
+            left: Some(260),
+            right: Some(180),
+            top: Some(160),
+            bottom: Some(200),
+            groups: vec![
+                group(
+                    "left",
+                    1,
+                    vec![entry("workspace", None), entry(key(0), Some(1))],
+                ),
+                group("left", 0, vec![entry(key(1), Some(3)), entry(key(2), None)]),
+                group(
+                    "right",
+                    0,
+                    vec![entry("docmap", None), entry(key(3), Some(2))],
+                ),
+                group("bottom", 0, vec![entry(key(4), Some(5))]),
+                DockGroupSession {
+                    x: Some(40),
+                    y: Some(50),
+                    w: Some(300),
+                    h: Some(220),
+                    ..group("float", 0, vec![entry(key(5), Some(0))])
+                },
+            ],
+            remembered: Vec::new(),
+        };
+        (session, panels)
+    }
+
+    /// A panel whose plugin cannot supply it is parked, and a session
+    /// that touches nothing else saves exactly the layout it loaded —
+    /// whichever panels were parked, in whichever order. That is what
+    /// Notepad++ does with a panel it saved open whose plugin has gone
+    /// (measured against 8.9.6): nothing shown, and the saved record
+    /// written back as it was. Putting them all back gives the loaded
+    /// layout again.
+    #[test]
+    fn parking_and_touching_nothing_saves_the_layout_that_was_loaded() {
+        let (session, panels) = parking_fixture();
+        let loaded = DockLayout::from_session(&session);
+        let baseline = loaded.to_session();
+        assert_eq!(
+            loaded.open_plugin_panels(),
+            panels,
+            "precondition: all six open"
+        );
+        for mask in 1u32..(1 << panels.len()) {
+            let subset: Vec<DockPanel> = (0..panels.len())
+                .filter(|i| mask & (1 << i) != 0)
+                .map(|i| panels[i])
+                .collect();
+            let reversed: Vec<DockPanel> = subset.iter().rev().copied().collect();
+            for order in [subset, reversed] {
+                let mut layout = loaded.clone();
+                assert!(layout.park(&order));
+                for &panel in &order {
+                    assert!(!layout.is_visible(panel), "{panel:?} still presented");
+                    assert!(layout.is_parked(panel));
+                }
+                assert_eq!(layout.to_session(), baseline, "parked {order:?}");
+                assert!(layout.unpark(&order));
+                assert!(layout.parked_panels().is_empty());
+                assert_eq!(
+                    layout.to_session(),
+                    baseline,
+                    "parked, then put back {order:?}"
+                );
+            }
+        }
+    }
+
+    /// Five plugin panels placed where the order they come back in
+    /// matters: three tabs of one group with the *last* in front, then,
+    /// stacked under it on the same side, a group of one, a host
+    /// panel's group and another group of one — so a group that had
+    /// gone has to come back to its own place in the stack.
+    fn stacked_fixture() -> (DockSession, Vec<DockPanel>) {
+        let panels: Vec<DockPanel> = ["One", "Two", "Three", "Four", "Five"]
+            .iter()
+            .enumerate()
+            .map(|(i, name)| {
+                intern_plugin_panel(&format!("stack-{}.dll", i + 1), name).expect("intern")
+            })
+            .collect();
+        let entry = |kind: &str| DockPanelSession {
+            kind: kind.into(),
+            cmd: None,
+        };
+        let group = |active: usize, kinds: Vec<&str>| DockGroupSession {
+            side: "left".into(),
+            active,
+            panels: kinds.into_iter().map(entry).collect(),
+            ..DockGroupSession::default()
+        };
+        let key = |i: usize| panels[i].persist_key();
+        let session = DockSession {
+            left: Some(260),
+            groups: vec![
+                group(2, vec![key(0), key(1), key(2)]),
+                group(0, vec![key(3)]),
+                group(0, vec!["workspace"]),
+                group(0, vec![key(4)]),
+            ],
+            ..DockSession::default()
+        };
+        (session, panels)
+    }
+
+    /// Every ordering of `items`.
+    fn permutations(items: &[DockPanel]) -> Vec<Vec<DockPanel>> {
+        if items.len() <= 1 {
+            return vec![items.to_vec()];
+        }
+        let mut all = Vec::new();
+        for (i, &first) in items.iter().enumerate() {
+            let mut rest = items.to_vec();
+            rest.remove(i);
+            for tail in permutations(&rest) {
+                let mut ordering = vec![first];
+                ordering.extend(tail);
+                all.push(ordering);
+            }
+        }
+        all
+    }
+
+    /// `after` is `before` with `added` put in and nothing else moved:
+    /// the same groups in the same order under the same ids, each with
+    /// its tabs in the same order and the same tab in front — unless an
+    /// added panel is owed the front, being its group's front in
+    /// `whole`, the layout with nothing parked. Then it must have it.
+    fn assert_only_added(
+        before: &DockLayout,
+        after: &DockLayout,
+        added: &[DockPanel],
+        whole: &DockLayout,
+        context: &str,
+    ) {
+        let before_ids: Vec<u32> = before.groups().iter().map(|g| g.id).collect();
+        let kept: Vec<u32> = after
+            .groups()
+            .iter()
+            .map(|g| g.id)
+            .filter(|id| before_ids.contains(id))
+            .collect();
+        assert_eq!(
+            kept, before_ids,
+            "{context}: a group on screen moved or went"
+        );
+        for old in before.groups() {
+            let new = after.group(old.id).expect("kept, checked above");
+            let tabs: Vec<DockPanel> = new
+                .panels
+                .iter()
+                .copied()
+                .filter(|p| !added.contains(p))
+                .collect();
+            assert_eq!(
+                tabs, old.panels,
+                "{context}: tabs of group {} moved",
+                old.id
+            );
+            let owed = new
+                .panels
+                .iter()
+                .copied()
+                .find(|p| added.contains(p) && whole.is_active(*p));
+            assert_eq!(
+                new.active_panel(),
+                owed.unwrap_or(old.active_panel()),
+                "{context}: front of group {}",
+                old.id
+            );
+        }
+        for group in after.groups() {
+            for panel in &group.panels {
+                assert!(
+                    before.is_visible(*panel) || added.contains(panel),
+                    "{context}: {panel:?} appeared"
+                );
+            }
+        }
+        for panel in added {
+            assert!(
+                after.is_visible(*panel),
+                "{context}: {panel:?} did not come back"
+            );
+        }
+    }
+
+    /// Panels parked together come back to their old arrangement
+    /// whichever order they come back in — one at a time, as when the
+    /// plugins that own them are re-enabled on different days — and
+    /// each one coming back changes nothing on screen but adding it.
+    /// The first version put each back relative to the group it found,
+    /// still missing the panels parked before it, and the review of it
+    /// reproduced the result: two tabs of one group came back reversed,
+    /// and a group whose last tab was in front came back with its first
+    /// in front. A group that had gone could come back in another's
+    /// place in the stack the same way.
+    #[test]
+    fn unparking_one_at_a_time_in_any_order_puts_back_what_was_parked() {
+        let (session, panels) = parking_fixture();
+        for (session, panels) in [(session, panels.to_vec()), stacked_fixture()] {
+            let loaded = DockLayout::from_session(&session);
+            let baseline = loaded.to_session();
+            for mask in 1u32..(1 << panels.len()) {
+                let subset: Vec<DockPanel> = (0..panels.len())
+                    .filter(|i| mask & (1 << i) != 0)
+                    .map(|i| panels[i])
+                    .collect();
+                let reversed: Vec<DockPanel> = subset.iter().rev().copied().collect();
+                for parked in [subset.clone(), reversed] {
+                    for back in permutations(&subset) {
+                        let mut layout = loaded.clone();
+                        layout.park(&parked);
+                        for &panel in &back {
+                            let context =
+                                format!("parked {parked:?}, put back {back:?}, now {panel:?}");
+                            let before = layout.clone();
+                            assert!(layout.unpark(&[panel]), "{context}");
+                            assert_only_added(&before, &layout, &[panel], &loaded, &context);
+                            assert_eq!(layout.to_session(), baseline, "{context}");
+                        }
+                        assert!(layout.parked_panels().is_empty());
+                    }
+                }
+            }
+        }
+    }
+
+    /// The cases the exhaustive test above covers, spelled out: panels
+    /// parked together and put back one at a time in the order they
+    /// were parked.
+    #[test]
+    fn panels_put_back_one_at_a_time_keep_their_order_and_front() {
+        // Two tabs of one group, the first in front.
+        let (session, panels) = parking_fixture();
+        let mut layout = DockLayout::from_session(&session);
+        layout.park(&[panels[1], panels[2]]);
+        layout.unpark(&[panels[1]]);
+        layout.unpark(&[panels[2]]);
+        let group = layout.group_of(panels[1]).expect("back");
+        assert_eq!(group.panels, vec![panels[1], panels[2]]);
+        assert_eq!(group.active_panel(), panels[1]);
+
+        // Three tabs with the last in front, and two groups of one on
+        // the same side around a host panel's group.
+        let (session, stacked) = stacked_fixture();
+        let mut layout = DockLayout::from_session(&session);
+        layout.park(&stacked);
+        for &panel in &stacked {
+            layout.unpark(&[panel]);
+        }
+        let group = layout.group_of(stacked[0]).expect("back");
+        assert_eq!(group.panels, stacked[..3]);
+        assert_eq!(
+            group.active_panel(),
+            stacked[2],
+            "the last tab in front again"
+        );
+        let left: Vec<Vec<DockPanel>> = layout
+            .groups_on(DockSide::Left)
+            .map(|g| g.panels.clone())
+            .collect();
+        assert_eq!(
+            left,
+            vec![
+                stacked[..3].to_vec(),
+                vec![stacked[3]],
+                vec![DockPanel::Workspace],
+                vec![stacked[4]],
+            ]
+        );
+    }
+
+    /// Closing or moving a parked panel works on it where it belongs
+    /// and leaves the panels parked around it where they belong: what
+    /// is saved is exactly what the same close or move would have made
+    /// with nothing parked. The first version dropped the panel's
+    /// record instead, which left the records parked before it
+    /// describing a group that still held it.
+    #[test]
+    fn closing_or_moving_a_parked_panel_leaves_the_rest_where_they_belong() {
+        let (session, stacked) = stacked_fixture();
+        let loaded = DockLayout::from_session(&session);
+        let reversed: Vec<DockPanel> = stacked.iter().rev().copied().collect();
+        for parked in [stacked.clone(), reversed] {
+            for &panel in &stacked {
+                let mut expected = loaded.clone();
+                expected.hide(panel);
+                let mut layout = loaded.clone();
+                layout.park(&parked);
+                layout.hide(panel);
+                assert!(!layout.is_parked(panel) && !layout.is_visible(panel));
+                assert_eq!(
+                    layout.to_session(),
+                    expected.to_session(),
+                    "closed {panel:?}, parked {parked:?}"
+                );
+
+                let mut expected = loaded.clone();
+                expected.move_panel(panel, DropTarget::Side(DockSide::Top));
+                let mut layout = loaded.clone();
+                layout.park(&parked);
+                layout.move_panel(panel, DropTarget::Side(DockSide::Top));
+                assert!(!layout.is_parked(panel) && layout.is_visible(panel));
+                assert_eq!(
+                    layout.to_session(),
+                    expected.to_session(),
+                    "moved {panel:?}, parked {parked:?}"
+                );
+            }
+        }
+        // A drop onto a group that does not exist moves nothing, parked
+        // or not: the panel stays parked and nothing else changes.
+        let mut layout = loaded.clone();
+        layout.park(&stacked);
+        let parked = layout.clone();
+        layout.move_panel(stacked[1], DropTarget::IntoGroup(u32::MAX));
+        assert!(layout.is_parked(stacked[1]));
+        assert_eq!(layout.to_session(), parked.to_session());
+        assert_eq!(layout.parked_panels(), parked.parked_panels());
+    }
+
+    /// Nothing presents a parked panel: a band it had to itself is not
+    /// carved, a float it had to itself is gone, a group it shared
+    /// shows the rest, and it is not among the panels a load pass
+    /// restores or the fronts it puts back.
+    #[test]
+    fn a_parked_panel_is_not_presented() {
+        let (session, panels) = parking_fixture();
+        let mut layout = DockLayout::from_session(&session);
+        let carved = |l: &DockLayout| -> Vec<DockSide> {
+            compute_frame(mid(), l, 200, 100)
+                .bands
+                .iter()
+                .map(|b| b.side)
+                .collect()
+        };
+        assert!(carved(&layout).contains(&DockSide::Bottom));
+        assert!(layout.park(&[panels[3], panels[4], panels[5]]));
+        assert!(!carved(&layout).contains(&DockSide::Bottom));
+        assert_eq!(layout.floating_groups().count(), 0);
+        assert_eq!(
+            layout.group_of(DockPanel::DocMap).map(|g| g.panels.clone()),
+            Some(vec![DockPanel::DocMap])
+        );
+        assert_eq!(
+            layout.open_plugin_panels(),
+            [panels[0], panels[1], panels[2]]
+        );
+        assert!(!layout.fronts().iter().any(|(_, p)| layout.is_parked(*p)));
+        assert_eq!(layout.parked_panels(), [panels[3], panels[4], panels[5]]);
+        // Parking what is not open, or a host panel, does nothing.
+        assert!(!layout.park(&[panels[3], DockPanel::DocMap]));
+    }
+
+    /// `show` brings a parked panel back where it was and to the front,
+    /// which is what registering it with its plugin loaded means.
+    #[test]
+    fn show_brings_a_parked_panel_back_where_it_was() {
+        let (session, panels) = parking_fixture();
+        let mut layout = DockLayout::from_session(&session);
+        layout.park(&[panels[3]]);
+        layout.show(panels[3]);
+        assert!(!layout.is_parked(panels[3]));
+        let group = layout.group_of(panels[3]).expect("back in a group");
+        assert_eq!(group.panels, vec![DockPanel::DocMap, panels[3]]);
+        assert_eq!(group.active_panel(), panels[3], "a show puts it in front");
+        assert_eq!(group.location, DockLocation::Side(DockSide::Right));
+    }
+
+    /// Closing a parked panel closes it for good: it is remembered
+    /// where it was, and no longer written back as open.
+    #[test]
+    fn hiding_a_parked_panel_closes_it() {
+        let (session, panels) = parking_fixture();
+        let mut layout = DockLayout::from_session(&session);
+        layout.park(&[panels[4]]);
+        layout.hide(panels[4]);
+        assert!(!layout.is_parked(panels[4]));
+        assert!(!layout.is_visible(panels[4]));
+        let saved = layout.to_session();
+        assert!(!saved
+            .groups
+            .iter()
+            .any(|g| g.panels.iter().any(|p| p.kind == panels[4].persist_key())));
+        assert!(saved
+            .remembered
+            .iter()
+            .any(|r| r.kind == panels[4].persist_key() && r.side == "bottom"));
+    }
+
+    /// The layout can change around a parked panel, and what is saved
+    /// follows it: a panel parked from a group the user then moves is
+    /// written into the group where it now is, and one whose front the
+    /// user has since changed does not take the front back.
+    #[test]
+    fn a_parked_panel_is_saved_into_the_layout_as_it_now_is() {
+        let (session, panels) = parking_fixture();
+        let mut layout = DockLayout::from_session(&session);
+        layout.park(&[panels[0], panels[3]]);
+        // The docmap's group moves from the right to the top.
+        let docmap = layout.group_of(DockPanel::DocMap).expect("docked").id;
+        layout.move_group(docmap, DropTarget::Side(DockSide::Top));
+        let saved = layout.to_session();
+        let top = saved
+            .groups
+            .iter()
+            .find(|g| g.side == "top")
+            .expect("a top group");
+        let kinds: Vec<&str> = top.panels.iter().map(|p| p.kind.as_str()).collect();
+        assert_eq!(kinds, ["docmap", panels[3].persist_key()]);
+
+        // panels[0] was the front of the workspace group. The user
+        // brings another tab forward there — the docmap, dragged in —
+        // and the parked panel does not take the front back from their
+        // choice. The docmap leaving the top group dissolves that
+        // group, and panels[3] keeps the place it last had: the top.
+        let workspace = layout.group_of(DockPanel::Workspace).expect("docked").id;
+        layout.move_panel(DockPanel::DocMap, DropTarget::IntoGroup(workspace));
+        let saved = layout.to_session();
+        let top = saved
+            .groups
+            .iter()
+            .find(|g| g.side == "top")
+            .expect("panels[3] still saved on the top");
+        let kinds: Vec<&str> = top.panels.iter().map(|p| p.kind.as_str()).collect();
+        assert_eq!(kinds, [panels[3].persist_key()]);
+        let left = saved
+            .groups
+            .iter()
+            .find(|g| g.panels.iter().any(|p| p.kind == "workspace"))
+            .expect("the workspace group");
+        assert_eq!(left.panels[left.active].kind, "docmap");
+        assert!(left
+            .panels
+            .iter()
+            .any(|p| p.kind == panels[0].persist_key()));
+    }
+
+    /// A parked panel from a group that is dragged onto another goes
+    /// with its group's tabs into the one it joined.
+    #[test]
+    fn a_parked_panel_follows_its_group_into_a_merge() {
+        let (session, panels) = parking_fixture();
+        let mut layout = DockLayout::from_session(&session);
+        layout.park(&[panels[3]]);
+        let right = layout.group_of(DockPanel::DocMap).expect("docked").id;
+        let workspace = layout.group_of(DockPanel::Workspace).expect("docked").id;
+        layout.move_group(right, DropTarget::IntoGroup(workspace));
+        let saved = layout.to_session();
+        let joined = saved
+            .groups
+            .iter()
+            .find(|g| g.panels.iter().any(|p| p.kind == "workspace"))
+            .expect("the workspace group");
+        assert!(joined
+            .panels
+            .iter()
+            .any(|p| p.kind == panels[3].persist_key()));
+        assert!(!saved.groups.iter().any(|g| g.side == "right"));
+    }
+
+    /// A group all of whose panels were parked is recreated when one
+    /// comes back — under a fresh id, not the one it had — and the rest
+    /// follow it into that group rather than starting others.
+    #[test]
+    fn unparking_recreates_a_gone_group_and_the_rest_follow_it() {
+        let (session, panels) = parking_fixture();
+        let mut layout = DockLayout::from_session(&session);
+        let old_id = layout.group_of(panels[1]).expect("docked").id;
+        layout.park(&[panels[1], panels[2]]);
+        assert_eq!(layout.groups_on(DockSide::Left).count(), 1);
+        assert!(layout.unpark(&[panels[2]]));
+        let new_id = layout.group_of(panels[2]).expect("back").id;
+        assert!(new_id > old_id, "a fresh id, not the old one reused");
+        assert!(layout.unpark(&[panels[1]]));
+        let group = layout.group_of(panels[1]).expect("back");
+        assert_eq!(group.id, new_id, "followed its old group-mate");
+        assert_eq!(group.panels, vec![panels[1], panels[2]]);
+        assert_eq!(group.active_panel(), panels[1]);
+        assert_eq!(layout.groups_on(DockSide::Left).count(), 2);
+        assert!(!layout.unpark(&[panels[1]]), "nothing left to put back");
+    }
+
+    /// Putting a panel back spends a group id only on a group that
+    /// stays. Every other parked panel is put back for the length of
+    /// the call, and a group of theirs that had gone comes back just as
+    /// briefly, under the id its records name. The first version gave
+    /// each such group a fresh id on every call — up to one per parked
+    /// panel — which the security audit flagged as spending the id
+    /// counter many times faster than the call needed.
+    #[test]
+    fn putting_a_panel_back_spends_ids_only_on_groups_that_stay() {
+        let (session, panels) = parking_fixture();
+        let mut layout = DockLayout::from_session(&session);
+        layout.park(&panels);
+        let before = layout.next_id;
+        // Back into the docmap's group, which never went: no id, though
+        // three groups that had gone came back for the call.
+        assert!(layout.unpark(&[panels[3]]));
+        assert_eq!(layout.next_id, before);
+        // Its own group had gone, and comes back to stay: one id.
+        assert!(layout.unpark(&[panels[4]]));
+        assert_eq!(layout.next_id, before + 1);
+    }
+
+    /// Group ids wrap past `u32::MAX`, so the counter can come round to
+    /// an id still in use. It skips one: a new group never shares an id
+    /// with a live group, or with the group a parked panel's record
+    /// names, which is where that panel comes back — a shared id there
+    /// would put the parked panel into the stranger's group.
+    #[test]
+    fn a_wrapped_group_id_skips_ids_still_in_use() {
+        let (session, panels) = parking_fixture();
+        let mut layout = DockLayout::from_session(&session);
+        let first = intern_plugin_panel("wrap.dll", "First").expect("intern");
+        let second = intern_plugin_panel("wrap.dll", "Second").expect("intern");
+        // panels[4] is alone at the bottom, so parking it leaves its
+        // group's id named only by the parked record.
+        let named = layout.group_of(panels[4]).expect("docked").id;
+        layout.park(&[panels[4]]);
+        let live = layout.group_of(DockPanel::Workspace).expect("docked").id;
+
+        // The counter comes round to the id the parked record names...
+        layout.next_id = named;
+        layout.show(first);
+        assert_ne!(layout.group_of(first).expect("shown").id, named);
+        // ...and to a live group's.
+        layout.next_id = live;
+        layout.show(second);
+        assert_ne!(layout.group_of(second).expect("shown").id, live);
+
+        let mut ids: Vec<u32> = layout.groups().iter().map(|g| g.id).collect();
+        let count = ids.len();
+        ids.sort_unstable();
+        ids.dedup();
+        assert_eq!(ids.len(), count, "two groups share an id");
+        // And the parked panel still comes back alone, where it was.
+        assert!(layout.unpark(&[panels[4]]));
+        let back = layout.group_of(panels[4]).expect("back");
+        assert_eq!(back.panels, vec![panels[4]]);
+        assert_eq!(back.location, DockLocation::Side(DockSide::Bottom));
+    }
+
+    /// Everything that forgets plugin panels, or places one explicitly,
+    /// also lets go of a parked record — and parked float rects are
+    /// clamped back into reach like every other one.
+    #[test]
+    fn a_parked_record_is_dropped_moved_and_clamped_with_the_rest() {
+        let (session, panels) = parking_fixture();
+        let mut layout = DockLayout::from_session(&session);
+        layout.park(&[panels[4], panels[5]]);
+        layout.move_panel(panels[4], DropTarget::Side(DockSide::Top));
+        assert!(!layout.is_parked(panels[4]));
+        assert!(layout.is_visible(panels[4]));
+        let area = DockRect::new(1000, 1000, 400, 300);
+        layout.clamp_floating_to_area(area);
+        let float = layout
+            .to_session()
+            .groups
+            .into_iter()
+            .find(|g| g.side == "float")
+            .expect("the parked float is still saved");
+        let rect = DockRect::new(
+            float.x.unwrap_or(0),
+            float.y.unwrap_or(0),
+            float.w.unwrap_or(0),
+            float.h.unwrap_or(0),
+        );
+        assert_eq!(
+            rect,
+            clamp_float_into(DockRect::new(40, 50, 300, 220), area),
+            "clamped the way every floating rect is"
+        );
+        layout.drop_plugin_panels();
+        assert!(layout.parked_panels().is_empty());
+    }
+
     /// A plugin panel's name is what its caption and tab draw, so text
     /// the display policy rejects is refused where identities are made.
     /// Registration sanitizes first; a `session.xml` key does not, and
@@ -2036,12 +3034,34 @@ mod tests {
             DropTarget::Floating(DockRect::new(10, 10, 300, 200)),
         );
         l.hide(floated);
+        // Parked: one whose group is still on screen, beside a mate,
+        // and one whose float went with it.
+        let mate = intern_plugin_panel("ctr-mate.dll", "Mate").expect("intern");
+        let parked_beside = intern_plugin_panel("ctr-parked.dll", "Beside").expect("intern");
+        let parked_alone = intern_plugin_panel("ctr-parked.dll", "Alone").expect("intern");
+        l.set_initial_side(mate, DockSide::Left);
+        l.show(mate);
+        l.set_initial_side(parked_beside, DockSide::Left);
+        l.show(parked_beside);
+        l.show(parked_alone);
+        l.move_panel(
+            parked_alone,
+            DropTarget::Floating(DockRect::new(30, 30, 250, 180)),
+        );
+        l.park(&[parked_beside, parked_alone]);
+        assert_eq!(
+            l.container_of(parked_beside),
+            DockContainer::Docked(DockSide::Left)
+        );
+        assert_eq!(l.container_of(parked_alone), DockContainer::Floating(None));
 
         for panel in [
             fresh,
             sided,
             docked,
             floated,
+            parked_beside,
+            parked_alone,
             DockPanel::Workspace,
             DockPanel::DocMap,
         ] {

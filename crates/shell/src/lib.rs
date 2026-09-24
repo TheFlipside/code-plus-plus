@@ -3148,47 +3148,33 @@ impl Shell {
         out
     }
 
-    /// The registry index of the one discovered plugin a plugin
-    /// panel's module name identifies.
+    /// The registry index of the installed plugin a plugin panel's
+    /// module name identifies, if there is one.
     ///
     /// The match is the panel's registered module name
     /// (`tTbData.pszModuleName`, which a Notepad++ plugin sets to its
     /// own DLL's file name) against each plugin's file name, both
     /// through `module_key` — the same match
-    /// [`Self::modules_with_restored_panels`] loads by. `Err(n)` when it
-    /// does not identify exactly one plugin: `n == 0` when none is
-    /// installed, `n > 1` when several are. The second is reachable,
-    /// because discovery accepts both `plugins/X.dll` and
-    /// `plugins/X/X.dll`, so two copies of a plugin — or two unrelated
-    /// plugins with one file name — can sit side by side; picking one
-    /// by discovery order would run one's command for a panel the other
-    /// registered.
-    fn panel_owner(&self, panel: codepp_core::dock::DockPanel) -> Result<usize, usize> {
-        let Some(module) = panel.plugin_module() else {
-            return Err(0);
-        };
-        let key = codepp_core::shortcuts::module_key(module);
-        let owners: Vec<usize> = self
-            .plugins
-            .iter()
-            .enumerate()
-            .filter(|(_, p)| codepp_core::shortcuts::module_key(&p.filename()) == key)
-            .map(|(idx, _)| idx)
-            .collect();
-        match owners.as_slice() {
-            [only] => Ok(*only),
-            _ => Err(owners.len()),
-        }
+    /// [`Self::modules_with_restored_panels`] loads by. Discovery
+    /// registers at most one plugin per name
+    /// (`codepp_plugin_host::PluginHost::discover`), so the plugin found
+    /// is the only one the name can mean, and a restore cannot run one
+    /// plugin's command for a panel another registered.
+    fn panel_owner(&self, panel: codepp_core::dock::DockPanel) -> Option<usize> {
+        let key = codepp_core::shortcuts::module_key(panel.plugin_module()?);
+        self.plugins.iter().position(|p| p.module_key() == key)
+    }
+
+    /// Whether the plugin owning `panel` is installed and loaded.
+    fn panel_owner_is_loaded(&self, panel: codepp_core::dock::DockPanel) -> bool {
+        self.panel_owner(panel)
+            .and_then(|idx| self.plugins.iter().nth(idx))
+            .is_some_and(codepp_plugin_host::PluginInfo::is_loaded)
     }
 
     /// The plugin panels in `panels` that belong to one of the loaded
     /// plugins at registry indices `loaded` — a load pass's
     /// `PendingLoad::idx`es — in the order given.
-    ///
-    /// A panel whose name more than one installed plugin answers to is
-    /// left out, with a warning: restoring it would mean running a
-    /// command of a plugin chosen by discovery order. See
-    /// [`Self::panel_owner`].
     #[must_use]
     pub fn panels_owned_by(
         &self,
@@ -3198,49 +3184,54 @@ impl Shell {
         panels
             .iter()
             .copied()
-            .filter(|&panel| match self.panel_owner(panel) {
-                Ok(idx) => {
-                    loaded.contains(&idx)
-                        && self
-                            .plugins
-                            .iter()
-                            .nth(idx)
-                            .is_some_and(codepp_plugin_host::PluginInfo::is_loaded)
-                }
-                Err(owners) => {
-                    if owners > 1 {
-                        tracing::warn!(
-                            panel = panel.persist_key(),
-                            owners,
-                            "several installed plugins share this panel's module name; \
-                             not restoring it"
-                        );
-                    }
-                    false
-                }
+            .filter(|&panel| {
+                self.panel_owner(panel)
+                    .is_some_and(|idx| loaded.contains(&idx))
+                    && self.panel_owner_is_loaded(panel)
             })
             .collect()
     }
 
-    /// The command id that runs `FuncItem[index]` of the one loaded
-    /// plugin owning `panel`. Given a plugin panel's `tTbData.dlgID`,
-    /// that is the command that opens it — and it is the same id a
-    /// click on that menu item dispatches, so a backend restoring the
-    /// panel runs it exactly as the user would have.
+    /// The plugin panels in `panels` that no loaded plugin can supply
+    /// — their plugin is not installed, is disabled, failed to load, or
+    /// has not been loaded — in the order given. Host panels are never
+    /// among them.
     ///
-    /// Resolved against the plugin [`Self::panel_owner`] names, never
-    /// "the first loaded plugin with that name", so it cannot answer
-    /// with another plugin's command. `None` for one of the host's own
-    /// panels, a name no single installed plugin answers to, a plugin
-    /// that is not loaded, a negative or out-of-range index, or a
-    /// separator slot.
+    /// What a backend parks
+    /// (`codepp_core::dock::DockLayout::park`) once its startup restore
+    /// has loaded every plugin that can be: such a panel's content
+    /// window can only come from its plugin, so leaving it in its group
+    /// would show a caption with nothing under it for the whole
+    /// session.
+    #[must_use]
+    pub fn panels_without_a_loaded_plugin(
+        &self,
+        panels: &[codepp_core::dock::DockPanel],
+    ) -> Vec<codepp_core::dock::DockPanel> {
+        panels
+            .iter()
+            .copied()
+            .filter(|&panel| panel.plugin_module().is_some() && !self.panel_owner_is_loaded(panel))
+            .collect()
+    }
+
+    /// The command id that runs `FuncItem[index]` of the loaded plugin
+    /// owning `panel`. Given a plugin panel's `tTbData.dlgID`, that is
+    /// the command that opens it — and it is the same id a click on
+    /// that menu item dispatches, so a backend restoring the panel runs
+    /// it exactly as the user would have.
+    ///
+    /// Resolved against the plugin `Self::panel_owner` names. `None`
+    /// for one of the host's own panels, a plugin that is not installed
+    /// or not loaded, a negative or out-of-range index, or a separator
+    /// slot.
     #[must_use]
     pub fn panel_open_command_id(
         &self,
         panel: codepp_core::dock::DockPanel,
         index: i32,
     ) -> Option<i32> {
-        let owner = self.panel_owner(panel).ok()?;
+        let owner = self.panel_owner(panel)?;
         let plugin = self.plugins.iter().nth(owner)?;
         if !plugin.is_loaded() {
             return None;
@@ -3339,7 +3330,7 @@ impl Shell {
             .plugins
             .iter()
             .filter(|p| !p.disabled)
-            .map(|p| codepp_core::shortcuts::module_key(&p.filename()))
+            .map(codepp_plugin_host::PluginInfo::module_key)
             .collect();
         let mut chords: Vec<PluginChord> = Vec::new();
         let mut by_chord: std::collections::HashMap<(bool, bool, bool, u8), (String, u32)> =
@@ -3456,9 +3447,9 @@ impl Shell {
     /// do nothing).
     #[must_use]
     pub fn is_module_loaded(&self, module_key: &str) -> bool {
-        self.plugins.iter().any(|p| {
-            p.is_loaded() && codepp_core::shortcuts::module_key(&p.filename()) == module_key
-        })
+        self.plugins
+            .iter()
+            .any(|p| p.is_loaded() && p.module_key() == module_key)
     }
 
     /// Resolve a cached shortcut identity to the live command it
@@ -3472,9 +3463,10 @@ impl Shell {
         module_key: &str,
         internal_id: u32,
     ) -> Option<(i32, PluginCmd)> {
-        let plugin = self.plugins.iter().find(|p| {
-            p.is_loaded() && codepp_core::shortcuts::module_key(&p.filename()) == module_key
-        })?;
+        let plugin = self
+            .plugins
+            .iter()
+            .find(|p| p.is_loaded() && p.module_key() == module_key)?;
         let func = plugin.func_items()?.get(internal_id as usize)?;
         Some((func.cmd_id, func.p_func?))
     }
@@ -3487,7 +3479,7 @@ impl Shell {
                 continue;
             };
             if let Some(idx) = funcs.iter().position(|f| f.cmd_id == cmd_id) {
-                let module_key = codepp_core::shortcuts::module_key(&p.filename());
+                let module_key = p.module_key();
                 return Some((module_key, u32::try_from(idx).unwrap_or(u32::MAX)));
             }
         }
@@ -12195,9 +12187,10 @@ mod tests {
         shell.plugin_shortcuts = codepp_core::PluginShortcuts::new();
         let dir = tempfile::tempdir().unwrap();
         for n in names {
-            let file = dir
-                .path()
-                .join(format!("{n}.{}", codepp_platform::PLUGIN_EXTENSION));
+            // Notepad++'s layout, the only one discovery loads.
+            let folder = dir.path().join(n);
+            std::fs::create_dir(&folder).unwrap();
+            let file = folder.join(format!("{n}.{}", codepp_platform::PLUGIN_EXTENSION));
             std::fs::write(&file, b"").unwrap();
         }
         shell.discover_plugins(dir.path()).unwrap();
@@ -12313,6 +12306,38 @@ mod tests {
         assert_eq!(shell.panel_open_command_id(host, 0), None);
     }
 
+    /// What a backend parks after its startup restore: a plugin panel
+    /// whose plugin is not installed, not loaded, or disabled — never
+    /// one of the host's own panels.
+    #[test]
+    fn panels_without_a_loaded_plugin_are_the_ones_nobody_can_supply() {
+        let (mut shell, _dir) = shell_with_fake_plugins(&["cppark_pending", "cppark_off"]);
+        let ext = codepp_platform::PLUGIN_EXTENSION;
+        let pending = codepp_core::dock::intern_plugin_panel(
+            &format!("cppark_pending.{ext}"),
+            "Pending Panel",
+        )
+        .expect("intern");
+        let disabled =
+            codepp_core::dock::intern_plugin_panel(&format!("cppark_off.{ext}"), "Off Panel")
+                .expect("intern");
+        let missing = codepp_core::dock::intern_plugin_panel("cppark_missing.dll", "Missing Panel")
+            .expect("intern");
+        // Straight on the registry: `set_plugin_disabled` would also
+        // write the real profile's `disabled.txt`.
+        let off = shell
+            .plugins
+            .iter()
+            .position(|p| p.filename().starts_with("cppark_off"))
+            .expect("discovered");
+        assert!(shell.plugins.set_disabled(off, true));
+        let host = codepp_core::dock::DockPanel::DocMap;
+        assert_eq!(
+            shell.panels_without_a_loaded_plugin(&[pending, host, disabled, missing]),
+            vec![pending, disabled, missing]
+        );
+    }
+
     /// The built `example_hello.dll`, or `None` when it has not been
     /// built (`cargo test -p codepp-shell` does not build it).
     #[cfg(target_os = "windows")]
@@ -12366,7 +12391,14 @@ mod tests {
         // the demo plugin off in the Plugin Manager would otherwise
         // see this test fail for a reason that has nothing to do with
         // it. The loader does not care what the file is called.
-        std::fs::copy(&dll, dir.path().join("cprestore_hello.dll")).unwrap();
+        std::fs::create_dir(dir.path().join("cprestore_hello")).unwrap();
+        std::fs::copy(
+            &dll,
+            dir.path()
+                .join("cprestore_hello")
+                .join("cprestore_hello.dll"),
+        )
+        .unwrap();
         assert_eq!(shell.discover_plugins(dir.path()).unwrap(), 1);
         let loaded = load_every_plugin(&mut shell);
         assert_eq!(loaded, vec![0], "example_hello did not load");
@@ -12389,6 +12421,11 @@ mod tests {
             vec![first, second]
         );
         assert!(shell.panels_owned_by(&[first], &[]).is_empty());
+        assert_eq!(
+            shell.panels_without_a_loaded_plugin(&[first, stranger, second]),
+            vec![stranger],
+            "a loaded plugin's panels are its to supply"
+        );
         // The demo's `dlgID`s, and what they must name.
         for (panel, dlg_id, label) in [
             (first, 1, "Show Dock Panel"),
@@ -12407,15 +12444,16 @@ mod tests {
         assert_eq!(shell.panel_open_command_id(stranger, 1), None);
     }
 
-    /// Two installed copies answering to one name — the flat
-    /// `plugins/X.dll` beside the staged `plugins/X/X.dll`, which
-    /// discovery accepts both of — make the name identify nothing, and
-    /// the restore refuses it rather than run one copy's command for a
-    /// panel the other registered. Both copies are real and loaded, so
-    /// only the ambiguity can be what refuses.
+    /// The profile that used to make a panel's name mean two plugins —
+    /// an old copy left directly in the plugins folder, beside the
+    /// staged `plugins/X/X.dll` — now holds one, because discovery
+    /// loads only Notepad++'s layout, and the panel restores from it.
+    /// Before, both copies loaded and the restore had to refuse the
+    /// name rather than run one copy's command for a panel the other
+    /// registered.
     #[cfg(target_os = "windows")]
     #[test]
-    fn a_panel_name_two_installed_plugins_share_restores_nothing() {
+    fn a_flat_copy_beside_the_staged_plugin_does_not_block_its_panel() {
         let Some(dll) = built_example_hello() else {
             eprintln!(
                 "skipping: example_hello.dll not built. Run `cargo build -p codepp-example-hello`."
@@ -12428,18 +12466,15 @@ mod tests {
         std::fs::copy(&dll, dir.path().join("cpdup_hello.dll")).unwrap();
         std::fs::create_dir(dir.path().join("cpdup_hello")).unwrap();
         std::fs::copy(&dll, dir.path().join("cpdup_hello").join("cpdup_hello.dll")).unwrap();
-        assert_eq!(shell.discover_plugins(dir.path()).unwrap(), 2);
+        assert_eq!(shell.discover_plugins(dir.path()).unwrap(), 1);
         let loaded = load_every_plugin(&mut shell);
-        assert_eq!(
-            loaded.len(),
-            2,
-            "both copies must load for this to test anything"
-        );
+        assert_eq!(loaded, vec![0], "the staged copy loads");
         let panel =
             codepp_core::dock::intern_plugin_panel("cpdup_hello.dll", "Example Hello Panel")
                 .expect("intern");
-        assert!(shell.panels_owned_by(&[panel], &loaded).is_empty());
-        assert_eq!(shell.panel_open_command_id(panel, 1), None);
+        assert_eq!(shell.panels_owned_by(&[panel], &loaded), vec![panel]);
+        assert!(shell.panel_open_command_id(panel, 1).is_some());
+        assert!(shell.panels_without_a_loaded_plugin(&[panel]).is_empty());
     }
 
     #[test]

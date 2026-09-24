@@ -55,7 +55,10 @@ fn example_hello_loads_and_publishes_its_func_items() {
     // Stage the DLL in an isolated tempdir so PluginHost::discover
     // doesn't sweep up unrelated artifacts that share `target/debug`.
     let staging = tempfile::tempdir().unwrap();
-    let staged = staging.path().join("example_hello.dll");
+    // Notepad++'s layout, the only one discovery loads.
+    let staged_dir = staging.path().join("example_hello");
+    std::fs::create_dir(&staged_dir).expect("create the plugin's folder");
+    let staged = staged_dir.join("example_hello.dll");
     std::fs::copy(&dll, &staged).expect("copy example_hello.dll into staging dir");
 
     let mut host = PluginHost::new();

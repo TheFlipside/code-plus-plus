@@ -74,7 +74,10 @@ extern "C" {
  * NPPN_TBMODIFICATION if you like, but a plugin that also shows it
  * there has its toggle close it again a moment later. A plugin that
  * sets either field differently still works, but its panel is not
- * restored.
+ * restored. A panel whose plugin is missing at a start — uninstalled,
+ * disabled, or failing to load — is not shown and not forgotten: it
+ * stays open in the saved layout and comes back, by that same run,
+ * the next time the plugin loads. Notepad++ keeps it the same way.
  *
  * Code++ field support: hClient, pszName, dlgID, uMask,
  * pszModuleName are honoured. A registered panel is an ordinary

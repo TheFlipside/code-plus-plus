@@ -10,8 +10,8 @@
 //!
 //! The copy handles two filename quirks: a `cdylib` on Unix gets a
 //! `lib` prefix (`libexample_hello.so`) that the destination must drop,
-//! and the destination stem must equal its directory name — the rule
-//! the host's `is_plugin_dll` discovery enforces.
+//! and the destination stem must equal its directory name — the
+//! Notepad++ layout, and the only one `PluginHost::discover` loads.
 
 use std::path::Path;
 

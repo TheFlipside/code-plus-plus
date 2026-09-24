@@ -103,7 +103,10 @@ fn cppmimetools_loads_and_publishes_twenty_func_items() {
     };
 
     let staging = tempfile::tempdir().unwrap();
-    let staged = staging.path().join("cppmimetools.dll");
+    // Notepad++'s layout, the only one discovery loads.
+    let staged_dir = staging.path().join("cppmimetools");
+    std::fs::create_dir(&staged_dir).expect("create the plugin's folder");
+    let staged = staged_dir.join("cppmimetools.dll");
     std::fs::copy(&dll, &staged).expect("copy cppmimetools.dll into staging dir");
 
     let mut host = PluginHost::new();

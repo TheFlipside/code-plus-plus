@@ -3546,6 +3546,13 @@ impl UiPlatform for Win32Ui {
             // on every registration, so the value the plugin gives now
             // wins over whatever an older session saved.
             (*self.dock_layout).set_open_command(panel, params.dlg_id);
+            // A panel parked because no loaded plugin could supply it
+            // is saved as open, so it comes back where it was the
+            // moment its window arrives — as a panel Notepad++ saved
+            // open is shown when its plugin registers it. The load
+            // pass normally puts it back before this; a registration
+            // arriving by any other route still finds it.
+            (*self.dock_layout).unpark(&[panel]);
             // A restored layout can already name this panel — the
             // arrangement is persisted by key and comes back before
             // any plugin loads, so its group has been sitting there
@@ -20287,7 +20294,10 @@ unsafe fn load_plugins_where(hwnd: HWND, npp_data: NppData, scope: PluginLoadSco
     // The same borrow notes which dock panels these plugins had open,
     // and every group's front tab — before any of them runs and can
     // change either. That is the arrangement the restore below brings
-    // back.
+    // back. A panel parked because its plugin could not supply it is
+    // put back first, so a plugin that has become loadable since —
+    // re-enabled in the Plugin Manager — gets its panel restored the
+    // way it would have been at startup.
     let restore = unsafe { state_from_hwnd(hwnd) }.map(|state| {
         state.shell.after_plugin_loads();
         unsafe {
@@ -20299,7 +20309,11 @@ unsafe fn load_plugins_where(hwnd: HWND, npp_data: NppData, scope: PluginLoadSco
             );
             refresh_plugin_accels(state);
         }
-        PanelRestore::capture(state, &loaded_now)
+        let unparked = unpark_loaded_plugins_panels(state, &loaded_now);
+        PanelRestore {
+            unparked,
+            ..PanelRestore::capture(state, &loaded_now)
+        }
     });
     if restore.is_none() {
         tracing::error!(
@@ -20307,6 +20321,11 @@ unsafe fn load_plugins_where(hwnd: HWND, npp_data: NppData, scope: PluginLoadSco
         );
     }
     let restore = restore.unwrap_or_default();
+    if restore.unparked {
+        // The groups those panels are back in need windows before the
+        // plugins that fill them run.
+        unsafe { dock_panels::apply_dock_layout(hwnd) };
+    }
     let _ = unsafe { DrawMenuBar(hwnd) };
     // Then the notifications, with no borrow held — a plugin that
     // queries the host from `NPPN_READY` is doing something ordinary.
@@ -20326,6 +20345,9 @@ unsafe fn load_plugins_where(hwnd: HWND, npp_data: NppData, scope: PluginLoadSco
     // Only now, after READY: a plugin may register its panel from
     // there, and one that does must not find it already closed.
     unsafe { close_unregistered_restored_panels(hwnd, &restore) };
+    // And a panel whose plugin could not be loaded at all is parked
+    // rather than left on screen with nothing in it.
+    unsafe { park_unsupplied_plugin_panels(hwnd) };
 }
 
 /// What a load pass needs to bring back the dock panels its plugins
@@ -20338,6 +20360,10 @@ struct PanelRestore {
     panels: Vec<DockPanel>,
     /// Every group's front tab as the pass began.
     fronts: Vec<(u32, DockPanel)>,
+    /// Whether the pass put parked panels back — see
+    /// [`unpark_loaded_plugins_panels`] — so their groups need
+    /// windows.
+    unparked: bool,
 }
 
 impl PanelRestore {
@@ -20347,8 +20373,25 @@ impl PanelRestore {
                 .shell
                 .panels_owned_by(&state.dock_layout.open_plugin_panels(), loaded),
             fronts: state.dock_layout.fronts(),
+            unparked: false,
         }
     }
+}
+
+/// Put back where they were the parked panels whose plugins a load
+/// pass has just loaded; returns whether any came back.
+///
+/// A panel is parked when no loaded plugin can supply it — see
+/// [`park_unsupplied_plugin_panels`] — and a plugin disabled at
+/// startup can be re-enabled in the Plugin Manager and loaded later in
+/// the same session. Putting its panels back into their groups before
+/// the pass notes what to restore is what lets the ordinary restore
+/// run their commands, exactly as it would have at startup.
+fn unpark_loaded_plugins_panels(state: &mut WindowState, loaded: &[usize]) -> bool {
+    let back = state
+        .shell
+        .panels_owned_by(&state.dock_layout.parked_panels(), loaded);
+    state.dock_layout.unpark(&back)
 }
 
 /// Bring back the dock panels a load pass's plugins had open, the way
@@ -20454,6 +20497,49 @@ unsafe fn close_unregistered_restored_panels(hwnd: HWND, restore: &PanelRestore)
             }
         }
         changed
+    });
+    if changed {
+        unsafe { dock_panels::apply_dock_layout(hwnd) };
+    }
+}
+
+/// Park every open plugin panel that has no window and no loaded
+/// plugin to supply one — its plugin is not installed, is disabled, or
+/// failed to load.
+///
+/// Left in its group, such a panel is a caption with nothing under it
+/// for the whole session. Closed, it would be recorded as closed and
+/// not come back once its plugin does. Notepad++ does neither: measured
+/// against 8.9.6 with the plugin removed, a panel it had saved open
+/// shows nothing, its saved record is written back unchanged, and the
+/// panel returns the next time the plugin is installed. A parked panel
+/// behaves the same way — nothing presents it, and the layout still
+/// saves it where it was (`DockLayout::park`).
+///
+/// Runs at the end of every load pass, and only ever finds something
+/// after the startup one: every other open plugin panel was opened by
+/// its plugin registering it. A panel with a window is never parked,
+/// whichever plugin its name belongs to.
+///
+/// # Safety
+///
+/// `hwnd` must be the main window. UI thread only.
+unsafe fn park_unsupplied_plugin_panels(hwnd: HWND) {
+    let changed = unsafe { state_from_hwnd(hwnd) }.is_some_and(|state| {
+        let windowless: Vec<DockPanel> = state
+            .dock_layout
+            .open_plugin_panels()
+            .into_iter()
+            .filter(|&panel| !state.dock_dialogs.iter().any(|e| e.panel == panel))
+            .collect();
+        let unsupplied = state.shell.panels_without_a_loaded_plugin(&windowless);
+        for panel in &unsupplied {
+            tracing::info!(
+                panel = panel.persist_key(),
+                "no loaded plugin can supply this dock panel; keeping it for when one can"
+            );
+        }
+        state.dock_layout.park(&unsupplied)
     });
     if changed {
         unsafe { dock_panels::apply_dock_layout(hwnd) };
@@ -28532,8 +28618,11 @@ mod plugin_accel_tests {
         let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
         let mut shell = codepp_shell::Shell::new(wake).unwrap();
         let dir = tempfile::tempdir().unwrap();
+        // Notepad++'s layout, the only one discovery loads.
+        std::fs::create_dir(dir.path().join("cpaccel_x")).unwrap();
         let file = dir
             .path()
+            .join("cpaccel_x")
             .join(format!("cpaccel_x.{}", codepp_platform::PLUGIN_EXTENSION));
         std::fs::write(&file, b"").unwrap();
         shell.discover_plugins(dir.path()).unwrap();
@@ -31252,6 +31341,53 @@ mod plugin_load_borrow_guards {
             close > deliver_end,
             "an unregistered panel must be closed only after READY, where its plugin may \
              still register it"
+        );
+        // Parked panels whose plugin this pass loaded are put back
+        // before the capture — or the restore would not know about
+        // them — and panels no plugin can supply are parked only once
+        // the pass is over, after the close above, so a panel whose
+        // plugin did load is never parked by mistake.
+        let unpark = body
+            .find("unpark_loaded_plugins_panels(state, &loaded_now)")
+            .expect("the pass no longer puts back the panels its plugins can now supply");
+        assert!(
+            tail < unpark && unpark < capture,
+            "parked panels must be put back under the bookkeeping borrow, before the capture"
+        );
+        let park = body
+            .find("park_unsupplied_plugin_panels(hwnd)")
+            .expect("a panel no plugin can supply is no longer parked");
+        assert!(
+            park > close,
+            "panels no plugin can supply must be parked last"
+        );
+    }
+
+    /// Parking takes out only panels with no window: a panel a plugin
+    /// has registered is being supplied, whichever plugin its name
+    /// belongs to. And registration puts a parked panel back, since a
+    /// window is exactly what it was waiting for.
+    #[test]
+    fn only_windowless_plugin_panels_are_parked_and_registration_unparks() {
+        let park = code_only(&fn_body(production_src(), "park_unsupplied_plugin_panels"));
+        assert!(
+            park.contains(".filter(|&panel| !state.dock_dialogs.iter().any(|e| e.panel == panel))"),
+            "parking must skip panels that have a registered window"
+        );
+        let filter = park
+            .find("state.dock_dialogs.iter().any(|e| e.panel == panel)")
+            .expect("the window filter");
+        let unsupplied = park
+            .find("panels_without_a_loaded_plugin(&windowless)")
+            .expect("parking must ask which panels no loaded plugin can supply");
+        let parked = park
+            .find("state.dock_layout.park(&unsupplied)")
+            .expect("parking must park exactly those");
+        assert!(filter < unsupplied && unsupplied < parked);
+        let register = code_only(&fn_body(production_src(), "register_dock_dialog"));
+        assert!(
+            register.contains("(*self.dock_layout).unpark(&[panel]);"),
+            "registering a parked panel must put it back"
         );
     }
 

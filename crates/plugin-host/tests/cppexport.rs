@@ -63,7 +63,10 @@ fn cppexport_loads_and_publishes_five_func_items() {
     };
 
     let staging = tempfile::tempdir().unwrap();
-    let staged = staging.path().join("cppexport.dll");
+    // Notepad++'s layout, the only one discovery loads.
+    let staged_dir = staging.path().join("cppexport");
+    std::fs::create_dir(&staged_dir).expect("create the plugin's folder");
+    let staged = staged_dir.join("cppexport.dll");
     std::fs::copy(&dll, &staged).expect("copy cppexport.dll into staging dir");
 
     let mut host = PluginHost::new();
