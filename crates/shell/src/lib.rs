@@ -12527,8 +12527,10 @@ mod tests {
     /// built for it.
     #[test]
     fn an_inter_plugin_message_runs_as_its_target() {
-        // LF only: the Windows CI runner checks the file out with CRLF
-        // line endings, and the end of the body is found by `"\n    }\n"`.
+        // LF only, because the end of the body is found by `"\n    }\n"`.
+        // `.gitattributes` checks `*.rs` out as LF, but a working copy
+        // checked out before the rule arrived keeps its CRLF files until
+        // they change.
         let src = include_str!("lib.rs").replace("\r\n", "\n");
         let body = &src[src
             .find("    fn forward_plugin_message(")

@@ -3,3 +3,10 @@
 
 # Tools
 tools/** linguist-vendored
+
+# Rust sources are LF in every checkout, whatever core.autocrlf says.
+# Source-scan tests read their own file with include_str! and search it,
+# so the bytes they see must not depend on the machine: Git for Windows'
+# default CRLF checkout, the Windows CI runner's included, once failed
+# tests that passed on an LF working copy.
+*.rs text eol=lf

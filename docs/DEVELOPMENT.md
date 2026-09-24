@@ -63,7 +63,7 @@ The repo's `rust-toolchain.toml` will pin a specific stable version on first `ca
 ### 2.3 Git
 
 - Install Git for Windows: https://git-scm.com/download/win.
-- During setup, leave the line-ending option at the default ("Checkout as-is, commit Unix-style") — this matches the `.gitattributes` in the repo.
+- On the installer's line-ending page, pick "Checkout as-is, commit Unix-style line endings" (`core.autocrlf=input`). It is not the default: that is "Checkout Windows-style, commit Unix-style line endings" (`core.autocrlf=true`), which checks text files out with CRLF, and a shell script with CRLF line endings breaks in bash. Rust sources are LF whichever you pick: `.gitattributes` pins `*.rs` to LF, because source-scan tests read their own file with `include_str!` and must see the same bytes on every machine. A clone made before that rule keeps its CRLF `.rs` files until they are next rewritten.
 
 ### 2.4 Verify
 
