@@ -34,11 +34,13 @@
 // Windows-only through Phase 4 because only Win32 wired a plugin host;
 // Phase 5 ports the host to GTK/Linux (loader in `platform::dynlib`,
 // message transport in `codepp-plugin-sdk`), so these are unconditional.
+pub mod caller;
 pub mod codepp_ext;
 pub mod dispatch;
 pub mod ffi;
 pub mod host;
 
+pub use caller::{calling_plugin, CallingPlugin, PluginCommand};
 pub use codepp_ext::{
     ClipEntry, ClipboardSetRequest, ExportSaveRequest, CLIP_FORMAT_HTML, CLIP_FORMAT_PLAIN,
     CLIP_FORMAT_RTF, CODEPPMSG, CODEPPMSG_RANGE, CODEPPM_EXPORTSAVEDIALOG, CODEPPM_GETZOOMLEVEL,

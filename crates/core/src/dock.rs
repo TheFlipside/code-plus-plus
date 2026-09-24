@@ -366,6 +366,112 @@ impl DockPanel {
     }
 }
 
+/// A signature over one plugin panel's startup command: the
+/// HMAC-SHA256 of [`restore_command_message`] under a key only the
+/// user's own account can read.
+///
+/// Code++ restores a plugin panel by running the plugin's own command
+/// for it — see [`DockLayout::set_open_command`] — and that command's
+/// index is saved in `session.xml`, a file anyone who can write the
+/// user's profile can change. Code++ signs a command only when the
+/// plugin the panel is named for is the plugin that registered it, and
+/// with Preferences → Security's guard on it runs a saved command only
+/// when the signature checks out. So neither an edited or copied
+/// session file nor a plugin registering a panel under another plugin's
+/// name chooses what runs at startup.
+///
+/// This module neither computes nor checks one. The key and the MAC
+/// are platform code, and the policy is the shell's. What lives here is
+/// the value, its wire form and the exact message it signs, so the
+/// persisted layout carries it like any other field.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub struct CommandSeal([u8; 32]);
+
+impl CommandSeal {
+    /// Wrap a MAC.
+    #[must_use]
+    pub const fn from_bytes(bytes: [u8; 32]) -> Self {
+        Self(bytes)
+    }
+
+    /// Whether `other` is the same signature. Every byte is compared
+    /// whatever the first difference, which costs nothing and leaves no
+    /// timing to measure.
+    #[must_use]
+    pub fn matches(&self, other: &Self) -> bool {
+        self.0
+            .iter()
+            .zip(other.0.iter())
+            .fold(0u8, |diff, (a, b)| diff | (a ^ b))
+            == 0
+    }
+
+    /// The `session.xml` spelling: 64 lowercase hexadecimal digits.
+    #[must_use]
+    pub fn to_hex(&self) -> String {
+        use std::fmt::Write as _;
+        self.0.iter().fold(String::with_capacity(64), |mut out, b| {
+            let _ = write!(out, "{b:02x}");
+            out
+        })
+    }
+
+    /// Inverse of [`Self::to_hex`]. `None` for anything else — the wrong
+    /// length or alphabet, uppercase included — which the restore then
+    /// treats as no signature at all.
+    #[must_use]
+    pub fn from_hex(text: &str) -> Option<Self> {
+        let digits = text.as_bytes();
+        if digits.len() != 64 {
+            return None;
+        }
+        let nibble = |d: u8| match d {
+            b'0'..=b'9' => Some(d - b'0'),
+            b'a'..=b'f' => Some(d - b'a' + 10),
+            _ => None,
+        };
+        let mut bytes = [0u8; 32];
+        for (byte, pair) in bytes.iter_mut().zip(digits.chunks_exact(2)) {
+            *byte = (nibble(pair[0])? << 4) | nibble(pair[1])?;
+        }
+        Some(Self(bytes))
+    }
+}
+
+impl std::fmt::Debug for CommandSeal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "CommandSeal({})", self.to_hex())
+    }
+}
+
+/// What a [`CommandSeal`] signs, first: the purpose and its version.
+///
+/// A signature made for this cannot be taken for anything else a later
+/// version signs with the same key. Bump the version if the fields
+/// change. Every saved signature then stops checking out, and each
+/// panel needs opening by hand once — the same as when the account can
+/// no longer read the key.
+const RESTORE_COMMAND_LABEL: &[u8] = b"Code++ plugin panel startup command v1\0";
+
+/// The bytes a [`CommandSeal`] signs for `panel`'s startup command
+/// `command`: [`RESTORE_COMMAND_LABEL`], the panel's persisted key, a
+/// NUL, and the index in decimal. Neither half of a plugin panel's
+/// identity can hold a control character ([`intern_plugin_panel`]
+/// refuses them), so no two records share a message.
+///
+/// `None` for the host's own panels, which have no plugin command.
+#[must_use]
+pub fn restore_command_message(panel: DockPanel, command: i32) -> Option<Vec<u8>> {
+    if !matches!(panel, DockPanel::Plugin(_)) {
+        return None;
+    }
+    let mut message = RESTORE_COMMAND_LABEL.to_vec();
+    message.extend_from_slice(panel.persist_key().as_bytes());
+    message.push(0);
+    message.extend_from_slice(command.to_string().as_bytes());
+    Some(message)
+}
+
 /// One of the four dockable edges of the dock area.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum DockSide {
@@ -527,6 +633,20 @@ impl DockGroup {
         // Invariant: active < panels.len() and panels non-empty.
         self.panels[self.active.min(self.panels.len().saturating_sub(1))]
     }
+}
+
+/// The command recorded for one plugin panel — see
+/// [`DockLayout::set_open_command`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct OpenCommand {
+    panel: DockPanel,
+    /// `tTbData.dlgID`: the index of the plugin's `FuncItem` that
+    /// shows the panel.
+    index: i32,
+    /// Code++'s signature over `(panel, index)`, when the plugin the
+    /// panel is named for is the plugin that registered it — or the
+    /// signature a saved session carried, which is not checked here.
+    seal: Option<CommandSeal>,
 }
 
 /// A plugin panel that is open in the layout but that no plugin can
@@ -701,8 +821,9 @@ pub struct DockLayout {
     /// that was open, which is what Notepad++ does (measured: it runs
     /// `FuncItem[dlgID]` between `NPPN_TBMODIFICATION` and
     /// `NPPN_READY`). Re-seeded at every registration, so the plugin's
-    /// current value wins over a persisted one.
-    open_commands: Vec<(DockPanel, i32)>,
+    /// current value wins over a persisted one. Each carries the
+    /// [`CommandSeal`] Code++ signed it with, if it did.
+    open_commands: Vec<OpenCommand>,
     /// Open plugin panels no plugin can supply this session, in the
     /// order they were parked — see [`Self::park`]. Out of every
     /// group, so nothing presents them; written back where they were
@@ -907,26 +1028,38 @@ impl DockLayout {
     }
 
     /// Record the command that opens plugin `panel` — its
-    /// `tTbData.dlgID`. Ignored for the host's own panels, which have
-    /// no plugin command. A negative index names no `FuncItem` and is
-    /// not recorded.
-    pub fn set_open_command(&mut self, panel: DockPanel, command: i32) {
+    /// `tTbData.dlgID` — with the [`CommandSeal`] Code++ signed it with,
+    /// if it signed it. Replaces whatever was recorded before, seal
+    /// included: an unsigned registration leaves the panel unsigned.
+    /// Ignored for the host's own panels, which have no plugin command.
+    /// A negative index names no `FuncItem` and is not recorded.
+    pub fn set_open_command(&mut self, panel: DockPanel, command: i32, seal: Option<CommandSeal>) {
         if !matches!(panel, DockPanel::Plugin(_)) {
             return;
         }
-        self.open_commands.retain(|(p, _)| *p != panel);
+        self.open_commands.retain(|c| c.panel != panel);
         if command >= 0 {
-            self.open_commands.push((panel, command));
+            self.open_commands.push(OpenCommand {
+                panel,
+                index: command,
+                seal,
+            });
         }
     }
 
     /// The command recorded for plugin `panel`, if any.
     #[must_use]
     pub fn open_command_for(&self, panel: DockPanel) -> Option<i32> {
+        self.open_command(panel).map(|(index, _)| index)
+    }
+
+    /// The command recorded for plugin `panel` and its seal, if any.
+    #[must_use]
+    pub fn open_command(&self, panel: DockPanel) -> Option<(i32, Option<CommandSeal>)> {
         self.open_commands
             .iter()
-            .find(|(p, _)| *p == panel)
-            .map(|(_, c)| *c)
+            .find(|c| c.panel == panel)
+            .map(|c| (c.index, c.seal))
     }
 
     /// Every plugin panel the layout has open — in a group, docked or
@@ -1602,9 +1735,15 @@ impl DockLayout {
                         panels: g
                             .panels
                             .iter()
-                            .map(|p| DockPanelSession {
-                                kind: p.persist_key().to_string(),
-                                cmd: self.open_command_for(*p),
+                            .map(|p| {
+                                let command = self.open_command(*p);
+                                DockPanelSession {
+                                    kind: p.persist_key().to_string(),
+                                    cmd: command.map(|(index, _)| index),
+                                    seal: command
+                                        .and_then(|(_, seal)| seal)
+                                        .map(|seal| seal.to_hex()),
+                                }
                             })
                             .collect(),
                     }
@@ -1720,8 +1859,11 @@ impl DockLayout {
                     // hand-editable file: `set_open_command` keeps only
                     // a plugin panel's non-negative index, and an index
                     // naming no command resolves to nothing when the
-                    // host looks it up.
-                    layout.set_open_command(panel, command);
+                    // host looks it up. The seal is only parsed here;
+                    // whether it checks out is the shell's question,
+                    // asked before the command runs.
+                    let seal = saved.seal.as_deref().and_then(CommandSeal::from_hex);
+                    layout.set_open_command(panel, command, seal);
                 }
             }
             if panels.is_empty() {
@@ -2156,8 +2298,8 @@ mod tests {
         let mut l = DockLayout::new();
         l.show(console);
         l.show(notes);
-        l.set_open_command(console, 5);
-        l.set_open_command(DockPanel::Workspace, 7);
+        l.set_open_command(console, 5, None);
+        l.set_open_command(DockPanel::Workspace, 7, None);
         let session = l.to_session();
         let saved: Vec<(String, Option<i32>)> = session
             .groups
@@ -2187,6 +2329,115 @@ mod tests {
             DockLayout::from_session(&edited).open_command_for(console),
             None
         );
+    }
+
+    /// A command's seal survives `session.xml` beside it, and a seal the
+    /// file spells any other way than 64 lowercase hex digits is read as
+    /// no seal — which the restore treats as unsigned — rather than
+    /// failing the session.
+    #[test]
+    fn a_commands_seal_round_trips_and_a_malformed_one_reads_as_none() {
+        let console = intern_plugin_panel("seal-a.dll", "Console").expect("intern");
+        let notes = intern_plugin_panel("seal-b.dll", "Notes").expect("intern");
+        let seal = CommandSeal::from_bytes(std::array::from_fn(|i| u8::try_from(i * 7).unwrap()));
+        let mut l = DockLayout::new();
+        l.show(console);
+        l.show(notes);
+        l.set_open_command(console, 5, Some(seal));
+        l.set_open_command(notes, 2, None);
+        let session = l.to_session();
+        let saved = |kind: &str| {
+            session
+                .groups
+                .iter()
+                .flat_map(|g| &g.panels)
+                .find(|p| p.kind == kind)
+                .expect("saved")
+                .clone()
+        };
+        assert_eq!(saved(console.persist_key()).seal, Some(seal.to_hex()));
+        assert_eq!(
+            saved(notes.persist_key()).seal,
+            None,
+            "unsigned stays unsigned"
+        );
+        let back = DockLayout::from_session(&session);
+        assert_eq!(back.open_command(console), Some((5, Some(seal))));
+        assert_eq!(back.open_command(notes), Some((2, None)));
+
+        for bad in [
+            seal.to_hex().to_uppercase(),
+            seal.to_hex()[..62].to_string(),
+            format!("{}0", seal.to_hex()),
+            format!("{}zz", &seal.to_hex()[..62]),
+            String::new(),
+        ] {
+            let mut edited = session.clone();
+            for p in edited.groups.iter_mut().flat_map(|g| &mut g.panels) {
+                if p.seal.is_some() {
+                    p.seal = Some(bad.clone());
+                }
+            }
+            assert_eq!(
+                DockLayout::from_session(&edited).open_command(console),
+                Some((5, None)),
+                "{bad:?} is not a seal"
+            );
+        }
+        // A seal with no command beside it is ignored.
+        let mut orphan = session.clone();
+        for p in orphan.groups.iter_mut().flat_map(|g| &mut g.panels) {
+            p.cmd = None;
+        }
+        assert_eq!(
+            DockLayout::from_session(&orphan).open_command(console),
+            None
+        );
+    }
+
+    /// A seal's text is its bytes in order, and reads back to them.
+    #[test]
+    fn a_seal_is_its_bytes_in_lowercase_hex() {
+        let mut bytes = [0u8; 32];
+        bytes[0] = 0xab;
+        bytes[1] = 0x01;
+        bytes[31] = 0xff;
+        let seal = CommandSeal::from_bytes(bytes);
+        let hex = seal.to_hex();
+        assert_eq!(hex.len(), 64);
+        assert!(hex.starts_with("ab01"));
+        assert!(hex.ends_with("ff"));
+        assert_eq!(CommandSeal::from_hex(&hex), Some(seal));
+        assert!(seal.matches(&CommandSeal::from_bytes(bytes)));
+        for i in 0..32 {
+            let mut other = bytes;
+            other[i] ^= 0x80;
+            assert!(!seal.matches(&CommandSeal::from_bytes(other)), "byte {i}");
+        }
+    }
+
+    /// The message a seal signs is exactly the label, the panel's key and
+    /// the index — pinned, because a change to it silently invalidates
+    /// every seal already saved — and no two records share one. A host
+    /// panel has none.
+    #[test]
+    fn the_signed_message_names_the_panel_and_the_command() {
+        let console = intern_plugin_panel("msg-a.dll", "Console").expect("intern");
+        let other = intern_plugin_panel("msg-b.dll", "Console").expect("intern");
+        assert_eq!(
+            restore_command_message(console, 12).expect("a plugin panel"),
+            b"Code++ plugin panel startup command v1\0plugin:msg-a.dll|Console\x0012".to_vec()
+        );
+        assert_ne!(
+            restore_command_message(console, 1),
+            restore_command_message(console, 12)
+        );
+        assert_ne!(
+            restore_command_message(console, 1),
+            restore_command_message(other, 1)
+        );
+        assert_eq!(restore_command_message(DockPanel::Workspace, 1), None);
+        assert_eq!(restore_command_message(DockPanel::DocMap, 1), None);
     }
 
     /// Restoring panels shows each through its plugin's own command,
@@ -2254,9 +2505,9 @@ mod tests {
         }
         layout.show(unrecorded);
         layout.show(DockPanel::DocMap);
-        layout.set_open_command(console, 1);
-        layout.set_open_command(notes, 3);
-        layout.set_open_command(closed, 0);
+        layout.set_open_command(console, 1, None);
+        layout.set_open_command(notes, 3, None);
+        layout.set_open_command(closed, 0, None);
         layout.hide(closed);
         let open = layout.open_plugin_panels();
         assert!(open.contains(&unrecorded));
@@ -2292,6 +2543,7 @@ mod tests {
         let entry = |kind: &str, cmd: Option<i32>| DockPanelSession {
             kind: kind.into(),
             cmd,
+            seal: None,
         };
         let key = |i: usize| panels[i].persist_key();
         let group = |side: &str, active: usize, panels: Vec<DockPanelSession>| DockGroupSession {
@@ -2389,6 +2641,7 @@ mod tests {
         let entry = |kind: &str| DockPanelSession {
             kind: kind.into(),
             cmd: None,
+            seal: None,
         };
         let group = |active: usize, kinds: Vec<&str>| DockGroupSession {
             side: "left".into(),
@@ -2908,10 +3161,12 @@ mod tests {
                     DockPanelSession {
                         kind: "plugin:spoof.dll|Inv\u{202E}exe.pdf".into(),
                         cmd: Some(1),
+                        seal: None,
                     },
                     DockPanelSession {
                         kind: "docmap".into(),
                         cmd: None,
+                        seal: None,
                     },
                 ],
                 ..DockGroupSession::default()
@@ -2940,6 +3195,7 @@ mod tests {
         let group_panel = |kind: &str| DockPanelSession {
             kind: kind.into(),
             cmd: None,
+            seal: None,
         };
         let session = DockSession {
             groups: vec![DockGroupSession {
@@ -3840,10 +4096,12 @@ mod tests {
                         DockPanelSession {
                             kind: "workspace".into(),
                             cmd: None,
+                            seal: None,
                         },
                         DockPanelSession {
                             kind: "hologram".into(),
                             cmd: None,
+                            seal: None,
                         },
                     ],
                 },
@@ -3857,6 +4115,7 @@ mod tests {
                     panels: vec![DockPanelSession {
                         kind: "docmap".into(),
                         cmd: None,
+                        seal: None,
                     }],
                 },
                 DockGroupSession {
@@ -3869,6 +4128,7 @@ mod tests {
                     panels: vec![DockPanelSession {
                         kind: "workspace".into(),
                         cmd: None,
+                        seal: None,
                     }],
                 },
             ],

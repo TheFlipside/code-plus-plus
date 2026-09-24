@@ -8,12 +8,11 @@
 //! logged + replaced with defaults so a hand-edit that breaks
 //! the schema can never lock the user out of the app.
 //!
-//! **Scope note.** Phase 4 wiring populates only the sections
-//! that back live UI: right now that is
-//! [`RecentFilesHistoryConfig`]. Other Preferences panes land
-//! one by one and each adds a new field with a `#[serde(default)]`
-//! attribute so downgrading a config from a future version keeps
-//! working.
+//! **Scope note.** Only the sections that back live UI are
+//! populated: [`RecentFilesHistoryConfig`] and [`SecurityConfig`].
+//! Other Preferences panes land one by one and each adds a new
+//! field with a `#[serde(default)]` attribute so downgrading a
+//! config from a future version keeps working.
 //!
 //! Schema:
 //!
@@ -27,6 +26,9 @@
 //!     <display-mode>full-path</display-mode>
 //!     <custom-max-length>60</custom-max-length>
 //!   </recent-files-history>
+//!   <security>
+//!     <verify-panel-commands>true</verify-panel-commands>
+//!   </security>
 //! </preferences>
 //! ```
 
@@ -43,6 +45,41 @@ pub struct Preferences {
     /// Preferences → Recent Files History panel.
     #[serde(rename = "recent-files-history", default)]
     pub recent_files_history: RecentFilesHistoryConfig,
+    /// Preferences → Security panel. A `config.xml` written before it
+    /// existed has no `<security>` element and gets the defaults — the
+    /// guard on, which is the point of defaulting it on.
+    #[serde(default)]
+    pub security: SecurityConfig,
+}
+
+/// The Preferences → Security panel's persisted controls.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SecurityConfig {
+    /// Run a plugin dock panel's startup command only when Code++
+    /// signed it — see `codepp_core::dock::CommandSeal`.
+    ///
+    /// Code++ reopens a plugin's panel at startup the way Notepad++
+    /// does, by running the plugin's own command for it, and the
+    /// command is named in `session.xml`. With this on, Code++ runs a
+    /// command only when it recorded it from the panel's own plugin and
+    /// signed it with a key only the user's account can read, so an
+    /// edited or copied session file, or a plugin registering a panel
+    /// under another plugin's name, cannot choose what runs. Nor does a
+    /// record that fails the check make Code++ load its plugin at
+    /// startup. Off is Notepad++'s behaviour: every saved command runs.
+    #[serde(
+        rename = "verify-panel-commands",
+        default = "defaults::verify_panel_commands"
+    )]
+    pub verify_panel_commands: bool,
+}
+
+impl Default for SecurityConfig {
+    fn default() -> Self {
+        Self {
+            verify_panel_commands: defaults::verify_panel_commands(),
+        }
+    }
 }
 
 /// The Preferences → Recent Files History panel's persisted
@@ -212,6 +249,9 @@ mod defaults {
     pub(super) fn custom_max_length() -> u32 {
         60
     }
+    pub(super) fn verify_panel_commands() -> bool {
+        true
+    }
 }
 
 /// Errors from reading or writing `config.xml`. Mirrors the
@@ -312,6 +352,40 @@ mod tests {
             RecentFileDisplayMode::FullPath
         );
         assert_eq!(p.recent_files_history.custom_max_length, 60);
+        assert!(
+            p.security.verify_panel_commands,
+            "the startup-command guard is on out of the box"
+        );
+    }
+
+    /// A `config.xml` from before the Security pane existed — no
+    /// `<security>` element, or one without the field — reads with the
+    /// guard on, so an upgrade does not quietly leave it off.
+    #[test]
+    fn a_config_without_the_security_pane_has_the_guard_on() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("config.xml");
+        for xml in [
+            "<?xml version=\"1.0\"?><preferences><recent-files-history/></preferences>",
+            "<?xml version=\"1.0\"?><preferences><security/></preferences>",
+            "<?xml version=\"1.0\"?><preferences></preferences>",
+        ] {
+            std::fs::write(&path, xml).expect("write");
+            let p = Preferences::load(&path).expect("load");
+            assert!(p.security.verify_panel_commands, "{xml}");
+        }
+        std::fs::write(
+            &path,
+            "<?xml version=\"1.0\"?><preferences><security>             <verify-panel-commands>false</verify-panel-commands></security></preferences>",
+        )
+        .expect("write");
+        assert!(
+            !Preferences::load(&path)
+                .expect("load")
+                .security
+                .verify_panel_commands,
+            "an explicit off is kept"
+        );
     }
 
     #[test]
@@ -391,6 +465,9 @@ mod tests {
                 display_mode: RecentFileDisplayMode::CustomMaxLength,
                 custom_max_length: 120,
             },
+            security: SecurityConfig {
+                verify_panel_commands: false,
+            },
         };
         p.save(&path).expect("save");
         let back = Preferences::load(&path).expect("load");
@@ -421,6 +498,7 @@ mod tests {
                 custom_max_length: 0,
                 ..Default::default()
             },
+            ..Default::default()
         };
         bad.save(&path).expect("save");
         let raw = std::fs::read_to_string(&path).expect("read");

@@ -173,6 +173,18 @@ pub fn styles_xml_path() -> Option<PathBuf> {
     config_dir().map(|d| d.join("styles.xml"))
 }
 
+/// Path to the key Code++ signs plugin panels' startup commands with —
+/// `config_dir/panel-restore.key`, encrypted for the current Windows
+/// account (see `panel_key`). Next to `session.xml`, whose signatures it
+/// checks, rather than in the machine-local profile: a roaming profile
+/// takes both along, and a scratch profile — a demo, a test — has its
+/// own. `panel-restore.key.lock` beside it is the lock two instances
+/// take turns with; it holds nothing.
+#[must_use]
+pub fn panel_key_path() -> Option<PathBuf> {
+    config_dir().map(|d| d.join("panel-restore.key"))
+}
+
 /// Path to `shortcuts.xml` under [`config_dir`] — the persisted
 /// plugin-command shortcut cache (Notepad++'s file name and
 /// `<PluginCommands>` schema, so a user migrating from N++ can

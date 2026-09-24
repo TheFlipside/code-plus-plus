@@ -797,9 +797,10 @@ fn on_plugin_command(cmd_id: i32) {
         return;
     };
     // SAFETY: `cmd` is a plugin `FuncItem.p_func`, invoked on the UI
-    // thread with no arguments, per the N++ ABI. The boundary keeps a
-    // Rust-plugin panic from unwinding across `extern "C"`.
-    crate::at_callback_boundary("plugin:command", (), || unsafe { cmd() });
+    // thread with no arguments, per the N++ ABI, and marked as its own
+    // plugin while it runs (`codepp_plugin_host::caller`). The boundary
+    // keeps a Rust-plugin panic from unwinding across `extern "C"`.
+    crate::at_callback_boundary("plugin:command", (), || unsafe { cmd.run() });
     // A command may have edited the buffer, changed status, or queued
     // notifications; flush the wake pipeline.
     crate::drain_shell();

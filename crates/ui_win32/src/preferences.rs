@@ -5,16 +5,17 @@
 //! N++'s Preferences box: left-side category listbox + right-side
 //! per-category panel + bottom Close button.
 //!
-//! Today the dialog ships exactly one category — **Recent Files
-//! History** — since that's the only pane wired into live UI so
-//! far. Every other N++ Preferences pane (General, Toolbar, Tab
-//! Bar, Editing 1/2, Dark Mode, Margins/Border/Edge, New
-//! Document, Default Directory, File Association, Language,
-//! Indentation, Highlighting, Print, Searching, Backup,
-//! Auto-Completion, Multi-Instance & Date, Delimiter,
-//! Performance, Cloud & Link, Search Engine, MISC.) is a future
-//! commit — each just adds a new listbox row and a new
-//! per-category panel switched by the listbox selection.
+//! Two categories today: **Recent Files History**, and **Security**,
+//! which Notepad++ does not have — it holds the switch for the check
+//! on plugin panels' startup commands (`codepp_core::dock::CommandSeal`).
+//! Every other N++ Preferences pane (General, Toolbar, Tab Bar,
+//! Editing 1/2, Dark Mode, Margins/Border/Edge, New Document, Default
+//! Directory, File Association, Language, Indentation, Highlighting,
+//! Print, Searching, Backup, Auto-Completion, Multi-Instance & Date,
+//! Delimiter, Performance, Cloud & Link, Search Engine, MISC.) is a
+//! future commit — each adds a listbox row, a page of controls, and
+//! an entry in [`PrefsState::pages`], which the listbox selection
+//! switches between.
 //!
 //! **Return value.** [`show_preferences_dialog`] returns
 //! `Some(Preferences)` when the user closed via the Close button
@@ -35,11 +36,12 @@ use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Input::KeyboardAndMouse::SetFocus;
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, EndDialog, GetWindowLongPtrW, GetWindowTextW, SendMessageW, SetWindowLongPtrW,
-    BM_GETCHECK, BM_SETCHECK, BN_CLICKED, BS_AUTOCHECKBOX, BS_AUTORADIOBUTTON, BS_DEFPUSHBUTTON,
-    GWLP_USERDATA, HMENU, IDCANCEL, LBN_SELCHANGE, LBS_HASSTRINGS, LBS_NOTIFY, LB_ADDSTRING,
-    LB_SETCURSEL, WINDOW_EX_STYLE, WINDOW_STYLE, WM_COMMAND, WM_CTLCOLORBTN, WM_CTLCOLORSTATIC,
-    WM_INITDIALOG, WM_NCDESTROY, WM_SETFONT, WM_SETTEXT, WS_BORDER, WS_CHILD, WS_EX_CONTROLPARENT,
-    WS_GROUP, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
+    ShowWindow, BM_GETCHECK, BM_SETCHECK, BN_CLICKED, BS_AUTOCHECKBOX, BS_AUTORADIOBUTTON,
+    BS_DEFPUSHBUTTON, GWLP_USERDATA, HMENU, IDCANCEL, LBN_SELCHANGE, LBS_HASSTRINGS, LBS_NOTIFY,
+    LB_ADDSTRING, LB_GETCURSEL, LB_SETCURSEL, SW_HIDE, SW_SHOW, WINDOW_EX_STYLE, WINDOW_STYLE,
+    WM_COMMAND, WM_CTLCOLORBTN, WM_CTLCOLORSTATIC, WM_INITDIALOG, WM_NCDESTROY, WM_SETFONT,
+    WM_SETTEXT, WS_BORDER, WS_CHILD, WS_EX_CONTROLPARENT, WS_GROUP, WS_TABSTOP, WS_VISIBLE,
+    WS_VSCROLL,
 };
 
 use codepp_core::preferences::{
@@ -66,6 +68,28 @@ const IDC_PREFS_RADIO_FULL_PATH: u16 = 905;
 const IDC_PREFS_RADIO_CUSTOM_LEN: u16 = 906;
 const IDC_PREFS_CUSTOM_LEN_EDIT: u16 = 907;
 const IDC_PREFS_CLOSE: u16 = 908;
+const IDC_PREFS_VERIFY_PANEL_COMMANDS: u16 = 909;
+
+/// The category list's rows, in order. A row's index is its page's
+/// index in [`PrefsState::pages`].
+const CATEGORIES: [&str; 2] = ["Recent Files History", "Security"];
+
+/// The Security page's checkbox label: what the switch does, in the
+/// fewest words that still say it.
+const VERIFY_PANEL_COMMANDS_LABEL: &str = "Run only signed plugin panel commands at startup";
+
+/// What the checkbox means, below it. The panel is narrow, so this is
+/// the one place the whole story is told.
+const VERIFY_PANEL_COMMANDS_HELP: &str = "\
+Code++ reopens a plugin's panel at startup the way Notepad++ does: \
+by running the plugin's own command for it. It signs each command it \
+records from the panel's own plugin, with a key only your Windows \
+account can read.\r\n\r\n\
+With this on, Code++ neither runs a command it did not sign nor loads \
+its plugin at startup. That covers a command from an edited or copied \
+session file, and one set by a plugin that is not the panel's own. \
+The panel keeps its place until you open it from its plugin's menu.\r\n\r\n\
+With this off, every saved command runs, as in Notepad++.";
 
 /// Per-dialog state. Lives on the heap and its raw pointer is
 /// parked in `GWLP_USERDATA` on the dialog HWND. Access from
@@ -92,6 +116,12 @@ struct PrefsState {
     hwnd_custom_len_radio: HWND,
     hwnd_custom_len_edit: HWND,
     hwnd_close: HWND,
+    hwnd_verify_panel_commands: HWND,
+    /// Every control of each category's page, indexed like
+    /// [`CATEGORIES`]. Only the selected page's are shown; the dialog
+    /// manager skips hidden controls when tabbing, so the others are
+    /// out of the way entirely.
+    pages: [Vec<HWND>; 2],
 }
 
 /// Show the Preferences dialog modally. On close returns the
@@ -124,6 +154,8 @@ pub fn show_preferences_dialog(main_hwnd: HWND, current: Preferences) -> Option<
             hwnd_custom_len_radio: HWND(std::ptr::null_mut()),
             hwnd_custom_len_edit: HWND(std::ptr::null_mut()),
             hwnd_close: HWND(std::ptr::null_mut()),
+            hwnd_verify_panel_commands: HWND(std::ptr::null_mut()),
+            pages: [Vec::new(), Vec::new()],
         });
         let state_ptr = Box::into_raw(state);
 
@@ -303,9 +335,13 @@ unsafe fn handle_command(hwnd: HWND, effective: u16, notify: u16) {
             | IDC_PREFS_RADIO_ONLY_NAME
             | IDC_PREFS_RADIO_FULL_PATH
             | IDC_PREFS_RADIO_CUSTOM_LEN
+            | IDC_PREFS_VERIFY_PANEL_COMMANDS
                 if u32::from(notify) == BN_CLICKED =>
             {
                 sync_state_from_controls(hwnd);
+            }
+            IDC_PREFS_CATEGORY_LIST if u32::from(notify) == LBN_SELCHANGE => {
+                show_selected_page(hwnd);
             }
             // Edit-control values are re-read on close and on
             // kill-focus. Both paths funnel through
@@ -363,6 +399,30 @@ unsafe fn sync_state_from_controls(hwnd: HWND) {
         }
 
         cfg.clamp();
+
+        state.prefs.security.verify_panel_commands = is_checked(state.hwnd_verify_panel_commands);
+    }
+}
+
+/// Show the page of the category selected in the list, and hide the
+/// rest. An out-of-range selection (none, `LB_ERR`) shows the first.
+unsafe fn show_selected_page(hwnd: HWND) {
+    unsafe {
+        let Some(state_ptr) = state_from(hwnd) else {
+            return;
+        };
+        let state = &*state_ptr;
+        let selected = SendMessageW(state.hwnd_category, LB_GETCURSEL, None, None).0;
+        let selected = usize::try_from(selected)
+            .ok()
+            .filter(|&i| i < state.pages.len())
+            .unwrap_or(0);
+        for (i, page) in state.pages.iter().enumerate() {
+            let show = if i == selected { SW_SHOW } else { SW_HIDE };
+            for &control in page {
+                let _ = ShowWindow(control, show);
+            }
+        }
     }
 }
 
@@ -433,11 +493,11 @@ unsafe fn populate_controls(hwnd: HWND) {
         );
         state.hwnd_category = category;
         set_font(category, font);
-        // Populate with the single available category. Every
-        // future pane just adds another `LB_ADDSTRING` line.
-        add_listbox_string(category, "Recent Files History");
-        // Select the first (and only) row so the panel is
-        // immediately labelled correctly.
+        for name in CATEGORIES {
+            add_listbox_string(category, name);
+        }
+        // Open on the first row, whose page is the one created visible
+        // below.
         SendMessageW(category, LB_SETCURSEL, Some(WPARAM(0)), None);
 
         // NOTE: the checkboxes and radios below deliberately keep
@@ -669,6 +729,76 @@ unsafe fn populate_controls(hwnd: HWND) {
             RecentFileDisplayMode::FullPath => set_checked(full_path, true),
             RecentFileDisplayMode::CustomMaxLength => set_checked(custom_len_radio, true),
         }
+        state.pages[0] = vec![
+            group_top,
+            group_top_title,
+            enabled,
+            lbl_max,
+            max_edit,
+            hint_max_hwnd,
+            group_disp,
+            group_disp_title,
+            in_submenu,
+            only_name,
+            full_path,
+            custom_len_radio,
+            custom_len_edit,
+            hint_len_hwnd,
+        ];
+
+        // Security page, created hidden: shown when its row is picked.
+        const SECURITY_H: i32 = GROUP_TOP_H + 12 + DISPLAY_H;
+        let group_security = create_child(
+            hwnd,
+            windows::core::w!("STATIC"),
+            None,
+            WS_CHILD | WINDOW_STYLE(SS_ETCHEDFRAME),
+            PANEL_X,
+            PANEL_Y,
+            420,
+            SECURITY_H,
+            0,
+        );
+        set_font(group_security, font);
+        let group_security_title = create_child(
+            hwnd,
+            windows::core::w!("STATIC"),
+            Some(" Plugin panels "),
+            WS_CHILD | WINDOW_STYLE(SS_CENTERIMAGE),
+            PANEL_X + 12,
+            PANEL_Y - CAPTION_TEXT_H / 2,
+            100,
+            CAPTION_TEXT_H,
+            0,
+        );
+        set_font(group_security_title, font);
+        let verify = create_child(
+            hwnd,
+            windows::core::w!("BUTTON"),
+            Some(VERIFY_PANEL_COMMANDS_LABEL),
+            WS_CHILD | WS_TABSTOP | WINDOW_STYLE(BS_AUTOCHECKBOX as u32),
+            PANEL_X + 16,
+            PANEL_Y + 24,
+            388,
+            22,
+            IDC_PREFS_VERIFY_PANEL_COMMANDS,
+        );
+        state.hwnd_verify_panel_commands = verify;
+        set_font(verify, font);
+        set_checked(verify, state.prefs.security.verify_panel_commands);
+        let verify_help = create_child(
+            hwnd,
+            windows::core::w!("STATIC"),
+            Some(VERIFY_PANEL_COMMANDS_HELP),
+            WS_CHILD,
+            PANEL_X + 34,
+            PANEL_Y + 54,
+            370,
+            SECURITY_H - 66,
+            0,
+        );
+        set_font(verify_help, font);
+        state.pages[1] = vec![group_security, group_security_title, verify, verify_help];
 
         // 4. Bottom-centred Close button.
         const CLOSE_W: i32 = 96;

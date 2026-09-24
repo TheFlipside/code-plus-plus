@@ -367,6 +367,12 @@ pub struct DockPanelSession {
     /// never recorded.
     #[serde(rename = "@cmd", skip_serializing_if = "Option::is_none", default)]
     pub cmd: Option<i32>,
+    /// Code++'s signature over [`Self::cmd`], as 64 hex digits — see
+    /// `dock::CommandSeal`. Present only when the plugin the panel is
+    /// named for registered it; with Preferences → Security's guard on,
+    /// a command without a signature that checks out is not run.
+    #[serde(rename = "@seal", skip_serializing_if = "Option::is_none", default)]
+    pub seal: Option<String>,
 }
 
 /// A hidden panel's remembered location.
@@ -1439,10 +1445,12 @@ mod tests {
                             DockPanelSession {
                                 kind: "workspace".into(),
                                 cmd: None,
+                                seal: None,
                             },
                             DockPanelSession {
                                 kind: "docmap".into(),
                                 cmd: None,
+                                seal: None,
                             },
                         ],
                     },
@@ -1456,6 +1464,7 @@ mod tests {
                         panels: vec![DockPanelSession {
                             kind: "docmap".into(),
                             cmd: None,
+                            seal: None,
                         }],
                     },
                 ],

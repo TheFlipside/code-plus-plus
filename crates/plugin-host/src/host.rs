@@ -739,6 +739,7 @@ impl PluginHost {
                 plugin.name = Some(loaded.name.clone());
                 plugin.state = PluginState::Loaded(loaded);
                 Ok(Some(PluginReady {
+                    idx: pending.idx,
                     path: pending.path.clone(),
                     be_notified,
                 }))
@@ -805,12 +806,20 @@ impl PluginHost {
     /// `catch_unwind` to keep panics from unwinding across the FFI.
     #[must_use]
     pub fn lookup_cmd(&self, cmd_id: i32) -> Option<crate::ffi::PluginCmd> {
-        for plugin in &self.plugins {
+        self.lookup_command(cmd_id).map(|command| command.func)
+    }
+
+    /// [`Self::lookup_cmd`] with the plugin the command belongs to,
+    /// which is what a backend runs a menu command through:
+    /// [`crate::PluginCommand::run`] marks that plugin as the one
+    /// being called while its command runs, so a dock panel the command
+    /// registers is known to be its own (see [`crate::caller`]).
+    #[must_use]
+    pub fn lookup_command(&self, cmd_id: i32) -> Option<crate::PluginCommand> {
+        for (owner, plugin) in self.plugins.iter().enumerate() {
             if let Some(funcs) = plugin.func_items() {
-                for f in funcs {
-                    if f.cmd_id == cmd_id {
-                        return f.p_func;
-                    }
+                if let Some(f) = funcs.iter().find(|f| f.cmd_id == cmd_id) {
+                    return f.p_func.map(|func| crate::PluginCommand { owner, func });
                 }
             }
         }
@@ -906,6 +915,9 @@ pub struct PendingLoad {
 /// load pass commits into a [`LoadNotifications`], which delivers them.
 #[derive(Clone, Debug)]
 pub struct PluginReady {
+    /// Registry index, marked as the calling plugin while its handler
+    /// runs — see [`crate::caller`].
+    idx: usize,
     /// Only for the log line on a panicking handler.
     path: std::path::PathBuf,
     be_notified: crate::ffi::BeNotifiedFn,
@@ -921,6 +933,9 @@ impl PluginReady {
             },
             ..SCNotification::default()
         };
+        // A dock panel registered from `NPPN_TBMODIFICATION` — the
+        // moment the ABI sets aside for it — is this plugin's.
+        let _calling = crate::caller::CallingPlugin::enter(self.idx);
         // SAFETY: `be_notified` came from a successful resolve in
         // `execute_load`, its library is still mapped (plugins are
         // never unloaded before the host drops), and the
@@ -1069,6 +1084,9 @@ pub fn execute_load(
     dispatch: Option<crate::ffi::HostDispatchFn>,
 ) -> Result<LoadedPlugin, String> {
     let _span = tracing::info_span!("plugin_load", path = ?pending.path).entered();
+    // Whatever `setInfo` or `getFuncsArray` sends the host was sent by
+    // this plugin — a panel registered from `setInfo` among it.
+    let _calling = crate::caller::CallingPlugin::enter(pending.idx);
     load_inner(&pending.path, npp_data, pending.cmd_id_base, dispatch)
 }
 
@@ -2041,8 +2059,9 @@ mod load_order_tests {
         record('b', sci);
     }
 
-    fn ready(be_notified: crate::ffi::BeNotifiedFn) -> PluginReady {
+    fn ready(idx: usize, be_notified: crate::ffi::BeNotifiedFn) -> PluginReady {
         PluginReady {
+            idx,
             path: PathBuf::from("recorder"),
             be_notified,
         }
@@ -2059,8 +2078,8 @@ mod load_order_tests {
     fn load_notifications_broadcast_in_notepad_plus_plus_order() {
         let mut notices = LoadNotifications::default();
         assert!(notices.is_empty());
-        notices.push(ready(plugin_a));
-        notices.push(ready(plugin_b));
+        notices.push(ready(0, plugin_a));
+        notices.push(ready(1, plugin_b));
 
         // `'*'` marks the panel-restore slot, which Notepad++ runs
         // after every plugin has had NPPN_TBMODIFICATION — where panels
@@ -2138,6 +2157,62 @@ mod load_order_tests {
         let ran = std::cell::Cell::new(false);
         LoadNotifications::default().deliver(core::ptr::null_mut(), || Some(1), || ran.set(true));
         assert!(!ran.get(), "an empty pass ran the panel restore");
+    }
+
+    std::thread_local! {
+        /// The plugin each load-time handler, and the restore slot, ran as.
+        static RAN_AS: std::cell::RefCell<Vec<(char, Option<usize>)>> =
+            const { std::cell::RefCell::new(Vec::new()) };
+    }
+
+    unsafe extern "C" fn record_calling_plugin(_sci: *const SCNotification) {
+        RAN_AS.with(|r| r.borrow_mut().push(('p', crate::calling_plugin())));
+    }
+
+    /// Each plugin's load-time handlers run marked as that plugin — a
+    /// panel registered from `NPPN_TBMODIFICATION` is known to be its
+    /// own — while the restore slot between them, which is host code,
+    /// runs with no plugin marked: the commands it sends mark their own.
+    #[test]
+    fn load_notifications_run_each_handler_as_its_plugin() {
+        let mut notices = LoadNotifications::default();
+        notices.push(ready(4, record_calling_plugin));
+        notices.push(ready(6, record_calling_plugin));
+        RAN_AS.with(|r| r.borrow_mut().clear());
+        notices.deliver(
+            core::ptr::null_mut(),
+            || None,
+            || RAN_AS.with(|r| r.borrow_mut().push(('*', crate::calling_plugin()))),
+        );
+        assert_eq!(
+            RAN_AS.with(|r| r.borrow().clone()),
+            vec![
+                ('p', Some(4)),
+                ('p', Some(6)),
+                ('*', None),
+                ('p', Some(4)),
+                ('p', Some(6)),
+            ]
+        );
+    }
+
+    /// A plugin's `setInfo` and `getFuncsArray` run marked as the plugin
+    /// being loaded, so a dock panel registered from `setInfo` is known
+    /// to be its own. A source check, because observing the mark needs
+    /// a real DLL that reports it.
+    #[test]
+    fn a_plugin_loads_as_itself() {
+        let src = include_str!("host.rs");
+        let body = &src[src.find("pub fn execute_load(").expect("execute_load")..];
+        let body = &body[..body.find("\n}\n").expect("end of execute_load")];
+        let mark = body
+            .find("CallingPlugin::enter(pending.idx)")
+            .expect("the load no longer runs marked as the plugin being loaded");
+        let load = body.find("load_inner(").expect("the load itself");
+        assert!(
+            mark < load,
+            "the mark must be set before the plugin's code runs"
+        );
     }
 
     /// A plugin's four init entry points are called in

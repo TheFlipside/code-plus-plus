@@ -463,6 +463,12 @@ pub struct DockDialogParams {
     /// Never null: the dispatcher rejects a null / negative
     /// `lparam` before building this struct.
     pub tb_data: *const crate::ffi::TbData,
+    /// Registry index of the plugin the host was calling when the
+    /// registration arrived — see [`crate::caller`] — or `None` when it
+    /// arrived from outside any such call. What decides whether the
+    /// panel's startup command is signed: only when this is the plugin
+    /// [`Self::module_name`] names.
+    pub caller: Option<usize>,
 }
 
 /// The three display strings a plugin's `tTbData` carries, decoded
@@ -745,9 +751,11 @@ pub fn notify_all(host: &PluginHost, notification: &Notification, npp_hwnd: Hwnd
 /// backend takes one and consumes it within a single UI-thread turn.
 #[derive(Clone, Default)]
 pub struct NotifyTargets {
-    /// `(display label, beNotified)` per loaded plugin, in registry
-    /// order — the same order [`PluginHost::iter`] walks.
-    targets: Vec<(String, crate::ffi::BeNotifiedFn)>,
+    /// `(registry index, display label, beNotified)` per loaded plugin,
+    /// in registry order — the same order [`PluginHost::iter`] walks.
+    /// The index is marked as the calling plugin while its handler runs
+    /// (see [`crate::caller`]).
+    targets: Vec<(usize, String, crate::ffi::BeNotifiedFn)>,
 }
 
 impl NotifyTargets {
@@ -756,7 +764,8 @@ impl NotifyTargets {
     pub fn snapshot(host: &PluginHost) -> Self {
         let targets = host
             .iter()
-            .filter_map(|p| p.be_notified_fn().map(|f| (p.display_label(), f)))
+            .enumerate()
+            .filter_map(|(idx, p)| p.be_notified_fn().map(|f| (idx, p.display_label(), f)))
             .collect();
         Self { targets }
     }
@@ -798,13 +807,14 @@ impl NotifyTargets {
             ..SCNotification::default()
         };
 
-        for (label, be_notified) in &self.targets {
+        for (idx, label, be_notified) in &self.targets {
             let _span = tracing::trace_span!(
                 "plugin_notify",
                 plugin = ?label,
                 code = notification.code(),
             )
             .entered();
+            let _calling = crate::caller::CallingPlugin::enter(*idx);
             let result = catch_unwind(AssertUnwindSafe(|| {
                 // SAFETY: `be_notified` has the C ABI declared in
                 // PluginInterface.h and its DLL is still mapped (see
@@ -2468,6 +2478,7 @@ pub unsafe fn dispatch_nppm<S: HostServices>(
                 dlg_id,
                 i_prev_cont,
                 tb_data: td,
+                caller: crate::caller::calling_plugin(),
             };
             isize::from(services.register_dock_dialog(params))
         }
@@ -3387,6 +3398,9 @@ mod tests {
         /// tests only need to verify the handler-side
         /// bookkeeping shape, not the per-field round-trip.
         dock_dialogs: Vec<(usize, String, String, bool)>,
+        /// [`DockDialogParams::caller`] of every registration, in
+        /// order — failed ones included.
+        dock_callers: Vec<Option<usize>>,
         /// Whether `register_dock_dialog` reports success.
         /// Defaults to `true`; tests that exercise the
         /// frame-creation-failure path flip it to false.
@@ -3922,6 +3936,7 @@ mod tests {
                 "register_dock_dialog(h=0x{:x},name={:?},mod={:?})",
                 params.h_client as usize, params.name, params.module_name
             ));
+            self.dock_callers.push(params.caller);
             if !self.dock_register_succeeds {
                 return false;
             }
@@ -4568,6 +4583,36 @@ mod tests {
             &Notification::FileBeforeClose { buffer_id: 7 },
             core::ptr::null_mut(),
         );
+    }
+
+    std::thread_local! {
+        /// `(the plugin a handler ran as, code)` per delivery.
+        static DELIVERED_AS: std::cell::RefCell<Vec<Option<usize>>> =
+            const { std::cell::RefCell::new(Vec::new()) };
+    }
+
+    unsafe extern "C" fn record_calling_plugin(_sci: *const SCNotification) {
+        DELIVERED_AS.with(|d| d.borrow_mut().push(crate::calling_plugin()));
+    }
+
+    /// Each plugin's `beNotified` runs marked as that plugin, so a panel
+    /// it registers from a notification is known to be its own, and the
+    /// mark ends with the delivery.
+    #[test]
+    fn notify_targets_deliver_to_each_plugin_as_itself() {
+        let targets = NotifyTargets {
+            targets: vec![
+                (3, "three".into(), record_calling_plugin),
+                (8, "eight".into(), record_calling_plugin),
+            ],
+        };
+        DELIVERED_AS.with(|d| d.borrow_mut().clear());
+        targets.deliver(&Notification::Ready, core::ptr::null_mut());
+        assert_eq!(
+            DELIVERED_AS.with(|d| d.borrow().clone()),
+            vec![Some(3), Some(8)]
+        );
+        assert_eq!(crate::calling_plugin(), None);
     }
 
     #[test]
@@ -6342,6 +6387,32 @@ mod tests {
         assert_eq!(s.dock_dialogs[0].1, "Console");
         assert_eq!(s.dock_dialogs[0].2, "NppExec");
         assert!(!s.dock_dialogs[0].3); // not visible until SHOW
+    }
+
+    /// A registration carries the plugin the host was calling when it
+    /// arrived — what the panel's startup command is signed on — and
+    /// none when it arrived from outside every such call.
+    #[test]
+    fn dmm_register_carries_the_calling_plugin() {
+        let mut s = MockServices {
+            dock_register_succeeds: true,
+            ..Default::default()
+        };
+        let name = make_wide("Console");
+        let module = make_wide("NppExec");
+        let inside = build_tb_data(0xA1, &name, &module, 0);
+        let outside = build_tb_data(0xA2, &name, &module, 0);
+        {
+            let _calling = crate::CallingPlugin::enter(9);
+            let r = unsafe {
+                dispatch_nppm(&mut s, NPPM_DMMREGASDCKDLG, 0, &raw const inside as isize)
+            };
+            assert_eq!(r, Some(1));
+        }
+        let r =
+            unsafe { dispatch_nppm(&mut s, NPPM_DMMREGASDCKDLG, 0, &raw const outside as isize) };
+        assert_eq!(r, Some(1));
+        assert_eq!(s.dock_callers, vec![Some(9), None]);
     }
 
     #[test]

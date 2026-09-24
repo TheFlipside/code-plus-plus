@@ -499,10 +499,30 @@ pub trait UiPlatform {
     /// Adopt a plugin's docking dialog as the content of a dock
     /// panel. Drives `NPPM_DMMREGASDCKDLG`. The panel starts
     /// hidden; the plugin must follow with `show_dock_dialog` to
-    /// place it. Defaulted to `false` — only the Win32 backend
-    /// accepts the registration (DESIGN.md §7.4).
-    fn register_dock_dialog(&mut self, _params: codepp_plugin_host::DockDialogParams) -> bool {
-        false
+    /// place it. Returns the panel the registration interned to — the
+    /// shell then records its startup command through
+    /// [`Self::record_panel_open_command`] — or `None` when it was
+    /// refused. Defaulted to `None`: only the Win32 backend accepts
+    /// the registration (DESIGN.md §7.4).
+    fn register_dock_dialog(
+        &mut self,
+        _params: codepp_plugin_host::DockDialogParams,
+    ) -> Option<codepp_core::dock::DockPanel> {
+        None
+    }
+
+    /// Record the command that reopens `panel` at the next start — the
+    /// `tTbData.dlgID` it was registered with — and the signature the
+    /// shell made for it, if it made one
+    /// ([`Shell::seal_for_registration`]). Called straight after a
+    /// successful [`Self::register_dock_dialog`], which is the only
+    /// thing that knows which panel a registration interned to.
+    fn record_panel_open_command(
+        &mut self,
+        _panel: codepp_core::dock::DockPanel,
+        _command: i32,
+        _seal: Option<codepp_core::dock::CommandSeal>,
+    ) {
     }
 
     /// Show the panel previously registered for `h_client`,
@@ -1908,7 +1928,18 @@ pub struct Shell {
     /// [`Self::discover_plugins`], [`Self::set_plugin_disabled`].
     /// `RefCell` because the query methods are `&self`.
     plugin_chord_index: std::cell::RefCell<Option<PluginChordIndex>>,
+    /// Signs plugin panels' startup commands — see
+    /// [`Self::set_panel_signer`]. `None` until a backend that hosts
+    /// plugin panels installs one.
+    panel_signer: Option<PanelSignFn>,
 }
+
+/// Computes the signature on a plugin panel's startup command: the
+/// HMAC-SHA256 of `codepp_core::dock::restore_command_message` under
+/// the user's key, or `None` when there is no key. The Win32 backend
+/// installs `codepp_platform::panel_key::PanelSigner::sign`; a test
+/// installs its own.
+pub type PanelSignFn = Box<dyn Fn(&[u8]) -> Option<[u8; 32]>>;
 
 /// The memoized chord table backing [`Shell::startup_plugin_chords`]
 /// and [`Shell::match_plugin_chord`]. Both `chords` (registration
@@ -2315,6 +2346,7 @@ impl Shell {
             udl_registry,
             plugin_shortcuts: load_plugin_shortcuts(),
             plugin_chord_index: std::cell::RefCell::new(None),
+            panel_signer: None,
         })
     }
 
@@ -3130,6 +3162,13 @@ impl Shell {
     /// stops the panel being blank the moment they click its tab.
     /// Panels the user *closed* are not, because `hide` takes them
     /// out of the groups this walks and into the remembered table.
+    ///
+    /// With Preferences → Security's guard on, only panels whose record
+    /// [`Self::panel_record_is_trusted`] counts: a record Code++ did not
+    /// sign — from an edited or copied `session.xml`, or for a panel
+    /// another plugin registered under this one's name — does not make
+    /// a plugin load at startup. Such a panel waits, parked, until its
+    /// plugin is loaded some other way.
     #[must_use]
     pub fn modules_with_restored_panels(&self) -> Vec<String> {
         let layout = self.restored_dock_layout();
@@ -3139,6 +3178,9 @@ impl Shell {
                 let Some(module) = panel.plugin_module() else {
                     continue;
                 };
+                if !self.panel_record_is_trusted(&layout, *panel) {
+                    continue;
+                }
                 let key = codepp_core::shortcuts::module_key(module);
                 if !out.contains(&key) {
                     out.push(key);
@@ -3239,6 +3281,110 @@ impl Shell {
         let func = plugin.func_items()?.get(usize::try_from(index).ok()?)?;
         func.p_func?;
         Some(func.cmd_id)
+    }
+
+    /// Install what signs plugin panels' startup commands.
+    ///
+    /// A backend that hosts plugin panels installs one before its
+    /// startup restore; only Win32 does. Without one nothing is signed,
+    /// so with Preferences → Security's guard on no saved command runs
+    /// and no restored panel loads its plugin at startup.
+    pub fn set_panel_signer(&mut self, sign: PanelSignFn) {
+        self.panel_signer = Some(sign);
+    }
+
+    /// Code++'s signature on `panel`'s startup command `command`, or
+    /// `None` with no signer or no key, or for one of the host's panels.
+    fn sign_panel_command(
+        &self,
+        panel: codepp_core::dock::DockPanel,
+        command: i32,
+    ) -> Option<codepp_core::dock::CommandSeal> {
+        let message = codepp_core::dock::restore_command_message(panel, command)?;
+        let sign = self.panel_signer.as_ref()?;
+        sign(&message).map(codepp_core::dock::CommandSeal::from_bytes)
+    }
+
+    /// The signature on a startup command a plugin has just registered
+    /// for `panel`, made only when `caller` — the plugin the host was
+    /// calling when the registration arrived,
+    /// `codepp_plugin_host::DockDialogParams::caller` — is the plugin
+    /// the panel is named for. Otherwise the command is recorded
+    /// unsigned, and with Preferences → Security's guard on it does not
+    /// run at the next start: a panel registered under another plugin's
+    /// name, one from outside any call the host made, and one naming no
+    /// installed plugin at all.
+    ///
+    /// Signed whether or not the guard is on, so turning it on later
+    /// does not cost the panels Code++ has already seen registered.
+    #[must_use]
+    pub fn seal_for_registration(
+        &self,
+        caller: Option<usize>,
+        panel: codepp_core::dock::DockPanel,
+        command: i32,
+    ) -> Option<codepp_core::dock::CommandSeal> {
+        let owner = self.panel_owner(panel);
+        if owner.is_none() || caller != owner {
+            let named = panel.plugin_module().unwrap_or_default();
+            match caller.and_then(|idx| self.plugins.iter().nth(idx)) {
+                Some(registrant) if owner.is_some() => tracing::warn!(
+                    panel = panel.persist_key(),
+                    registrant = ?registrant.filename(),
+                    named = ?named,
+                    "a plugin registered a dock panel under another plugin's name; \
+                     its startup command is not signed"
+                ),
+                _ => tracing::debug!(
+                    panel = panel.persist_key(),
+                    caller = ?caller,
+                    "a dock panel's registration is not tied to the plugin it names; \
+                     its startup command is not signed"
+                ),
+            }
+            return None;
+        }
+        self.sign_panel_command(panel, command)
+    }
+
+    /// Whether `panel`'s startup command `command`, carrying `seal`, may
+    /// run. Always with Preferences → Security's guard off, which is
+    /// what Notepad++ does; with it on, only when `seal` is the
+    /// signature Code++ makes for exactly this panel and command —
+    /// which it made only when the panel's own plugin registered it.
+    #[must_use]
+    pub fn may_run_panel_command(
+        &self,
+        panel: codepp_core::dock::DockPanel,
+        command: i32,
+        seal: Option<codepp_core::dock::CommandSeal>,
+    ) -> bool {
+        if !self.preferences.security.verify_panel_commands {
+            return true;
+        }
+        let Some(seal) = seal else {
+            return false;
+        };
+        self.sign_panel_command(panel, command)
+            .is_some_and(|expected| expected.matches(&seal))
+    }
+
+    /// Whether `layout`'s record of plugin `panel` may make Code++ act on
+    /// it at startup: load its plugin, run its command, take it out of
+    /// parking to be restored. With the guard off, any record; with it
+    /// on, only one whose command [`Self::may_run_panel_command`] would
+    /// run — so not a record with no command at all, which gives
+    /// nothing to check.
+    #[must_use]
+    pub fn panel_record_is_trusted(
+        &self,
+        layout: &codepp_core::dock::DockLayout,
+        panel: codepp_core::dock::DockPanel,
+    ) -> bool {
+        match layout.open_command(panel) {
+            Some((command, seal)) => self.may_run_panel_command(panel, command, seal),
+            None => !self.preferences.security.verify_panel_commands,
+        }
     }
 
     /// Record one [`Self::next_plugin_to_load`] outcome. Returns the
@@ -3585,18 +3731,23 @@ impl Shell {
         (!funcs.is_empty()).then(|| (plugin.display_label(), funcs))
     }
 
-    /// Find the plugin callback registered for menu-command id
-    /// `cmd_id`. Returns the bare `PluginCmd` function pointer so
-    /// the caller can invoke it after dropping any `&mut Shell`
-    /// borrow — invoking the callback while a borrow is alive
-    /// would be aliasing UB if the plugin synchronously
-    /// `SendMessage`s an `NPPM_*` back into our `wnd_proc`.
+    /// Find the plugin command registered for menu-command id
+    /// `cmd_id`. Returns it by value so the caller can run it after
+    /// dropping any `&mut Shell` borrow — invoking the callback while a
+    /// borrow is alive would be aliasing UB if the plugin
+    /// synchronously `SendMessage`s an `NPPM_*` back into our
+    /// `wnd_proc`.
     ///
-    /// The returned pointer is valid as long as the plugin's DLL
-    /// stays loaded (i.e. for the lifetime of `self`).
+    /// Run it with [`codepp_plugin_host::PluginCommand::run`], which
+    /// marks its plugin as the one being called: a dock panel the
+    /// command registers is then known to be that plugin's own, which
+    /// is what its startup command is signed on.
+    ///
+    /// The function pointer is valid as long as the plugin's DLL stays
+    /// loaded (i.e. for the lifetime of `self`).
     #[must_use]
-    pub fn lookup_plugin_command(&self, cmd_id: i32) -> Option<PluginCmd> {
-        self.plugins.lookup_cmd(cmd_id)
+    pub fn lookup_plugin_command(&self, cmd_id: i32) -> Option<codepp_plugin_host::PluginCommand> {
+        self.plugins.lookup_command(cmd_id)
     }
 
     /// Route a wnd_proc-received NPPM_* message into the plugin
@@ -8800,7 +8951,16 @@ impl<U: UiPlatform> HostServices for HostBridge<'_, U> {
     }
 
     fn register_dock_dialog(&mut self, params: codepp_plugin_host::DockDialogParams) -> bool {
-        self.ui.register_dock_dialog(params)
+        let (caller, command) = (params.caller, params.dlg_id);
+        let Some(panel) = self.ui.register_dock_dialog(params) else {
+            return false;
+        };
+        // Only the UI knows which panel the plugin's module and title
+        // intern to, so the command is recorded once it has said —
+        // signed only if the plugin the panel is named for sent it.
+        let seal = self.shell.seal_for_registration(caller, panel, command);
+        self.ui.record_panel_open_command(panel, command, seal);
+        true
     }
 
     fn show_dock_dialog(&mut self, h_client: codepp_plugin_host::Hwnd) -> bool {
@@ -8855,12 +9015,13 @@ impl<U: UiPlatform> HostServices for HostBridge<'_, U> {
         // appears in the Plugins menu). An unloaded or panicked
         // plugin returns `None` here and the lookup misses — the
         // upstream contract says "0 when target isn't loaded."
-        let Some(proc) = self
+        let Some((target_idx, proc)) = self
             .shell
             .plugins
             .iter()
-            .find(|p| p.name.as_deref() == Some(target_name))
-            .and_then(codepp_plugin_host::PluginInfo::message_proc_fn)
+            .enumerate()
+            .find(|(_, p)| p.name.as_deref() == Some(target_name))
+            .and_then(|(idx, p)| p.message_proc_fn().map(|f| (idx, f)))
         else {
             tracing::trace!(
                 target = target_name,
@@ -8873,6 +9034,9 @@ impl<U: UiPlatform> HostServices for HostBridge<'_, U> {
         // plugin's panic doesn't unwind across the C ABI — same
         // safety boundary as `notify_all` for beNotified.
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            // The target runs as itself, not as the plugin that sent it
+            // the message.
+            let _calling = codepp_plugin_host::CallingPlugin::enter(target_idx);
             // SAFETY: `proc` is the plugin's exported
             // `messageProc` — declared `unsafe extern "C" fn(u32,
             // usize, isize) -> isize` in `ffi.rs`. The plugin
@@ -10015,6 +10179,13 @@ mod tests {
         /// Every `convert_doc_eols` call as `(doc, eol)`, for the
         /// `NPPM_SETBUFFERFORMAT` tests.
         converted_docs: Vec<(isize, codepp_core::Eol)>,
+        /// Every `record_panel_open_command` call, for the tests of
+        /// which registrations get their startup command signed.
+        recorded_panel_commands: Vec<(
+            codepp_core::dock::DockPanel,
+            i32,
+            Option<codepp_core::dock::CommandSeal>,
+        )>,
         status_calls: Vec<(LangType, String, String, u64)>,
         plugin_status_calls: Vec<(usize, String)>,
         /// Every `set_clipboard` call's payload set, so a test can assert
@@ -10371,12 +10542,23 @@ mod tests {
             // creation.
             core::ptr::null_mut()
         }
-        #[cfg(target_os = "windows")]
-        fn register_dock_dialog(&mut self, _params: codepp_plugin_host::DockDialogParams) -> bool {
-            // Shell-level tests don't model docked dialogs;
-            // the dispatcher mock in `dispatch.rs` covers the
-            // surface end-to-end.
-            true
+        fn register_dock_dialog(
+            &mut self,
+            params: codepp_plugin_host::DockDialogParams,
+        ) -> Option<codepp_core::dock::DockPanel> {
+            // Shell-level tests don't model docked dialogs — the
+            // dispatcher mock in `dispatch.rs` covers the surface end
+            // to end. What they need is the identity the real backend
+            // interns, so the startup command's signature can be seen.
+            codepp_core::dock::intern_plugin_panel(&params.module_name, &params.name)
+        }
+        fn record_panel_open_command(
+            &mut self,
+            panel: codepp_core::dock::DockPanel,
+            command: i32,
+            seal: Option<codepp_core::dock::CommandSeal>,
+        ) {
+            self.recorded_panel_commands.push((panel, command, seal));
         }
         #[cfg(target_os = "windows")]
         fn show_dock_dialog(&mut self, _h_client: codepp_plugin_host::Hwnd) -> bool {
@@ -12336,6 +12518,260 @@ mod tests {
             shell.panels_without_a_loaded_plugin(&[pending, host, disabled, missing]),
             vec![pending, disabled, missing]
         );
+    }
+
+    /// `NPPM_MSGTOPLUGIN` runs the target's `messageProc` marked as the
+    /// target rather than as the plugin that sent the message, so a dock
+    /// panel the target registers from it is its own. A source check,
+    /// because a `messageProc` that reports its caller needs a plugin
+    /// built for it.
+    #[test]
+    fn an_inter_plugin_message_runs_as_its_target() {
+        let src = include_str!("lib.rs");
+        let body = &src[src
+            .find("    fn forward_plugin_message(")
+            .expect("forward_plugin_message")..];
+        let body = &body[..body
+            .find("\n    }\n")
+            .expect("end of forward_plugin_message")];
+        let mark = body
+            .find("CallingPlugin::enter(target_idx)")
+            .expect("the target's messageProc no longer runs marked as the target");
+        let call = body
+            .find("proc(internal_msg as u32, info_ptr, 0)")
+            .expect("the messageProc call");
+        assert!(
+            mark < call,
+            "the mark must be set before the target's code runs"
+        );
+    }
+
+    /// A stand-in for the platform signer: deterministic and keyed, so
+    /// two shells built with the same `key` agree and a different key
+    /// does not. Not a MAC — the real one is tested in
+    /// `codepp_platform::panel_key`; this checks the policy around it.
+    fn test_signer(key: u8) -> PanelSignFn {
+        Box::new(move |message| {
+            let mut out = [key; 32];
+            for (i, b) in message.iter().enumerate() {
+                out[i % 32] = out[i % 32].rotate_left(3) ^ *b ^ (i as u8);
+            }
+            Some(out)
+        })
+    }
+
+    /// A registration's startup command is signed only when the plugin
+    /// the host was calling is the plugin the panel is named for, and
+    /// only when there is a signer: never for a panel named for another
+    /// plugin, never from outside any call, never naming no installed
+    /// plugin — whatever the guard's setting, so turning it on later
+    /// does not cost a panel Code++ saw registered.
+    #[test]
+    fn a_registration_is_signed_only_when_the_named_plugin_sent_it() {
+        let (mut shell, _dir) = shell_with_fake_plugins(&["cpseal_own", "cpseal_other"]);
+        let ext = codepp_platform::PLUGIN_EXTENSION;
+        let panel =
+            codepp_core::dock::intern_plugin_panel(&format!("cpseal_own.{ext}"), "Own Panel")
+                .expect("intern");
+        let stranger = codepp_core::dock::intern_plugin_panel("cpseal_gone.dll", "Gone Panel")
+            .expect("intern");
+        let own = shell
+            .plugins
+            .iter()
+            .position(|p| p.filename().starts_with("cpseal_own"))
+            .expect("discovered");
+        let other = shell
+            .plugins
+            .iter()
+            .position(|p| p.filename().starts_with("cpseal_other"))
+            .expect("discovered");
+
+        assert_eq!(
+            shell.seal_for_registration(Some(own), panel, 3),
+            None,
+            "no signer, no signature"
+        );
+        shell.set_panel_signer(test_signer(1));
+        for guard in [true, false] {
+            shell.preferences.security.verify_panel_commands = guard;
+            let seal = shell
+                .seal_for_registration(Some(own), panel, 3)
+                .expect("its own plugin registered it");
+            assert!(shell.may_run_panel_command(panel, 3, Some(seal)));
+            assert_eq!(shell.seal_for_registration(Some(other), panel, 3), None);
+            assert_eq!(shell.seal_for_registration(None, panel, 3), None);
+            assert_eq!(shell.seal_for_registration(Some(own), stranger, 3), None);
+        }
+    }
+
+    /// With the guard on, a saved command runs only with the signature
+    /// Code++ makes for exactly that panel and command; with it off —
+    /// Notepad++'s behaviour — any saved command runs.
+    #[test]
+    fn the_guard_runs_only_commands_code_plus_plus_signed() {
+        let (mut shell, _dir) = shell_with_fake_plugins(&["cpguard_a"]);
+        let ext = codepp_platform::PLUGIN_EXTENSION;
+        let panel =
+            codepp_core::dock::intern_plugin_panel(&format!("cpguard_a.{ext}"), "Guarded Panel")
+                .expect("intern");
+        let owner = shell
+            .plugins
+            .iter()
+            .position(|p| p.filename().starts_with("cpguard_a"))
+            .expect("discovered");
+        shell.set_panel_signer(test_signer(2));
+        shell.preferences.security.verify_panel_commands = true;
+        let seal = shell
+            .seal_for_registration(Some(owner), panel, 4)
+            .expect("signed");
+
+        assert!(shell.may_run_panel_command(panel, 4, Some(seal)));
+        assert!(
+            !shell.may_run_panel_command(panel, 5, Some(seal)),
+            "an edited index"
+        );
+        assert!(!shell.may_run_panel_command(panel, 4, None), "no signature");
+        let mut forged = [0u8; 32];
+        forged[0] = 1;
+        assert!(!shell.may_run_panel_command(
+            panel,
+            4,
+            Some(codepp_core::dock::CommandSeal::from_bytes(forged))
+        ));
+
+        // A copied session: signed by another profile's key.
+        let (mut elsewhere, _dir2) = shell_with_fake_plugins(&["cpguard_a"]);
+        elsewhere.preferences.security.verify_panel_commands = true;
+        elsewhere.set_panel_signer(test_signer(3));
+        assert!(!elsewhere.may_run_panel_command(panel, 4, Some(seal)));
+
+        shell.preferences.security.verify_panel_commands = false;
+        assert!(shell.may_run_panel_command(panel, 5, None), "the guard off");
+    }
+
+    /// With the guard on, a restored record makes Code++ load its plugin
+    /// at startup only when Code++ signed its command — a record with no
+    /// command, or one it did not sign, does not; with the guard off,
+    /// every docked record does, as before.
+    #[test]
+    fn the_guard_loads_only_the_plugins_of_signed_restored_panels() {
+        use codepp_core::dock::{DockLayout, DockSide};
+
+        let (mut shell, _dir) = shell_with_fake_plugins(&["cpload_signed", "cpload_forged"]);
+        let ext = codepp_platform::PLUGIN_EXTENSION;
+        let signed =
+            codepp_core::dock::intern_plugin_panel(&format!("cpload_signed.{ext}"), "Signed")
+                .expect("intern");
+        let forged =
+            codepp_core::dock::intern_plugin_panel(&format!("cpload_forged.{ext}"), "Forged")
+                .expect("intern");
+        let bare =
+            codepp_core::dock::intern_plugin_panel("cpload_bare.dll", "Bare").expect("intern");
+        shell.set_panel_signer(test_signer(4));
+        shell.preferences.security.verify_panel_commands = true;
+        let owner = shell
+            .plugins
+            .iter()
+            .position(|p| p.filename().starts_with("cpload_signed"))
+            .expect("discovered");
+        let seal = shell.seal_for_registration(Some(owner), signed, 1);
+        assert!(seal.is_some());
+
+        let mut layout = DockLayout::new();
+        for panel in [signed, forged, bare] {
+            layout.set_initial_side(panel, DockSide::Bottom);
+            layout.show(panel);
+        }
+        layout.set_open_command(signed, 1, seal);
+        // An edited file: another plugin's panel naming a command, with
+        // the signature of the first copied across.
+        layout.set_open_command(forged, 1, seal);
+        shell.set_dock_session(Some(layout.to_session()));
+
+        let restored = shell.restored_dock_layout();
+        assert!(shell.panel_record_is_trusted(&restored, signed));
+        assert!(!shell.panel_record_is_trusted(&restored, forged));
+        assert!(
+            !shell.panel_record_is_trusted(&restored, bare),
+            "no command"
+        );
+        assert_eq!(
+            shell.modules_with_restored_panels(),
+            vec!["cpload_signed".to_string()]
+        );
+
+        shell.preferences.security.verify_panel_commands = false;
+        assert!(shell.panel_record_is_trusted(&restored, forged));
+        assert!(shell.panel_record_is_trusted(&restored, bare));
+        assert_eq!(
+            shell.modules_with_restored_panels(),
+            vec![
+                "cpload_signed".to_string(),
+                "cpload_forged".to_string(),
+                "cpload_bare".to_string()
+            ]
+        );
+    }
+
+    /// End to end through the dispatcher: `NPPM_DMMREGASDCKDLG` sent
+    /// while the host is calling the named plugin records its command
+    /// signed; the same registration under another plugin's name, or
+    /// from outside any call, records it unsigned.
+    #[test]
+    fn a_registration_through_the_dispatcher_records_its_signed_command() {
+        let (mut shell, _dir) = shell_with_fake_plugins(&["cpdisp_own", "cpdisp_other"]);
+        shell.set_panel_signer(test_signer(5));
+        let ext = codepp_platform::PLUGIN_EXTENSION;
+        let idx = |shell: &Shell, name: &str| {
+            shell
+                .plugins
+                .iter()
+                .position(|p| p.filename().starts_with(name))
+                .expect("discovered")
+        };
+        let (own, other) = (idx(&shell, "cpdisp_own"), idx(&shell, "cpdisp_other"));
+        let wide = |s: &str| {
+            s.encode_utf16()
+                .chain(std::iter::once(0))
+                .collect::<Vec<u16>>()
+        };
+        let module = wide(&format!("cpdisp_own.{ext}"));
+        let names = [wide("Disp One"), wide("Disp Two"), wide("Disp Three")];
+        let mut ui = FakeUi::default();
+        for (name, caller) in names.iter().zip([Some(own), Some(other), None]) {
+            let td = codepp_plugin_host::TbData {
+                h_client: 0x51 as codepp_plugin_host::Hwnd,
+                psz_name: name.as_ptr(),
+                dlg_id: 2,
+                u_mask: 0,
+                h_icon_tab: core::ptr::null_mut(),
+                psz_add_info: core::ptr::null(),
+                rc_float: codepp_plugin_host::TbRect::default(),
+                i_prev_cont: 0,
+                psz_module_name: module.as_ptr(),
+            };
+            let _calling = caller.map(codepp_plugin_host::CallingPlugin::enter);
+            // SAFETY: `td` and the strings it points at outlive the call.
+            let r = unsafe {
+                shell.dispatch_plugin_message(
+                    &mut ui,
+                    HostHandles::null(),
+                    codepp_plugin_host::dispatch::NPPM_DMMREGASDCKDLG,
+                    0,
+                    &raw const td as isize,
+                )
+            };
+            assert_eq!(r, Some(1));
+        }
+        let seals: Vec<bool> = ui
+            .recorded_panel_commands
+            .iter()
+            .map(|(_, command, seal)| {
+                assert_eq!(*command, 2);
+                seal.is_some()
+            })
+            .collect();
+        assert_eq!(seals, vec![true, false, false]);
     }
 
     /// The built `example_hello.dll`, or `None` when it has not been
@@ -17874,6 +18310,9 @@ mod tests {
 
         let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
         let mut shell = Shell::new(wake).unwrap();
+        // Notepad++'s behaviour — every record counts. The guard's side
+        // is `the_guard_loads_only_the_plugins_of_signed_restored_panels`.
+        shell.preferences.security.verify_panel_commands = false;
 
         // Nothing restored: nothing to load.
         assert!(shell.modules_with_restored_panels().is_empty());
@@ -17915,6 +18354,7 @@ mod tests {
 
         let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
         let mut shell = Shell::new(wake).unwrap();
+        shell.preferences.security.verify_panel_commands = false;
 
         let a = codepp_core::dock::intern_plugin_panel("Twin.dll", "A").expect("intern a");
         let b = codepp_core::dock::intern_plugin_panel("Twin.dll", "B").expect("intern b");

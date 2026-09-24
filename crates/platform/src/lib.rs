@@ -8,13 +8,15 @@
 pub mod config;
 pub mod dynlib;
 pub mod host_env;
+#[cfg(target_os = "windows")]
+pub mod panel_key;
 pub mod plugin_stage;
 pub mod watch;
 
 pub use config::{
     backups_dir, config_dir, config_xml_path, disabled_plugins_path, find_history_xml_path,
-    plugins_config_dir, plugins_dir, recent_files_xml_path, session_xml_path, shortcuts_xml_path,
-    styles_xml_path, user_define_langs_dir,
+    panel_key_path, plugins_config_dir, plugins_dir, recent_files_xml_path, session_xml_path,
+    shortcuts_xml_path, styles_xml_path, user_define_langs_dir,
 };
 pub use dynlib::{has_plugin_extension, DynLib, PLUGIN_EXTENSION};
 pub use host_env::{program_dir, program_path, windows_version_npp};

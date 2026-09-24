@@ -3299,10 +3299,16 @@ impl UiPlatform for Win32Ui {
         }
     }
 
-    fn register_dock_dialog(&mut self, params: codepp_plugin_host::DockDialogParams) -> bool {
+    fn register_dock_dialog(
+        &mut self,
+        params: codepp_plugin_host::DockDialogParams,
+    ) -> Option<DockPanel> {
         // Adopt the plugin's h_client as a dock panel's content:
         // intern the panel identity, restyle the window as a child,
-        // and park it until NPPM_DMMSHOW places it.
+        // and park it until NPPM_DMMSHOW places it. The command that
+        // reopens it at the next start is recorded by the shell
+        // afterwards, through `record_panel_open_command` — the shell
+        // decides whether to sign it, and needs this panel to do so.
         //
         // SAFETY: every Win32 call here runs on the UI thread
         // (the trait method is invoked from a NPPM dispatch).
@@ -3312,7 +3318,7 @@ impl UiPlatform for Win32Ui {
         // `PluginCallGuard`.
         let h_client = HWND(params.h_client);
         if h_client.is_invalid() {
-            return false;
+            return None;
         }
         unsafe {
             if !IsWindow(Some(h_client)).as_bool() {
@@ -3320,7 +3326,7 @@ impl UiPlatform for Win32Ui {
                     h = h_client.0 as usize,
                     "NPPM_DMMREGASDCKDLG: h_client is not a live window"
                 );
-                return false;
+                return None;
             }
             // The host's main window: the owner the frame will get,
             // and the root of the window tree the checks below use to
@@ -3336,7 +3342,7 @@ impl UiPlatform for Win32Ui {
                 Ok(p) if !p.is_invalid() => p,
                 _ => {
                     tracing::warn!("NPPM_DMMREGASDCKDLG: GetParent(tab_hwnd) returned no owner");
-                    return false;
+                    return None;
                 }
             };
             // Refuse a handle that is not the plugin's own window to
@@ -3383,14 +3389,14 @@ impl UiPlatform for Win32Ui {
                     h = h_client.0 as usize,
                     "NPPM_DMMREGASDCKDLG: h_client belongs to another process"
                 );
-                return false;
+                return None;
             }
             if is_host_own_window(self, main_hwnd_owner, h_client) {
                 tracing::warn!(
                     h = h_client.0 as usize,
                     "NPPM_DMMREGASDCKDLG: h_client is one of the host's own windows"
                 );
-                return false;
+                return None;
             }
             // Reject duplicate registrations of the same h_client,
             // and any frame the host already created — registering a
@@ -3404,7 +3410,7 @@ impl UiPlatform for Win32Ui {
                     h = h_client.0 as usize,
                     "NPPM_DMMREGASDCKDLG: h_client already registered"
                 );
-                return false;
+                return None;
             }
             // Bound the number of registered frames so a buggy
             // / malicious plugin can't exhaust the per-process
@@ -3415,7 +3421,7 @@ impl UiPlatform for Win32Ui {
                     cap = DOCK_DIALOG_REGISTRATION_CAP,
                     "NPPM_DMMREGASDCKDLG: registration cap reached; rejecting"
                 );
-                return false;
+                return None;
             }
             // Intern the panel identity from the module and the
             // *sanitized* display name.
@@ -3456,14 +3462,14 @@ impl UiPlatform for Win32Ui {
                     panel = display_name,
                     "NPPM_DMMREGASDCKDLG: unusable panel identity, or the panel table is full"
                 );
-                return false;
+                return None;
             };
             if dialogs.iter().any(|e| e.panel == panel) {
                 tracing::warn!(
                     panel = display_name,
                     "NPPM_DMMREGASDCKDLG: that panel is already registered"
                 );
-                return false;
+                return None;
             }
             // Adopt `h_client` as a child of the main window: parked
             // there, hidden, until the dock reconciler moves it into
@@ -3476,7 +3482,7 @@ impl UiPlatform for Win32Ui {
                     h = h_client.0 as usize,
                     "NPPM_DMMREGASDCKDLG: SetParent failed"
                 );
-                return false;
+                return None;
             }
             // Make `h_client` look like the child it now is.
             //
@@ -3538,14 +3544,6 @@ impl UiPlatform for Win32Ui {
             if let Some(side) = dock_side_from_u_mask(params.u_mask) {
                 (*self.dock_layout).set_initial_side(panel, side);
             }
-            // And record the command that opens it — `dlgID` is the
-            // index of the plugin's own `FuncItem` that shows this
-            // panel. It is persisted with the panel, and at the next
-            // start the host runs it to bring the panel back, which is
-            // how Notepad++ restores every plugin panel. Re-recorded
-            // on every registration, so the value the plugin gives now
-            // wins over whatever an older session saved.
-            (*self.dock_layout).set_open_command(panel, params.dlg_id);
             // A panel parked because no loaded plugin could supply it
             // is saved as open, so it comes back where it was the
             // moment its window arrives — as a panel Notepad++ saved
@@ -3562,8 +3560,30 @@ impl UiPlatform for Win32Ui {
             // the group stays empty until some unrelated dock
             // mutation happens to repaint it.
             *self.dock_dirty = true;
+            Some(panel)
         }
-        true
+    }
+
+    fn record_panel_open_command(
+        &mut self,
+        panel: DockPanel,
+        command: i32,
+        seal: Option<codepp_core::dock::CommandSeal>,
+    ) {
+        // The command that opens the panel — `dlgID`, the index of the
+        // plugin's own `FuncItem` that shows it. It is persisted with
+        // the panel, and at the next start the host runs it to bring
+        // the panel back, which is how Notepad++ restores every plugin
+        // panel. Re-recorded on every registration, so the value the
+        // plugin gives now wins over whatever an older session saved —
+        // and so does its signature: a registration the shell did not
+        // sign leaves the command unsigned, which with Preferences →
+        // Security's guard on keeps it from running.
+        //
+        // SAFETY: UI thread, from inside the NPPM dispatch that has
+        // just registered `panel`; `dock_layout` points at
+        // `WindowState.dock_layout` — see the field docs on `Win32Ui`.
+        unsafe { (*self.dock_layout).set_open_command(panel, command, seal) };
     }
 
     fn show_dock_dialog(&mut self, h_client: codepp_plugin_host::Hwnd) -> bool {
@@ -18354,6 +18374,15 @@ pub fn run(initial_path: Option<PathBuf>, perf: codepp_core::perf::Perf) -> Resu
         let mut shell = Shell::new(wake)
             .map_err(|e| windows::core::Error::new(E_FAIL, format!("shell init: {e}")))?;
 
+        // What signs plugin panels' startup commands, for Preferences →
+        // Security's guard. Installed before the startup restore, which
+        // is the first thing that checks a signature. The key is read
+        // (or created) the first time something is signed or checked,
+        // so a session with no plugin panel never touches it.
+        let panel_signer =
+            codepp_platform::panel_key::PanelSigner::new(codepp_platform::panel_key_path());
+        shell.set_panel_signer(Box::new(move |message| panel_signer.sign(message)));
+
         // Stage the bundled plugin DLLs into the user's plugins dir
         // so they are discoverable without a manual install step.
         // Copies only on first run (or after a rebuild); otherwise
@@ -20334,17 +20363,23 @@ unsafe fn load_plugins_where(hwnd: HWND, npp_data: NppData, scope: PluginLoadSco
     // own initialisation. The active buffer is read per plugin, under
     // a borrow that ends before that plugin runs. Between the toolbar
     // notice and READY, the panels these plugins had open come back —
-    // see `restore_plugin_panels`.
+    // see `restore_plugin_panels` — except those whose command
+    // Preferences → Security's guard withholds, which it notes here.
+    let mut withheld: Vec<DockPanel> = Vec::new();
     let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         notices.deliver(
             npp_data.npp_handle,
             || unsafe { state_from_hwnd(hwnd) }.and_then(|s| s.shell.active_buffer_id()),
-            || unsafe { restore_plugin_panels(hwnd, &restore) },
+            || unsafe { restore_plugin_panels(hwnd, &restore, &mut withheld) },
         );
     }));
     // Only now, after READY: a plugin may register its panel from
-    // there, and one that does must not find it already closed.
-    unsafe { close_unregistered_restored_panels(hwnd, &restore) };
+    // there, and one that does must not find it already closed — or
+    // parked.
+    unsafe { close_unregistered_restored_panels(hwnd, &restore, &withheld) };
+    // A panel whose command was withheld is not broken, so it keeps
+    // its place rather than being closed.
+    unsafe { park_withheld_panels(hwnd, &withheld) };
     // And a panel whose plugin could not be loaded at all is parked
     // rather than left on screen with nothing in it.
     unsafe { park_unsupplied_plugin_panels(hwnd) };
@@ -20358,6 +20393,13 @@ struct PanelRestore {
     /// The open plugin panels owned by the plugins this pass loaded,
     /// in group then tab order.
     panels: Vec<DockPanel>,
+    /// Panels owned by the plugins this pass loaded that stay parked
+    /// because Preferences → Security's guard does not trust their
+    /// record — see [`unpark_loaded_plugins_panels`]. Restored after
+    /// all if their plugin registers them from `NPPN_TBMODIFICATION`,
+    /// which puts them back and records a command the plugin itself
+    /// declared.
+    held: Vec<DockPanel>,
     /// Every group's front tab as the pass began.
     fronts: Vec<(u32, DockPanel)>,
     /// Whether the pass put parked panels back — see
@@ -20372,6 +20414,9 @@ impl PanelRestore {
             panels: state
                 .shell
                 .panels_owned_by(&state.dock_layout.open_plugin_panels(), loaded),
+            held: state
+                .shell
+                .panels_owned_by(&state.dock_layout.parked_panels(), loaded),
             fronts: state.dock_layout.fronts(),
             unparked: false,
         }
@@ -20387,10 +20432,24 @@ impl PanelRestore {
 /// the same session. Putting its panels back into their groups before
 /// the pass notes what to restore is what lets the ordinary restore
 /// run their commands, exactly as it would have at startup.
+///
+/// With Preferences → Security's guard on, only a panel whose record
+/// Code++ signed comes back here. An unsigned one's command will not
+/// run, so putting it back would only show an empty group until the
+/// pass parks it again; it stays parked and is noted as held
+/// ([`PanelRestore::held`]), and comes back the moment its plugin
+/// registers it.
 fn unpark_loaded_plugins_panels(state: &mut WindowState, loaded: &[usize]) -> bool {
-    let back = state
+    let back: Vec<DockPanel> = state
         .shell
-        .panels_owned_by(&state.dock_layout.parked_panels(), loaded);
+        .panels_owned_by(&state.dock_layout.parked_panels(), loaded)
+        .into_iter()
+        .filter(|&panel| {
+            state
+                .shell
+                .panel_record_is_trusted(&state.dock_layout, panel)
+        })
+        .collect();
     state.dock_layout.unpark(&back)
 }
 
@@ -20420,21 +20479,46 @@ fn unpark_loaded_plugins_panels(state: &mut WindowState, loaded: &[usize]) -> bo
 /// the user had in front are put back in front afterwards — which
 /// Notepad++ also does.
 ///
+/// With Preferences → Security's guard on, a command runs only if
+/// Code++ signed it — which it does only for a command the panel's own
+/// plugin registered. Each panel whose command is held back goes into
+/// `withheld`, for the caller to park once READY is over. The command
+/// is read at this point rather than when the pass began, so one a
+/// plugin has just registered from `NPPN_TBMODIFICATION` is the one
+/// judged — and a held panel it registered, back from parking, is
+/// restored with the rest.
+///
 /// # Safety
 ///
 /// `hwnd` must be the main window. UI thread only.
-unsafe fn restore_plugin_panels(hwnd: HWND, restore: &PanelRestore) {
-    if restore.panels.is_empty() {
+unsafe fn restore_plugin_panels(hwnd: HWND, restore: &PanelRestore, withheld: &mut Vec<DockPanel>) {
+    if restore.panels.is_empty() && restore.held.is_empty() {
         return;
     }
     let commands: Vec<u16> = unsafe { state_from_hwnd(hwnd) }
         .map(|state| {
             let mut out: Vec<u16> = Vec::new();
-            for &panel in &restore.panels {
+            for &panel in restore.panels.iter().chain(&restore.held) {
+                // A held panel its plugin has not registered is still
+                // parked, and stays so.
+                if state.dock_layout.is_parked(panel) {
+                    continue;
+                }
+                let Some((index, seal)) = state.dock_layout.open_command(panel) else {
+                    continue;
+                };
+                if !state.shell.may_run_panel_command(panel, index, seal) {
+                    tracing::info!(
+                        panel = panel.persist_key(),
+                        "not running this panel's startup command: Code++ did not sign it \
+                         (Preferences > Security)"
+                    );
+                    withheld.push(panel);
+                    continue;
+                }
                 let id = state
-                    .dock_layout
-                    .open_command_for(panel)
-                    .and_then(|index| state.shell.panel_open_command_id(panel, index))
+                    .shell
+                    .panel_open_command_id(panel, index)
                     .and_then(|cmd| u16::try_from(cmd).ok());
                 // One command can open several panels; a second run of
                 // a toggle would close what the first opened.
@@ -20476,16 +20560,27 @@ unsafe fn restore_plugin_panels(hwnd: HWND, restore: &PanelRestore) {
 /// panel that was never registered. The plugin may have renamed the
 /// panel, stopped offering it, or declined for a reason of its own.
 ///
+/// A panel whose command was never run — withheld by Preferences →
+/// Security's guard — is not closed here: nothing about it is known to
+/// be wrong. [`park_withheld_panels`] keeps its place instead.
+///
 /// # Safety
 ///
 /// `hwnd` must be the main window. UI thread only.
-unsafe fn close_unregistered_restored_panels(hwnd: HWND, restore: &PanelRestore) {
+unsafe fn close_unregistered_restored_panels(
+    hwnd: HWND,
+    restore: &PanelRestore,
+    withheld: &[DockPanel],
+) {
     if restore.panels.is_empty() {
         return;
     }
     let changed = unsafe { state_from_hwnd(hwnd) }.is_some_and(|state| {
         let mut changed = false;
         for &panel in &restore.panels {
+            if withheld.contains(&panel) {
+                continue;
+            }
             let registered = state.dock_dialogs.iter().any(|e| e.panel == panel);
             if !registered && state.dock_layout.is_visible(panel) {
                 tracing::warn!(
@@ -20497,6 +20592,40 @@ unsafe fn close_unregistered_restored_panels(hwnd: HWND, restore: &PanelRestore)
             }
         }
         changed
+    });
+    if changed {
+        unsafe { dock_panels::apply_dock_layout(hwnd) };
+    }
+}
+
+/// Park each restored panel whose startup command Preferences →
+/// Security's guard withheld and whose plugin, READY over, has not
+/// registered it anyway.
+///
+/// Closing it, which is what happens to a panel whose command ran and
+/// produced nothing, would record it closed. Nothing is wrong with this
+/// one: Code++ declined to run a command it did not sign. Parked, it is
+/// saved where it was and comes back there the moment its plugin
+/// registers it — when the user opens it from that plugin's menu, which
+/// also records the command, signed, for next time.
+///
+/// # Safety
+///
+/// `hwnd` must be the main window. UI thread only.
+unsafe fn park_withheld_panels(hwnd: HWND, withheld: &[DockPanel]) {
+    if withheld.is_empty() {
+        return;
+    }
+    let changed = unsafe { state_from_hwnd(hwnd) }.is_some_and(|state| {
+        let waiting: Vec<DockPanel> = withheld
+            .iter()
+            .copied()
+            .filter(|&panel| {
+                state.dock_layout.is_visible(panel)
+                    && !state.dock_dialogs.iter().any(|e| e.panel == panel)
+            })
+            .collect();
+        state.dock_layout.park(&waiting)
     });
     if changed {
         unsafe { dock_panels::apply_dock_layout(hwnd) };
@@ -20533,11 +20662,25 @@ unsafe fn park_unsupplied_plugin_panels(hwnd: HWND) {
             .filter(|&panel| !state.dock_dialogs.iter().any(|e| e.panel == panel))
             .collect();
         let unsupplied = state.shell.panels_without_a_loaded_plugin(&windowless);
-        for panel in &unsupplied {
-            tracing::info!(
-                panel = panel.persist_key(),
-                "no loaded plugin can supply this dock panel; keeping it for when one can"
-            );
+        for &panel in &unsupplied {
+            if state
+                .shell
+                .panel_record_is_trusted(&state.dock_layout, panel)
+            {
+                tracing::info!(
+                    panel = panel.persist_key(),
+                    "no loaded plugin can supply this dock panel; keeping it for when one can"
+                );
+            } else {
+                // Its plugin may well be installed: the guard is what
+                // kept it from loading at startup.
+                tracing::info!(
+                    panel = panel.persist_key(),
+                    "keeping this dock panel for when its plugin is loaded: Code++ did not \
+                     sign its record, so the plugin was not loaded for it at startup \
+                     (Preferences > Security)"
+                );
+            }
         }
         state.dock_layout.park(&unsupplied)
     });
@@ -27026,20 +27169,24 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                         // phase and an invoke phase keeps the
                         // re-entrant call sound.
                         if cmd_i32 >= PLUGIN_CMD_ID_BASE {
-                            let p_func = if let Some(state) = state_from_hwnd(hwnd) {
+                            let command = if let Some(state) = state_from_hwnd(hwnd) {
                                 state.shell.lookup_plugin_command(cmd_i32)
                             } else {
                                 None
                             };
                             // Borrow on `state` ends here.
-                            if let Some(f) = p_func {
-                                // SAFETY: `f` is the C ABI fn ptr the
-                                // plugin handed us in FuncItem.p_func.
-                                // The plugin's DLL stays loaded for as
-                                // long as Shell holds it; the pointer
-                                // is valid. catch_unwind so a Rust-
+                            if let Some(command) = command {
+                                // SAFETY: the C ABI fn ptr the plugin
+                                // handed us in FuncItem.p_func. The
+                                // plugin's DLL stays loaded for as long
+                                // as Shell holds it; the pointer is
+                                // valid. catch_unwind so a Rust-
                                 // authored plugin's panic doesn't
-                                // unwind across the C ABI.
+                                // unwind across the C ABI. `run`
+                                // runs it marked as its own plugin, so
+                                // a dock panel it registers is known to
+                                // be that plugin's — what its startup
+                                // command is signed on.
                                 //
                                 // **No `PluginCallGuard` here**, and
                                 // that is deliberate. The lookup borrow
@@ -27058,7 +27205,9 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                                 // survived by falling back to the
                                 // handles `setInfo` gave them.
                                 let _ =
-                                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f()));
+                                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                                        command.run();
+                                    }));
                                 // A plugin command can queue a deferred
                                 // dialog (e.g. cppexport's
                                 // CODEPPM_EXPORTSAVEDIALOG →
@@ -30398,6 +30547,13 @@ mod plugin_reentry_guards {
             "the plugin command arm arms the guard; every NPPM_* the command sends is \
              then refused"
         );
+        // Run as its own plugin, so a panel it registers is known to be
+        // that plugin's — what the panel's startup command is signed on.
+        assert!(
+            arm.contains("command.run();"),
+            "the plugin command no longer runs through `PluginCommand::run`, so a dock \
+             panel it registers is not attributed to it"
+        );
     }
 }
 
@@ -31327,7 +31483,7 @@ mod plugin_load_borrow_guards {
         let deliver = body.find("notices.deliver(").expect("the batch delivery");
         let deliver_end = statement_end(&body, deliver);
         let hook = body
-            .find("restore_plugin_panels(hwnd, &restore)")
+            .find("restore_plugin_panels(hwnd, &restore, &mut withheld)")
             .expect("the delivery no longer restores the plugins' panels");
         assert!(
             deliver < hook && hook < deliver_end,
@@ -31335,12 +31491,22 @@ mod plugin_load_borrow_guards {
              notice and READY — not before or after it"
         );
         let close = body
-            .find("close_unregistered_restored_panels(hwnd, &restore)")
+            .find("close_unregistered_restored_panels(hwnd, &restore, &withheld)")
             .expect("a restored panel that never gets a window is no longer closed");
         assert!(
             close > deliver_end,
             "an unregistered panel must be closed only after READY, where its plugin may \
              still register it"
+        );
+        // A panel whose command the guard withheld is parked, not
+        // closed — and only once READY is over, for the same reason.
+        let park_withheld = body
+            .find("park_withheld_panels(hwnd, &withheld)")
+            .expect("a panel whose command was withheld is no longer parked");
+        assert!(
+            park_withheld > close,
+            "a withheld panel must be parked after READY, where its plugin may still \
+             register it"
         );
         // Parked panels whose plugin this pass loaded are put back
         // before the capture — or the restore would not know about
@@ -31360,6 +31526,48 @@ mod plugin_load_borrow_guards {
         assert!(
             park > close,
             "panels no plugin can supply must be parked last"
+        );
+
+        // Preferences > Security's guard: an unsigned record is not put
+        // back from parking to be restored, and a panel whose command it
+        // withheld is kept rather than closed.
+        let unpark_body = code_only(&fn_body(production_src(), "unpark_loaded_plugins_panels"));
+        assert!(
+            unpark_body.contains(".panel_record_is_trusted(&state.dock_layout, panel)"),
+            "a load pass puts back parked panels whether or not the guard trusts their record"
+        );
+        let close_body = code_only(&fn_body(
+            production_src(),
+            "close_unregistered_restored_panels",
+        ));
+        let skip = close_body
+            .find("if withheld.contains(&panel) {")
+            .expect("a panel whose command was withheld is closed like a broken one");
+        let hide = close_body
+            .find("state.dock_layout.hide(panel)")
+            .expect("the close");
+        assert!(
+            skip < hide,
+            "the withheld panel must be skipped before anything is closed"
+        );
+    }
+
+    /// The signer the guard checks with is installed before the startup
+    /// restore, which is the first thing that asks it anything; without
+    /// it nothing verifies, and with the guard on no panel would come
+    /// back by command.
+    #[test]
+    fn the_panel_signer_is_installed_before_the_startup_restore() {
+        let src = code_only(production_src());
+        let install = src
+            .find("shell.set_panel_signer(")
+            .expect("nothing installs the signer the guard checks with");
+        let restore = src
+            .find("PluginLoadScope::RestoredPanels,")
+            .expect("the startup restore pass");
+        assert!(
+            install < restore,
+            "the signer must be installed before the startup restore checks a signature"
         );
     }
 
@@ -31413,6 +31621,21 @@ mod plugin_load_borrow_guards {
             body[resolve..resolved].contains("panel_open_command_id("),
             "the commands are no longer resolved through the plugin's own FuncItems"
         );
+        // Preferences → Security's check comes before the command is
+        // resolved, and a refused command is not resolved at all.
+        let guard = body[resolve..resolved]
+            .find("if !state.shell.may_run_panel_command(panel, index, seal) {")
+            .expect("the restore no longer asks whether a command may run");
+        let skip = body[resolve + guard..resolved]
+            .find("continue;")
+            .expect("a refused command is no longer skipped");
+        assert!(
+            guard + skip
+                < body[resolve..resolved]
+                    .find("panel_open_command_id(")
+                    .unwrap(),
+            "a command must be checked before it is resolved, and skipped when refused"
+        );
         let send = body
             .find("SendMessageW(")
             .expect("the commands are no longer sent");
@@ -31432,11 +31655,18 @@ mod plugin_load_borrow_guards {
             "the front tabs must be put back after the commands run"
         );
 
+        // Registration hands back the panel, so the shell can record its
+        // command — signed or not — through the UI.
         let register = code_only(&fn_body(production_src(), "register_dock_dialog"));
         assert!(
-            register.contains("set_open_command(panel, params.dlg_id)"),
-            "registration no longer records the command that opens the panel, so nothing \
-             would be restored"
+            register.contains("Some(panel)"),
+            "registration no longer returns the panel whose command the shell records"
+        );
+        let record = code_only(&fn_body(production_src(), "record_panel_open_command"));
+        assert!(
+            record.contains("set_open_command(panel, command, seal)"),
+            "recording no longer stores the command that opens the panel, with its signature, \
+             so nothing would be restored"
         );
     }
 

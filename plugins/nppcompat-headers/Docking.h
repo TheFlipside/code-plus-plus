@@ -79,6 +79,17 @@ extern "C" {
  * stays open in the saved layout and comes back, by that same run,
  * the next time the plugin loads. Notepad++ keeps it the same way.
  *
+ * Code++ also checks who registered a panel before restoring it that
+ * way (Preferences > Security, on by default): it runs the saved
+ * command only if the registration came from the plugin pszModuleName
+ * names, while Code++ was calling that plugin — its setInfo, a
+ * notification, one of its own menu commands, or an NPPM_MSGTOPLUGIN
+ * delivered to it. Register your panel from one of those, as nearly
+ * every plugin does. A registration sent from a window procedure, a
+ * timer or another thread, or one naming another plugin's module,
+ * still gets its panel; but at the next start that panel waits, where
+ * it was, until the user opens it again.
+ *
  * Code++ field support: hClient, pszName, dlgID, uMask,
  * pszModuleName are honoured. A registered panel is an ordinary
  * dock panel — it docks to any side, floats, shares a container
