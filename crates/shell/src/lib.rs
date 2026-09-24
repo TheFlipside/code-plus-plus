@@ -12527,7 +12527,9 @@ mod tests {
     /// built for it.
     #[test]
     fn an_inter_plugin_message_runs_as_its_target() {
-        let src = include_str!("lib.rs");
+        // LF only: the Windows CI runner checks the file out with CRLF
+        // line endings, and the end of the body is found by `"\n    }\n"`.
+        let src = include_str!("lib.rs").replace("\r\n", "\n");
         let body = &src[src
             .find("    fn forward_plugin_message(")
             .expect("forward_plugin_message")..];

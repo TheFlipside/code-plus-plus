@@ -2202,7 +2202,9 @@ mod load_order_tests {
     /// a real DLL that reports it.
     #[test]
     fn a_plugin_loads_as_itself() {
-        let src = include_str!("host.rs");
+        // LF only: the Windows CI runner checks the file out with CRLF
+        // line endings, and the end of the body is found by `"\n}\n"`.
+        let src = include_str!("host.rs").replace("\r\n", "\n");
         let body = &src[src.find("pub fn execute_load(").expect("execute_load")..];
         let body = &body[..body.find("\n}\n").expect("end of execute_load")];
         let mark = body
