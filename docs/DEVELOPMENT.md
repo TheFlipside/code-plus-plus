@@ -408,29 +408,33 @@ does not link:
 
 ```sh
 rustup target add aarch64-apple-darwin x86_64-pc-windows-msvc
-cargo check --workspace --target aarch64-apple-darwin    # fully clean today
-cargo check -p codepp-core --target x86_64-pc-windows-msvc
-```
-
-The macOS target is the useful one: `crates/scintilla-sys/build.rs`
-takes its no-native-backend arm there, so nothing needs a C toolchain
-and the whole workspace checks. The Windows target will get as far as
-`cc-rs` and then fail on a missing `windows.h` unless you have a
-Windows SDK — that failure is expected and still informative, because
-everything before it (build-script compilation, all Rust type
-checking) has already succeeded by then.
-
-To typecheck the Windows-only crates — `ui_win32` is the largest in the
-workspace and is `#![cfg(target_os = "windows")]`, so a Linux `cargo
-build` compiles it to an *empty* rlib and verifies nothing — set
-`CODEPP_SKIP_NATIVE_BUILD=1`. That makes `crates/scintilla-sys/build.rs`
-skip compiling the vendored C/C++, which is the only thing stopping a
-cross-target check on a machine with no Windows SDK:
-
-```sh
+CODEPP_SKIP_NATIVE_BUILD=1 cargo check --workspace --all-targets \
+    --target aarch64-apple-darwin
 CODEPP_SKIP_NATIVE_BUILD=1 cargo check -p codepp-ui-win32 --all-targets \
     --target x86_64-pc-windows-msvc
 ```
+
+`CODEPP_SKIP_NATIVE_BUILD=1` is what makes this work from another host.
+`cargo check` still runs build scripts, and
+`crates/scintilla-sys/build.rs` compiles the vendored Scintilla and
+Lexilla for the *target*: the Win32 backend needs a Windows SDK, and
+the Cocoa backend is Objective-C++ that needs Apple's clang and the
+macOS SDK. The variable skips that compile. Without it, only the crates
+that do not depend on `codepp-scintilla-sys`, such as `codepp-core`,
+`codepp-platform` and `codepp-udl`, check cleanly, and everything else
+stops in that build script. From Windows, for example, a macOS check
+fails there with `failed to find tool "c++"`.
+
+The backends are what these checks are for. `ui_win32`, the largest
+crate in the workspace, and `ui_cocoa` are each gated on their own OS,
+so a build anywhere else compiles them to an *empty* rlib and verifies
+nothing. The Windows check names `codepp-ui-win32` rather than the
+workspace because `codepp-app`'s and the plugins' build scripts compile
+a Windows resource with `rc.exe` for that target, which the variable
+does not skip. `ui_gtk` cannot be checked this way: the GTK bindings'
+own build scripts, which the variable does not reach, need the target's
+GTK development files through `pkg-config`, so check it on Linux, or in
+a Linux container.
 
 `cargo check` never links, so skipping the native build costs nothing
 there. Anything that *does* link — a binary or a test target — fails
