@@ -1,17 +1,21 @@
 //! The Preferences dialog for the Cocoa backend.
 //!
 //! Mirrors `ui_gtk::preferences` and the Win32 `preferences` module. It
-//! edits the one pane wired on any backend so far — **Recent Files
-//! History** ([`codepp_core::preferences::RecentFilesHistoryConfig`]),
-//! which shapes the File menu's recent-files region. On Close the
-//! controls are read back and written through `Shell::set_preferences`,
-//! which clamps and persists them; the File menu picks the change up the
-//! next time it opens, since that region is rebuilt on every open.
+//! edits the one pane this backend has — **Recent Files History**
+//! ([`codepp_core::preferences::RecentFilesHistoryConfig`]), which shapes
+//! the File menu's recent-files region. The other two backends also have
+//! **Security**, the guard on plugin panels' startup commands; this one
+//! hosts no plugin panels, so it shows no control for that setting and
+//! writes it back as stored. On Close the controls are read back and
+//! written through `Shell::set_preferences`, which clamps and persists
+//! them; the File menu picks the change up the next time it opens, since
+//! that region is rebuilt on every open.
 //!
 //! **Why an `NSAlert` rather than a window.** The Win32 dialog is a
 //! category-list + panel design; with a single category that is a lot of
-//! chrome around four controls, and `ui_gtk` reaches the same conclusion
-//! with a plain framed modal. An alert with an accessory view is the
+//! chrome around four controls. (`ui_gtk` reached the same conclusion
+//! while it had one category too, and took the category list once
+//! Security gave it a second.) An alert with an accessory view is the
 //! Cocoa shape of the same thing, and it reuses a modal path this
 //! backend already exercises in three places — where a fresh `NSWindow`
 //! would need its own `setReleasedWhenClosed(false)` lifecycle care

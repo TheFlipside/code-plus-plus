@@ -2360,10 +2360,10 @@ fn refresh_active_status() {
 
 /// Build the Settings menu, mirroring Win32's two entries.
 ///
-/// "Preferences…" opens the GTK Preferences dialog (the Recent Files
-/// History pane — the only one wired on either backend so far). "Style
-/// Configurator…" opens the GTK style editor (the Default Style + window
-/// transparency, mirroring Win32's dialog scope).
+/// "Preferences…" opens the GTK Preferences dialog (a category list like
+/// Win32's: Recent Files History and Security). "Style Configurator…"
+/// opens the GTK style editor (the Default Style + window transparency,
+/// mirroring Win32's dialog scope).
 fn build_settings_menu(bar: &gtk::MenuBar, window: &gtk::Window) {
     let Some(menu) = submenu_at(bar, 6, "Settings") else {
         return;
