@@ -54,7 +54,7 @@ fn example_hello_loads_and_publishes_its_func_items() {
 
     // Stage the DLL in an isolated tempdir so PluginHost::discover
     // doesn't sweep up unrelated artifacts that share `target/debug`.
-    let staging = tempfile::tempdir().unwrap();
+    let staging = tempfile::tempdir().expect("create the staging tempdir");
     // Notepad++'s layout, the only one discovery loads.
     let staged_dir = staging.path().join("example_hello");
     std::fs::create_dir(&staged_dir).expect("create the plugin's folder");
@@ -62,7 +62,9 @@ fn example_hello_loads_and_publishes_its_func_items() {
     std::fs::copy(&dll, &staged).expect("copy example_hello.dll into staging dir");
 
     let mut host = PluginHost::new();
-    let count = host.discover(staging.path()).unwrap();
+    let count = host
+        .discover(staging.path())
+        .expect("scan the staging tempdir");
     assert_eq!(count, 1, "discovery should find exactly the staged DLL");
 
     host.load_blocking(0, npp_data_with_bogus_handles(), None)
@@ -79,8 +81,8 @@ fn example_hello_loads_and_publishes_its_func_items() {
     let funcs = info.func_items().expect("loaded plugin has func items");
     assert_eq!(
         funcs.len(),
-        5,
-        "example-hello contributes the insert command and four docking-panel commands"
+        6,
+        "example-hello publishes the six commands listed below"
     );
     assert_eq!(
         funcs[0].cmd_id, PLUGIN_CMD_ID_BASE,
@@ -92,12 +94,13 @@ fn example_hello_loads_and_publishes_its_func_items() {
     assert_eq!(funcs[2].cmd_id, PLUGIN_CMD_ID_BASE + 2);
     assert_eq!(funcs[3].cmd_id, PLUGIN_CMD_ID_BASE + 3);
     assert_eq!(funcs[4].cmd_id, PLUGIN_CMD_ID_BASE + 4);
+    assert_eq!(funcs[5].cmd_id, PLUGIN_CMD_ID_BASE + 5);
 
-    // The plugin's func ptr is non-null (defined as
-    // `Some(plugin_cmd_insert_hello)` in the static FuncItem).
+    // Every item is a command with a callback: the demo publishes no
+    // separators, whose `p_func` would be null.
     assert!(
-        funcs[0].p_func.is_some(),
-        "p_func should be the menu callback"
+        funcs.iter().all(|f| f.p_func.is_some()),
+        "every item's p_func should be its menu callback"
     );
 
     // Lookup by cmd-id finds the same callback.
@@ -127,6 +130,7 @@ fn example_hello_loads_and_publishes_its_func_items() {
             "Rename Dock Panel",
             "Show Second Dock Panel",
             "Switch To Other Dock Panel",
+            "Show Modeless Dialog",
         ]
     );
 }
