@@ -97,7 +97,16 @@
  *     `IsWindow` guard before each `IsDialogMessageW` call
  *     turns a forgotten REMOVE into a clean miss instead of
  *     UB on a freed handle, but plugins should not rely on
- *     that defensive backstop. */
+ *     that defensive backstop.
+ *     On macOS lParam is an NSWindow*. Registering changes
+ *     nothing there — AppKit moves focus within every window
+ *     itself, and the host's plugin shortcuts fire only in its
+ *     main window — so the host checks that the handle is a
+ *     window that is not one of its own and answers it. REMOVE
+ *     does not look at what the pointer points at: it refuses
+ *     only the handles the host knows without doing so — null,
+ *     the npp handle, a Scintilla view it made — and answers any
+ *     other. The GTK host answers 0. */
 #define NPPM_MODELESSDIALOG               (NPPMSG + 12)
 /* Selectors for NPPM_MODELESSDIALOG's wParam. */
 #ifndef MODELESSDIALOGADD
@@ -193,7 +202,24 @@ typedef struct sessionInfo_ {
  *     UTF-8-internal invariant; plugins are free to override
  *     that and any other Scintilla setting via direct
  *     SendMessage calls (or via SCI_GETDIRECTFUNCTION /
- *     SCI_GETDIRECTPOINTER for the hot-path direct-call API). */
+ *     SCI_GETDIRECTPOINTER for the hot-path direct-call API).
+ *     On macOS lParam is an NSView*, and the answer is a
+ *     ScintillaView* inside it, hidden and zero-sized for the
+ *     plugin to size (setFrame:, an autoresizing mask) and show
+ *     (setHidden:NO). The npp handle as lParam makes a view in
+ *     no window: a text buffer driven through SCI_* alone, or
+ *     placed by the plugin later. The parent must be the
+ *     plugin's own — a view in the host's main window or a
+ *     floating dock window is refused unless it is inside the
+ *     plugin's docked panel. The host keeps every view it makes
+ *     for the rest of the process, as Notepad++ keeps the
+ *     Scintillas it makes for plugins until it exits, and makes
+ *     at most 16 per plugin and 64 in all. A view's
+ *     notifications reach the plugin's messageProc as
+ *     WM_NOTIFY: wParam the view's control id
+ *     (SCI_SETIDENTIFIER, 0 by default), lParam an
+ *     SCNotification whose nmhdr.hwndFrom is the view. The GTK
+ *     host answers 0. */
 #define NPPM_CREATESCINTILLAHANDLE        (NPPMSG + 20)
 #define NPPM_DESTROYSCINTILLAHANDLE       (NPPMSG + 21)  /* deprecated upstream */
 /* v3: number of user-defined languages (UDL) currently
@@ -360,7 +386,15 @@ typedef struct sessionInfo_ {
  *     installing a menu-only command. The plugin owns the
  *     HICON's lifetime; `ImageList_ReplaceIcon` internally
  *     copies the bits, so the plugin can free its handle
- *     immediately after this call returns. */
+ *     immediately after this call returns.
+ *     On macOS hToolbarIcon is an NSImage*, which the host
+ *     retains, so the plugin may release its own reference once
+ *     this returns. wParam must be one of the loaded plugins'
+ *     own commands; the button runs it as the menu item does,
+ *     shows the item's label as its tooltip and its check mark
+ *     (NPPM_SETMENUITEMCHECK) as pressed, and a second call for
+ *     the same command replaces the image. Plugins may add 64
+ *     buttons in all. The GTK host answers FALSE. */
 #define NPPM_ADDTOOLBARICON               (NPPMSG + 41)
 /* Plugin-supplied icon payload for `NPPM_ADDTOOLBARICON`. */
 #ifndef NPP_TOOLBAR_ICONS_DEFINED

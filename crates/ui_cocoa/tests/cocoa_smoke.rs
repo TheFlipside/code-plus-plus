@@ -82,7 +82,7 @@ mod smoke {
             return;
         }
 
-        println!("\nrunning 4 tests");
+        println!("\nrunning 5 tests");
 
         // Hard failure rather than a skip: with `harness = false` this *is*
         // the main thread, so `None` here would mean cargo changed how it
@@ -99,7 +99,7 @@ mod smoke {
         notifications_are_delivered();
         println!("test cocoa_smoke::notifications_are_delivered ... ok");
 
-        // The last two scenarios need `codepp_ui_cocoa::smoke_support`,
+        // The last three scenarios need `codepp_ui_cocoa::smoke_support`,
         // which is compiled out of release builds because it can rewrite
         // the plugin dispatcher's trust anchor. A `--release` test build
         // therefore reports them ignored rather than silently dropping
@@ -112,7 +112,14 @@ mod smoke {
             );
             codepp_ui_cocoa::smoke_support::plugin_panels_are_hosted_by_the_dock();
             println!("test cocoa_smoke::plugin_panels_are_hosted_by_the_dock ... ok");
-            println!("\ntest result: ok. 4 passed; 0 failed; 0 ignored\n");
+            // SAFETY: `NSApplication` exists and this is the main thread.
+            let host_sci = unsafe { scintilla_cocoa_new() };
+            assert!(!host_sci.is_null(), "scintilla_cocoa_new() returned null");
+            // SAFETY: a view from `scintilla_cocoa_new` that this binary
+            // never releases, like every other one it makes.
+            unsafe { codepp_ui_cocoa::smoke_support::what_plugins_ask_the_host_to_make(host_sci) };
+            println!("test cocoa_smoke::what_plugins_ask_the_host_to_make ... ok");
+            println!("\ntest result: ok. 5 passed; 0 failed; 0 ignored\n");
         }
         #[cfg(not(debug_assertions))]
         {
@@ -120,9 +127,10 @@ mod smoke {
                 "test cocoa_smoke::a_plugins_worker_thread_reaches_scintilla_through_the_main_queue ... ignored"
             );
             println!("test cocoa_smoke::plugin_panels_are_hosted_by_the_dock ... ignored");
+            println!("test cocoa_smoke::what_plugins_ask_the_host_to_make ... ignored");
             println!(
-                "\ntest result: ok. 2 passed; 0 failed; 2 ignored\n\n\
-                 note: the marshal and plugin-panel scenarios need a debug build \
+                "\ntest result: ok. 2 passed; 0 failed; 3 ignored\n\n\
+                 note: the marshal and plugin scenarios need a debug build \
                  (`smoke_support` is compiled out of release).\n"
             );
         }

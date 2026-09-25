@@ -1343,6 +1343,11 @@ pub trait HostServices {
     /// MUST be told to unregister BEFORE the plugin destroys
     /// the HWND, otherwise the pump will pass a freed handle
     /// to `IsDialogMessageW`. Returns `true` on success.
+    ///
+    /// On macOS the handle is an `NSWindow*` and registering changes
+    /// nothing — AppKit moves focus within a window itself, and plugin
+    /// shortcuts fire only in the main window — so the host checks the
+    /// handle and answers it, as Notepad++ does.
     fn register_modeless_dialog(&mut self, dlg: crate::ffi::Hwnd, register: bool) -> bool;
 
     /// Create a fresh Scintilla control as a child of the
@@ -1364,6 +1369,13 @@ pub trait HostServices {
     /// other Scintilla setting via direct `SendMessage` calls
     /// (or via `SCI_GETDIRECTFUNCTION` / `SCI_GETDIRECTPOINTER`
     /// for the hot-path direct-call API).
+    ///
+    /// On macOS `parent` is an `NSView*`: the new view goes into it,
+    /// hidden and zero-sized, for the plugin to size and show. The npp
+    /// handle as `parent` makes a view in no window. Either way the
+    /// host keeps the view for the rest of the process, as Notepad++
+    /// keeps the Scintillas it makes for plugins, and its notifications
+    /// go to the plugin's `messageProc`.
     fn create_plugin_scintilla(&mut self, parent: crate::ffi::Hwnd) -> crate::ffi::Hwnd;
 
     /// Register a plugin's HWND as a dockable dialog. Drives
@@ -1464,6 +1476,9 @@ pub trait HostServices {
     ///
     /// Returns `true` on success; `false` for null `hicon`,
     /// imagelist-add failure, or `TB_ADDBUTTONS` failure.
+    ///
+    /// On macOS `hicon` is an `NSImage*`, which the host retains; the
+    /// button is added only for a command a loaded plugin published.
     fn add_toolbar_icon(&mut self, cmd_id: i32, hicon: crate::ffi::Hwnd) -> bool;
 
     /// Returns `true` iff the host is currently rendering its

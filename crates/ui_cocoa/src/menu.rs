@@ -664,6 +664,27 @@ define_class!(
             });
         }
 
+        /// A plugin's toolbar button (`NPPM_ADDTOOLBARICON`): run the
+        /// command its tag names — a command id, like a menu item's —
+        /// then show the plugin's mark for it. The button is push-on
+        /// push-off so it can show that mark, which means AppKit has
+        /// already flipped its state for the click by now; the mark is
+        /// the plugin's to set, as the menu item's is, so it is put back
+        /// from the plugin's record once the command has run.
+        #[unsafe(method(codeppPluginToolbarCommand:))]
+        fn plugin_toolbar_command(&self, sender: Option<&NSButton>) {
+            crate::at_callback_boundary("toolbar:pluginCommand", (), || {
+                let Some(sender) = sender else {
+                    return;
+                };
+                let Ok(cmd_id) = i32::try_from(sender.tag()) else {
+                    return;
+                };
+                crate::plugin::on_plugin_command(cmd_id);
+                sender.setState(isize::from(crate::plugin::menu_mark(cmd_id)));
+            });
+        }
+
         #[unsafe(method(codeppPluginManager:))]
         fn plugin_manager(&self, _sender: Option<&NSObject>) {
             crate::at_callback_boundary(

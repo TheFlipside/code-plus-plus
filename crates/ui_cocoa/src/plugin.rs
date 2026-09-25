@@ -25,14 +25,20 @@
 //!    `DMN_*` notifications about it go to the plugin's `messageProc`,
 //!    and the startup pass brings back the panels a session left open by
 //!    running each one's own command ([`restore_panel_plugins`]).
+//! 6. **What a plugin asks the host to make for it** — a Scintilla view
+//!    of its own ([`create_plugin_scintilla`]), a toolbar button for one
+//!    of its commands ([`add_toolbar_icon`]) — and the modeless-dialog
+//!    registration Win32 needs and this platform does not
+//!    ([`register_modeless_dialog`]).
 //!
 //! # Routing is by handle *identity*, not by message range
 //!
 //! `SCI_*` and `NPPM_*` message numbers overlap, so the number alone
 //! cannot say where a message belongs — only the handle can.
 //! [`NPP_SENTINEL`]'s address is this backend's "npp handle" and routes
-//! to the host dispatcher; the one legitimate `ScintillaView*` routes to
-//! Scintilla; **every other pointer is refused**. That last clause is
+//! to the host dispatcher; the host's own `ScintillaView*`, and the ones
+//! it made for plugins, route to Scintilla; **every other pointer is
+//! refused**. That last clause is
 //! the security-relevant one: `scintilla_cocoa_send_message` casts its
 //! argument and messages it, so forwarding an unvalidated pointer would
 //! turn a plugin bug into a wild `objc_msgSend`. Win32 fails soft here
@@ -48,12 +54,12 @@
 //! memory-safe equivalent of Win32's `PLUGIN_CALL_ACTIVE` guard, since
 //! `with_state`'s `try_borrow_mut` already declines true re-entry.
 //!
-//! [`VALID_SCI`] is deliberately an atomic rather than a `with_state`
-//! read for the same reason in reverse: the identity check must still
-//! work when a plugin sends `SCI_*` from inside a `beNotified` that does
-//! hold the borrow, where a `with_state` read would be declined — and a
-//! declined read here would read as "not our view" and **refuse a
-//! legitimate message**.
+//! [`VALID_SCI`] and [`PLUGIN_SCIS`] are deliberately atomics rather
+//! than a `with_state` read for the same reason in reverse: the
+//! identity check must still work when a plugin sends `SCI_*` from
+//! inside a `beNotified` that does hold the borrow, where a
+//! `with_state` read would be declined — and a declined read here would
+//! read as "not our view" and **refuse a legitimate message**.
 //!
 //! # Threading, and where this differs from Windows
 //!
@@ -82,10 +88,10 @@
 //! GTK's `invoke` merely dispatches inline. See [`send_sci_on_main`].
 
 use std::cell::{Cell, RefCell};
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::ffi::c_void;
 use std::panic::{catch_unwind, AssertUnwindSafe};
-use std::sync::atomic::{AtomicPtr, Ordering};
+use std::sync::atomic::{AtomicPtr, AtomicUsize, Ordering};
 
 use dispatch2::DispatchQueue;
 use objc2::rc::Retained;
@@ -95,13 +101,19 @@ use objc2_app_kit::{
     NSAlert, NSBorderType, NSButton, NSControlTextEditingDelegate, NSFont, NSImage,
     NSLineBreakMode, NSMenu, NSMenuItem, NSScrollView, NSStackView, NSTableColumn, NSTableView,
     NSTableViewColumnAutoresizingStyle, NSTableViewDataSource, NSTableViewDelegate, NSTextField,
-    NSUserInterfaceLayoutOrientation, NSView, NSWorkspace,
+    NSUserInterfaceLayoutOrientation, NSView, NSWindow, NSWorkspace,
 };
 use objc2_foundation::{NSPoint, NSRect, NSSize, NSString, NSURL};
 
 use codepp_core::dock::DockPanel;
-use codepp_plugin_host::{HostDispatchFn, NppData, PluginMenuChecks};
-use codepp_scintilla_sys::{scintilla_cocoa_send_message, SCI_GETMODIFY};
+use codepp_editor::EditorHandle;
+use codepp_plugin_host::{
+    HostDispatchFn, NppData, PluginMenuChecks, PluginMessageProc, SCNotification, WM_NOTIFY,
+};
+use codepp_scintilla_sys::{
+    scintilla_cocoa_new, scintilla_cocoa_send_message, scintilla_cocoa_set_notify_callback,
+    COCOA_WM_NOTIFY, SCI_GETMODIFY, SCI_SETCODEPAGE, SCN_PAINTED, SC_CP_UTF8,
+};
 use codepp_shell::{sanitize_str_for_display, HostHandles};
 
 use crate::menu::Actions;
@@ -112,10 +124,11 @@ use crate::state::with_state;
 /// Set once at startup by [`discover`]; see the module docs for why it
 /// is an atomic and not a `with_state` read.
 ///
-/// The Document Map's miniature view is deliberately **not** here: a
-/// plugin is only ever handed `NppData._scintillaMainHandle`, so a
-/// message addressed to the miniature did not come from anywhere
-/// legitimate.
+/// The Document Map's miniature view is deliberately **not** here, nor
+/// in [`PLUGIN_SCIS`]: a plugin is only ever handed
+/// `NppData._scintillaMainHandle` and the views it asked the host to
+/// make, so a message addressed to the miniature did not come from
+/// anywhere legitimate.
 static VALID_SCI: AtomicPtr<c_void> = AtomicPtr::new(std::ptr::null_mut());
 
 /// A dedicated sentinel whose *address* is this backend's "npp handle".
@@ -136,11 +149,57 @@ fn npp_sentinel() -> *mut c_void {
     std::ptr::addr_of!(NPP_SENTINEL).cast_mut().cast::<c_void>()
 }
 
-/// Whether `hwnd` is the host's own Scintilla view — the only pointer
-/// [`plugin_dispatch`] will forward an `SCI_*` message to.
+/// Whether `hwnd` is the host's own Scintilla view.
 fn is_valid_scintilla(hwnd: *mut c_void) -> bool {
     let valid = VALID_SCI.load(Ordering::Acquire);
     !valid.is_null() && std::ptr::eq(hwnd, valid)
+}
+
+/// The most Scintilla views the host makes for plugins, all told. Each
+/// is kept for the rest of the process (see [`create_plugin_scintilla`]),
+/// so an unbounded number would be an unbounded leak — and a fixed number
+/// is what lets [`PLUGIN_SCIS`] be read from any thread without a lock.
+const MAX_PLUGIN_SCINTILLAS: usize = 64;
+
+/// The most the host makes for any one plugin, so a plugin that asks for
+/// a view per file it processes runs out of views of its own rather than
+/// of everyone's — the same reasoning as the per-plugin quota on dock
+/// panels. Views asked for from outside any host call, where the host
+/// cannot tell which plugin asked, share one allowance of this size.
+const MAX_PLUGIN_SCINTILLAS_PER_PLUGIN: usize = 16;
+
+/// Every Scintilla view made for a plugin, in the order made: the handles
+/// besides the host's own that [`plugin_dispatch`] forwards `SCI_*` to.
+///
+/// Append-only, which is what makes reading it from any thread sound. A
+/// slot is written once, on the main thread, before [`PLUGIN_SCI_COUNT`]
+/// publishes it with release ordering, and the view it names is never
+/// released — so a reader that saw the count sees the pointer, and the
+/// pointer stays valid. Atomics rather than a `with_state` read for the
+/// reason [`VALID_SCI`] is one.
+static PLUGIN_SCIS: [AtomicPtr<c_void>; MAX_PLUGIN_SCINTILLAS] =
+    [const { AtomicPtr::new(std::ptr::null_mut()) }; MAX_PLUGIN_SCINTILLAS];
+
+/// How many slots of [`PLUGIN_SCIS`] are filled.
+static PLUGIN_SCI_COUNT: AtomicUsize = AtomicUsize::new(0);
+
+/// Whether `hwnd` is a Scintilla view the host made for a plugin.
+fn is_plugin_scintilla(hwnd: *mut c_void) -> bool {
+    if hwnd.is_null() {
+        return false;
+    }
+    let made = PLUGIN_SCI_COUNT.load(Ordering::Acquire);
+    PLUGIN_SCIS
+        .iter()
+        .take(made)
+        .any(|slot| std::ptr::eq(slot.load(Ordering::Relaxed), hwnd))
+}
+
+/// Whether `hwnd` is a Scintilla view this host made — its own, or one
+/// it made for a plugin. These are the only pointers [`plugin_dispatch`]
+/// forwards an `SCI_*` message to.
+fn is_known_scintilla(hwnd: *mut c_void) -> bool {
+    is_valid_scintilla(hwnd) || is_plugin_scintilla(hwnd)
 }
 
 /// Whether the caller is on the process main thread — the one AppKit
@@ -168,13 +227,16 @@ fn on_main_thread() -> bool {
 struct MainThreadPtr(*mut c_void);
 
 // SAFETY: the only pointer ever wrapped is one that has already passed
-// [`is_valid_scintilla`], i.e. the host's own `ScintillaView*`. That view
-// is created once at startup and never destroyed, removed from its
-// superview or reassigned (the discipline `CocoaUiState::sci_view`
-// documents and a source-scan guard enforces), so the address stays live
-// for the whole process. It is *dereferenced only on the main thread*,
-// which is the entire point of the marshal — the value crosses threads,
-// the dereference does not.
+// [`is_known_scintilla`]: the host's own `ScintillaView*`, or one it made
+// for a plugin. Neither is ever released. The host's is created once at
+// startup and never destroyed, removed from its superview or reassigned
+// (the discipline `CocoaUiState::sci_view` documents and a source-scan
+// guard enforces); a plugin's keeps the reference `scintilla_cocoa_new`
+// returned for the rest of the process, whatever the plugin does with the
+// view (see [`create_plugin_scintilla`]). So the address stays live for
+// the whole process. It is *dereferenced only on the main thread*, which
+// is the entire point of the marshal — the value crosses threads, the
+// dereference does not.
 unsafe impl Send for MainThreadPtr {}
 
 /// Run one `SCI_*` message against Scintilla on the main thread and
@@ -257,9 +319,9 @@ fn send_sci_on_main(hwnd: *mut c_void, msg: u32, wparam: usize, lparam: isize) -
             // compile. Naming the whole `MainThreadPtr` captures the
             // wrapper that carries the `unsafe impl Send`.
             let ptr = ptr;
-            // SAFETY: `ptr.0` passed `is_valid_scintilla` on the calling
-            // thread and addresses the host's own permanently-live
-            // `ScintillaView*` (see `MainThreadPtr`). This block runs on
+            // SAFETY: `ptr.0` passed `is_known_scintilla` on the calling
+            // thread and addresses a permanently-live `ScintillaView*` of
+            // the host's making (see `MainThreadPtr`). This block runs on
             // the main thread, which is the affinity AppKit requires and
             // the reason the message was marshaled here at all.
             *slot = Some(unsafe { scintilla_cocoa_send_message(ptr.0, msg, wparam, lparam) });
@@ -285,8 +347,9 @@ extern "C" fn plugin_dispatch(hwnd: *mut c_void, msg: u32, wparam: usize, lparam
     catch_unwind(AssertUnwindSafe(|| {
         if std::ptr::eq(hwnd, npp_sentinel()) {
             dispatch_nppm(msg, wparam, lparam)
-        } else if is_valid_scintilla(hwnd) {
-            // SCI_* addressed to *our* Scintilla view. `with_state` is
+        } else if is_known_scintilla(hwnd) {
+            // SCI_* addressed to a Scintilla view of ours — the host's
+            // own, or one made for a plugin. `with_state` is
             // deliberately not taken: this is a direct Scintilla call,
             // and the plugin may well issue it from inside an NPPM
             // dispatch that already holds the borrow. The identity check
@@ -294,13 +357,12 @@ extern "C" fn plugin_dispatch(hwnd: *mut c_void, msg: u32, wparam: usize, lparam
             // *before* the affinity check so an unknown handle is refused
             // rather than marshaled.
             if on_main_thread() {
-                // SAFETY: `hwnd` is identity-checked to be the host's own
-                // live `ScintillaView*`, which is created once at startup
-                // and never destroyed (see `CocoaUiState::sci_view`), this
-                // is the thread that owns it, and
-                // `scintilla_cocoa_send_message` is its documented entry
-                // point. The message-argument contract is the plugin's
-                // responsibility, exactly as it is on Win32.
+                // SAFETY: `hwnd` is identity-checked to be a live
+                // `ScintillaView*` of the host's making, which is never
+                // released (see `MainThreadPtr`), this is the thread that
+                // owns it, and `scintilla_cocoa_send_message` is its
+                // documented entry point. The message-argument contract is
+                // the plugin's responsibility, exactly as it is on Win32.
                 unsafe { scintilla_cocoa_send_message(hwnd, msg, wparam, lparam) }
             } else {
                 // A plugin calling from its own thread: hop to the main
@@ -701,6 +763,487 @@ fn send_dock_notification(panel: DockPanel, handle: *mut c_void, caller: Option<
     };
 }
 
+// --- what a plugin asks the host to make --------------------------------------------
+//
+// `NPPM_CREATESCINTILLAHANDLE`, `NPPM_MODELESSDIALOG` and
+// `NPPM_ADDTOOLBARICON`, on this backend. Each takes an `HWND` or an
+// `HICON` on Windows; here the same argument is the AppKit object that
+// plays the part — an `NSView*`, an `NSWindow*`, an `NSImage*` — as a
+// dock panel's `hClient` is an `NSView*`. The checks on those pointers
+// are bug containment, not a boundary (DESIGN.md §6.5): the handles the
+// host can recognise without trusting the pointer come first, then what
+// the Objective-C runtime can tell about the object, and a pointer to
+// something that is not an object at all faults in the class check
+// rather than being declined, as it does for a dock panel.
+
+/// What the host knows about one Scintilla view it made for a plugin. Its
+/// index in [`PLUGIN_SCINTILLAS`] is its slot in [`PLUGIN_SCIS`] and the
+/// `windowid` its notifications arrive with.
+struct PluginScintilla {
+    /// The view, holding the reference `scintilla_cocoa_new` returned.
+    /// Nothing ever releases it: a raw pointer rather than a `Retained`,
+    /// so no destructor can — see [`create_plugin_scintilla`].
+    view: *mut c_void,
+    /// The plugin that asked for it — the one whose `messageProc` hears
+    /// its notifications — or `None` when it was asked for from outside
+    /// any host call, where the host cannot tell which plugin asked.
+    owner: Option<usize>,
+    /// Who hears its notifications.
+    target: NotifyTarget,
+}
+
+/// Who hears the notifications of a view made for a plugin.
+#[derive(Clone, Copy)]
+enum NotifyTarget {
+    /// Not looked up yet. It is looked up at a notification rather than
+    /// when the view is made, because [`create_plugin_scintilla`] runs
+    /// inside the NPPM dispatch's state borrow, where the plugin registry
+    /// cannot be read — and it stays unresolved until the lookup finds the
+    /// plugin loaded, since a plugin may make a view from its own `setInfo`,
+    /// before it is.
+    Unresolved,
+    /// The `messageProc` of the plugin that asked for the view.
+    Plugin(PluginMessageProc),
+    /// No one: the view was asked for from outside any host call, where
+    /// the host cannot tell which plugin asked.
+    Nobody,
+}
+
+thread_local! {
+    /// The views [`create_plugin_scintilla`] made, in the order made.
+    /// Append-only, like [`PLUGIN_SCIS`], and main-thread only.
+    static PLUGIN_SCINTILLAS: RefCell<Vec<PluginScintilla>> =
+        const { RefCell::new(Vec::new()) };
+    /// The label of every command the loaded plugins publish, by command
+    /// id — the tooltip of a toolbar button for one of them. Filled with
+    /// the menu-check record, and for the same reason: a toolbar button is
+    /// added from inside the NPPM dispatch's borrow, where the plugins'
+    /// `FuncItem`s cannot be read.
+    static COMMAND_LABELS: RefCell<HashMap<i32, String>> = RefCell::new(HashMap::new());
+}
+
+/// `NPPM_CREATESCINTILLAHANDLE` on this backend: make a Scintilla view for
+/// the plugin that asked, and return its handle, or null.
+///
+/// `parent` is the `NSView*` to put it in. The view goes in **hidden and
+/// zero-sized**, for the plugin to size and show — the Win32 host creates
+/// its control at zero size without `WS_VISIBLE`, for the same reason.
+/// The npp handle as `parent` makes a view in no window, which a plugin
+/// can drive through `SCI_*` alone — a text buffer with Scintilla's search
+/// and styling — or put in a view of its own later.
+///
+/// The view is **kept for the rest of the process**. A plugin that
+/// captured its direct-call pair (`SCI_GETDIRECTFUNCTION`) holds pointers
+/// into it that nothing could invalidate safely, and Notepad++ keeps every
+/// Scintilla it makes for plugins until it exits too. That is what makes
+/// the routing check sound from any thread, and it is why the number is
+/// capped ([`MAX_PLUGIN_SCINTILLAS`], [`MAX_PLUGIN_SCINTILLAS_PER_PLUGIN`]):
+/// a plugin that asks for a view per file it processes would otherwise
+/// leak without end.
+///
+/// Refused, besides null: a Scintilla view as the parent, the host's own
+/// or a plugin's — a Scintilla has no room for a subview of anyone
+/// else's; anything the runtime says is not a view; the host's container
+/// around a plugin's docked panel — the panel's own view is what to pass;
+/// and a view of the host's own, which is any view in the main window or a
+/// floating dock window that is not inside a plugin's docked panel.
+///
+/// Its notifications go to the plugin's `messageProc` — see
+/// [`on_plugin_sci_notify`]. Its scrollers are permanent, as the host's
+/// own view's are and a Win32 plugin Scintilla's are.
+///
+/// It does not get the host view's scroll-width floor
+/// (`clamp_scroll_width_to_viewport`): that keeps state per view, and
+/// with width tracking on, the blank area right of a short line is not
+/// clickable here (DESIGN.md §7.4).
+pub(crate) fn create_plugin_scintilla(parent: *mut c_void, main_window: &NSWindow) -> *mut c_void {
+    let owner = codepp_plugin_host::calling_plugin();
+    let into = match plugin_scintilla_parent(parent, main_window) {
+        Ok(into) => into,
+        Err(why) => {
+            tracing::warn!(why, "NPPM_CREATESCINTILLAHANDLE: refused");
+            return std::ptr::null_mut();
+        }
+    };
+    let Some(made) = PLUGIN_SCINTILLAS.with(|made| {
+        made.try_borrow()
+            .ok()
+            .map(|made| made.iter().map(|s| s.owner).collect::<Vec<_>>())
+    }) else {
+        tracing::warn!("NPPM_CREATESCINTILLAHANDLE: refused: the host is already making one");
+        return std::ptr::null_mut();
+    };
+    if let Err(why) = may_make_plugin_scintilla(&made, owner) {
+        tracing::warn!(why, plugin = owner, "NPPM_CREATESCINTILLAHANDLE: refused");
+        return std::ptr::null_mut();
+    }
+    // SAFETY: the NPPM dispatch runs only on the main thread, after
+    // `NSApplication` exists — `scintilla_cocoa_new`'s preconditions.
+    let ptr = unsafe { scintilla_cocoa_new() };
+    if ptr.is_null() {
+        tracing::warn!("NPPM_CREATESCINTILLAHANDLE: scintilla_cocoa_new() returned null");
+        return std::ptr::null_mut();
+    }
+    // SAFETY: a live `ScintillaView`, an `NSView` subclass, whose +1
+    // reference is never given up — which is also what makes the borrow
+    // outlive this function.
+    let view: &NSView = unsafe { &*ptr.cast::<NSView>() };
+    // For the reason the host's own view clips: on recent macOS the
+    // scroll view's edge effect is sized past the view, and AppKit does
+    // not clip a subview to its parent by default.
+    view.setClipsToBounds(true);
+    view.setHidden(true);
+    view.setFrame(NSRect::ZERO);
+    // Permanent scrollers, as the host's own view has, repaired after each
+    // of this view's paints — see `forward_plugin_sci_notify`.
+    crate::force_permanent_scrollers(view);
+    // Scintilla 5 is UTF-8 by default, but the host's text is UTF-8
+    // throughout and the Win32 host sets it explicitly for the same
+    // reason — so a future default cannot change what a plugin gets. The
+    // host's own setup goes through `EditorHandle` like every other
+    // message the host sends a view it made; the sends in this module are
+    // the plugins' traffic.
+    //
+    // SAFETY: `ptr` is the live view just made, never released.
+    if let Some(editor) = unsafe { EditorHandle::from_cocoa_view(ptr) } {
+        editor.send(SCI_SETCODEPAGE, SC_CP_UTF8 as usize, 0);
+    }
+    // Recorded and made routable before it goes anywhere, so a view the
+    // host failed to record is never left in a plugin's view. Nothing
+    // between the check above and this push can make another view — making
+    // one takes a plugin's call, and none runs in between — so neither the
+    // borrow nor the routing slot can fail; were either ever to, the plugin
+    // is told it got no view.
+    let Some(index) = PLUGIN_SCINTILLAS.with(|made| {
+        let mut made = made.try_borrow_mut().ok()?;
+        made.push(PluginScintilla {
+            view: ptr,
+            owner,
+            target: if owner.is_some() {
+                NotifyTarget::Unresolved
+            } else {
+                NotifyTarget::Nobody
+            },
+        });
+        Some(made.len() - 1)
+    }) else {
+        tracing::error!("NPPM_CREATESCINTILLAHANDLE: the view could not be recorded");
+        return std::ptr::null_mut();
+    };
+    let Some(slot) = PLUGIN_SCIS.get(index) else {
+        tracing::error!(
+            index,
+            "NPPM_CREATESCINTILLAHANDLE: no routing slot for the view"
+        );
+        return std::ptr::null_mut();
+    };
+    slot.store(ptr, Ordering::Relaxed);
+    PLUGIN_SCI_COUNT.store(index + 1, Ordering::Release);
+    if let Some(parent) = into {
+        parent.addSubview(view);
+    }
+    // SAFETY: `ptr` is the live view just made; `on_plugin_sci_notify`
+    // matches `SciNotifyFunc` and cannot unwind out of it.
+    unsafe {
+        scintilla_cocoa_set_notify_callback(ptr, on_plugin_sci_notify, index as isize);
+    }
+    tracing::debug!(
+        plugin = owner,
+        index,
+        "NPPM_CREATESCINTILLAHANDLE: made a view"
+    );
+    ptr
+}
+
+/// Where a view made for a plugin goes: `Ok(None)` for the npp handle — no
+/// window at all — or the view to add it to, or why `parent` is refused.
+/// See [`create_plugin_scintilla`] for what is refused.
+fn plugin_scintilla_parent(
+    parent: *mut c_void,
+    main_window: &NSWindow,
+) -> Result<Option<Retained<NSView>>, &'static str> {
+    if parent.is_null() {
+        return Err("the parent is null");
+    }
+    if std::ptr::eq(parent, npp_sentinel()) {
+        return Ok(None);
+    }
+    if is_known_scintilla(parent) {
+        return Err("the parent is a Scintilla view");
+    }
+    // SAFETY: not one of the host's non-object handles; by the ABI's
+    // contract on this backend a parent is a live `NSView`. What happens
+    // when it is not is the limit in the section notes above.
+    let object: &AnyObject = unsafe { &*parent.cast::<AnyObject>() };
+    let Some(view) = object.downcast_ref::<NSView>() else {
+        return Err("the parent is not an NSView");
+    };
+    if view
+        .downcast_ref::<crate::dock::PluginPanelHost>()
+        .is_some()
+    {
+        return Err(
+            "the parent is the host's container around a plugin panel — pass the panel's own view",
+        );
+    }
+    if let Some(window) = view.window() {
+        if is_host_window(&window, main_window) && !inside_plugin_panel(view) {
+            return Err("the parent is one of the host's own views");
+        }
+    }
+    Ok(Some(view.retain()))
+}
+
+/// Whether `window` is one of the host's windows a plugin's content sits
+/// in: the main window, or a floating dock window. What a plugin can
+/// reach of them is its own docked panel's window — `[view window]` — and
+/// passing that for a window of its own is the mistake the callers name.
+fn is_host_window(window: &NSWindow, main_window: &NSWindow) -> bool {
+    std::ptr::eq(window, main_window) || window.downcast_ref::<crate::dock::FloatWindow>().is_some()
+}
+
+/// Whether `view` is a plugin's docked panel or inside one: some view
+/// above it is the host's container around a panel.
+fn inside_plugin_panel(view: &NSView) -> bool {
+    // SAFETY (both): a plain accessor on a live view, on the main thread.
+    let mut above = unsafe { view.superview() };
+    while let Some(ancestor) = above {
+        if ancestor
+            .downcast_ref::<crate::dock::PluginPanelHost>()
+            .is_some()
+        {
+            return true;
+        }
+        above = unsafe { ancestor.superview() };
+    }
+    false
+}
+
+/// Whether one more view may be made for `owner`, given the owners of
+/// every view made so far. See [`MAX_PLUGIN_SCINTILLAS`] and
+/// [`MAX_PLUGIN_SCINTILLAS_PER_PLUGIN`].
+fn may_make_plugin_scintilla(
+    made: &[Option<usize>],
+    owner: Option<usize>,
+) -> Result<(), &'static str> {
+    if made.len() >= MAX_PLUGIN_SCINTILLAS {
+        return Err("the host has made as many Scintilla views for plugins as it makes");
+    }
+    if made.iter().filter(|&&by| by == owner).count() >= MAX_PLUGIN_SCINTILLAS_PER_PLUGIN {
+        return Err(
+            "the host has made as many Scintilla views for this plugin as it makes for one",
+        );
+    }
+    Ok(())
+}
+
+/// Scintilla's notification callback for the views made for plugins.
+///
+/// Each `WM_NOTIFY` goes on to the plugin that asked for the view, at its
+/// `messageProc`, as `WM_NOTIFY` — where a Win32 plugin's Scintilla child
+/// sends it to the plugin's dialog procedure, which a view does not have.
+/// The same generalisation the `DMN_*` take. `lParam` is a copy of the
+/// `SCNotification` with `nmhdr.hwndFrom` set to the view's handle, which
+/// is how a plugin tells its views apart — the Cocoa backend puts its own
+/// C++ object there, which means nothing to a plugin. `wParam` is what
+/// Scintilla gives: the view's control identifier (`SCI_SETIDENTIFIER`,
+/// 0 unless the plugin sets one), as a Win32 `WM_NOTIFY` carries.
+///
+/// `SCN_PAINTED` also repairs the view's scroller layout first, as the
+/// host's own view's is repaired: the permanent scrollers
+/// [`create_plugin_scintilla`] gives it are what the vendored `tile`
+/// lays out wrong — see `enforce_scroller_layout`.
+///
+/// # Safety
+///
+/// Called by Scintilla on the main thread. `lparam` is an
+/// `SCNotification*` when `message` is `COCOA_WM_NOTIFY`, live for the
+/// call.
+unsafe extern "C" fn on_plugin_sci_notify(
+    windowid: isize,
+    message: u32,
+    wparam: usize,
+    lparam: usize,
+) {
+    // Plain `extern "C"`, so an escaping panic is undefined behaviour.
+    crate::at_callback_boundary("plugin:sci_notify", (), || {
+        // SAFETY: the enclosing signature's contract, unchanged.
+        unsafe { forward_plugin_sci_notify(windowid, message, wparam, lparam) }
+    });
+}
+
+/// The body of [`on_plugin_sci_notify`], so the panic guard wraps it
+/// whole.
+///
+/// # Safety
+///
+/// As [`on_plugin_sci_notify`].
+unsafe fn forward_plugin_sci_notify(windowid: isize, message: u32, wparam: usize, lparam: usize) {
+    if message != COCOA_WM_NOTIFY || lparam == 0 {
+        return;
+    }
+    let Some(index) = usize::try_from(windowid).ok() else {
+        return;
+    };
+    let Some(view) = plugin_scintilla_view(index) else {
+        return;
+    };
+    // SAFETY: for `WM_NOTIFY` the Cocoa backend passes its live
+    // `NotificationData`, which `SCNotification` mirrors field for field.
+    // Copied, so the host never writes into Scintilla's own.
+    let mut scn = unsafe { (lparam as *const SCNotification).read() };
+    if scn.nmhdr.code == SCN_PAINTED {
+        if let Some(mtm) = MainThreadMarker::new() {
+            // SAFETY: a view made for a plugin, never released.
+            crate::enforce_scroller_layout(unsafe { &*view.cast::<NSView>() }, mtm);
+        }
+    }
+    let Some(target) = plugin_scintilla_target(index) else {
+        return;
+    };
+    scn.nmhdr.hwnd_from = view;
+    // SAFETY: a loaded plugin's `messageProc` — plugins are never
+    // unloaded — run as that plugin, on the main thread. `scn` outlives
+    // the call.
+    let _ = unsafe { target.send(WM_NOTIFY, wparam, &raw const scn as isize) };
+}
+
+/// The view at `index` in [`PLUGIN_SCINTILLAS`].
+fn plugin_scintilla_view(index: usize) -> Option<*mut c_void> {
+    PLUGIN_SCINTILLAS.with(|made| made.try_borrow().ok()?.get(index).map(|s| s.view))
+}
+
+/// The `messageProc` that hears the notifications of the view at `index`,
+/// looked up on first use and kept once found.
+///
+/// The borrow of [`PLUGIN_SCINTILLAS`] is never held across the lookup or
+/// the plugin call, so a plugin that makes another view from inside its
+/// handler finds the registry free. A lookup that finds nothing is tried
+/// again at the next notification: `with_state` declines one made from
+/// inside a host borrow, and a plugin not yet loaded — one that made the
+/// view from its `setInfo` — has no `messageProc` to find until it is.
+/// Every loaded plugin exports one; the loader refuses a plugin without.
+fn plugin_scintilla_target(index: usize) -> Option<PluginMessageProc> {
+    let (owner, known) = PLUGIN_SCINTILLAS.with(|made| {
+        let made = made.try_borrow().ok()?;
+        let entry = made.get(index)?;
+        Some((entry.owner, entry.target))
+    })?;
+    match known {
+        NotifyTarget::Plugin(target) => return Some(target),
+        NotifyTarget::Nobody => return None,
+        NotifyTarget::Unresolved => {}
+    }
+    let target =
+        with_state(|st| owner.and_then(|owner| st.shell.plugin_message_target(owner))).flatten()?;
+    PLUGIN_SCINTILLAS.with(|made| {
+        if let Ok(mut made) = made.try_borrow_mut() {
+            if let Some(entry) = made.get_mut(index) {
+                entry.target = NotifyTarget::Plugin(target);
+            }
+        }
+    });
+    Some(target)
+}
+
+/// `NPPM_MODELESSDIALOG` on this backend: `true` — which the dispatcher
+/// answers with the handle, as Notepad++ does — for a window a plugin
+/// could have made, `false` for the handles that plainly are not one.
+///
+/// **Registering changes nothing here, and that is not a gap.** What the
+/// Win32 registration buys a dialog is the host's message pump calling
+/// `IsDialogMessage` for it — Tab moving between its controls, Enter
+/// pressing its default button — and so keeping the host's accelerators
+/// out of it. AppKit does the first for every window, and the second has
+/// nothing to keep out: a plugin shortcut fires only while the main
+/// window is key (`install_plugin_shortcut_monitor`), and on macOS the
+/// menu bar's key equivalents reach every window of an application by
+/// design.
+///
+/// A dialog is checked on the way in only. Its removal is answered
+/// without looking at what the pointer points at: a plugin removes its
+/// dialog on the way to releasing it, when the pointer is least
+/// trustworthy, and there is nothing to undo.
+pub(crate) fn register_modeless_dialog(
+    dlg: *mut c_void,
+    register: bool,
+    main_window: &NSWindow,
+) -> bool {
+    if dlg.is_null() || std::ptr::eq(dlg, npp_sentinel()) || is_known_scintilla(dlg) {
+        tracing::warn!(
+            register,
+            "NPPM_MODELESSDIALOG: refused: not a window's handle"
+        );
+        return false;
+    }
+    if !register {
+        tracing::debug!("NPPM_MODELESSDIALOG: removed (nothing was routed on this backend)");
+        return true;
+    }
+    // SAFETY: not one of the host's non-object handles; by the ABI's
+    // contract on this backend the dialog is a live `NSWindow`.
+    let object: &AnyObject = unsafe { &*dlg.cast::<AnyObject>() };
+    let Some(window) = object.downcast_ref::<NSWindow>() else {
+        tracing::warn!("NPPM_MODELESSDIALOG: refused: not an NSWindow");
+        return false;
+    };
+    if is_host_window(window, main_window) {
+        tracing::warn!("NPPM_MODELESSDIALOG: refused: one of the host's own windows");
+        return false;
+    }
+    tracing::debug!("NPPM_MODELESSDIALOG: registered (nothing to route on this backend)");
+    true
+}
+
+/// `NPPM_ADDTOOLBARICON` on this backend: a toolbar button that runs the
+/// plugin command `cmd_id`, showing `icon` — an `NSImage*`, which the host
+/// retains, so the plugin may release its own reference once this
+/// returns. The button's tooltip is the command's menu label, and it
+/// shows the command's check mark (`NPPM_SETMENUITEMCHECK`) as pressed,
+/// as Notepad++'s toolbar does.
+///
+/// Refused for an id that is not a command a loaded plugin published:
+/// the button runs its command through the plugin commands' own path,
+/// which knows no other. Asking again for the same command replaces the
+/// image rather than adding a second button.
+pub(crate) fn add_toolbar_icon(
+    toolbar: &crate::toolbar::Toolbar,
+    cmd_id: i32,
+    icon: *mut c_void,
+) -> bool {
+    if icon.is_null() || std::ptr::eq(icon, npp_sentinel()) || is_known_scintilla(icon) {
+        tracing::warn!(
+            cmd_id,
+            "NPPM_ADDTOOLBARICON: refused: not an image's handle"
+        );
+        return false;
+    }
+    let Some(label) = COMMAND_LABELS.with(|labels| labels.borrow().get(&cmd_id).cloned()) else {
+        tracing::warn!(
+            cmd_id,
+            "NPPM_ADDTOOLBARICON: refused: no loaded plugin publishes that command"
+        );
+        return false;
+    };
+    // SAFETY: not one of the host's non-object handles; by the ABI's
+    // contract on this backend the icon is a live `NSImage`.
+    let object: &AnyObject = unsafe { &*icon.cast::<AnyObject>() };
+    let Some(image) = object.downcast_ref::<NSImage>() else {
+        tracing::warn!(cmd_id, "NPPM_ADDTOOLBARICON: refused: not an NSImage");
+        return false;
+    };
+    let Some(mtm) = MainThreadMarker::new() else {
+        return false;
+    };
+    match toolbar.add_plugin_button(cmd_id, image, &label, menu_mark(cmd_id), mtm) {
+        Ok(()) => true,
+        Err(why) => {
+            tracing::warn!(cmd_id, why, "NPPM_ADDTOOLBARICON: refused");
+            false
+        }
+    }
+}
+
 /// Entry points for `tests/cocoa_smoke.rs`, and nothing else.
 ///
 /// The cross-thread `SCI_*` scenario has to drive the real
@@ -825,6 +1368,406 @@ pub mod smoke_support {
         std::mem::forget((rig, view, notes, replacement));
     }
 
+    /// What a plugin asks the host to make — `NPPM_CREATESCINTILLAHANDLE`,
+    /// `NPPM_MODELESSDIALOG`, `NPPM_ADDTOOLBARICON` — driven against real
+    /// AppKit objects, with a dock rig standing in for the main window.
+    /// Panics on the first failed check.
+    ///
+    /// What it pins is what a source scan cannot see: a view made for a
+    /// plugin lands where the plugin asked, hidden and zero-sized, and
+    /// answers `SCI_*` routed to it from any thread; the parents, windows
+    /// and images the host must not take are refused; and a plugin's
+    /// toolbar button runs through the toolbar's own action and comes back
+    /// showing the plugin's mark rather than AppKit's flip. Delivery of a
+    /// plugin view's notifications needs a loaded plugin to deliver to,
+    /// so the real app is where that is shown (DESIGN.md §7.4).
+    ///
+    /// # Safety
+    ///
+    /// `host_sci` must be a live `ScintillaView*` from
+    /// `scintilla_cocoa_new` that stays live for the rest of the process:
+    /// it is armed as the host's own view, as [`arm_scintilla`] requires.
+    pub unsafe fn what_plugins_ask_the_host_to_make(host_sci: *mut c_void) {
+        let mtm = objc2_foundation::MainThreadMarker::new()
+            .expect("the smoke binary owns the main thread");
+        // SAFETY: forwarded from this function's contract.
+        unsafe { arm_scintilla(host_sci) };
+        let rig = panel_scenario::Rig::install(mtm);
+        let panel = made_for_plugins::scintilla_parents_are_checked(&rig, host_sci, mtm);
+        made_for_plugins::a_plugin_panel_is_a_parent_and_its_container_is_not(&rig, panel, mtm);
+        made_for_plugins::a_plugin_view_is_routed_from_any_thread(&rig.window, mtm);
+        made_for_plugins::modeless_dialogs_are_checked_and_answered(&rig.window, host_sci, mtm);
+        made_for_plugins::plugin_toolbar_buttons(mtm);
+        // Kept for the process, like every view this binary makes.
+        std::mem::forget(rig);
+    }
+
+    /// The pieces of [`what_plugins_ask_the_host_to_make`].
+    mod made_for_plugins {
+        use std::ffi::{c_void, CString};
+
+        use objc2::rc::Retained;
+        use objc2::{AnyThread, MainThreadOnly};
+        use objc2_app_kit::{
+            NSBackingStoreType, NSButton, NSImage, NSView, NSWindow, NSWindowStyleMask,
+        };
+        use objc2_foundation::{
+            MainThreadMarker, NSDate, NSDefaultRunLoopMode, NSObject, NSPoint, NSRect, NSRunLoop,
+            NSSize,
+        };
+
+        use super::panel_scenario::{handle_of, plugin_view, reconcile, Rig};
+        use codepp_scintilla_sys::{SCI_GETCODEPAGE, SCI_GETLENGTH, SCI_SETTEXT, SC_CP_UTF8};
+
+        /// Stand-in for the plugin command a toolbar button runs.
+        const SMOKE_CMD: i32 = 22_001;
+
+        /// Ask for a view in `parent`, as the dispatcher would.
+        fn make(parent: *mut c_void, main: &NSWindow) -> *mut c_void {
+            super::super::create_plugin_scintilla(parent, main)
+        }
+
+        /// `text` into the view at `handle`, then its length back — both
+        /// through the plugin routing callback, as a plugin would send them.
+        fn round_trip(handle: *mut c_void, text: &str) -> isize {
+            let text = CString::new(text).expect("no interior NUL");
+            super::dispatch(handle, SCI_SETTEXT, 0, text.as_ptr() as isize);
+            super::dispatch(handle, SCI_GETLENGTH, 0, 0)
+        }
+
+        /// The view at `handle`, which the host made and never releases.
+        fn view_at(handle: *mut c_void) -> &'static NSView {
+            // SAFETY: a view `create_plugin_scintilla` made, never
+            // released, used on the main thread.
+            unsafe { &*handle.cast::<NSView>() }
+        }
+
+        /// Where a view may go, and where it may not. Returns the plugin
+        /// view the last check made a view in, for
+        /// [`a_plugin_panel_is_a_parent_and_its_container_is_not`].
+        pub(super) fn scintilla_parents_are_checked(
+            rig: &Rig,
+            host_sci: *mut c_void,
+            mtm: MainThreadMarker,
+        ) -> Retained<NSView> {
+            let main = &rig.window;
+            let not_a_view = NSObject::new();
+            // SAFETY: a plain accessor on a live view, on the main thread.
+            let frame_view = unsafe { rig.content.superview() }.expect("a window's frame view");
+            for (what, parent) in [
+                ("null", std::ptr::null_mut()),
+                ("the host's own Scintilla view", host_sci),
+                ("an NSObject", handle_of(&not_a_view)),
+                (
+                    "a view of the host's, in the main window",
+                    handle_of(&rig.editor_cell),
+                ),
+                ("the main window's frame view", handle_of(&frame_view)),
+            ] {
+                assert!(
+                    make(parent, main).is_null(),
+                    "{what} was accepted as a parent"
+                );
+            }
+
+            // The npp handle: a view in no window at all.
+            let detached = make(super::super::npp_sentinel(), main);
+            assert!(!detached.is_null(), "the npp handle as parent made no view");
+            let view = view_at(detached);
+            // SAFETY (here and below): plain accessors on live views, on
+            // the main thread.
+            assert!(
+                unsafe { view.superview() }.is_none(),
+                "a detached view was put somewhere"
+            );
+            assert_eq!(
+                round_trip(detached, "abc"),
+                3,
+                "the detached view is not routed"
+            );
+            assert!(
+                make(detached, main).is_null(),
+                "a plugin's own Scintilla view was accepted as a parent"
+            );
+
+            // A free-standing view of the plugin's: in it, hidden and
+            // zero-sized, and UTF-8.
+            let panel = plugin_view(mtm);
+            let made = make(handle_of(&panel), main);
+            assert!(!made.is_null(), "a plugin's free-standing view was refused");
+            let view = view_at(made);
+            let parent = unsafe { view.superview() }.expect("put in the parent");
+            assert!(std::ptr::eq(
+                Retained::as_ptr(&parent),
+                Retained::as_ptr(&panel)
+            ));
+            assert!(
+                view.isHidden(),
+                "a new view is shown before the plugin sizes it"
+            );
+            assert_eq!(
+                view.frame().size,
+                NSSize::new(0.0, 0.0),
+                "a new view has a size"
+            );
+            assert!(view.clipsToBounds(), "a new view does not clip");
+            assert_eq!(
+                super::dispatch(made, SCI_GETCODEPAGE, 0, 0),
+                SC_CP_UTF8 as isize,
+                "a new view is not UTF-8"
+            );
+            panel
+        }
+
+        /// A plugin view once it is a docked panel in the main window is
+        /// still the plugin's, so still a parent — and so is a view inside
+        /// it. The host's container around it is not, whether the panel is
+        /// shown or not yet.
+        pub(super) fn a_plugin_panel_is_a_parent_and_its_container_is_not(
+            rig: &Rig,
+            panel: Retained<NSView>,
+            mtm: MainThreadMarker,
+        ) {
+            let main = &rig.window;
+            assert!(
+                super::super::register_dock_dialog(rig.params(handle_of(&panel), "Smoke Sci Host"))
+                    .is_some(),
+                "the scenario's panel was not adopted"
+            );
+            assert!(crate::dock::show_plugin_panel(handle_of(&panel)));
+            reconcile();
+            let host = unsafe { panel.superview() }.expect("adopted into a container");
+            assert!(
+                panel
+                    .window()
+                    .is_some_and(|w| std::ptr::eq(Retained::as_ptr(&w), Retained::as_ptr(main))),
+                "the docked panel is not in the main window"
+            );
+            assert!(
+                !make(handle_of(&panel), main).is_null(),
+                "a docked plugin panel was refused"
+            );
+            let inner = NSView::initWithFrame(NSView::alloc(mtm), NSRect::ZERO);
+            panel.addSubview(&inner);
+            assert!(
+                !make(handle_of(&inner), main).is_null(),
+                "a view inside a plugin panel was refused"
+            );
+            assert!(
+                make(handle_of(&host), main).is_null(),
+                "the host's container around a plugin panel was accepted as a parent"
+            );
+
+            // A panel registered but not yet shown: its container is in no
+            // window yet, so the host-window check cannot see it, and only
+            // the check for the container itself refuses it.
+            let unshown = plugin_view(mtm);
+            assert!(
+                super::super::register_dock_dialog(
+                    rig.params(handle_of(&unshown), "Smoke Sci Unshown")
+                )
+                .is_some(),
+                "the unshown panel was not adopted"
+            );
+            let unshown_host = unsafe { unshown.superview() }.expect("adopted at registration");
+            assert!(
+                unshown_host.window().is_none(),
+                "an unshown panel's container is already in a window"
+            );
+            assert!(
+                make(handle_of(&unshown_host), main).is_null(),
+                "the host's container around an unshown plugin panel was accepted as a parent"
+            );
+            std::mem::forget((panel, inner, unshown));
+        }
+
+        /// A plugin's view answers `SCI_*` from the plugin's own thread
+        /// the way the host's does: parked until the main queue drains.
+        pub(super) fn a_plugin_view_is_routed_from_any_thread(
+            main: &NSWindow,
+            mtm: MainThreadMarker,
+        ) {
+            struct WorkerPtr(*mut c_void);
+            // SAFETY: a view the host never releases; the worker hands it
+            // only to `plugin_dispatch`, the code under test.
+            unsafe impl Send for WorkerPtr {}
+
+            let panel = plugin_view(mtm);
+            let made = make(handle_of(&panel), main);
+            assert_eq!(round_trip(made, "hello"), 5);
+            let handle = WorkerPtr(made);
+            let worker = std::thread::spawn(move || {
+                let handle = handle;
+                super::dispatch(handle.0, SCI_GETLENGTH, 0, 0)
+            });
+            std::thread::sleep(std::time::Duration::from_millis(200));
+            assert!(
+                !worker.is_finished(),
+                "a cross-thread SCI_* to a plugin's view ran off the main thread"
+            );
+            let mut spins = 0;
+            while !worker.is_finished() {
+                let deadline = NSDate::dateWithTimeIntervalSinceNow(0.01);
+                // SAFETY: main thread and a live mode constant.
+                let _ = unsafe {
+                    NSRunLoop::mainRunLoop().runMode_beforeDate(NSDefaultRunLoopMode, &deadline)
+                };
+                spins += 1;
+                assert!(spins < 10_000, "the marshaled SCI_* never completed");
+            }
+            assert_eq!(worker.join().expect("worker panicked"), 5);
+            std::mem::forget(panel);
+        }
+
+        /// A plugin's window is registered — to no effect, answered — and
+        /// the handles that are no window of a plugin's are not. Removal
+        /// refuses only what it can tell without reading the pointer.
+        pub(super) fn modeless_dialogs_are_checked_and_answered(
+            main: &NSWindow,
+            host_sci: *mut c_void,
+            mtm: MainThreadMarker,
+        ) {
+            // SAFETY: `NSWindow`'s designated initialiser on a fresh
+            // allocation; never shown, and release-on-close is off.
+            let dialog = unsafe {
+                NSWindow::initWithContentRect_styleMask_backing_defer(
+                    NSWindow::alloc(mtm),
+                    NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(200.0, 100.0)),
+                    NSWindowStyleMask::Titled,
+                    NSBackingStoreType::Buffered,
+                    false,
+                )
+            };
+            // SAFETY: the safe direction — this test keeps a reference.
+            unsafe { dialog.setReleasedWhenClosed(false) };
+            let register = super::super::register_modeless_dialog;
+            assert!(
+                register(handle_of(&dialog), true, main),
+                "a plugin's window was refused"
+            );
+            assert!(
+                register(handle_of(&dialog), false, main),
+                "its removal was refused"
+            );
+            let not_a_window = NSObject::new();
+            for (what, handle) in [
+                ("null", std::ptr::null_mut()),
+                ("the npp handle", super::super::npp_sentinel()),
+                ("the host's Scintilla view", host_sci),
+                ("an NSObject", handle_of(&not_a_window)),
+                ("the main window", handle_of(main)),
+            ] {
+                assert!(!register(handle, true, main), "{what} was registered");
+            }
+            for (what, handle) in [
+                ("null", std::ptr::null_mut()),
+                ("the npp handle", super::super::npp_sentinel()),
+                ("the host's Scintilla view", host_sci),
+            ] {
+                assert!(
+                    !register(handle, false, main),
+                    "{what}'s removal was answered"
+                );
+            }
+            std::mem::forget(dialog);
+        }
+
+        /// A plugin's toolbar button: added once per command after a
+        /// separator, its image replaced on a second request, refused for
+        /// an unknown command or a non-image — and a click that runs the
+        /// command leaves the plugin's mark showing, not AppKit's flip.
+        pub(super) fn plugin_toolbar_buttons(mtm: MainThreadMarker) {
+            let actions = crate::menu::Actions::new(mtm);
+            let toolbar = crate::toolbar::Toolbar::new(1000.0, &actions, mtm);
+            let before = toolbar.container.subviews().len();
+            let image = NSImage::initWithSize(NSImage::alloc(), NSSize::new(16.0, 16.0));
+            let other = NSImage::initWithSize(NSImage::alloc(), NSSize::new(16.0, 16.0));
+            let add = |icon: *mut c_void| super::super::add_toolbar_icon(&toolbar, SMOKE_CMD, icon);
+            assert!(
+                !add(handle_of(&image)),
+                "a button for an unknown command was added"
+            );
+
+            // Make the command known, as a load pass does, and give it a
+            // mark to show.
+            super::super::COMMAND_LABELS.with(|labels| {
+                labels
+                    .borrow_mut()
+                    .insert(SMOKE_CMD, "Smoke Command".to_owned())
+            });
+            let func = codepp_plugin_host::FuncItem {
+                item_name: [0; codepp_plugin_host::MENU_TITLE_LENGTH],
+                p_func: Some(smoke_command),
+                cmd_id: SMOKE_CMD,
+                init2_check: 0,
+                p_sh_key: std::ptr::null_mut(),
+            };
+            super::super::PLUGIN_CHECKS.with(|c| c.borrow_mut().absorb([&func]));
+            assert!(super::super::PLUGIN_CHECKS.with(|c| c.borrow_mut().set(SMOKE_CMD, true)));
+
+            let not_an_image = NSObject::new();
+            assert!(
+                !add(handle_of(&not_an_image)),
+                "an NSObject was taken as an image"
+            );
+            assert!(
+                add(handle_of(&image)),
+                "a known command's button was refused"
+            );
+            let subviews = toolbar.container.subviews();
+            assert_eq!(
+                subviews.len(),
+                before + 2,
+                "not one separator and one button"
+            );
+            let button = subviews
+                .iter()
+                .last()
+                .and_then(|v| v.downcast::<NSButton>().ok())
+                .expect("the last subview is the button");
+            assert_eq!(button.tag(), SMOKE_CMD as isize);
+            assert_eq!(
+                button.state(),
+                1,
+                "the button does not show the command's mark"
+            );
+            assert!(
+                button
+                    .image()
+                    .is_some_and(|i| std::ptr::eq(Retained::as_ptr(&i), Retained::as_ptr(&image))),
+                "the button does not show the plugin's image"
+            );
+            assert_eq!(
+                button.toolTip().map(|t| t.to_string()).as_deref(),
+                Some("Smoke Command")
+            );
+
+            // A second request replaces the image; nothing is added.
+            assert!(add(handle_of(&other)));
+            assert_eq!(toolbar.container.subviews().len(), before + 2);
+            assert!(button
+                .image()
+                .is_some_and(|i| std::ptr::eq(Retained::as_ptr(&i), Retained::as_ptr(&other))));
+
+            // A click flips a push-on/push-off button; the action runs the
+            // command — no plugin is loaded here, so it finds nothing to
+            // run — and puts the plugin's mark back.
+            // SAFETY: a live button on the main thread; its target is the
+            // `actions` this scenario keeps, and the action it sends is
+            // the toolbar's own, which takes a button.
+            unsafe { button.performClick(None) };
+            assert_eq!(button.state(), 1, "the click's flip was left showing");
+            // And a mark set through `NPPM_SETMENUITEMCHECK` reaches it.
+            toolbar.set_plugin_button_state(SMOKE_CMD, false);
+            assert_eq!(button.state(), 0);
+            std::mem::forget((actions, toolbar, image, other));
+        }
+
+        /// A plugin command that is never run: the scenario loads no
+        /// plugin, so `on_plugin_command` resolves nothing.
+        extern "C" fn smoke_command() {}
+    }
+
     /// The pieces of [`plugin_panels_are_hosted_by_the_dock`].
     mod panel_scenario {
         use std::ffi::c_void;
@@ -859,8 +1802,9 @@ pub mod smoke_support {
 
         /// A dock installed around a window that is never shown.
         pub(super) struct Rig {
-            /// Held so the window outlives the scenario, as the app's does.
-            _window: Retained<NSWindow>,
+            /// The window the dock sits in, standing in for the main
+            /// window. Held so it outlives the scenario, as the app's does.
+            pub(super) window: Retained<NSWindow>,
             pub(super) content: Retained<NSView>,
             pub(super) area: Retained<crate::dock::DockArea>,
             pub(super) editor_cell: Retained<NSView>,
@@ -918,7 +1862,7 @@ pub mod smoke_support {
                     psz_module_name: std::ptr::null(),
                 }));
                 Self {
-                    _window: window,
+                    window,
                     content,
                     area,
                     editor_cell,
@@ -1667,16 +2611,26 @@ fn live_command_item(main_menu: &NSMenu, cmd_id: i32) -> Option<Retained<NSMenuI
 }
 
 /// Take in the commands every loaded plugin publishes — see
-/// [`PluginMenuChecks::absorb`]. Run after each load pass and **before**
-/// its notifications, so a plugin ticking an item from
-/// `NPPN_TBMODIFICATION` or `NPPN_READY` finds its commands known, as
-/// Notepad++ has them installed by then.
+/// [`PluginMenuChecks::absorb`] — and their labels, which a toolbar
+/// button for one of them shows ([`add_toolbar_icon`]). Run after each
+/// load pass and **before** its notifications, so a plugin ticking an item
+/// or adding a toolbar button from `NPPN_TBMODIFICATION` or `NPPN_READY`
+/// finds its commands known, as Notepad++ has them installed by then.
 fn absorb_loaded_commands() {
-    // The record is its own thread-local and calls into nothing, so it is
-    // filled from under the state borrow rather than from a copy.
+    // Both records are thread-locals of their own and call into nothing,
+    // so they are filled from under the state borrow rather than from a
+    // copy.
     with_state(|st| {
         let funcs = st.shell.loaded_plugin_funcs().flat_map(|(_, funcs)| funcs);
         PLUGIN_CHECKS.with(|c| c.borrow_mut().absorb(funcs));
+        COMMAND_LABELS.with(|labels| {
+            let mut labels = labels.borrow_mut();
+            for f in st.shell.loaded_plugin_funcs().flat_map(|(_, funcs)| funcs) {
+                if f.p_func.is_some() {
+                    labels.insert(f.cmd_id, funcitem_label(f));
+                }
+            }
+        });
     });
 }
 
@@ -2253,5 +3207,46 @@ mod shortcut_tests {
         // Plain ⌘ and a named key.
         assert_eq!(chord_menu_suffix(true, false, false, 0x31), "\u{2318}1");
         assert_eq!(chord_menu_suffix(true, false, false, 0x2E), "\u{2318}Del");
+    }
+}
+
+#[cfg(test)]
+mod plugin_scintilla_tests {
+    use super::{
+        may_make_plugin_scintilla, MAX_PLUGIN_SCINTILLAS, MAX_PLUGIN_SCINTILLAS_PER_PLUGIN,
+    };
+
+    /// A plugin that has had its allowance is refused, and that costs
+    /// every other plugin nothing — the reason there is a per-plugin cap
+    /// at all.
+    #[test]
+    fn one_plugin_spends_its_own_allowance_and_nobody_elses() {
+        let mut made = Vec::new();
+        for _ in 0..MAX_PLUGIN_SCINTILLAS_PER_PLUGIN {
+            assert!(may_make_plugin_scintilla(&made, Some(3)).is_ok());
+            made.push(Some(3));
+        }
+        assert!(may_make_plugin_scintilla(&made, Some(3)).is_err());
+        assert!(may_make_plugin_scintilla(&made, Some(4)).is_ok());
+        // Views asked for from outside any host call share an allowance
+        // of their own, apart from every plugin's.
+        assert!(may_make_plugin_scintilla(&made, None).is_ok());
+    }
+
+    /// Views asked for from outside any host call are one allowance
+    /// between them.
+    #[test]
+    fn views_nobody_can_be_charged_for_share_one_allowance() {
+        let made = vec![None; MAX_PLUGIN_SCINTILLAS_PER_PLUGIN];
+        assert!(may_make_plugin_scintilla(&made, None).is_err());
+        assert!(may_make_plugin_scintilla(&made, Some(0)).is_ok());
+    }
+
+    /// The table is full once every slot is taken, whoever took them.
+    #[test]
+    fn the_table_holds_no_more_than_its_slots() {
+        let made: Vec<Option<usize>> = (0..MAX_PLUGIN_SCINTILLAS).map(Some).collect();
+        assert!(may_make_plugin_scintilla(&made, Some(MAX_PLUGIN_SCINTILLAS)).is_err());
+        assert!(may_make_plugin_scintilla(&made[1..], Some(MAX_PLUGIN_SCINTILLAS)).is_ok());
     }
 }

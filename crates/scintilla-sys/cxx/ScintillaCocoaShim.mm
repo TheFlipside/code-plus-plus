@@ -198,8 +198,10 @@ sptr_t scintilla_cocoa_send_message(void *view, unsigned int message,
 /// to set the delegate *and* re-implement the margin-click fold toggle
 /// host-side — not simply to swap one call for the other.
 ///
-/// `windowid` is passed back to the callback verbatim; Code++ has one
-/// view and passes 0.
+/// `windowid` is passed back to the callback verbatim. The host's own
+/// view passes 0; a view made for a plugin passes its index in the host's
+/// table of those (`ui_cocoa`'s `create_plugin_scintilla`), which is how
+/// one callback tells them apart.
 void scintilla_cocoa_set_notify_callback(void *view, SciNotifyFunc callback,
 					 intptr_t windowid) {
 	if (view == nullptr) {

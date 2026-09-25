@@ -943,10 +943,37 @@ impl UiPlatform for CocoaUi {
         // View menu's own marks come from live state in
         // `validateMenuItem:` on every open anyway. Unlike the dock
         // overrides above, this one touches AppKit from inside the
-        // dispatch's borrow — the item's state, if the menu is open —
-        // which is safe because setting an item's state calls back into
-        // nothing of ours. See `crate::plugin::set_menu_check`.
-        crate::plugin::set_menu_check(&self.menu, idm, checked)
+        // dispatch's borrow — the item's state, if the menu is open, and
+        // the command's toolbar button, if it has one — which is safe
+        // because setting either state calls back into nothing of ours.
+        // See `crate::plugin::set_menu_check`.
+        let known = crate::plugin::set_menu_check(&self.menu, idm, checked);
+        if known {
+            self.toolbar.set_plugin_button_state(idm, checked);
+        }
+        known
+    }
+
+    fn register_modeless_dialog(&mut self, dlg: codepp_plugin_host::Hwnd, register: bool) -> bool {
+        // `dlg` is an `NSWindow*` on this backend, and registering changes
+        // nothing; see `crate::plugin::register_modeless_dialog`.
+        crate::plugin::register_modeless_dialog(dlg, register, &self.window)
+    }
+
+    fn add_toolbar_icon(&mut self, cmd_id: i32, hicon: codepp_plugin_host::Hwnd) -> bool {
+        // `hicon` is an `NSImage*` on this backend. Adding the button
+        // touches AppKit from inside the dispatch's borrow, which is safe
+        // for the reason `set_npp_menu_item_check` gives.
+        crate::plugin::add_toolbar_icon(&self.toolbar, cmd_id, hicon)
+    }
+
+    fn create_plugin_scintilla(
+        &mut self,
+        parent: codepp_plugin_host::Hwnd,
+    ) -> codepp_plugin_host::Hwnd {
+        // `parent` is an `NSView*`, or the npp handle for a view in no
+        // window; see `crate::plugin::create_plugin_scintilla`.
+        crate::plugin::create_plugin_scintilla(parent, &self.window)
     }
 }
 

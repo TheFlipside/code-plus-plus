@@ -1115,6 +1115,9 @@ pub const SCI_SETCODEPAGE: u32 = 2037;
 /// `SCI_SETCODEPAGE` value selecting UTF-8. Numeric value 65001
 /// (the same Win32 codepage id Microsoft assigns to UTF-8).
 pub const SC_CP_UTF8: u32 = 65001;
+/// Read back the codepage [`SCI_SETCODEPAGE`] set — how a test confirms a
+/// view it did not configure itself is UTF-8.
+pub const SCI_GETCODEPAGE: u32 = 2137;
 pub const SCI_STYLESETFORE: u32 = 2051;
 pub const SCI_STYLESETBACK: u32 = 2052;
 pub const SCI_STYLESETBOLD: u32 = 2053;

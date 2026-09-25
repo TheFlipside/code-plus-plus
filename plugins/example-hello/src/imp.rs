@@ -45,7 +45,7 @@ const fn make_plugin_name() -> [u16; 14] {
 /// host indexes the array with the number we report — so a literal
 /// left stale after adding an item is an out-of-bounds read on the
 /// host's side.
-const FUNCS_COUNT: usize = 5;
+const FUNCS_COUNT: usize = 6;
 
 /// Index of "Show Dock Panel" in [`FUNCS`] — the first panel's
 /// `tTbData.dlgID`.
@@ -63,19 +63,21 @@ pub(crate) const CMD_SHOW_DOCK_PANEL: i32 = 1;
 /// panel's `tTbData.dlgID`. See [`CMD_SHOW_DOCK_PANEL`].
 pub(crate) const CMD_SHOW_SECOND_DOCK_PANEL: i32 = 3;
 
-/// Tick or untick the menu item at `index` in [`FUNCS`] — "Show Dock
-/// Panel" is ticked while its panel is open and unticked when the user
-/// closes it, the way `NppExec`'s "Show Console" tracks its console. The
-/// item's command id is the one the host wrote into its `FuncItem` at
-/// load, which is what `NPPM_SETMENUITEMCHECK` addresses it by.
-pub(crate) fn set_item_check(index: i32, checked: bool) {
-    let Ok(index) = usize::try_from(index) else {
-        return;
-    };
+/// The command id the host gave the item at `index` in [`FUNCS`] when it
+/// loaded the plugin — what `NPPM_SETMENUITEMCHECK` and
+/// `NPPM_ADDTOOLBARICON` address a command by.
+pub(crate) fn command_id(index: i32) -> Option<i32> {
+    let index = usize::try_from(index).ok()?;
     // SAFETY: single-threaded — the host writes `cmd_id` once at load, on
     // the UI thread this runs on too — and reading one `i32` field.
-    let cmd_id = unsafe { (*FUNCS.get()).get(index).map(|f| f.cmd_id) };
-    if let Some(cmd_id) = cmd_id {
+    unsafe { (*FUNCS.get()).get(index).map(|f| f.cmd_id) }
+}
+
+/// Tick or untick the menu item at `index` in [`FUNCS`] — "Show Dock
+/// Panel" is ticked while its panel is open and unticked when the user
+/// closes it, the way `NppExec`'s "Show Console" tracks its console.
+pub(crate) fn set_item_check(index: i32, checked: bool) {
+    if let Some(cmd_id) = command_id(index) {
         sdk::set_menu_item_check(cmd_id, checked);
     }
 }
@@ -123,6 +125,13 @@ static FUNCS: SyncCell<[FuncItem; FUNCS_COUNT]> = SyncCell::new([
         init2_check: 0,
         p_sh_key: core::ptr::null_mut(),
     },
+    FuncItem {
+        item_name: sdk::menu_label(b"Show Modeless Dialog"),
+        p_func: Some(plugin_cmd_show_modeless_dialog),
+        cmd_id: 0,
+        init2_check: 0,
+        p_sh_key: core::ptr::null_mut(),
+    },
 ]);
 
 #[no_mangle]
@@ -150,7 +159,9 @@ pub extern "C" fn getFuncsArray(nb: *mut i32) -> *mut FuncItem {
 ///
 /// `NPPN_TBMODIFICATION` is where the first dock panel is registered
 /// — see [`crate::dock::register_panels`], which also says why the
-/// second one deliberately is not.
+/// second one deliberately is not — and, on macOS, where "Show Dock
+/// Panel" gets its toolbar button. `NPPN_SHUTDOWN` unregisters the
+/// modeless dialog ([`crate::dialog`]).
 ///
 /// The other event example-hello handles is `NPPN_FILEBEFORECLOSE`,
 /// and it handles it the way real Notepad++ plugins do — by calling
@@ -174,7 +185,11 @@ pub extern "C" fn beNotified(notification: *const SCNotification) {
         // The second is left to its own menu command, which the host
         // runs at startup when that panel was open — see
         // `register_panels`.
-        sdk::NPPN_TBMODIFICATION => crate::dock::register_panels(),
+        sdk::NPPN_TBMODIFICATION => {
+            crate::dock::register_panels();
+            crate::dock::add_toolbar_button();
+        }
+        sdk::NPPN_SHUTDOWN => crate::dialog::shutdown(),
         sdk::NPPN_FILEBEFORECLOSE => match sdk::buffer_path(header.id_from) {
             Some(path) => sdk::set_status(&format!("Closing: {path}")),
             None => sdk::set_status("Closing: (untitled)"),
@@ -186,10 +201,11 @@ pub extern "C" fn beNotified(notification: *const SCNotification) {
 /// `messageProc`: example-hello has no host-to-plugin custom messages of
 /// its own, but off Windows this is where the host delivers the `DMN_*`
 /// notifications about its dock panels — `WM_NOTIFY`, `wParam` naming
-/// the panel — since a GTK widget or an `NSView` has no window procedure
-/// to receive them at. The docking module decides; on Windows it answers
-/// 0, the notifications arriving at the panel's own window procedure
-/// instead.
+/// the panel — and, on macOS, the notifications of the Scintilla view the
+/// host made for the Notes panel, since a GTK widget or an `NSView` has
+/// no window procedure to receive them at. The docking module decides; on
+/// Windows it answers 0, the notifications arriving at the panel's own
+/// window procedure instead.
 #[no_mangle]
 pub extern "C" fn messageProc(msg: u32, wparam: usize, lparam: isize) -> isize {
     crate::dock::message(msg, wparam, lparam)
@@ -246,6 +262,12 @@ extern "C" fn plugin_cmd_show_second_dock_panel() {
 /// panel's tab onto the other first and this switches the visible tab.
 extern "C" fn plugin_cmd_view_other_dock_tab() {
     crate::dock::view_other_tab();
+}
+
+/// Menu callback: open the modeless dialog, registering it with
+/// `NPPM_MODELESSDIALOG` the first time.
+extern "C" fn plugin_cmd_show_modeless_dialog() {
+    crate::dialog::show();
 }
 
 #[cfg(test)]

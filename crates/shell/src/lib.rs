@@ -438,12 +438,16 @@ pub trait UiPlatform {
         false
     }
 
-    /// Register or unregister a plugin-owned modeless-dialog
-    /// HWND with the host's message pump. `register == true`
-    /// adds the HWND so each pump iteration calls
-    /// `IsDialogMessageW` against it; `register == false`
-    /// removes it. Same `cfg(windows)` gate rationale as the
-    /// shortcut methods — `Hwnd` comes from `plugin-host`.
+    /// Register or unregister a plugin-owned modeless dialog.
+    /// Drives `NPPM_MODELESSDIALOG`; `true` answers the handle back.
+    /// On Win32 `register == true` adds the `HWND` so each pump
+    /// iteration calls `IsDialogMessageW` against it, and
+    /// `register == false` removes it. On Cocoa the handle is an
+    /// `NSWindow*`, and registering changes nothing: AppKit moves focus
+    /// within a window itself, and plugin shortcuts fire only in the
+    /// main window. The backend checks the handle is a window of the
+    /// plugin's and answers it, as Notepad++ does. The default,
+    /// `false`, is what a backend that has no such dialogs answers.
     fn register_modeless_dialog(
         &mut self,
         _dlg: codepp_plugin_host::Hwnd,
@@ -452,11 +456,11 @@ pub trait UiPlatform {
         false
     }
 
-    /// Add a plugin-supplied icon (HICON) to the host toolbar
-    /// bound to `cmd_id`. Drives `NPPM_ADDTOOLBARICON`. Same
-    /// `cfg(windows)` gate rationale as the shortcut messages
-    /// — `Hwnd` (the plugin's HICON shape) comes from
-    /// `plugin-host`.
+    /// Add a toolbar button for the plugin command `cmd_id`, showing
+    /// the plugin's image. Drives `NPPM_ADDTOOLBARICON`. The image is
+    /// an `HICON` on Win32 and an `NSImage*` on Cocoa. The default,
+    /// `false`, is what a backend without plugin toolbar buttons
+    /// answers.
     fn add_toolbar_icon(&mut self, _cmd_id: i32, _hicon: codepp_plugin_host::Hwnd) -> bool {
         false
     }
@@ -481,14 +485,13 @@ pub trait UiPlatform {
         false
     }
 
-    /// Create a fresh Scintilla control as a child of the
-    /// plugin-supplied `parent` HWND. Drives
-    /// `NPPM_CREATESCINTILLAHANDLE`. Returns the new HWND on
-    /// success, NULL on failure. The plugin owns the new
-    /// control's lifetime (must `DestroyWindow` before the
-    /// parent goes away). Same `cfg(windows)` gate rationale
-    /// as the other plugin-HWND methods — `Hwnd` comes from
-    /// `plugin-host`.
+    /// Create a Scintilla view for a plugin. Drives
+    /// `NPPM_CREATESCINTILLAHANDLE`. Returns the new handle, or NULL
+    /// on failure. On Win32 it is a child window of `parent`, which
+    /// the plugin destroys before the parent goes. On Cocoa `parent`
+    /// is an `NSView*`, or the npp handle for a view in no window, and
+    /// the host keeps the view for the rest of the process. The
+    /// default, NULL, is what a backend without the feature answers.
     fn create_plugin_scintilla(
         &mut self,
         _parent: codepp_plugin_host::Hwnd,
@@ -3307,6 +3310,19 @@ impl Shell {
                 self.panel_owner(panel)
                     .and_then(|idx| self.plugins.message_target(idx))
             })
+    }
+
+    /// The `messageProc` of the plugin at registry index `idx`: where a
+    /// backend sends what the plugin should hear about something the
+    /// host made for it, such as the notifications of a Scintilla view
+    /// from `NPPM_CREATESCINTILLAHANDLE`. `None` when that plugin is not
+    /// loaded, or exports no `messageProc`.
+    #[must_use]
+    pub fn plugin_message_target(
+        &self,
+        idx: usize,
+    ) -> Option<codepp_plugin_host::PluginMessageProc> {
+        self.plugins.message_target(idx)
     }
 
     /// Whether the plugin owning `panel` is installed and loaded.

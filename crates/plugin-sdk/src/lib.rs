@@ -73,6 +73,24 @@ pub use codepp_plugin_host::{
     DWS_DF_FLOATING, DWS_ICONTAB,
 };
 
+/// The messages a plugin sends to have the host make something for it —
+/// a Scintilla view (`NPPM_CREATESCINTILLAHANDLE`), a toolbar button
+/// (`NPPM_ADDTOOLBARICON`, whose payload is a [`ToolbarIcons`]) — or to
+/// register a modeless dialog (`NPPM_MODELESSDIALOG` with
+/// [`MODELESSDIALOGADD`] or [`MODELESSDIALOGREMOVE`]), and the
+/// notification a plugin undoes such registrations on
+/// (`NPPN_SHUTDOWN`). Re-exported from the host's dispatcher rather than
+/// redeclared, for the reason `Hwnd` is: numbers the dispatcher is
+/// checked against upstream for (`tools/npp-abi-check`) cannot drift here.
+///
+/// What each handle is off Windows — an `NSView*`, an `NSImage*`, an
+/// `NSWindow*` on macOS — is in `Notepad_plus_msgs.h`.
+pub use codepp_plugin_host::dispatch::{
+    MODELESSDIALOGADD, MODELESSDIALOGREMOVE, NPPM_ADDTOOLBARICON, NPPM_CREATESCINTILLAHANDLE,
+    NPPM_MODELESSDIALOG, NPPN_SHUTDOWN,
+};
+pub use codepp_plugin_host::ffi::ToolbarIcons;
+
 // ---- SendMessageW transport -------------------------------------
 //
 // On Windows this is the Win32 `#[link(name = "user32")]` import; the

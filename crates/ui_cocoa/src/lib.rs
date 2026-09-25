@@ -687,7 +687,8 @@ pub(crate) fn at_callback_boundary<R>(
 /// Scintilla's notification callback.
 ///
 /// The Cocoa counterpart of GTK's `sci-notify` handler and Win32's
-/// `WM_NOTIFY` arm. Registered once in [`run`]; see
+/// `WM_NOTIFY` arm. Registered once in [`run`], for the host's own view —
+/// the views made for plugins have `plugin::on_plugin_sci_notify` — see
 /// `scintilla_cocoa_set_notify_callback` for why the entry point it goes
 /// through is the deprecated one.
 ///
@@ -1542,18 +1543,29 @@ fn apply_editor_appearance() {
             SELECTION_BACK_INACTIVE as isize,
         );
         st.sci_view.setClipsToBounds(true);
-        if let Some(scroll) = editor_scroll_view(&st.sci_view) {
-            // Permanent bars, matching Win32 and GTK. The layout this
-            // then breaks is repaired below and after every paint.
-            scroll.setScrollerStyle(NSScrollerStyle::Legacy);
-            scroll.setAutohidesScrollers(false);
-        }
+        // Permanent bars, matching Win32 and GTK. The layout this then
+        // breaks is repaired below and after every paint.
+        force_permanent_scrollers(&st.sci_view);
         // After the style, never before: the repair is a no-op while the
         // scrollers are still overlay.
         if let Some(mtm) = mtm {
             enforce_scroller_layout(&st.sci_view, mtm);
         }
     });
+}
+
+/// Give a Scintilla view permanently visible scrollers, overriding the
+/// system's overlay default: the host's own view, and each view it makes
+/// for a plugin, as Win32's are. Overlay scrollers appear only during a
+/// wheel or trackpad gesture, and Scintilla scrolls its own content, so
+/// keyboard navigation and a plugin's scrolls would show no scrollbar at
+/// all. The layout this breaks has to be repaired after every paint by
+/// [`enforce_scroller_layout`], which every caller arranges.
+pub(crate) fn force_permanent_scrollers(sci_view: &NSView) {
+    if let Some(scroll) = editor_scroll_view(sci_view) {
+        scroll.setScrollerStyle(NSScrollerStyle::Legacy);
+        scroll.setAutohidesScrollers(false);
+    }
 }
 
 /// Give the editor permanently visible scrollers, and repair the
@@ -1590,7 +1602,7 @@ fn apply_editor_appearance() {
 /// system is set to overlay scrollers *and* this function has not forced
 /// otherwise, the vendored arithmetic is correct as written and must be
 /// left alone.
-fn enforce_scroller_layout(sci_view: &NSView, mtm: MainThreadMarker) {
+pub(crate) fn enforce_scroller_layout(sci_view: &NSView, mtm: MainThreadMarker) {
     let Some(scroll) = editor_scroll_view(sci_view) else {
         return;
     };
@@ -4141,6 +4153,22 @@ mod source_invariants {
             "the layout repair must run from the SCN_PAINTED arm, or it \
              lasts only until the first long line widens the document"
         );
+        // The views made for plugins get the same permanent bars, so they
+        // need the same repair after each of their own paints.
+        let plugin = plugin_src();
+        if fn_body(&plugin, "create_plugin_scintilla").contains("force_permanent_scrollers(") {
+            let forward = fn_body(&plugin, "forward_plugin_sci_notify");
+            let paint = forward
+                .find("== SCN_PAINTED")
+                .expect("a plugin view's SCN_PAINTED is no longer recognised");
+            let repair = forward
+                .find("enforce_scroller_layout(")
+                .expect("a plugin view's scrollers are forced but never repaired");
+            assert!(
+                paint < repair,
+                "a plugin view's scroller repair must run on its SCN_PAINTED"
+            );
+        }
         // Trimming the line-number ruler to the clip's height is only
         // half of keeping it out of the scrollbar band: Scintilla paints
         // the gutter a whole line-row at a time, so the trim leaves a
@@ -4284,7 +4312,8 @@ let msg = \"found scintilla_cocoa_new() calls\";
         );
     }
 
-    /// Exactly two permanent Scintilla views, never destroyed.
+    /// Scintilla views are made in three places, and none is ever
+    /// released.
     ///
     /// `EditorHandle` is `Copy`, carries no lifetime, and holds raw
     /// pointers into a view — so nothing in the type system stops a copy
@@ -4292,7 +4321,10 @@ let msg = \"found scintilla_cocoa_new() calls\";
     /// obligation structurally: the main editor and the Document Map's
     /// miniature are each created once in `run` and never finalised, and
     /// tabs get their own buffers through `SCI_SETDOCPOINTER` rather than
-    /// through views of their own.
+    /// through views of their own. The third place is
+    /// `create_plugin_scintilla`, and its views are kept for the process
+    /// for the same reason from the other side: a plugin that captured a
+    /// view's direct-call pair holds pointers the host cannot invalidate.
     ///
     /// DESIGN.md §7.4 names an `NSView`-per-tab design as the specific
     /// mistake this avoids, and says in as many words that a Cocoa
@@ -4302,7 +4334,7 @@ let msg = \"found scintilla_cocoa_new() calls\";
     /// failing an assertion — so the guard is a source scan, the same
     /// tool and the same reasoning as `ui_gtk`'s.
     #[test]
-    fn exactly_two_scintilla_views_are_ever_created() {
+    fn scintilla_views_are_made_in_three_places_and_never_released() {
         let src = all_production_code();
         assert!(
             src.len() > 20_000,
@@ -4311,12 +4343,54 @@ let msg = \"found scintilla_cocoa_new() calls\";
         );
         let calls = src.matches("scintilla_cocoa_new()").count();
         assert_eq!(
-            calls, 2,
-            "this backend must build exactly two permanent Scintilla views — the main \
-             editor and the Document Map miniature — found {calls}. Each is created once \
-             and shares tab documents via SCI_SETDOCPOINTER; a *per-tab* view would leave \
-             every copied `EditorHandle` dangling when a tab closes, which is the hazard \
-             this count guards. Adding a third permanent view is fine, but update this."
+            calls, 3,
+            "this backend makes Scintilla views in exactly three places — the main \
+             editor and the Document Map miniature, once each, and the views made for \
+             plugins — found {calls}. The two permanent ones share tab documents via \
+             SCI_SETDOCPOINTER; a *per-tab* view would leave every copied `EditorHandle` \
+             dangling when a tab closes, which is the hazard this count guards. Adding \
+             another permanent view is fine, but update this."
+        );
+        // The plugins' views: made in `create_plugin_scintilla` and held
+        // by a raw pointer, so no `Retained` — and no destructor — can
+        // ever release one; and published to the routing table once,
+        // there, which only ever grows.
+        let plugin = plugin_src();
+        let create = fn_body(&plugin, "create_plugin_scintilla");
+        assert_eq!(
+            create.matches("scintilla_cocoa_new()").count(),
+            1,
+            "the views made for plugins are no longer made in `create_plugin_scintilla`"
+        );
+        assert!(
+            !create.contains("Retained::from_raw("),
+            "`create_plugin_scintilla` adopts the view into a `Retained`, which releases \
+             it when dropped — and a plugin may hold its direct-call pair"
+        );
+        assert!(
+            plugin.contains("    view: *mut c_void,"),
+            "`PluginScintilla::view` is no longer a raw pointer; an owning field would \
+             release the view when its entry is dropped"
+        );
+        for (what, publish) in [
+            ("a routing slot", ".store(ptr, Ordering::Relaxed)"),
+            ("the routing count", "PLUGIN_SCI_COUNT.store("),
+        ] {
+            assert_eq!(
+                plugin.matches(publish).count(),
+                1,
+                "{what} is written somewhere besides `create_plugin_scintilla`; the table \
+                 is read from any thread on the promise that it only ever grows"
+            );
+            assert!(
+                create.contains(publish),
+                "{what} is not published where it is made"
+            );
+        }
+        assert!(
+            !plugin.contains("PLUGIN_SCI_COUNT.fetch_sub(")
+                && !plugin.contains("PLUGIN_SCI_COUNT.swap("),
+            "the routing count is decreased somewhere; the table only ever grows"
         );
         // The shim exposes no release entry point, so there is no
         // supported way to finalise one — but removing a view from its
@@ -5161,7 +5235,7 @@ let msg = \"found scintilla_cocoa_new() calls\";
             2,
             "plugin.rs sends to Scintilla from somewhere other than `plugin_dispatch` \
              and `send_sci_on_main`; every send must sit behind the \
-             `is_valid_scintilla` identity check"
+             `is_known_scintilla` identity check"
         );
         assert_eq!(dispatch.matches("scintilla_cocoa_send_message(").count(), 1);
         assert_eq!(marshal.matches("scintilla_cocoa_send_message(").count(), 1);
@@ -5171,8 +5245,22 @@ let msg = \"found scintilla_cocoa_new() calls\";
             "`send_sci_on_main` is called from somewhere other than `plugin_dispatch`"
         );
         let check = dispatch
-            .find("is_valid_scintilla(hwnd)")
+            .find("is_known_scintilla(hwnd)")
             .expect("`plugin_dispatch` no longer identity-checks the handle it was given");
+        // The check admits the host's own view and the views made for
+        // plugins, and nothing else.
+        let known = fn_body(&src, "is_known_scintilla");
+        assert!(
+            known.contains("is_valid_scintilla(hwnd) || is_plugin_scintilla(hwnd)")
+                && known.matches("||").count() == 1,
+            "`is_known_scintilla` must be exactly the host's view or a plugin's view"
+        );
+        let plugin_views = fn_body(&src, "is_plugin_scintilla");
+        assert!(
+            plugin_views.contains(".take(made)")
+                && plugin_views.contains("PLUGIN_SCI_COUNT.load(Ordering::Acquire)"),
+            "`is_plugin_scintilla` must read only the slots the count has published"
+        );
         let send = dispatch
             .find("scintilla_cocoa_send_message(")
             .expect("`plugin_dispatch` no longer forwards to Scintilla at all");

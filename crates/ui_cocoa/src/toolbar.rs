@@ -46,12 +46,24 @@
 //! so the toolbar and the menu can never disagree. The View menu needs
 //! no equivalent registration because its marks are resolved on open by
 //! `validateMenuItem:`.
+//!
+//! # Plugin buttons
+//!
+//! A plugin adds a button for one of its commands with
+//! `NPPM_ADDTOOLBARICON` ([`Toolbar::add_plugin_button`]). They go after
+//! the built-in groups, divided from them by one more separator, in the
+//! order added. A plugin button shows its command's check mark as
+//! pressed, as the Plugins menu shows it ticked, and Notepad++'s toolbar
+//! does the same.
+
+use std::cell::RefCell;
+use std::rc::Rc;
 
 use objc2::rc::Retained;
-use objc2::{sel, AnyThread, MainThreadOnly};
+use objc2::{sel, AnyThread, MainThreadOnly, Message};
 use objc2_app_kit::{
     NSAutoresizingMaskOptions, NSBezelStyle, NSBitmapImageRep, NSBox, NSBoxType, NSButton,
-    NSButtonType, NSImage, NSImageRep, NSView,
+    NSButtonType, NSImage, NSImageRep, NSImageScaling, NSView,
 };
 use objc2_foundation::{MainThreadMarker, NSData, NSPoint, NSRect, NSSize, NSString};
 
@@ -72,6 +84,11 @@ const SEPARATOR_WIDTH: f64 = 9.0;
 const SEPARATOR_LINE_WIDTH: f64 = 1.0;
 /// Inset from the bar's left edge, and between buttons.
 const BUTTON_GAP: f64 = 2.0;
+/// The most buttons plugins may add. The bar does not scroll, so what
+/// lies past the window's edge cannot be clicked anyway; the cap bounds
+/// what a plugin adding a button per call could otherwise grow without
+/// end — asking again for the same command only replaces its image.
+const MAX_PLUGIN_BUTTONS: usize = 64;
 
 /// `(png_1x, png_2x)` for one icon, embedded from `assets/icons/`.
 macro_rules! icon {
@@ -107,6 +124,23 @@ pub struct Toolbar {
     docmap: Retained<NSButton>,
     /// The Folder as Workspace toggle, held for the same reason.
     workspace: Retained<NSButton>,
+    /// The buttons plugins added. Shared by every clone of the handle,
+    /// since it is cloned on every drain and a button added through one
+    /// clone must be found through all of them.
+    plugin: Rc<RefCell<PluginButtons>>,
+}
+
+/// The buttons plugins added, and where the next one goes.
+struct PluginButtons {
+    /// The left edge of the next button: the end of the built-in bar
+    /// until the first plugin button, which is preceded by a separator.
+    next_x: f64,
+    /// Each button, with the command it runs.
+    buttons: Vec<(i32, Retained<NSButton>)>,
+    /// The target every button's click goes to — the built-in buttons'
+    /// target, held so a button added later can be given it. A control
+    /// holds its target weakly; this is not what keeps it alive.
+    actions: Retained<Actions>,
 }
 
 impl Toolbar {
@@ -228,11 +262,88 @@ impl Toolbar {
         bar.push(icon!("run"), "Run a Macro Multiple Times…", None);
         bar.push(icon!("save-macro"), "Save Current Recorded Macro…", None);
 
+        let plugin = Rc::new(RefCell::new(PluginButtons {
+            next_x: bar.x,
+            buttons: Vec::new(),
+            actions: actions.retain(),
+        }));
         Self {
             container,
             toggles,
             docmap,
             workspace,
+            plugin,
+        }
+    }
+
+    /// Add a button that runs plugin command `cmd_id`, showing `image` —
+    /// `NPPM_ADDTOOLBARICON` — or give the button that command already
+    /// has this image. `tip` is its tooltip and `checked` whether it
+    /// starts pressed. Refused once [`MAX_PLUGIN_BUTTONS`] are in place;
+    /// see [`plugin_button_slot`].
+    ///
+    /// The image is drawn at its own size, scaled down if it is larger
+    /// than a button: a plugin's icon is whatever size the plugin made it,
+    /// where the built-in ones are all the same.
+    pub fn add_plugin_button(
+        &self,
+        cmd_id: i32,
+        image: &NSImage,
+        tip: &str,
+        checked: bool,
+        mtm: MainThreadMarker,
+    ) -> Result<(), &'static str> {
+        let Ok(mut plugin) = self.plugin.try_borrow_mut() else {
+            return Err("the toolbar's plugin buttons are being changed already");
+        };
+        let commands: Vec<i32> = plugin.buttons.iter().map(|(id, _)| *id).collect();
+        match plugin_button_slot(&commands, cmd_id) {
+            PluginButtonSlot::Existing(index) => {
+                let button = &plugin.buttons[index].1;
+                button.setImage(Some(image));
+                button.setToolTip(Some(&NSString::from_str(tip)));
+                button.setState(isize::from(checked));
+                return Ok(());
+            }
+            PluginButtonSlot::Full => {
+                return Err("the toolbar has as many plugin buttons as it takes");
+            }
+            PluginButtonSlot::New { first } => {
+                if first {
+                    add_separator(&self.container, plugin.next_x, mtm);
+                    plugin.next_x += SEPARATOR_WIDTH;
+                }
+            }
+        }
+        let button = new_button(plugin.next_x, tip, mtm);
+        button.setImage(Some(image));
+        button.setImageScaling(NSImageScaling::ScaleProportionallyDown);
+        // Push-on/push-off, so the button can show the command's check
+        // mark. AppKit flips the state on a click, before the action runs;
+        // the action puts back the plugin's mark afterwards — see
+        // `codeppPluginToolbarCommand:`.
+        button.setButtonType(NSButtonType::PushOnPushOff);
+        button.setTag(cmd_id as isize);
+        set_target(&button, &plugin.actions, sel!(codeppPluginToolbarCommand:));
+        button.setState(isize::from(checked));
+        self.container.addSubview(&button);
+        plugin.next_x += BUTTON_SIZE + BUTTON_GAP;
+        plugin.buttons.push((cmd_id, button));
+        Ok(())
+    }
+
+    /// Show plugin command `cmd_id`'s check mark on its button, if it has
+    /// one — `NPPM_SETMENUITEMCHECK` marks both, as in Notepad++.
+    pub fn set_plugin_button_state(&self, cmd_id: i32, checked: bool) {
+        let Ok(plugin) = self.plugin.try_borrow() else {
+            tracing::debug!(
+                cmd_id,
+                "toolbar: a plugin button's mark was not set: the buttons are being changed"
+            );
+            return;
+        };
+        if let Some((_, button)) = plugin.buttons.iter().find(|(id, _)| *id == cmd_id) {
+            button.setState(isize::from(checked));
         }
     }
 
@@ -298,6 +409,35 @@ impl Toolbar {
 
     pub fn is_hidden(&self) -> bool {
         self.container.isHidden()
+    }
+}
+
+/// Where a plugin button for a command goes, given the commands that
+/// already have one.
+#[derive(Debug, PartialEq, Eq)]
+enum PluginButtonSlot {
+    /// The command's own button, at this index: its image is replaced.
+    Existing(usize),
+    /// A new button — the first plugin button of all when `first`, which
+    /// a separator then precedes.
+    New { first: bool },
+    /// None: the bar has [`MAX_PLUGIN_BUTTONS`] already.
+    Full,
+}
+
+/// Where a plugin button for `cmd_id` goes, given `commands`, the
+/// commands with a button, in order. A command keeps its one button
+/// however often it asks, so asking again is never refused, not even at
+/// the cap.
+fn plugin_button_slot(commands: &[i32], cmd_id: i32) -> PluginButtonSlot {
+    if let Some(index) = commands.iter().position(|&id| id == cmd_id) {
+        PluginButtonSlot::Existing(index)
+    } else if commands.len() >= MAX_PLUGIN_BUTTONS {
+        PluginButtonSlot::Full
+    } else {
+        PluginButtonSlot::New {
+            first: commands.is_empty(),
+        }
     }
 }
 
@@ -372,38 +512,15 @@ impl Bar<'_> {
         self.place(&button);
     }
 
-    /// A group separator: a gap with a hairline down the middle.
-    ///
-    /// An `NSBox` in separator mode rather than a hand-filled view. It is
-    /// AppKit's own separator, so it draws the system hairline at the
-    /// system width and follows the appearance into dark mode with no
-    /// colour of ours to keep in step — and it avoids pulling
-    /// `objc2-quartz-core` in just to set one layer background.
+    /// A group separator at the cursor — see [`add_separator`].
     fn separator(&mut self) {
-        let line = NSBox::initWithFrame(
-            NSBox::alloc(self.mtm),
-            NSRect::new(
-                NSPoint::new(self.x + (SEPARATOR_WIDTH - SEPARATOR_LINE_WIDTH) / 2.0, 4.0),
-                NSSize::new(SEPARATOR_LINE_WIDTH, TOOLBAR_HEIGHT - 8.0),
-            ),
-        );
-        line.setBoxType(NSBoxType::Separator);
-        self.container.addSubview(&line);
+        add_separator(self.container, self.x, self.mtm);
         self.x += SEPARATOR_WIDTH;
     }
 
-    /// The parts every button shares: frame, icon, tooltip, flat bezel.
+    /// A button at the cursor, with its bundled icon.
     fn button(&self, icons: IconPair, tip: &str) -> Retained<NSButton> {
-        let frame = NSRect::new(
-            NSPoint::new(self.x, (TOOLBAR_HEIGHT - BUTTON_SIZE) / 2.0),
-            NSSize::new(BUTTON_SIZE, BUTTON_SIZE),
-        );
-        let button = NSButton::initWithFrame(NSButton::alloc(self.mtm), frame);
-        // Image-only: an empty title, or AppKit reserves room for one.
-        button.setTitle(&NSString::from_str(""));
-        button.setToolTip(Some(&NSString::from_str(tip)));
-        button.setBezelStyle(NSBezelStyle::AccessoryBar);
-        button.setBordered(false);
+        let button = new_button(self.x, tip, self.mtm);
         if let Some(image) = decode_icon(icons) {
             button.setImage(Some(&image));
         }
@@ -412,20 +529,60 @@ impl Bar<'_> {
 
     /// Point a button's action at [`Actions`].
     fn target(&self, button: &NSButton, action: objc2::runtime::Sel) {
-        // SAFETY: the selector is a compile-time `sel!` literal declared
-        // in `Actions`'s own `define_class!` block, so it cannot go stale,
-        // and the target is a weak reference to an object the window
-        // state owns for the process lifetime.
-        unsafe {
-            button.setTarget(Some(self.actions));
-            button.setAction(Some(action));
-        }
+        set_target(button, self.actions, action);
     }
 
     /// Add `button` and advance the cursor past it.
     fn place(&mut self, button: &NSButton) {
         self.container.addSubview(button);
         self.x += BUTTON_SIZE + BUTTON_GAP;
+    }
+}
+
+/// A group separator at `x`: a gap with a hairline down the middle.
+///
+/// An `NSBox` in separator mode rather than a hand-filled view. It is
+/// AppKit's own separator, so it draws the system hairline at the system
+/// width and follows the appearance into dark mode with no colour of ours
+/// to keep in step — and it avoids pulling `objc2-quartz-core` in just to
+/// set one layer background.
+fn add_separator(container: &NSView, x: f64, mtm: MainThreadMarker) {
+    let line = NSBox::initWithFrame(
+        NSBox::alloc(mtm),
+        NSRect::new(
+            NSPoint::new(x + (SEPARATOR_WIDTH - SEPARATOR_LINE_WIDTH) / 2.0, 4.0),
+            NSSize::new(SEPARATOR_LINE_WIDTH, TOOLBAR_HEIGHT - 8.0),
+        ),
+    );
+    line.setBoxType(NSBoxType::Separator);
+    container.addSubview(&line);
+}
+
+/// The parts every button shares, the built-in ones and the plugins':
+/// frame at `x`, tooltip, flat bezel, no title.
+fn new_button(x: f64, tip: &str, mtm: MainThreadMarker) -> Retained<NSButton> {
+    let frame = NSRect::new(
+        NSPoint::new(x, (TOOLBAR_HEIGHT - BUTTON_SIZE) / 2.0),
+        NSSize::new(BUTTON_SIZE, BUTTON_SIZE),
+    );
+    let button = NSButton::initWithFrame(NSButton::alloc(mtm), frame);
+    // Image-only: an empty title, or AppKit reserves room for one.
+    button.setTitle(&NSString::from_str(""));
+    button.setToolTip(Some(&NSString::from_str(tip)));
+    button.setBezelStyle(NSBezelStyle::AccessoryBar);
+    button.setBordered(false);
+    button
+}
+
+/// Point `button`'s action at `actions`.
+fn set_target(button: &NSButton, actions: &Actions, action: objc2::runtime::Sel) {
+    // SAFETY: the selector is a compile-time `sel!` literal declared in
+    // `Actions`'s own `define_class!` block, so it cannot go stale, and
+    // the target is a weak reference to an object the window state owns
+    // for the process lifetime.
+    unsafe {
+        button.setTarget(Some(actions));
+        button.setAction(Some(action));
     }
 }
 
@@ -454,4 +611,46 @@ fn decode_icon(icons: IconPair) -> Option<Retained<NSImage>> {
         return None;
     }
     Some(image)
+}
+
+#[cfg(test)]
+mod plugin_button_tests {
+    use super::{plugin_button_slot, PluginButtonSlot, MAX_PLUGIN_BUTTONS};
+
+    /// The first plugin button is the one a separator precedes; later
+    /// ones are not.
+    #[test]
+    fn the_first_plugin_button_comes_after_a_separator() {
+        assert_eq!(
+            plugin_button_slot(&[], 7),
+            PluginButtonSlot::New { first: true }
+        );
+        assert_eq!(
+            plugin_button_slot(&[7], 8),
+            PluginButtonSlot::New { first: false }
+        );
+    }
+
+    /// A command that has a button keeps it: asking again replaces the
+    /// image, even once the bar is full.
+    #[test]
+    fn a_command_keeps_its_one_button() {
+        assert_eq!(
+            plugin_button_slot(&[5, 7, 9], 7),
+            PluginButtonSlot::Existing(1)
+        );
+        let full: Vec<i32> = (0..).take(MAX_PLUGIN_BUTTONS).collect();
+        assert_eq!(plugin_button_slot(&full, 3), PluginButtonSlot::Existing(3));
+    }
+
+    /// Past the cap a new command gets no button.
+    #[test]
+    fn the_bar_takes_no_more_than_the_cap() {
+        let full: Vec<i32> = (0..).take(MAX_PLUGIN_BUTTONS).collect();
+        assert_eq!(plugin_button_slot(&full, -1), PluginButtonSlot::Full);
+        assert_eq!(
+            plugin_button_slot(&full[1..], -1),
+            PluginButtonSlot::New { first: false }
+        );
+    }
 }
