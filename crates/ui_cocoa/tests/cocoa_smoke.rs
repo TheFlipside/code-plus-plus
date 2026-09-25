@@ -82,7 +82,7 @@ mod smoke {
             return;
         }
 
-        println!("\nrunning 3 tests");
+        println!("\nrunning 4 tests");
 
         // Hard failure rather than a skip: with `harness = false` this *is*
         // the main thread, so `None` here would mean cargo changed how it
@@ -99,27 +99,31 @@ mod smoke {
         notifications_are_delivered();
         println!("test cocoa_smoke::notifications_are_delivered ... ok");
 
-        // The third scenario needs `codepp_ui_cocoa::smoke_support`,
+        // The last two scenarios need `codepp_ui_cocoa::smoke_support`,
         // which is compiled out of release builds because it can rewrite
         // the plugin dispatcher's trust anchor. A `--release` test build
-        // therefore reports it ignored rather than silently dropping it.
+        // therefore reports them ignored rather than silently dropping
+        // them.
         #[cfg(debug_assertions)]
         {
             marshal::a_plugins_worker_thread_reaches_scintilla_through_the_main_queue();
             println!(
                 "test cocoa_smoke::a_plugins_worker_thread_reaches_scintilla_through_the_main_queue ... ok"
             );
-            println!("\ntest result: ok. 3 passed; 0 failed; 0 ignored\n");
+            codepp_ui_cocoa::smoke_support::plugin_panels_are_hosted_by_the_dock();
+            println!("test cocoa_smoke::plugin_panels_are_hosted_by_the_dock ... ok");
+            println!("\ntest result: ok. 4 passed; 0 failed; 0 ignored\n");
         }
         #[cfg(not(debug_assertions))]
         {
             println!(
                 "test cocoa_smoke::a_plugins_worker_thread_reaches_scintilla_through_the_main_queue ... ignored"
             );
+            println!("test cocoa_smoke::plugin_panels_are_hosted_by_the_dock ... ignored");
             println!(
-                "\ntest result: ok. 2 passed; 0 failed; 1 ignored\n\n\
-                 note: the marshal scenario needs a debug build (`smoke_support` is \
-                 compiled out of release).\n"
+                "\ntest result: ok. 2 passed; 0 failed; 2 ignored\n\n\
+                 note: the marshal and plugin-panel scenarios need a debug build \
+                 (`smoke_support` is compiled out of release).\n"
             );
         }
     }

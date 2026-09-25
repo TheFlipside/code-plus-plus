@@ -323,9 +323,9 @@ pub enum DockPanel {
     /// "Document Map" — the miniature second Scintilla view.
     DocMap,
     /// A panel a plugin registered through `NPPM_DMMREGASDCKDLG`.
-    /// The Win32 and GTK backends create these — the message carries
-    /// the plugin's own window, an `HWND` there and a `GtkWidget*`
-    /// here — and Cocoa declines it.
+    /// Every backend creates these — the message carries the plugin's
+    /// own content: an `HWND` on Windows, a `GtkWidget*` on Linux, an
+    /// `NSView*` on macOS.
     Plugin(&'static PluginPanelIdent),
 }
 
@@ -444,8 +444,20 @@ impl DockPanel {
 /// are platform code, and the policy is the shell's. What lives here is
 /// the value, its wire form and the exact message it signs, so the
 /// persisted layout carries it like any other field.
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy)]
 pub struct CommandSeal([u8; 32]);
+
+/// `==` is [`CommandSeal::matches`], so comparing two seals costs the
+/// same however early they differ, wherever the comparison is written.
+/// A derived `==` would stop at the first differing byte, and one day
+/// someone checks a seal with it instead of `matches`.
+impl PartialEq for CommandSeal {
+    fn eq(&self, other: &Self) -> bool {
+        self.matches(other)
+    }
+}
+
+impl Eq for CommandSeal {}
 
 impl CommandSeal {
     /// Wrap a MAC.
@@ -1462,35 +1474,6 @@ impl DockLayout {
         });
         self.debug_assert_invariants();
         id
-    }
-
-    /// Forget every plugin panel: out of the groups, out of both
-    /// placement tables.
-    ///
-    /// For a backend that cannot host one. A plugin registers its
-    /// dock dialog through `NPPM_DMMREGASDCKDLG`, which the Cocoa
-    /// host declines (DESIGN.md §7.4 — the `HWND`-shaped
-    /// `UiPlatform` methods keep their trait defaults there), yet
-    /// `session.xml` is portable and a layout written on Windows or
-    /// Linux names panels by a key that interns on any platform. A
-    /// backend that called this at restore never sees a panel it has
-    /// no content window for; one that did not would render an empty
-    /// group and have no way to close it. The backends that do host
-    /// plugin panels park one whose plugin cannot supply it instead
-    /// ([`Self::park`]), so it is saved back where it was.
-    pub fn drop_plugin_panels(&mut self) {
-        self.groups.retain_mut(|g| {
-            g.panels.retain(|p| !matches!(p, DockPanel::Plugin(_)));
-            g.active = g.active.min(g.panels.len().saturating_sub(1));
-            !g.panels.is_empty()
-        });
-        self.remembered
-            .retain(|(p, _)| !matches!(p, DockPanel::Plugin(_)));
-        self.initial_side
-            .retain(|(p, _)| !matches!(p, DockPanel::Plugin(_)));
-        self.open_commands.clear();
-        self.parked.clear();
-        self.debug_assert_invariants();
     }
 
     /// Show `panel`. Already visible → just make it the active tab
@@ -2520,6 +2503,40 @@ mod tests {
         }
     }
 
+    /// `==` on seals is `matches`, not a byte-by-byte early exit: it
+    /// answers the same for a difference in any byte, first or last.
+    #[test]
+    fn seal_equality_is_matches() {
+        let bytes = [7u8; 32];
+        let seal = CommandSeal::from_bytes(bytes);
+        assert!(seal == CommandSeal::from_bytes(bytes));
+        for i in 0..32 {
+            let mut other = bytes;
+            other[i] = 0;
+            let other = CommandSeal::from_bytes(other);
+            assert_eq!(seal == other, seal.matches(&other), "byte {i}");
+            assert!(seal != other, "byte {i}");
+        }
+    }
+
+    /// The test above passes for a derived `==` too, which would return at
+    /// the first differing byte. So the source is pinned: the struct
+    /// derives no equality, and the one it has goes through `matches`.
+    #[test]
+    fn seal_equality_is_not_derived() {
+        let src = include_str!("dock.rs");
+        assert!(
+            src.contains("#[derive(Clone, Copy)]\npub struct CommandSeal("),
+            "CommandSeal derives more than Clone and Copy — a derived `==` is not constant-time"
+        );
+        assert!(
+            src.contains(
+                "impl PartialEq for CommandSeal {\n    fn eq(&self, other: &Self) -> bool {\n        self.matches(other)\n"
+            ),
+            "CommandSeal's `==` no longer goes through `matches`"
+        );
+    }
+
     /// The message a seal signs is exactly the label, the panel's key and
     /// the index — pinned, because a change to it silently invalidates
     /// every seal already saved — and no two records share one. A host
@@ -2622,12 +2639,6 @@ mod tests {
         );
         let recorded: Vec<DockPanel> = open.into_iter().filter(|p| *p != unrecorded).collect();
         assert_eq!(recorded, vec![console, notes], "group then tab order");
-
-        // Dropping plugin panels (the backends that cannot host them)
-        // forgets their commands too.
-        layout.drop_plugin_panels();
-        assert!(layout.open_plugin_panels().is_empty());
-        assert_eq!(layout.open_command_for(console), None);
     }
 
     /// Six plugin panels, placed each way a parked panel has to be put
@@ -3206,11 +3217,11 @@ mod tests {
         assert_eq!(back.location, DockLocation::Side(DockSide::Bottom));
     }
 
-    /// Everything that forgets plugin panels, or places one explicitly,
-    /// also lets go of a parked record — and parked float rects are
-    /// clamped back into reach like every other one.
+    /// Placing a parked panel explicitly lets go of its parked record —
+    /// and parked float rects are clamped back into reach like every
+    /// other one.
     #[test]
-    fn a_parked_record_is_dropped_moved_and_clamped_with_the_rest() {
+    fn a_parked_record_is_moved_and_clamped_with_the_rest() {
         let (session, panels) = parking_fixture();
         let mut layout = DockLayout::from_session(&session);
         layout.park(&[panels[4], panels[5]]);
@@ -3236,8 +3247,6 @@ mod tests {
             clamp_float_into(DockRect::new(40, 50, 300, 220), area),
             "clamped the way every floating rect is"
         );
-        layout.drop_plugin_panels();
-        assert!(layout.parked_panels().is_empty());
     }
 
     /// A plugin panel's name is what its caption and tab draw, so text
@@ -3665,48 +3674,6 @@ mod tests {
             DockPanel::from_persist_key("workspace"),
             Some(DockPanel::Workspace)
         );
-    }
-
-    /// The backends that cannot host a plugin panel drop them at
-    /// restore, and a shared group must survive losing one tab
-    /// rather than taking the whole group with it.
-    #[test]
-    fn dropping_plugin_panels_leaves_a_valid_layout() {
-        let a = intern_plugin_panel("drop.dll", "Drop A").expect("intern A");
-        let b = intern_plugin_panel("drop.dll", "Drop B").expect("intern B");
-        let mut l = DockLayout::new();
-        l.show(DockPanel::DocMap);
-        l.set_initial_side(a, DockSide::Right);
-        l.show(a);
-        l.set_initial_side(b, DockSide::Bottom);
-        l.show(b);
-        l.hide(b);
-        // Preconditions: A shares the docmap's group and is its
-        // active tab; B is hidden but remembered.
-        assert_eq!(
-            l.group_of(a).expect("A visible").panels,
-            vec![DockPanel::DocMap, a]
-        );
-        assert_eq!(l.group_of(a).unwrap().active, 1);
-        assert!(!l.is_visible(b));
-
-        l.drop_plugin_panels();
-
-        assert!(!l.is_visible(a));
-        assert_eq!(
-            l.group_of(DockPanel::DocMap)
-                .expect("docmap survives")
-                .panels,
-            vec![DockPanel::DocMap],
-            "losing a tab must not take the group with it"
-        );
-        assert_eq!(l.group_of(DockPanel::DocMap).unwrap().active, 0);
-        // And neither plugin panel can be resurrected by a show:
-        // nothing remembers them, so they are simply gone.
-        assert!(l
-            .groups()
-            .iter()
-            .all(|g| g.panels.iter().all(|p| !matches!(p, DockPanel::Plugin(_)))));
     }
 
     #[test]

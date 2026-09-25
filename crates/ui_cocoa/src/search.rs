@@ -942,7 +942,11 @@ pub(crate) fn browse_fif_directory() {
 
 /// Add an `NSTabViewItem` and return its content view plus that view's
 /// height, which the caller needs to lay rows out from the top.
-fn tab_page(label: &str, tabs: &NSTabView, mtm: MainThreadMarker) -> (Retained<NSView>, f64) {
+pub(crate) fn tab_page(
+    label: &str,
+    tabs: &NSTabView,
+    mtm: MainThreadMarker,
+) -> (Retained<NSView>, f64) {
     // SAFETY: `initWithIdentifier:` accepts nil for "no identifier",
     // which is what we want — the pages are addressed by index.
     let item: Retained<NSTabViewItem> =

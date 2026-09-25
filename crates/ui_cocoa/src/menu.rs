@@ -36,7 +36,7 @@ use objc2_app_kit::{
     NSAboutPanelOptionApplicationIcon, NSAboutPanelOptionApplicationName,
     NSAboutPanelOptionApplicationVersion, NSAboutPanelOptionCredits, NSAboutPanelOptionKey,
     NSAboutPanelOptionVersion, NSApplication, NSButton, NSControl, NSEventModifierFlags, NSImage,
-    NSMenu, NSMenuDelegate, NSMenuItem, NSTableView, NSWindowDelegate, NSWorkspace,
+    NSMenu, NSMenuDelegate, NSMenuItem, NSTableView, NSWindow, NSWindowDelegate, NSWorkspace,
 };
 use objc2_foundation::{
     MainThreadMarker, NSAttributedString, NSData, NSDictionary, NSNotification, NSObject,
@@ -87,6 +87,17 @@ define_class!(
                 crate::relayout_chrome_bands();
                 crate::refresh_tab_chrome();
             });
+        }
+
+        /// The main window's close button: on this single-window editor,
+        /// the user quitting — answered by quitting rather than closing.
+        /// See [`crate::main_window_should_close`]. A panic lets the
+        /// window close, which still quits, the old way round.
+        #[unsafe(method(windowShouldClose:))]
+        fn window_should_close(&self, sender: &NSWindow) -> bool {
+            crate::at_callback_boundary("window:shouldClose", true, || {
+                crate::main_window_should_close(sender)
+            })
         }
     }
 
@@ -759,6 +770,13 @@ fn validate(item: &NSMenuItem) -> bool {
         // no `VIEW_TOGGLES` tag and is matched on its selector. The mark
         // still comes from live state, like every other one here.
         item.setState(isize::from(crate::docmap::is_visible()));
+    } else if action == sel!(codeppPluginCommand:) {
+        // The plugin's own mark (`NPPM_SETMENUITEMCHECK`, `_init2Check`),
+        // recorded by command id because the Plugins menu is rebuilt on
+        // every open. Read from the plugin module's record, never through
+        // `with_state`: AppKit validates while menus track, which can be
+        // inside a borrow.
+        item.setState(isize::from(crate::plugin::menu_mark(tag as i32)));
     } else if action == sel!(codeppRestoreRecentClosed:)
         || action == sel!(codeppOpenAllRecent:)
         || action == sel!(codeppEmptyRecentFiles:)
@@ -1675,6 +1693,15 @@ const PLUGINS_MENU_TITLE: &str = "Plugins";
 /// True if `menu` is the one [`build_plugins_menu`] built.
 fn is_plugins_menu(menu: &NSMenu) -> bool {
     menu.title().to_string() == PLUGINS_MENU_TITLE
+}
+
+/// The Plugins menu in the menu bar `main`, found by the same title the
+/// delegate matches on.
+pub(crate) fn plugins_menu(main: &NSMenu) -> Option<Retained<NSMenu>> {
+    main.itemArray()
+        .iter()
+        .filter_map(|item| item.submenu())
+        .find(|menu| is_plugins_menu(menu))
 }
 
 /// The Plugins menu.

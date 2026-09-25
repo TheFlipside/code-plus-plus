@@ -36,9 +36,11 @@ windows = { version = "0.62", features = [
     "Win32_System_SystemInformation",
 ] }
 
-# The dlopen/dlsym/dlclose arm of `dynlib` on Unix (Linux plugin
-# loading), and `getrandom` / `flock` / `geteuid` for `panel_key`'s Linux
-# backend.
+# The dlopen/dlsym/dlclose arm of `dynlib` on Unix (Linux and macOS
+# plugin loading), and `flock` / `geteuid` / `getrandom` (Linux) /
+# `getentropy` (macOS) for `panel_key`'s Unix backend. macOS's HMAC and
+# ACL calls are in libSystem too, declared where they are used, so no
+# crate is added for them.
 [target.'cfg(unix)'.dependencies]
 libc = { workspace = true }
 

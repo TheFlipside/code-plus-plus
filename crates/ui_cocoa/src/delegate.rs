@@ -17,9 +17,10 @@
 //! 3. **The session had no save-on-quit.** Same hook again.
 //!
 //! Ordering inside `applicationWillTerminate:` matters and is asserted
-//! by the code rather than left to chance: save the session *first*
-//! (it reads the caret back out of the live editor, so it needs the
-//! state intact), then report perf, then tear the state down.
+//! by the code rather than left to chance: run `crate::quit` *first* —
+//! it tells the plugins they are shutting down and saves the session,
+//! which reads the caret back out of the live editor, so it needs the
+//! state intact — then report perf, then tear the state down.
 
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
@@ -71,11 +72,30 @@ define_class!(
         /// here makes the bare binary report all true as well — which
         /// matters because `cargo run` is the documented development
         /// workflow (DEVELOPMENT.md §4.5).
+        ///
+        /// Then the plugins whose dock panels the restored session had
+        /// open are loaded and those panels brought back, by running
+        /// their own commands the way Notepad++ restores a plugin panel
+        /// — after the window is on screen, as Win32 and GTK do, and
+        /// before the first frame paints, so that frame already carries
+        /// the panels. Each step at its own boundary: a failed restore
+        /// must not cost the window its focus, nor the reverse.
         #[unsafe(method(applicationDidFinishLaunching:))]
         fn did_finish_launching(&self, _notification: &NSNotification) {
             crate::at_callback_boundary("applicationDidFinishLaunching:", (), || {
                 crate::activate_main_window();
             });
+            crate::at_callback_boundary(
+                "applicationDidFinishLaunching:restore",
+                (),
+                crate::plugin::restore_panel_plugins,
+            );
+            // Last: a plugin's command may have focused its own panel.
+            crate::at_callback_boundary(
+                "applicationDidFinishLaunching:focus",
+                (),
+                crate::focus_editor,
+            );
         }
 
         /// Re-order the floating dock panels front once the application
@@ -109,11 +129,13 @@ define_class!(
             // together: this is the last code to run before `exit()`, so
             // a panic in the session save must not cost the teardown, and
             // a panic in either must not cost the other.
-            crate::at_callback_boundary("applicationWillTerminate:save", (), || {
-                // Order is load-bearing. `save_session_now` reads the
-                // caret position back out of the live Scintilla view, so
-                // it has to run while the state is still installed.
-                crate::save_session_now();
+            crate::at_callback_boundary("applicationWillTerminate:quit", (), || {
+                // Order is load-bearing. The quit tells the plugins and
+                // saves the session, which reads the caret position back
+                // out of the live Scintilla view, so it has to run while
+                // the state is still installed. A no-op when the main
+                // window's close button already ran it.
+                crate::quit();
             });
             crate::at_callback_boundary("applicationWillTerminate:perf", (), crate::report_perf);
             // Drop the state so `Shell` — and the worker threads its

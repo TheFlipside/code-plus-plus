@@ -137,10 +137,48 @@ extern "C" {
  * malice: a pointer cannot be tested for being a live object
  * without reading it, so pass only a widget you made. The DMN_*
  * notifications cannot be sent to a widget, which has no window
- * procedure; see "On Linux" under DMN_* below.
+ * procedure; see "Off Windows" under DMN_* below.
  *
- * macOS does not host plugin panels yet: NPPM_DMMREGASDCKDLG
- * returns 0 there.
+ * On macOS (the Cocoa backend) the same two fields carry AppKit
+ * objects:
+ *
+ *   hClient   an NSView* the plugin created and has not added to a
+ *             view, nor made a window's content. The host retains
+ *             it for as long as the registration stands and puts it
+ *             in a container of its own, which is what moves as the
+ *             panel docks, floats and tabs. From then on the host
+ *             owns the view's frame, as a Windows host owns a docked
+ *             dialog's: it sizes the view to fill the panel through
+ *             its autoresizing mask (width and height sizable, with
+ *             translatesAutoresizingMaskIntoConstraints on), so lay
+ *             the view's own subviews out to follow its size — Auto
+ *             Layout inside the view keeps working. Content that does
+ *             not fit is clipped at the panel's edge, not scrolled.
+ *             The host unhides the view once, as Notepad++ shows
+ *             hClient; showing and hiding the panel after that shows
+ *             and hides the container, so ask
+ *             isHiddenOrHasHiddenAncestor, not isHidden, whether the
+ *             panel is on screen. The host never releases the plugin's
+ *             own reference. A plugin that takes the view out of the
+ *             host's container — removeFromSuperview, or adding it to
+ *             another view — ends the registration, and the panel
+ *             closes; registering a view again brings it back where it
+ *             was.
+ *   hIconTab  an NSImage*, drawn on the panel's tab under the same
+ *             DWS_ICONTAB rule; the host retains it. Anything that is
+ *             not an image gets the generic glyph.
+ *
+ * NPPM_DMMREGASDCKDLG refuses there a view that is already in a view
+ * (every view of the host's own is), one that belongs to a window,
+ * and anything that is not a view — mistakes, not malice, as on
+ * Linux, so pass only a view you made. The DMN_* notifications go to
+ * messageProc, as on Linux. Send the host messages from the main
+ * thread only, and not from the view's own layout overrides
+ * (setFrameSize:, resizeSubviewsWithOldSize:, layout) or from its
+ * superview and window callbacks (viewWillMoveToSuperview: and the
+ * like): the host resizes and moves the view from inside its own
+ * layout pass, where an NPPM_* message is declined — answered 0.
+ * Send it later instead, from a dispatch_async to the main queue.
  */
 typedef struct tTbData_ {
     HWND        hClient;        /* plugin's docking-dialog HWND */
@@ -243,13 +281,13 @@ typedef struct tTbData_ {
  * containers are rearranged; a plugin must not depend on them under
  * Code++ today.
  *
- * On Linux, where hClient is a widget, the same notifications go to
- * the plugin's messageProc export instead: message WM_NOTIFY
- * (0x004E), lParam the same NMHDR with the same fields, and wParam
- * the panel's hClient, the only way left to say which of the
- * plugin's panels the notification is about. The return value is
- * ignored. Everything else above holds as written, the ordering and
- * the queueing included.
+ * Off Windows — on Linux and macOS, where hClient is a widget or a
+ * view — the same notifications go to the plugin's messageProc
+ * export instead: message WM_NOTIFY (0x004E), lParam the same NMHDR
+ * with the same fields, and wParam the panel's hClient, the only way
+ * left to say which of the plugin's panels the notification is
+ * about. The return value is ignored. Everything else above holds as
+ * written, the ordering and the queueing included.
  */
 #define DMN_FIRST        1050
 #define DMN_CLOSE        (DMN_FIRST + 1)  /* user closed the panel (panel hidden) */

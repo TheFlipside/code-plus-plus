@@ -263,25 +263,7 @@ pub fn run(initial_path: Option<PathBuf>, perf: Perf) -> Result<(), CocoaUiError
         tracing::info!(count = staged, "staged bundled plugins");
     }
 
-    // --- Shell, and the §5.4 cross-thread wake ---------------------
-    //
-    // Worker threads (the file loader, the watcher) never touch views or
-    // Scintilla. They push a typed message onto a channel and call this
-    // closure, which hops to the main thread; the main thread then
-    // drains the channel and applies the results.
-    //
-    // `exec_async` takes `FnOnce() + Send`, so the closure must carry no
-    // AppKit references — exactly like Win32's
-    // `PostMessage(WM_APP_WAKE, 0, 0)`, which carries no payload either,
-    // and like GTK's `MainContext::invoke`. It finds the state through a
-    // main-thread thread-local once it arrives, the way the Win32
-    // wnd_proc recovers its state from `GWLP_USERDATA`.
-    let wake: Arc<dyn Fn() + Send + Sync> = Arc::new(|| {
-        DispatchQueue::main().exec_async(|| {
-            drain_shell();
-        });
-    });
-    let shell = Shell::new(wake).map_err(|e| CocoaUiError::Shell(e.to_string()))?;
+    let shell = new_shell()?;
 
     // --- The Scintilla view ---------------------------------------
     //
@@ -552,6 +534,38 @@ pub fn run(initial_path: Option<PathBuf>, perf: Perf) -> Result<(), CocoaUiError
     Ok(())
 }
 
+/// Build the `Shell`, with the §5.4 cross-thread wake and the signer for
+/// plugin panels' startup commands.
+///
+/// Worker threads (the file loader, the watcher) never touch views or
+/// Scintilla. They push a typed message onto a channel and call the wake
+/// closure, which hops to the main thread; the main thread then drains
+/// the channel and applies the results. `exec_async` takes
+/// `FnOnce() + Send`, so the closure must carry no AppKit references —
+/// exactly like Win32's `PostMessage(WM_APP_WAKE, 0, 0)`, which carries no
+/// payload either, and like GTK's `MainContext::invoke`. It finds the
+/// state through a main-thread thread-local once it arrives, the way the
+/// Win32 `wnd_proc` recovers its state from `GWLP_USERDATA`.
+///
+/// The signer is what lets a plugin panel this host recorded come back
+/// at the next start by running its command, with Preferences →
+/// Security's guard on (the default), while one from an edited or copied
+/// session does not. Installed before discovery and the startup restore,
+/// which both consult it; the key itself is not touched until something
+/// is signed or checked. See `codepp_platform::panel_key`.
+fn new_shell() -> Result<Shell, CocoaUiError> {
+    let wake: Arc<dyn Fn() + Send + Sync> = Arc::new(|| {
+        DispatchQueue::main().exec_async(|| {
+            drain_shell();
+        });
+    });
+    let mut shell = Shell::new(wake).map_err(|e| CocoaUiError::Shell(e.to_string()))?;
+    let panel_signer =
+        codepp_platform::panel_key::PanelSigner::new(codepp_platform::panel_key_path());
+    shell.set_panel_signer(Box::new(move |message| panel_signer.sign(message)));
+    Ok(shell)
+}
+
 /// RAII freeze of [`drain_shell`] for the span of a modal.
 ///
 /// **This is a correctness guard, not tidiness.** `NSAlert::runModal`
@@ -605,6 +619,27 @@ impl DrainFreeze {
 impl Drop for DrainFreeze {
     fn drop(&mut self) {
         MODAL_DEPTH.with(|d| d.set(d.get().saturating_sub(1)));
+    }
+}
+
+/// RAII set-and-clear of a thread-local latch, cleared on every exit
+/// path — a panic caught at a callback boundary included, which a bare
+/// `set(true)` … `set(false)` pair would leave stuck for the session.
+/// The same guard `ui_gtk` keeps, for the plugin bridge's re-entry
+/// latches (`plugin::close_plugin_panel`, `plugin::deliver_dock_notices`).
+pub(crate) struct FlagGuard(&'static std::thread::LocalKey<Cell<bool>>);
+
+impl FlagGuard {
+    /// Set `flag` and return the guard that clears it.
+    pub(crate) fn set(flag: &'static std::thread::LocalKey<Cell<bool>>) -> Self {
+        flag.with(|f| f.set(true));
+        Self(flag)
+    }
+}
+
+impl Drop for FlagGuard {
+    fn drop(&mut self) {
+        self.0.with(|f| f.set(false));
     }
 }
 
@@ -1294,13 +1329,42 @@ pub(crate) fn activate_main_window() {
     let Some(mtm) = MainThreadMarker::new() else {
         return;
     };
-    with_state(|st| {
-        // Focus the editor so the first keystroke lands in the buffer
-        // rather than on a tab-strip button.
-        st.window.makeFirstResponder(Some(&st.sci_view));
-        st.window.makeKeyAndOrderFront(None);
-    });
+    focus_editor();
+    // Outside the borrow, like the focus: ordering the window in can draw
+    // it, and a plugin panel's own view draws with it.
+    if let Some(window) = with_state(|st| st.window.clone()) {
+        window.makeKeyAndOrderFront(None);
+    }
     NSApplication::sharedApplication(mtm).activate();
+}
+
+/// Make the editor the main window's first responder, so the next
+/// keystroke lands in the buffer rather than on a tab-strip button — or
+/// in a plugin's panel, which is why the delegate asks again after the
+/// startup restore: a plugin's command may have focused its own view.
+///
+/// **Through `SCI_GRABFOCUS`, never `makeFirstResponder:` on
+/// `sci_view`.** That view is the outer `ScintillaView`; the keys go to
+/// the content view inside it, and `makeFirstResponder:` does not ask
+/// `acceptsFirstResponder`, so it hands focus to the container and every
+/// keystroke goes nowhere until the user clicks. It looked right for a
+/// long time because AppKit replaces an unfit first responder when a
+/// window *becomes* key, and the only call used to come before
+/// `makeKeyAndOrderFront`. The second call, after the startup restore,
+/// comes after it and is not corrected. Found by the §8 A/B measurement:
+/// no focused text client meant no `TextInputUI` window and no blinking
+/// caret, so the build measured 17 MB smaller than its baseline.
+///
+/// The handle is copied out and Scintilla called after the borrow ends:
+/// a focus change reaches the outgoing responder's
+/// `resignFirstResponder`, which may be a plugin's view, and a plugin
+/// asking the host something from there is answered only with no borrow
+/// held. The incoming side notifies too (`SCN_FOCUSIN`), and its
+/// handler needs the state.
+pub(crate) fn focus_editor() {
+    if let Some(editor) = with_state(|st| st.editor) {
+        editor.send(codepp_scintilla_sys::SCI_GRABFOCUS, 0, 0);
+    }
 }
 
 /// Emit the `--perf` distribution. Called from the application
@@ -1706,6 +1770,13 @@ pub(crate) fn drain_shell() {
     if DrainFreeze::active() {
         return;
     }
+    // And stopped for good once the quit has begun: a plugin's shutdown
+    // handler may spin a nested run loop, and a worker's wake landing
+    // there must not deliver notifications after `NPPN_SHUTDOWN`. See
+    // [`quit`].
+    if QUITTING.with(Cell::get) {
+        return;
+    }
     let dialogs = with_state(|st| {
         let (shell, mut ui) = st.split();
         let pending = shell.drain(&mut ui);
@@ -1773,6 +1844,19 @@ thread_local! {
 /// rule and stack an alert on top of the one it interrupts.
 fn pump_dialogs() {
     if PRESENTING.with(Cell::get) {
+        return;
+    }
+    if QUITTING.with(Cell::get) {
+        // Queued once the quit began — by a plugin's shutdown handler,
+        // say, or a worker wake that landed after it: the window is going,
+        // and a modal now would hold the quit hostage. Win32 drops these
+        // at `WM_DESTROY` and GTK once its quit has begun, for the same
+        // reason.
+        let dropped = DIALOG_QUEUE.with(|q| std::mem::take(&mut *q.borrow_mut()));
+        tracing::debug!(
+            count = dropped.len(),
+            "dropping dialogs queued during shutdown"
+        );
         return;
     }
     let _presenting = PresentingGuard::enter();
@@ -2925,17 +3009,35 @@ fn sync_window_geometry_to_shell() {
 }
 
 /// Persist the session now. Idempotent; safe to call repeatedly.
+///
+/// A no-op once [`quit`] has begun: it has saved the session it pinned,
+/// and an autosave tick landing in a plugin's shutdown handler's nested
+/// run loop must not re-capture what the handler has changed since.
 pub(crate) fn save_session_now() {
+    if QUITTING.with(Cell::get) {
+        return;
+    }
+    capture_ui_state_to_shell();
+    persist_session();
+}
+
+/// Snapshot the live window geometry, dock arrangement and panel state
+/// into the shell, so `save_session` carries them.
+///
+/// The dock arrangement lives in the dock module's thread-local, not in
+/// the shell, so it is pushed across before the save reads the session;
+/// the two legacy per-panel mirrors read the same live model (visibility
+/// and band width) and carry it for downgrade tolerance. Same "sync right
+/// before every save" discipline `ui_gtk` and `ui_win32` follow.
+fn capture_ui_state_to_shell() {
     sync_window_geometry_to_shell();
-    // The dock arrangement lives in the dock module's thread-local, not
-    // in the shell, so it is pushed across before the save reads the
-    // session; the two legacy per-panel mirrors read the same live model
-    // (visibility and band width) and carry it for downgrade tolerance.
-    // Same "sync right before every save" discipline the geometry sync
-    // above and `ui_gtk` follow.
     dock::sync_to_shell();
     docmap::sync_to_shell();
     workspace::sync_to_shell();
+}
+
+/// Write the session the shell holds to disk, as it stands.
+fn persist_session() {
     with_state(|st| {
         let (shell, mut ui) = st.split();
         if let Err(e) = shell.save_session(&mut ui) {
@@ -2945,6 +3047,85 @@ pub(crate) fn save_session_now() {
             tracing::warn!(error = ?e, "session save failed");
         }
     });
+}
+
+thread_local! {
+    /// Set once [`quit`] has begun. See there.
+    static QUITTING: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Leave the application's working state: tell the plugins, save the
+/// session. The one way out: ⌘Q, the Quit menu item and the main
+/// window's close button all reach it through `terminate:` and the
+/// application delegate's `applicationWillTerminate:` (see
+/// [`main_window_should_close`]), and it runs once. `terminate:` then
+/// calls `exit()`, so nothing after this needs undoing.
+///
+/// The order is Win32's `notify_plugins_of_shutdown` followed by its
+/// `WM_DESTROY` save, and `ui_gtk`'s `quit`, and each step matters:
+///
+///   1. The UI's state is captured into the shell *first*, and the dock
+///      layout then pinned (`dock::freeze_session`), so the saved
+///      arrangement is the one the user left — not whatever a plugin
+///      hides or shows from its shutdown handler. A plugin panel open at
+///      quit comes back open.
+///   2. `NPPN_BEFORESHUTDOWN` then `NPPN_SHUTDOWN`, while the plugins'
+///      panels are still on screen, with no borrow held, so a plugin
+///      saving its settings can ask the host where to put them
+///      (`NPPM_GETPLUGINSCONFIGDIR`) and is answered. A dialog a handler
+///      queues is dropped rather than shown (see [`pump_dialogs`]), and
+///      nothing drains the shell or autosaves once this has begun — a
+///      handler that spins a nested run loop must not get a worker's
+///      notifications delivered after `NPPN_SHUTDOWN`, nor an autosave
+///      that re-captures what step 1 pinned.
+///   3. The session is saved as captured.
+///
+/// Each step runs at its own boundary, so a panic in one cannot skip the
+/// save.
+pub(crate) fn quit() {
+    if QUITTING.with(|q| q.replace(true)) {
+        return;
+    }
+    at_callback_boundary("lib:quit:capture", (), capture_ui_state_to_shell);
+    // A boundary of its own, so it holds even if the capture panicked:
+    // either way a plugin's shutdown handler must not get to change what
+    // is saved.
+    at_callback_boundary("lib:quit:freeze", (), dock::freeze_session);
+    at_callback_boundary("lib:quit:notify", (), plugin::notify_shutdown);
+    at_callback_boundary("lib:quit:save", (), persist_session);
+}
+
+/// `windowShouldClose:` for the main window: on this single-window
+/// editor its close button means the user is quitting, so the answer is
+/// to quit — through `terminate:`, the one path ⌘Q takes too — and not
+/// to close.
+///
+/// That leaves one way out rather than two, and it is the right moment:
+/// `applicationWillTerminate:` runs [`quit`] while the window, and every
+/// dock panel in it, is still on screen — where Win32 runs its shutdown
+/// (`WM_CLOSE`) — with no run-loop turn before `exit()` for a timer or a
+/// worker wake to land in. Closing first would tell the plugins they are
+/// shutting down with their panels already off screen, and would rely on
+/// AppKit's last-window rule to end the process at all. `terminate:`
+/// does not return when it succeeds; when it is refused, answering `NO`
+/// keeps the window, and nothing has been torn down.
+///
+/// Any other window is not this function's to veto: `Actions` is the main
+/// window's delegate only today, but a floating dock group or the Find
+/// panel closing must never read as the user leaving.
+pub(crate) fn main_window_should_close(sender: &NSWindow) -> bool {
+    // A declined read — the state already torn down, or borrowed further
+    // up the stack — reads as "not the main window", which lets the close
+    // go ahead. Neither happens today: AppKit asks from its own event
+    // handling, with no borrow of ours held, and the state is removed
+    // only in `applicationWillTerminate:`, after which nothing asks.
+    let is_main =
+        with_state(|st| std::ptr::eq(Retained::as_ptr(&st.window), sender)).unwrap_or(false);
+    let Some(mtm) = MainThreadMarker::new().filter(|_| is_main) else {
+        return true;
+    };
+    NSApplication::sharedApplication(mtm).terminate(None);
+    false
 }
 
 // --- Menu actions --------------------------------------------------
@@ -3492,13 +3673,79 @@ mod source_invariants {
         }
 
         let activate_body = fn_body(src, "activate_main_window");
-        for required in ["makeKeyAndOrderFront", "makeFirstResponder", ".activate("] {
+        for required in ["makeKeyAndOrderFront", "focus_editor()", ".activate("] {
             assert!(
                 activate_body.contains(required),
                 "`activate_main_window` no longer calls `{required}` — the \
                  window would never become key."
             );
         }
+        let focus_body = fn_body(src, "focus_editor");
+        assert!(
+            focus_body.contains("SCI_GRABFOCUS") && !focus_body.contains("makeFirstResponder"),
+            "`focus_editor` must focus the editor with `SCI_GRABFOCUS` — \
+             `makeFirstResponder:` on `sci_view` focuses the outer \
+             `ScintillaView`, which does not take keys"
+        );
+    }
+
+    /// No code hands `makeFirstResponder:` the outer Scintilla view.
+    ///
+    /// The view a host holds is `ScintillaView`, a container; the keys go
+    /// to the content view inside it. `makeFirstResponder:` does not ask
+    /// `acceptsFirstResponder`, so passing it the container focuses a
+    /// view that ignores every keystroke. AppKit repairs that when the
+    /// window *becomes* key, which is how it hid for so long, and does
+    /// not repair it on an already-key window. `SCI_GRABFOCUS` is the
+    /// way to focus an editor.
+    ///
+    /// **An allowlist of targets, not a ban on a name.** A ban on
+    /// `sci_view` passes `let v = st.sci_view.clone(); …(Some(&v))` —
+    /// the regression this test exists for was spelled exactly that way.
+    /// So every call's argument must be one listed here, and a new call
+    /// site has to be added deliberately, after checking it is not a
+    /// Scintilla view.
+    #[test]
+    fn nothing_focuses_the_outer_scintilla_view() {
+        const ALLOWED: [&str; 2] = [
+            // The Find/Replace panel's own fields (`search.rs`).
+            "Some(&dialog.fif_directory)",
+            "Some(&dialog.find_field)",
+        ];
+        let code = all_production_code();
+        let mut calls = 0;
+        let mut rest = code.as_str();
+        while let Some(at) = rest.find("makeFirstResponder(") {
+            let after = &rest[at + "makeFirstResponder(".len()..];
+            let mut depth = 1;
+            let end = after
+                .char_indices()
+                .find(|&(_, c)| {
+                    match c {
+                        '(' => depth += 1,
+                        ')' => depth -= 1,
+                        _ => {}
+                    }
+                    depth == 0
+                })
+                .map_or(after.len(), |(i, _)| i);
+            let args = after[..end].trim();
+            assert!(
+                ALLOWED.contains(&args),
+                "`makeFirstResponder({args})` is not a known focus target. \
+                 If it is a Scintilla view, send `SCI_GRABFOCUS` to its \
+                 handle instead: the view is a container that does not \
+                 take keys. Otherwise add it to `ALLOWED`."
+            );
+            calls += 1;
+            rest = &after[end..];
+        }
+        assert_eq!(
+            calls,
+            ALLOWED.len(),
+            "the scan should find each allowed call once; a count that \
+             does not match means it is not reading the calls it guards"
+        );
     }
 
     /// Cold start must close on a real paint, and nowhere else.
@@ -5081,6 +5328,13 @@ let msg = \"found scintilla_cocoa_new() calls\";
     /// `shortcuts.xml` cache exists to serve, and loading in response
     /// is exactly the lazy-load §6.4 describes. Neither is on `run`'s
     /// startup path, which is the property that actually matters.
+    ///
+    /// And **one** startup pass, the exception §8 names: the plugins a
+    /// restored dock panel belongs to (`restore_panel_plugins`), loaded
+    /// from the application delegate once the app runs, never from `run`,
+    /// and through the scoped loader, which admits nothing else. So the
+    /// loader proper is pinned too — its two callers, and the one place
+    /// the scope that loads at startup is asked for.
     #[test]
     fn startup_discovers_plugins_without_loading_them() {
         assert!(
@@ -5114,6 +5368,46 @@ let msg = \"found scintilla_cocoa_new() calls\";
             fn_body(&src, "fire_plugin_chord").contains("load_pending_plugins()"),
             "the plugin-hotkey path no longer lazy-loads; a cached shortcut would \
              be dead until the user opened the Plugins menu"
+        );
+
+        let all = all_production_code();
+        assert_eq!(
+            all.matches("load_plugins_where(").count(),
+            // The two load functions, plus the definition itself.
+            3,
+            "the scoped loader has a caller beyond the lazy triggers and the \
+             startup restore"
+        );
+        assert!(
+            fn_body(&src, "load_pending_plugins").contains("load_plugins_where(LoadScope::All)"),
+            "the lazy triggers no longer load through the scoped loader"
+        );
+        assert!(
+            fn_body(&src, "restore_panel_plugins")
+                .contains("load_plugins_where(LoadScope::RestoredPanels)"),
+            "the startup restore no longer limits itself to restored panels' plugins"
+        );
+        assert_eq!(
+            all.matches("next_restored_panel_plugin_to_load").count(),
+            1,
+            "the startup scope is asked for somewhere other than the scoped loader"
+        );
+        assert_eq!(
+            all.matches("restore_panel_plugins").count(),
+            // The definition, and the delegate's one call.
+            2,
+            "the startup restore is reached from somewhere other than the delegate"
+        );
+        let delegate = code_only(include_str!("delegate.rs"));
+        assert!(
+            fn_body(&delegate, "did_finish_launching")
+                .contains("crate::plugin::restore_panel_plugins"),
+            "the startup restore is no longer run once the application has launched"
+        );
+        assert!(
+            !fn_body(production_src(), "run").contains("restore_panel_plugins"),
+            "run() restores plugin panels before the run loop — before the \
+             window can be ordered front"
         );
     }
 
@@ -5153,5 +5447,226 @@ let msg = \"found scintilla_cocoa_new() calls\";
             "recent-files menu labels are no longer sanitized, so a filename \
              carrying bidi controls renders reordered in the File menu"
         );
+    }
+
+    /// `crates/ui_cocoa/src/dock.rs`, cut at its own test module.
+    fn dock_src() -> String {
+        let src = include_str!("dock.rs");
+        let cut = src.find("#[cfg(test)]").unwrap_or(src.len());
+        code_only(&src[..cut])
+    }
+
+    /// The argument text of every `with_dock(…)` call in `src`, by paren
+    /// matching. `src` must already have had its comments and string
+    /// contents removed ([`code_only`]); a character literal is stepped
+    /// over, so `'('` cannot unbalance the count, while a lifetime —
+    /// `'static`, which has no closing quote two characters on — is not
+    /// mistaken for one.
+    fn with_dock_arguments(src: &str) -> Vec<String> {
+        let bytes = src.as_bytes();
+        let mut out = Vec::new();
+        for (at, _) in src.match_indices("with_dock(") {
+            let open = at + "with_dock".len();
+            let mut depth = 0usize;
+            let mut i = open;
+            while i < bytes.len() {
+                match bytes[i] {
+                    b'\'' if bytes.get(i + 2) == Some(&b'\'') => i += 2,
+                    b'\''
+                        if bytes.get(i + 1) == Some(&b'\\') && bytes.get(i + 3) == Some(&b'\'') =>
+                    {
+                        i += 3;
+                    }
+                    b'(' => depth += 1,
+                    b')' => {
+                        depth -= 1;
+                        if depth == 0 {
+                            break;
+                        }
+                    }
+                    _ => {}
+                }
+                i += 1;
+            }
+            out.push(src[open..i.min(src.len())].to_owned());
+        }
+        out
+    }
+
+    /// What bounds the `DMN_DOCK` / `DMN_FLOAT` round trip is an ordering
+    /// no unit test can see: the container is *recorded* under the dock
+    /// borrow, in `container_notices`, and only then sent, with no borrow
+    /// held, by `plugin::deliver_dock_notices`. A handler that shows or
+    /// hides a panel reconciles again from inside the send; if the record
+    /// were written after the send, that nested pass would find the
+    /// transition untold and send it again, from inside which the next
+    /// pass would do the same. The twin of the Win32 and GTK tests of the
+    /// same name.
+    #[test]
+    fn the_container_is_recorded_before_the_notification_is_sent() {
+        let dock = dock_src();
+        let apply = fn_body(&dock, "apply_layout");
+        let record = apply
+            .find("with_dock(container_notices)")
+            .expect("the reconcile no longer records containers under the dock borrow");
+        let send = apply
+            .find("deliver_dock_notices(notices)")
+            .expect("the reconcile no longer sends the notices");
+        assert!(record < send, "the send now precedes the record");
+
+        let notices = fn_body(&dock, "container_notices");
+        assert!(
+            notices.contains("entry.told = Some(now);"),
+            "container_notices no longer writes the record"
+        );
+        assert!(
+            !notices.contains("deliver_dock_notices") && !notices.contains(".send("),
+            "container_notices sends while the dock borrow is live"
+        );
+        let deliver = fn_body(&plugin_src(), "deliver_dock_notices");
+        assert!(
+            !deliver.contains(".told"),
+            "the record moved into the send loop, after the send it must precede"
+        );
+    }
+
+    /// Code holding the dock borrow never calls `with_state` — the rule
+    /// the dock module's docs give for keeping the two `RefCell`s from
+    /// deadlocking on each other. Checks every argument handed to
+    /// `with_dock`, closure or function name; the body of a function
+    /// passed by name is not followed, so it keeps the same rule by hand.
+    /// The twin of `ui_gtk`'s test of the same name.
+    #[test]
+    fn nothing_under_the_dock_borrow_asks_for_the_state() {
+        let arguments = with_dock_arguments(&dock_src());
+        assert!(
+            arguments.len() > 20,
+            "found only {} `with_dock` calls: the scan is not reading the module",
+            arguments.len()
+        );
+        for argument in &arguments {
+            assert!(
+                !argument.contains("with_state"),
+                "a `with_dock` call asks for the state under the dock borrow: {argument}"
+            );
+        }
+        // The scanner itself: a call whose argument asks for the state is
+        // found, and a character literal does not end the argument early.
+        let sample = code_only("with_dock(|d| { let c = ')'; with_state(|st| st.x) });");
+        let found = with_dock_arguments(&sample);
+        assert_eq!(found.len(), 1);
+        assert!(
+            found[0].contains("with_state"),
+            "the scanner lost the argument: {found:?}"
+        );
+    }
+
+    /// A refused registration logs the plugin's two strings as the chrome
+    /// would draw them — the twin of the Win32 and GTK tests of the same
+    /// name, which say why.
+    #[test]
+    fn a_refused_registration_is_logged_sanitized() {
+        let flat = plugin_src()
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
+        for (field, sanitized) in [
+            (
+                "module",
+                "codepp_shell::sanitize_str_for_display(&params.module_name)",
+            ),
+            (
+                "panel",
+                "codepp_shell::plugin_dock_title(&params.name, &params.module_name)",
+            ),
+        ] {
+            assert!(
+                flat.contains(&format!("{field} = {sanitized}")),
+                "the refusal log's {field} field is not sanitized"
+            );
+        }
+        assert!(
+            !flat.contains("= params.name") && !flat.contains("= params.module_name"),
+            "a log field records the plugin's raw text"
+        );
+    }
+
+    /// The quit's order is the saved session's integrity: the UI state is
+    /// captured and the dock layout pinned *before* the plugins hear they
+    /// are shutting down — so one that hides its panel from
+    /// `NPPN_SHUTDOWN` does not change what the next start restores — and
+    /// the session is written after. `applicationWillTerminate:` runs it
+    /// first, while the state is still installed, and the close button
+    /// reaches it through `terminate:` rather than by closing the window.
+    /// None of it changes a type, so none of it would fail to compile.
+    #[test]
+    fn the_quit_pins_the_layout_before_the_plugins_hear_of_it() {
+        let src = production_src();
+        let quit = fn_body(src, "quit");
+        // Each step's whole call, so two steps merged into one boundary —
+        // where a panic in the first would skip the second — fail here.
+        let steps = [
+            r#"at_callback_boundary("lib:quit:capture", (), capture_ui_state_to_shell);"#,
+            r#"at_callback_boundary("lib:quit:freeze", (), dock::freeze_session);"#,
+            r#"at_callback_boundary("lib:quit:notify", (), plugin::notify_shutdown);"#,
+            r#"at_callback_boundary("lib:quit:save", (), persist_session);"#,
+        ];
+        let at: Vec<usize> = steps
+            .iter()
+            .map(|step| {
+                quit.find(step).unwrap_or_else(|| {
+                    panic!("the quit no longer runs `{step}` at a boundary of its own")
+                })
+            })
+            .collect();
+        assert!(
+            at.windows(2).all(|pair| pair[0] < pair[1]),
+            "the quit's steps are out of order: {steps:?} at {at:?}"
+        );
+        for gated in ["drain_shell", "save_session_now", "pump_dialogs"] {
+            assert!(
+                fn_body(src, gated).contains("QUITTING.with("),
+                "`{gated}` no longer stops once the quit has begun"
+            );
+        }
+        let close = fn_body(src, "main_window_should_close");
+        assert!(
+            close.contains(".terminate(None)"),
+            "the close button no longer quits through `terminate:`"
+        );
+
+        let delegate = code_only(include_str!("delegate.rs"));
+        let terminate = fn_body(&delegate, "will_terminate");
+        let quit_at = terminate
+            .find("crate::quit()")
+            .expect("applicationWillTerminate: no longer runs the quit");
+        let teardown_at = terminate
+            .find("uninstall()")
+            .expect("applicationWillTerminate: no longer tears the state down");
+        assert!(
+            quit_at < teardown_at,
+            "the quit runs after the state it saves from is torn down"
+        );
+    }
+
+    /// A plugin's mark is painted from `validateMenuItem:` and set from
+    /// inside the NPPM dispatch — so both read and write the plugin
+    /// module's own record, never `with_state`, which the dispatch's borrow
+    /// would decline, and which AppKit may be inside when it validates.
+    #[test]
+    fn plugin_marks_are_painted_without_the_state() {
+        let menu_src = include_str!("menu.rs");
+        let menu = code_only(&menu_src[..menu_src.find("#[cfg(test)]").unwrap_or(menu_src.len())]);
+        assert!(
+            fn_body(&menu, "validate").contains("crate::plugin::menu_mark("),
+            "plugin commands' marks are no longer painted from validateMenuItem:"
+        );
+        let plugin = plugin_src();
+        for f in ["menu_mark", "set_menu_check", "live_command_item"] {
+            assert!(
+                !fn_body(&plugin, f).contains("with_state("),
+                "`{f}` reaches for the state"
+            );
+        }
     }
 }

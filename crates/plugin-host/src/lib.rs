@@ -40,6 +40,7 @@ pub mod dispatch;
 pub mod docking;
 pub mod ffi;
 pub mod host;
+pub mod menu_checks;
 
 pub use caller::{calling_plugin, CallingPlugin, PluginCommand, PluginMessageProc};
 pub use codepp_ext::{
@@ -72,3 +73,5 @@ pub use host::{
     PluginInfo, PluginReady, PLUGIN_ALLOC_CMD_BASE, PLUGIN_ALLOC_CMD_LIMIT,
     PLUGIN_ALLOC_MARKER_BASE, PLUGIN_ALLOC_MARKER_LIMIT, PLUGIN_CMD_ID_BASE,
 };
+
+pub use menu_checks::PluginMenuChecks;

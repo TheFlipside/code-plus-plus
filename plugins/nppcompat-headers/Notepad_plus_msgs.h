@@ -305,8 +305,9 @@ typedef struct sessionInfo_ {
  *     same pszModuleName has registered 8 distinct names in
  *     this session.
  *     On Linux hClient is a GtkWidget* instead, and hIconTab a
- *     GdkPixbuf*: see Docking.h for that contract and for how the
- *     DMN_* notifications reach the plugin there. */
+ *     GdkPixbuf*; on macOS they are an NSView* and an NSImage*: see
+ *     Docking.h for those contracts and for how the DMN_*
+ *     notifications reach the plugin there. */
 #define NPPM_DMMREGASDCKDLG               (NPPMSG + 33)
 /* v2: open every titled file listed in a session-XML at lParam,
  *     in the order they appear. The recorded active-tab is

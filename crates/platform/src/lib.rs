@@ -8,7 +8,7 @@
 pub mod config;
 pub mod dynlib;
 pub mod host_env;
-#[cfg(any(target_os = "windows", target_os = "linux"))]
+#[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
 pub mod panel_key;
 pub mod plugin_stage;
 pub mod watch;

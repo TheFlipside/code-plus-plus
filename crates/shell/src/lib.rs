@@ -502,9 +502,10 @@ pub trait UiPlatform {
     /// place it. Returns the panel the registration interned to — the
     /// shell then records its startup command through
     /// [`Self::record_panel_open_command`] — or `None` when it was
-    /// refused. Defaulted to `None`, which is Cocoa's answer: the
-    /// Win32 and GTK backends accept the registration, Cocoa does not
-    /// (DESIGN.md §7.4).
+    /// refused. Every backend accepts the registration — Win32 adopts
+    /// an `HWND`, GTK a `GtkWidget*`, Cocoa an `NSView*` (DESIGN.md
+    /// §7.4); the default, `None`, is what a backend that hosts no
+    /// plugin panel would answer.
     fn register_dock_dialog(
         &mut self,
         _params: codepp_plugin_host::DockDialogParams,
@@ -547,7 +548,7 @@ pub trait UiPlatform {
     /// group it shares, showing it first if it is hidden. Drives
     /// `NPPM_DMMVIEWOTHERTAB`. Defaulted to `false` — the message
     /// addresses a panel registered through `NPPM_DMMREGASDCKDLG`,
-    /// which the Cocoa backend declines.
+    /// which a backend hosting no plugin panel declines.
     fn view_other_dock_tab(&mut self, _name: &str) -> bool {
         false
     }
@@ -708,9 +709,9 @@ pub trait UiPlatform {
     /// implementation maps built-in `IDM_*` ids through the same
     /// table as [`Self::dispatch_npp_menu_command`], falls through
     /// for plugin-allocated cmd ids, and issues the native
-    /// "check menu item by command" call. The GTK one takes plugin
-    /// cmd ids only, and records the mark for the Plugins menu to
-    /// paint whenever it is built. Returns `true` if the state was
+    /// "check menu item by command" call. The GTK and Cocoa ones take
+    /// plugin cmd ids only, and record the mark for the Plugins menu to
+    /// paint whenever it is built or shown. Returns `true` if the state was
     /// applied, `false` if the id has no menu item (unmapped
     /// built-in id, or a plugin cmd id whose owning plugin didn't
     /// publish a menu entry).
@@ -742,7 +743,7 @@ pub trait UiPlatform {
     /// Provided default returns `false` ("no clipboard support") so a
     /// backend without one degrades gracefully — the plugin then
     /// reports a clipboard failure rather than believing it succeeded.
-    /// The Win32 and GTK backends override it.
+    /// All three backends override it.
     fn set_clipboard(&mut self, _payloads: &[ClipboardData]) -> bool {
         false
     }
@@ -2006,7 +2007,7 @@ pub struct Shell {
 
 /// Computes the signature on a plugin panel's startup command: the
 /// HMAC-SHA256 of `codepp_core::dock::restore_command_message` under
-/// the user's key, or `None` when there is no key. The Win32 backend
+/// the user's key, or `None` when there is no key. Every backend
 /// installs `codepp_platform::panel_key::PanelSigner::sign`; a test
 /// installs its own.
 pub type PanelSignFn = Box<dyn Fn(&[u8]) -> Option<[u8; 32]>>;
@@ -3278,8 +3279,9 @@ impl Shell {
     }
 
     /// Where the `DMN_*` notifications about plugin `panel` go on a
-    /// backend that has no window procedure to send them to — the GTK
-    /// one, where a panel's content is a widget: the `messageProc` of
+    /// backend that has no window procedure to send them to — GTK and
+    /// Cocoa, where a panel's content is a widget or a view: the
+    /// `messageProc` of
     /// the plugin that registered the panel, `caller`
     /// (`codepp_plugin_host::DockDialogParams::caller`), or, when the
     /// registration arrived from outside any call the host made into a
@@ -3386,7 +3388,7 @@ impl Shell {
     /// Install what signs plugin panels' startup commands.
     ///
     /// A backend that hosts plugin panels installs one before its
-    /// startup restore; Win32 and GTK do. Without one nothing is signed,
+    /// startup restore, and all three do. Without one nothing is signed,
     /// so with Preferences → Security's guard on no saved command runs
     /// and no restored panel loads its plugin at startup.
     pub fn set_panel_signer(&mut self, sign: PanelSignFn) {

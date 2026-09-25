@@ -105,8 +105,8 @@ pub const NPPM_LAUNCHFINDINFILESDLG: u32 = NPPMSG + 29;
 // plugin panel docks to any side, floats, shares a container with
 // other panels as tabs, reorders by drag and persists across runs —
 // the same machinery the host's Folder as Workspace and Document
-// Map use. The Win32 and GTK hosts accept the registration; Cocoa
-// declines it (DESIGN.md §7.4).
+// Map use. Every host accepts the registration: Win32 adopts an
+// `HWND`, GTK a `GtkWidget*`, Cocoa an `NSView*` (DESIGN.md §7.4).
 pub const NPPM_DMMSHOW: u32 = NPPMSG + 30;
 pub const NPPM_DMMHIDE: u32 = NPPMSG + 31;
 pub const NPPM_DMMUPDATEDISPINFO: u32 = NPPMSG + 32;
@@ -6523,11 +6523,11 @@ mod tests {
     #[test]
     fn dmm_view_other_tab_declines_when_the_backend_hosts_no_panels() {
         // `MockServices` takes the trait's default, which is what
-        // a backend that cannot host a plugin panel answers — GTK
-        // and Cocoa, where `NPPM_DMMREGASDCKDLG` is also defaulted.
-        // This pins the *decline*, not the message: the Win32 arm
-        // shows the named panel and makes it its group's active
-        // tab, and is exercised end to end by `example-hello`.
+        // a backend that hosts no plugin panel would answer — none
+        // of the three does today, but a new one inherits it. This
+        // pins the *decline*, not the message: the real arms show
+        // the named panel and make it their group's active tab, and
+        // are exercised end to end by `example-hello`.
         let mut s = MockServices::default();
         let name = make_wide("Console");
         let r = unsafe { dispatch_nppm(&mut s, NPPM_DMMVIEWOTHERTAB, 0, name.as_ptr() as isize) };

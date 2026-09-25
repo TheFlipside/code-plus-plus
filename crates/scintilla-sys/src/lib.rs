@@ -971,6 +971,18 @@ pub const SCI_GOTOPOS: u32 = 2025;
 pub const SCI_SETSAVEPOINT: u32 = 2014;
 pub const SCI_GETMODIFY: u32 = 2159;
 
+/// Give the editor the keyboard focus.
+///
+/// On Cocoa this is the only reliable way for a host to do it. The view
+/// a host holds is the outer `ScintillaView`, which neither overrides
+/// `acceptsFirstResponder` nor handles keys; the keys go to its inner
+/// content view. `-[NSWindow makeFirstResponder:]` does not consult
+/// `acceptsFirstResponder`, so pointing it at the outer view makes the
+/// container the responder and typing goes nowhere. This message
+/// focuses the content view instead (`cocoa/ScintillaCocoa.mm`,
+/// `Message::GrabFocus`).
+pub const SCI_GRABFOCUS: u32 = 2400;
+
 // Selection
 pub const SCI_SELECTALL: u32 = 2013;
 pub const SCI_GETSELECTIONSTART: u32 = 2143;

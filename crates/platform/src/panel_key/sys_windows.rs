@@ -55,6 +55,14 @@ pub(super) fn unseal(blob: &[u8], key: &mut [u8; KEY_LEN]) -> io::Result<()> {
     unprotect_into(blob, key)
 }
 
+/// Nothing to remove. The file's ACL is inherited from the profile as
+/// every file there is, and whatever it grants another account, the
+/// file holds a DPAPI blob only this account can decrypt.
+#[allow(clippy::unnecessary_wraps)] // one signature for every backend
+pub(super) fn make_private(_file: &std::fs::File) -> io::Result<()> {
+    Ok(())
+}
+
 /// The bytes at `path`, at most [`MAX_KEY_FILE_BYTES`] + 1 of them, so
 /// an oversized file is recognised without being read whole; `None`
 /// when there is no file.

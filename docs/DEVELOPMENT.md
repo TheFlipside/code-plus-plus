@@ -237,7 +237,7 @@ symlink tests.
 
 ## 4. macOS
 
-macOS support is part of Phase 5. Until then, macOS contributors can build the headless crates.
+macOS support landed in Phase 5: the Cocoa backend builds, runs and hosts plugins, and `cargo run -p codepp-app` opens it.
 
 ### 4.1 Xcode Command Line Tools
 
@@ -300,22 +300,24 @@ A plain `cargo test` reports it as ignored in the summary line rather
 than skipping it silently, so a runner without a window session cannot
 drop the coverage while still looking green.
 
-It runs three scenarios from one `main` — the direct-call round trip,
-notification delivery, and the cross-thread `SCI_*` marshal (a plugin
-worker thread's message hopping onto the main queue). A new
-display-gated scenario belongs in `smoke::run` beside them, for the
-same reason the GTK scenarios share one `#[test]` (§3.3); the private
-items it needs are reached through the crate's `#[doc(hidden)]`
-`smoke_support` re-export rather than by moving the scenario in-crate,
-where libtest could never hand it the main thread. That surface exists
-only in debug builds, so a `--release` run of the smoke binary reports
-the marshal scenario as ignored.
+It runs four scenarios from one `main` — the direct-call round trip,
+notification delivery, the cross-thread `SCI_*` marshal (a plugin
+worker thread's message hopping onto the main queue), and plugin dock
+panels hosted by a real dock (a plugin's `NSView` adopted, refused,
+hidden and taken back). A new display-gated scenario belongs in
+`smoke::run` beside them, for the same reason the GTK scenarios share
+one `#[test]` (§3.3); the private items it needs are reached through
+the crate's `#[doc(hidden)]` `smoke_support` re-export rather than by
+moving the scenario in-crate, where libtest could never hand it the
+main thread. That surface exists only in debug builds, so a
+`--release` run of the smoke binary reports the last two scenarios as
+ignored.
 
 Launched from a **non-interactive** shell (an agent session, `ssh`,
 a CI runner with no GUI login), `NSApplication::sharedApplication`
 can block for minutes before the first scenario starts — measured at
-four minutes here, with the three scenarios then completing in about
-a second. The stall precedes every line of test code, so it is not a
+four minutes here, with the scenarios then completing in about a
+second. The stall precedes every line of test code, so it is not a
 hang in the scenarios; run it from a terminal inside the GUI session
 if the wait matters.
 
@@ -338,6 +340,14 @@ They come from vendored source (`cocoa/ScintillaView.mm:1255`, `:1264`)
 looking for cursor images in a framework bundle's resources. Code++
 static-links Scintilla rather than shipping its framework, so those two
 cursors fall back to system defaults. Cosmetic; not a build problem.
+
+The `macos`-labelled runner must run the tests as an ordinary account,
+not as root, for the reason §3.4 gives for Linux: the plugin-panel key
+tests (`codepp-platform`'s `panel_key`, shared by both platforms) need a
+file their own account cannot read, and fail rather than skip when `CI`
+is set. The macOS-only key tests also call `/bin/chmod +a` to put
+extended ACLs on files in a temporary directory, so the runner's temp
+directory must be on a volume that keeps ACLs (APFS does).
 
 ---
 

@@ -37,7 +37,7 @@
 //! `with_state`'s `try_borrow_mut` already declines true re-entry.
 
 use std::cell::Cell;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::ffi::c_void;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicPtr, Ordering};
@@ -867,7 +867,7 @@ fn load_plugins_where(scope: LoadScope) {
     // `NPPN_READY` is recorded — Notepad++ has the items installed by
     // then. The menu itself is rebuilt by the caller afterwards, which is
     // not the Win32 order, and not observable either: a mark is kept by
-    // command id (`PluginChecks`) and painted on every rebuild, and
+    // command id (`PluginMenuChecks`) and painted on every rebuild, and
     // `NPPM_GETMENUHANDLE` answers NULL here, so no plugin can reach the
     // menu before it exists.
     absorb_loaded_commands();
@@ -1217,65 +1217,6 @@ type Chord = (bool, bool, bool, u8);
 /// command (vs. a separator), and its display chord if any.
 type PluginMenuRow = (String, i32, bool, Option<Chord>);
 
-/// The plugins' check marks on their own menu items, keyed by command id.
-///
-/// A Notepad++ plugin ticks its items by command id whenever it likes —
-/// from `NPPN_TBMODIFICATION` or `NPPN_READY`, from one of its commands,
-/// from a `DMN_CLOSE` about its panel — and a click never ticks or
-/// unticks an item by itself: the mark changes only when the plugin says
-/// so (`NPPM_SETMENUITEMCHECK`), or at load (`_init2Check`). This backend
-/// rebuilds the Plugins menu from scratch every time it opens, so a mark
-/// cannot live on a widget; it lives here, and every rebuild paints from
-/// it. That also makes the order of loading and menu-building
-/// unobservable: a tick set before the menu has ever been built is simply
-/// waiting here for it.
-#[derive(Debug, Default)]
-struct PluginChecks {
-    /// Every command a loaded plugin's `FuncItem` array publishes — the
-    /// only ids a mark is recorded for, which bounds the map by what the
-    /// plugins published rather than by what a buggy one sends.
-    commands: HashSet<i32>,
-    /// The last mark recorded for each command. A command with no entry
-    /// has never been ticked or unticked, and its item is drawn as a
-    /// plain one — no empty check box beside an action that is not a
-    /// toggle, which is what an unchecked item looks like on Win32.
-    marks: HashMap<i32, bool>,
-}
-
-impl PluginChecks {
-    /// Take in the commands a load pass's plugins publish, as
-    /// `(command id, is a command rather than a separator, _init2Check)`.
-    /// `_init2Check` ticks a command that has no mark yet; a mark already
-    /// recorded is the plugin's later word and is kept.
-    fn absorb(&mut self, funcs: impl IntoIterator<Item = (i32, bool, bool)>) {
-        for (cmd_id, is_command, init_checked) in funcs {
-            if !is_command {
-                continue;
-            }
-            self.commands.insert(cmd_id);
-            if init_checked {
-                self.marks.entry(cmd_id).or_insert(true);
-            }
-        }
-    }
-
-    /// Record a plugin's mark for `cmd_id`. `false` — nothing recorded —
-    /// for an id no loaded plugin published as a command: a built-in
-    /// `IDM_*` (this backend maps none), a separator, or a stray value.
-    fn set(&mut self, cmd_id: i32, checked: bool) -> bool {
-        if !self.commands.contains(&cmd_id) {
-            return false;
-        }
-        self.marks.insert(cmd_id, checked);
-        true
-    }
-
-    /// The mark recorded for `cmd_id`, if the plugin has ever set one.
-    fn get(&self, cmd_id: i32) -> Option<bool> {
-        self.marks.get(&cmd_id).copied()
-    }
-}
-
 /// The Plugins-menu item currently built for one command, with what it
 /// was built from — enough to build it again as a check item in place,
 /// the first time its plugin ticks it while the menu is up.
@@ -1286,9 +1227,10 @@ struct LiveItem {
 }
 
 thread_local! {
-    /// See [`PluginChecks`].
-    static PLUGIN_CHECKS: std::cell::RefCell<PluginChecks> =
-        std::cell::RefCell::new(PluginChecks::default());
+    /// The plugins' marks, painted on every rebuild — see
+    /// [`codepp_plugin_host::PluginMenuChecks`].
+    static PLUGIN_CHECKS: std::cell::RefCell<codepp_plugin_host::PluginMenuChecks> =
+        std::cell::RefCell::new(codepp_plugin_host::PluginMenuChecks::default());
     /// The items the current Plugins menu holds, by command id. Replaced
     /// wholesale on every rebuild.
     static LIVE_ITEMS: std::cell::RefCell<HashMap<i32, LiveItem>> =
@@ -1320,23 +1262,17 @@ pub(crate) fn set_menu_check(cmd_id: i32, checked: bool) -> bool {
 }
 
 /// Take in the commands every loaded plugin publishes — see
-/// [`PluginChecks::absorb`]. Run after each load pass and **before** its
-/// notifications, so a plugin ticking an item from
+/// [`codepp_plugin_host::PluginMenuChecks::absorb`]. Run after each load
+/// pass and **before** its notifications, so a plugin ticking an item from
 /// `NPPN_TBMODIFICATION` or `NPPN_READY` finds its commands known, as
 /// Notepad++ has them installed by then.
 fn absorb_loaded_commands() {
-    let funcs: Vec<(i32, bool, bool)> = with_state(|st| {
-        st.shell
-            .loaded_plugin_funcs()
-            .flat_map(|(_, funcs)| {
-                funcs
-                    .iter()
-                    .map(|f| (f.cmd_id, f.p_func.is_some(), f.init2_check != 0))
-            })
-            .collect()
-    })
-    .unwrap_or_default();
-    PLUGIN_CHECKS.with(|c| c.borrow_mut().absorb(funcs));
+    // The record is its own thread-local and calls into nothing, so it is
+    // filled from under the state borrow rather than from a copy.
+    with_state(|st| {
+        let funcs = st.shell.loaded_plugin_funcs().flat_map(|(_, funcs)| funcs);
+        PLUGIN_CHECKS.with(|c| c.borrow_mut().absorb(funcs));
+    });
 }
 
 /// Make the live item for `cmd_id`, if the menu holds one, show the mark
@@ -2071,59 +2007,6 @@ pub(crate) mod cross_thread_tests {
             0,
             "an unknown handle must be refused without dereferencing it"
         );
-    }
-}
-
-#[cfg(test)]
-mod check_tests {
-    use super::PluginChecks;
-
-    /// Only a loaded plugin's own commands take a mark — not a built-in
-    /// id, not a separator's slot, not a stray value — so the table is
-    /// bounded by what the plugins published.
-    #[test]
-    fn a_mark_is_recorded_only_for_a_published_command() {
-        let mut checks = PluginChecks::default();
-        checks.absorb([(50_000, true, false), (50_001, false, false)]);
-        assert!(checks.set(50_000, true));
-        assert_eq!(checks.get(50_000), Some(true));
-        assert!(!checks.set(50_001, true), "a separator is no command");
-        assert!(
-            !checks.set(42_001, true),
-            "a built-in IDM_* id is not mapped"
-        );
-        assert!(!checks.set(-1, false));
-        assert_eq!(checks.get(50_001), None);
-        assert_eq!(checks.get(42_001), None);
-    }
-
-    /// `_init2Check` ticks a command that has no mark yet and yields to
-    /// one the plugin set since — a later load pass re-absorbing the same
-    /// commands must not undo the plugin's own untick.
-    #[test]
-    fn init2check_seeds_a_mark_without_overriding_one() {
-        let mut checks = PluginChecks::default();
-        checks.absorb([(50_010, true, true), (50_011, true, false)]);
-        assert_eq!(checks.get(50_010), Some(true), "_init2Check ticks it");
-        assert_eq!(checks.get(50_011), None, "no mark: drawn as a plain item");
-        assert!(checks.set(50_010, false));
-        checks.absorb([(50_010, true, true)]);
-        assert_eq!(
-            checks.get(50_010),
-            Some(false),
-            "the plugin's untick survives"
-        );
-    }
-
-    /// An untick is a mark too: an item the plugin has unticked is a
-    /// toggle the user should see as one, empty, rather than a plain
-    /// action.
-    #[test]
-    fn an_untick_is_recorded_as_a_mark() {
-        let mut checks = PluginChecks::default();
-        checks.absorb([(50_020, true, false)]);
-        assert!(checks.set(50_020, false));
-        assert_eq!(checks.get(50_020), Some(false));
     }
 }
 

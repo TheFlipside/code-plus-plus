@@ -12,7 +12,7 @@
 //! 1. **"Show Dock Panel"** creates the panel's content — a plain
 //!    child window on Windows (as a real Notepad++ plugin does, except
 //!    a real one usually builds it from a dialog template), a GTK
-//!    widget on Linux — hands it to the host with
+//!    widget on Linux, an `NSView` on macOS — hands it to the host with
 //!    `NPPM_DMMREGASDCKDLG`, and shows it with `NPPM_DMMSHOW`. The
 //!    host hosts it as a dock panel; this content is only ever a child
 //!    of the host's container. The menu item is ticked
@@ -27,9 +27,9 @@
 //!    send `DMN_CLOSE` — *not* through `beNotified` — and the panel
 //!    reports it on the status bar and unticks its menu item. On
 //!    Windows it arrives as an ordinary `WM_NOTIFY` at this panel's
-//!    window procedure; on Linux, where a widget has no window
-//!    procedure, as the same `WM_NOTIFY` at this plugin's own
-//!    `messageProc`, `wParam` naming the panel.
+//!    window procedure; on Linux and macOS, where a widget or a view
+//!    has no window procedure, as the same `WM_NOTIFY` at this plugin's
+//!    own `messageProc`, `wParam` naming the panel.
 //! 4. **Quitting with a panel open and starting again** brings it
 //!    back, and the two panels come back two different ways. The
 //!    first is registered from `NPPN_TBMODIFICATION`, so its content
@@ -39,101 +39,42 @@
 //!    that command at startup: `tTbData.dlgID` names it, and
 //!    Notepad++ restores every panel that way.
 //!
-//! Windows and Linux. The macOS host accepts no dock registration,
-//! and there the menu items say so rather than disappearing, which
-//! keeps one `FuncItem` array across all three platforms.
+//! Linux and macOS share everything but how the content is built —
+//! [`hosted`] registers, shows, renames and hears the `DMN_*`, and a
+//! small module per toolkit builds the widget or the view. Windows has a
+//! module of its own, since there the content is a window with its own
+//! procedure.
 
 #[cfg(target_os = "windows")]
 pub use win::{
     message, register_panels, rename_panel, show_panel, show_second_panel, view_other_tab,
 };
 
-#[cfg(target_os = "linux")]
-pub use gtk_panel::{
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+pub use hosted::{
     message, register_panels, rename_panel, show_panel, show_second_panel, view_other_tab,
 };
 
-#[cfg(not(any(target_os = "windows", target_os = "linux")))]
-pub use stub::{
-    message, register_panels, rename_panel, show_panel, show_second_panel, view_other_tab,
-};
-
-/// The macOS arm: the Cocoa host hosts no plugin panel, so there is
-/// nothing to register; DESIGN.md §7.4 tracks what one should be there.
-#[cfg(not(any(target_os = "windows", target_os = "linux")))]
-mod stub {
-    use codepp_plugin_sdk as sdk;
-
-    pub fn show_panel() {
-        sdk::set_status("Example Hello: docking panels are not available on this platform yet");
-    }
-
-    pub fn rename_panel() {
-        show_panel();
-    }
-
-    pub fn show_second_panel() {
-        show_panel();
-    }
-
-    pub fn view_other_tab() {
-        show_panel();
-    }
-
-    pub fn register_panels() {}
-
-    /// No `DMN_*` arrive here: nothing is registered.
-    pub fn message(_msg: u32, _wparam: usize, _lparam: isize) -> isize {
-        0
-    }
-}
-
-/// The Linux arm: the panels are GTK widgets.
+/// Linux and macOS: the panels are toolkit objects — a `GtkWidget*` or
+/// an `NSView*` — which the host adopts as a panel's content where a
+/// Windows host adopts a window, taking its own reference and moving the
+/// object between its dock containers; this module never frees it.
 ///
-/// A recompiled plugin hands the GTK host a `GtkWidget*` as `hClient`
-/// where a Windows one hands it a dialog `HWND` — unparented, and not a
-/// window of its own; the host takes its own reference and moves the
-/// widget between its dock containers, so this module never frees it.
-/// The widget's children are shown here (`gtk_widget_show_all`); the
-/// widget itself is the host's to show and hide.
-///
-/// The few GTK calls are declared here rather than taken from a binding
-/// crate, as the Windows arm does for `user32`: a demo panel is a
-/// handful of functions, and a plugin that a third party might copy as
-/// a starting point is better off showing the dependency-free shape.
-/// `libgtk-3` is the library the host has already loaded, so linking it
-/// adds nothing to the process.
-#[cfg(target_os = "linux")]
-mod gtk_panel {
+/// Everything here is the same on both, because the host's contract is
+/// the same on both: registration by `NPPM_DMMREGASDCKDLG`, the `DMN_*`
+/// at `messageProc`. What differs — building the content, and whether
+/// the toolkit is up to build it with — is in [`view`], one module per
+/// toolkit.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+mod hosted {
     use codepp_plugin_sdk::{self as sdk, Hwnd, SciNotifyHeader, SyncCell, TbData, TbRect};
-    use core::ffi::{c_char, c_int, c_uint, c_void, CStr};
+    use core::ffi::{c_void, CStr};
     use core::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
 
-    #[link(name = "gdk-3")]
-    extern "C" {
-        fn gdk_display_get_default() -> *mut c_void;
-    }
-
-    #[link(name = "gobject-2.0")]
-    extern "C" {
-        fn g_object_ref_sink(object: *mut c_void) -> *mut c_void;
-    }
-
-    #[link(name = "gtk-3")]
-    extern "C" {
-        fn gtk_box_new(orientation: c_int, spacing: c_int) -> *mut c_void;
-        fn gtk_container_add(container: *mut c_void, widget: *mut c_void);
-        fn gtk_container_set_border_width(container: *mut c_void, width: c_uint);
-        fn gtk_label_new(text: *const c_char) -> *mut c_void;
-        fn gtk_label_set_line_wrap(label: *mut c_void, wrap: c_int);
-        fn gtk_label_set_xalign(label: *mut c_void, xalign: f32);
-        fn gtk_widget_show_all(widget: *mut c_void);
-    }
-
-    /// `GTK_ORIENTATION_VERTICAL`.
-    const VERTICAL: c_int = 1;
-    /// Inner margin around the label, in pixels.
-    const LABEL_INSET: c_uint = 8;
+    #[cfg(target_os = "macos")]
+    use super::cocoa_view as view;
+    #[cfg(target_os = "linux")]
+    use super::gtk_view as view;
 
     // ---- Static payloads ----------------------------------------
     //
@@ -141,10 +82,6 @@ mod gtk_panel {
     // these a valid null-terminated wide string as long as the text is
     // shorter than the array — so they double as `psz_*` buffers.
 
-    /// `tTbData.pszModuleName`: the plugin's own file name, extension
-    /// included — the convention Notepad++ keeps with `.dll`, and what
-    /// the host matches a restored panel to its plugin by.
-    const MODULE_NAME: [u16; sdk::MENU_TITLE_LENGTH] = sdk::menu_label(b"example_hello.so");
     const TITLE_A: [u16; sdk::MENU_TITLE_LENGTH] = sdk::menu_label(b"Example Hello Panel");
     const TITLE_B: [u16; sdk::MENU_TITLE_LENGTH] =
         sdk::menu_label(b"Example Hello Panel (renamed)");
@@ -182,21 +119,19 @@ mod gtk_panel {
         psz_module_name: core::ptr::null(),
     });
 
-    /// This plugin's panel widget — the `hClient` the host knows it by.
+    /// This plugin's panel content — the `hClient` the host knows it by.
     /// Null until it is first needed. From then on the plugin holds a
     /// reference of its own for the rest of the process, so the pointer
-    /// here names a live object whatever else happens to the widget —
-    /// even a plugin that later destroyed its panel would find a
-    /// destroyed object here, not freed memory.
+    /// here names a live object whatever else happens to it.
     static PANEL: AtomicPtr<c_void> = AtomicPtr::new(core::ptr::null_mut());
     /// Whether `NPPM_DMMREGASDCKDLG` has been accepted. Registering the
-    /// same widget twice is refused, so this keeps a second "Show Dock
+    /// same content twice is refused, so this keeps a second "Show Dock
     /// Panel" to a plain `NPPM_DMMSHOW`.
     static REGISTERED: AtomicBool = AtomicBool::new(false);
     /// Which of the two titles `psz_name` currently points at.
     static RENAMED: AtomicBool = AtomicBool::new(false);
 
-    /// The second panel's payload, widget and registration — same
+    /// The second panel's payload, content and registration — same
     /// lifetime rules as the first.
     static TB_DATA_2: SyncCell<TbData> = SyncCell::new(TbData {
         h_client: core::ptr::null_mut(),
@@ -217,57 +152,26 @@ mod gtk_panel {
     static PANEL_2: AtomicPtr<c_void> = AtomicPtr::new(core::ptr::null_mut());
     static REGISTERED_2: AtomicBool = AtomicBool::new(false);
 
-    /// Whether GTK is up to build widgets with: a default display is
-    /// open. Always so inside the GTK host; a host that loads plugins
-    /// without a display — a headless test harness — would otherwise
-    /// have GTK abort the process at the first widget.
-    fn gtk_ready() -> bool {
-        // SAFETY: takes nothing; answers null until a display is open.
-        !unsafe { gdk_display_get_default() }.is_null()
-    }
-
-    /// Build a panel's widget on first use: a box with a label in it,
-    /// held by a reference of the plugin's own. Returns the widget, or
-    /// null if GTK is not up or could not make it.
+    /// Build a panel's content on first use. Returns it, or null if the
+    /// toolkit is not up or could not make it.
     fn create_in(slot: &'static AtomicPtr<c_void>, text: &CStr) -> Hwnd {
         let existing = slot.load(Ordering::Acquire);
         if !existing.is_null() {
             return existing;
         }
-        if !gtk_ready() {
+        if !view::ready() {
             return core::ptr::null_mut();
         }
-        // SAFETY: plain GTK calls on the UI thread — a plugin menu
-        // command or notification runs there by the ABI's contract, and
-        // the host has initialised GTK. `text` is a NUL-terminated
-        // static string; every widget passed on is one just created.
-        unsafe {
-            let panel = gtk_box_new(VERTICAL, 0);
-            if panel.is_null() {
-                return core::ptr::null_mut();
-            }
-            // Sink the floating reference, making it the plugin's own —
-            // never released, as `PANEL`'s doc says. The host takes a
-            // reference of its own when it adopts the widget.
-            g_object_ref_sink(panel);
-            gtk_container_set_border_width(panel, LABEL_INSET);
-            let label = gtk_label_new(text.as_ptr());
-            if !label.is_null() {
-                gtk_label_set_xalign(label, 0.0);
-                gtk_label_set_line_wrap(label, 1);
-                gtk_container_add(panel, label);
-            }
-            // Shown, children and all: the host shows and hides the
-            // container it puts the panel in, never the panel.
-            gtk_widget_show_all(panel);
+        let panel = view::build(text);
+        if !panel.is_null() {
             slot.store(panel, Ordering::Release);
-            panel
         }
+        panel
     }
 
     /// Create and register one panel, without showing it. Idempotent
     /// through `registered`, because the host refuses a second
-    /// registration of the same widget. Returns the widget, or null if
+    /// registration of the same content. Returns the content, or null if
     /// it could not be created or the host refused it.
     fn register_one(
         slot: &'static AtomicPtr<c_void>,
@@ -286,7 +190,7 @@ mod gtk_panel {
             let tb = tb_data.get();
             (*tb).h_client = panel;
             (*tb).psz_name = title;
-            (*tb).psz_module_name = MODULE_NAME.as_ptr();
+            (*tb).psz_module_name = view::MODULE_NAME.as_ptr();
         }
         // SAFETY: the `tTbData` is a live `static` for the process's
         // whole life, which is exactly the lifetime the host's
@@ -312,9 +216,9 @@ mod gtk_panel {
     /// only by its own menu command — see the Windows arm, which keeps
     /// the same split for the same reason.
     pub fn register_panels() {
-        // Silently, with no display: that is a host with nowhere to put a
-        // panel, not a refusal worth reporting.
-        if !gtk_ready() {
+        // Silently, with no toolkit to build with: that is a host with
+        // nowhere to put a panel, not a refusal worth reporting.
+        if !view::ready() {
             return;
         }
         let a = register_one(&PANEL, LABEL_TEXT, &TB_DATA, TITLE_A.as_ptr(), &REGISTERED);
@@ -429,13 +333,13 @@ mod gtk_panel {
         sdk::set_status("Example Hello: dock panel renamed");
     }
 
-    /// The host's `DMN_*` about this plugin's panels, which on this
-    /// platform arrive at `messageProc` as `WM_NOTIFY` with the panel's
-    /// widget in `wParam` — the host has no window procedure to send
+    /// The host's `DMN_*` about this plugin's panels, which on these
+    /// platforms arrive at `messageProc` as `WM_NOTIFY` with the panel's
+    /// content in `wParam` — the host has no window procedure to send
     /// them to. `lParam` is the same `NMHDR` a Windows plugin gets.
     pub fn message(msg: u32, wparam: usize, lparam: isize) -> isize {
-        // A zero `wParam` names no panel: the host sends a registered
-        // widget, never null — and a panel not created yet reads as null
+        // A zero `wParam` names no panel: the host sends registered
+        // content, never null — and a panel not created yet reads as null
         // below, so this also keeps one from matching it.
         if msg != sdk::WM_NOTIFY || lparam == 0 || wparam == 0 {
             return 0;
@@ -477,6 +381,293 @@ mod gtk_panel {
             _ => {}
         }
         0
+    }
+}
+
+/// The Linux content: a GTK widget.
+///
+/// A recompiled plugin hands the GTK host a `GtkWidget*` as `hClient`
+/// where a Windows one hands it a dialog `HWND` — unparented, and not a
+/// window of its own. The widget's children are shown here
+/// (`gtk_widget_show_all`); the widget itself is the host's to show and
+/// hide.
+///
+/// The few GTK calls are declared here rather than taken from a binding
+/// crate, as the Windows arm does for `user32`: a demo panel is a
+/// handful of functions, and a plugin that a third party might copy as
+/// a starting point is better off showing the dependency-free shape.
+/// `libgtk-3` is the library the host has already loaded, so linking it
+/// adds nothing to the process.
+#[cfg(target_os = "linux")]
+mod gtk_view {
+    use codepp_plugin_sdk::{self as sdk, Hwnd};
+    use core::ffi::{c_char, c_int, c_uint, c_void, CStr};
+
+    #[link(name = "gdk-3")]
+    extern "C" {
+        fn gdk_display_get_default() -> *mut c_void;
+    }
+
+    #[link(name = "gobject-2.0")]
+    extern "C" {
+        fn g_object_ref_sink(object: *mut c_void) -> *mut c_void;
+    }
+
+    #[link(name = "gtk-3")]
+    extern "C" {
+        fn gtk_box_new(orientation: c_int, spacing: c_int) -> *mut c_void;
+        fn gtk_container_add(container: *mut c_void, widget: *mut c_void);
+        fn gtk_container_set_border_width(container: *mut c_void, width: c_uint);
+        fn gtk_label_new(text: *const c_char) -> *mut c_void;
+        fn gtk_label_set_line_wrap(label: *mut c_void, wrap: c_int);
+        fn gtk_label_set_xalign(label: *mut c_void, xalign: f32);
+        fn gtk_widget_show_all(widget: *mut c_void);
+    }
+
+    /// `GTK_ORIENTATION_VERTICAL`.
+    const VERTICAL: c_int = 1;
+    /// Inner margin around the label, in pixels.
+    const LABEL_INSET: c_uint = 8;
+
+    /// `tTbData.pszModuleName`: the plugin's own file name, extension
+    /// included — the convention Notepad++ keeps with `.dll`, and what
+    /// the host matches a restored panel to its plugin by. No `lib`
+    /// prefix, although Cargo builds `libexample_hello.so`: staging
+    /// drops it, so the installed file is `example_hello/example_hello.so`,
+    /// the layout discovery requires. Both spellings read as one plugin
+    /// anyway (`codepp_core::shortcuts::module_key`), so adding the prefix
+    /// here would change nothing but the name persisted.
+    pub(super) const MODULE_NAME: [u16; sdk::MENU_TITLE_LENGTH] =
+        sdk::menu_label(b"example_hello.so");
+
+    /// Whether GTK is up to build widgets with: a default display is
+    /// open. Always so inside the GTK host; a host that loads plugins
+    /// without a display — a headless test harness — would otherwise
+    /// have GTK abort the process at the first widget.
+    pub(super) fn ready() -> bool {
+        // SAFETY: takes nothing; answers null until a display is open.
+        !unsafe { gdk_display_get_default() }.is_null()
+    }
+
+    /// A box with a label in it, held by a reference of the plugin's own
+    /// — never released. Null if GTK could not make it.
+    pub(super) fn build(text: &CStr) -> Hwnd {
+        // SAFETY: plain GTK calls on the UI thread — a plugin menu
+        // command or notification runs there by the ABI's contract, and
+        // the host has initialised GTK. `text` is a NUL-terminated
+        // static string; every widget passed on is one just created.
+        unsafe {
+            let panel = gtk_box_new(VERTICAL, 0);
+            if panel.is_null() {
+                return core::ptr::null_mut();
+            }
+            // Sink the floating reference, making it the plugin's own —
+            // never released. The host takes a reference of its own when
+            // it adopts the widget.
+            g_object_ref_sink(panel);
+            gtk_container_set_border_width(panel, LABEL_INSET);
+            let label = gtk_label_new(text.as_ptr());
+            if !label.is_null() {
+                gtk_label_set_xalign(label, 0.0);
+                gtk_label_set_line_wrap(label, 1);
+                gtk_container_add(panel, label);
+            }
+            // Shown, children and all: the host shows and hides the
+            // container it puts the panel in, never the panel.
+            gtk_widget_show_all(panel);
+            panel
+        }
+    }
+}
+
+/// The macOS content: an `NSView` holding a wrapping label.
+///
+/// A recompiled plugin hands the Cocoa host an `NSView*` as `hClient` —
+/// in no superview, and not a window's. The host takes its own
+/// reference, sizes the view to fill the panel through its autoresizing
+/// mask, and shows it; it never releases the plugin's reference, which
+/// this module holds for the process.
+///
+/// Built on the Objective-C runtime directly — `objc_getClass`,
+/// `sel_registerName`, `objc_msgSend` — for the reason the GTK arm
+/// declares its handful of GTK calls: a demo panel is a handful of
+/// messages, and a plugin a third party might copy is better off
+/// showing the dependency-free shape. Only `libobjc` is linked. The
+/// AppKit classes are looked up by name, so a process that has not
+/// loaded AppKit — a test harness — finds none and builds nothing, where
+/// linking AppKit would have loaded it.
+#[cfg(target_os = "macos")]
+mod cocoa_view {
+    use codepp_plugin_sdk::{self as sdk, Hwnd};
+    use core::ffi::{c_char, c_int, c_void, CStr};
+
+    type Id = *mut c_void;
+    type Sel = *const c_void;
+
+    /// `CGPoint` / `CGSize` / `CGRect`, which `NSRect` is.
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    struct Point {
+        x: f64,
+        y: f64,
+    }
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    struct Size {
+        width: f64,
+        height: f64,
+    }
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    struct Rect {
+        origin: Point,
+        size: Size,
+    }
+
+    fn rect(x: f64, y: f64, width: f64, height: f64) -> Rect {
+        Rect {
+            origin: Point { x, y },
+            size: Size { width, height },
+        }
+    }
+
+    #[link(name = "objc")]
+    extern "C" {
+        fn objc_getClass(name: *const c_char) -> Id;
+        fn sel_registerName(name: *const c_char) -> Sel;
+        /// Never called as declared: each use is cast to the prototype
+        /// of the method it sends — see [`send`].
+        fn objc_msgSend();
+        fn objc_autoreleasePoolPush() -> *mut c_void;
+        fn objc_autoreleasePoolPop(pool: *mut c_void);
+    }
+
+    extern "C" {
+        /// `libSystem`: nonzero on the process's main thread.
+        fn pthread_main_np() -> c_int;
+    }
+
+    /// `tTbData.pszModuleName`: the plugin's own file name, extension
+    /// included — the convention Notepad++ keeps with `.dll`, and what
+    /// the host matches a restored panel to its plugin by. No `lib`
+    /// prefix, although Cargo builds `libexample_hello.dylib`: staging
+    /// drops it, so the installed file is `example_hello/example_hello.dylib`,
+    /// the layout discovery requires. Both spellings read as one plugin
+    /// anyway (`codepp_core::shortcuts::module_key`), so adding the prefix
+    /// here would change nothing but the name persisted.
+    pub(super) const MODULE_NAME: [u16; sdk::MENU_TITLE_LENGTH] =
+        sdk::menu_label(b"example_hello.dylib");
+
+    /// `NSViewWidthSizable | NSViewHeightSizable`.
+    const WIDTH_AND_HEIGHT_SIZABLE: usize = 2 | 16;
+    /// The panel's starting size, in points; the host resizes it.
+    const PANEL_WIDTH: f64 = 240.0;
+    const PANEL_HEIGHT: f64 = 120.0;
+    /// Inner margin around the label, in points.
+    const LABEL_INSET: f64 = 8.0;
+
+    /// `objc_msgSend` as the prototype `F` of the method being sent.
+    ///
+    /// On arm64 the untyped symbol cannot be called as declared: a
+    /// variadic call passes its arguments differently from the method's
+    /// own prototype. So every send goes through an exact function type,
+    /// and none of them returns a structure — which on `x86_64` would
+    /// need `objc_msgSend_stret` instead.
+    ///
+    /// # Safety
+    ///
+    /// `F` must be an `unsafe extern "C" fn(Id, Sel, …)` type matching
+    /// the method it will be called with, argument for argument.
+    unsafe fn send<F: Copy>() -> F {
+        // Catches an `F` that is not a function pointer at all — a value
+        // type passed by mistake. It cannot catch the wrong prototype:
+        // every function pointer is one word, so that stays the caller's
+        // contract above.
+        debug_assert_eq!(
+            core::mem::size_of::<F>(),
+            core::mem::size_of::<unsafe extern "C" fn()>(),
+            "`send` casts a function pointer to a function pointer, nothing else"
+        );
+        // SAFETY: a function pointer, reinterpreted as another function
+        // pointer of the same size — the caller's contract makes the
+        // signature the method's own.
+        unsafe { core::mem::transmute_copy::<unsafe extern "C" fn(), F>(&(objc_msgSend as _)) }
+    }
+
+    /// The selector named `name`.
+    fn sel(name: &CStr) -> Sel {
+        // SAFETY: registers or finds a selector by its NUL-terminated
+        // name; never fails.
+        unsafe { sel_registerName(name.as_ptr()) }
+    }
+
+    /// Whether AppKit is up to build views with: this is the main thread,
+    /// and the process has loaded AppKit. Always so inside the Cocoa host;
+    /// a host that loads plugins elsewhere — a test harness on a worker
+    /// thread — gets no view built, since AppKit's views are main-thread
+    /// only.
+    pub(super) fn ready() -> bool {
+        // SAFETY: both read process state and take nothing but a static
+        // NUL-terminated class name.
+        unsafe { pthread_main_np() != 0 && !objc_getClass(c"NSView".as_ptr()).is_null() }
+    }
+
+    /// An `NSView` with a wrapping label filling it, less an inset, held
+    /// by the reference `alloc`/`init` returns — the plugin's own, never
+    /// released. Null if AppKit could not make it.
+    pub(super) fn build(text: &CStr) -> Hwnd {
+        // SAFETY: plain AppKit messages on the main thread (`ready`
+        // checked it), each sent through the exact prototype of its
+        // method, to classes looked up by name and checked for null, and
+        // to objects just created. The autorelease pool bounds the two
+        // autoreleased objects — the string and the label — to this call;
+        // the view holds the label past it.
+        unsafe {
+            let view_class = objc_getClass(c"NSView".as_ptr());
+            let label_class = objc_getClass(c"NSTextField".as_ptr());
+            let string_class = objc_getClass(c"NSString".as_ptr());
+            if view_class.is_null() || label_class.is_null() || string_class.is_null() {
+                return core::ptr::null_mut();
+            }
+            let alloc: unsafe extern "C" fn(Id, Sel) -> Id = send();
+            let init_with_frame: unsafe extern "C" fn(Id, Sel, Rect) -> Id = send();
+            let with_utf8: unsafe extern "C" fn(Id, Sel, *const c_char) -> Id = send();
+            let with_string: unsafe extern "C" fn(Id, Sel, Id) -> Id = send();
+            let set_frame: unsafe extern "C" fn(Id, Sel, Rect) = send();
+            let set_mask: unsafe extern "C" fn(Id, Sel, usize) = send();
+            let add_subview: unsafe extern "C" fn(Id, Sel, Id) = send();
+
+            let pool = objc_autoreleasePoolPush();
+            let panel = init_with_frame(
+                alloc(view_class, sel(c"alloc")),
+                sel(c"initWithFrame:"),
+                rect(0.0, 0.0, PANEL_WIDTH, PANEL_HEIGHT),
+            );
+            if !panel.is_null() {
+                let string = with_utf8(string_class, sel(c"stringWithUTF8String:"), text.as_ptr());
+                let label = with_string(label_class, sel(c"wrappingLabelWithString:"), string);
+                if !label.is_null() {
+                    set_frame(
+                        label,
+                        sel(c"setFrame:"),
+                        rect(
+                            LABEL_INSET,
+                            LABEL_INSET,
+                            PANEL_WIDTH - 2.0 * LABEL_INSET,
+                            PANEL_HEIGHT - 2.0 * LABEL_INSET,
+                        ),
+                    );
+                    set_mask(
+                        label,
+                        sel(c"setAutoresizingMask:"),
+                        WIDTH_AND_HEIGHT_SIZABLE,
+                    );
+                    add_subview(panel, sel(c"addSubview:"), label);
+                }
+            }
+            objc_autoreleasePoolPop(pool);
+            panel
+        }
     }
 }
 

@@ -57,15 +57,10 @@ const FUNCS_COUNT: usize = 5;
 /// Getting it wrong is not cosmetic — an index of 0 would run "Insert
 /// Hello" into the user's buffer on every start. Named here, next to
 /// the array it indexes, and pinned by a test against it.
-///
-/// Windows and Linux only outside tests, like the panels that use it:
-/// the macOS docking module is a stub with nothing to register.
-#[cfg(any(target_os = "windows", target_os = "linux", test))]
 pub(crate) const CMD_SHOW_DOCK_PANEL: i32 = 1;
 
 /// Index of "Show Second Dock Panel" in [`FUNCS`] — the second
 /// panel's `tTbData.dlgID`. See [`CMD_SHOW_DOCK_PANEL`].
-#[cfg(any(target_os = "windows", target_os = "linux", test))]
 pub(crate) const CMD_SHOW_SECOND_DOCK_PANEL: i32 = 3;
 
 /// Tick or untick the menu item at `index` in [`FUNCS`] — "Show Dock
@@ -73,7 +68,6 @@ pub(crate) const CMD_SHOW_SECOND_DOCK_PANEL: i32 = 3;
 /// closes it, the way `NppExec`'s "Show Console" tracks its console. The
 /// item's command id is the one the host wrote into its `FuncItem` at
 /// load, which is what `NPPM_SETMENUITEMCHECK` addresses it by.
-#[cfg(any(target_os = "windows", target_os = "linux"))]
 pub(crate) fn set_item_check(index: i32, checked: bool) {
     let Ok(index) = usize::try_from(index) else {
         return;
@@ -90,10 +84,9 @@ pub(crate) fn set_item_check(index: i32, checked: bool) {
 /// host during load; we leave it 0 in the static initialiser per
 /// the ABI contract.
 ///
-/// The two docking entries drive the host's `NPPM_DMM*` surface —
-/// see [`crate::dock`] for what each one demonstrates. They are
-/// present on every platform and report their own unavailability
-/// off Windows rather than changing the array's length per target.
+/// The docking entries drive the host's `NPPM_DMM*` surface — see
+/// [`crate::dock`] for what each one demonstrates. The array is the
+/// same on every platform.
 static FUNCS: SyncCell<[FuncItem; FUNCS_COUNT]> = SyncCell::new([
     FuncItem {
         item_name: sdk::menu_label(b"Insert Hello"),
@@ -193,9 +186,10 @@ pub extern "C" fn beNotified(notification: *const SCNotification) {
 /// `messageProc`: example-hello has no host-to-plugin custom messages of
 /// its own, but off Windows this is where the host delivers the `DMN_*`
 /// notifications about its dock panels — `WM_NOTIFY`, `wParam` naming
-/// the panel — since a GTK widget has no window procedure to receive
-/// them at. The docking module decides; on Windows it answers 0, the
-/// notifications arriving at the panel's own window procedure instead.
+/// the panel — since a GTK widget or an `NSView` has no window procedure
+/// to receive them at. The docking module decides; on Windows it answers
+/// 0, the notifications arriving at the panel's own window procedure
+/// instead.
 #[no_mangle]
 pub extern "C" fn messageProc(msg: u32, wparam: usize, lparam: isize) -> isize {
     crate::dock::message(msg, wparam, lparam)

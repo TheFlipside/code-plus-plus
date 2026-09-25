@@ -126,8 +126,8 @@ typedef void (*PFUNCPLUGINCMD)(void);
  *   _init2Check     — if TRUE, the menu item starts in the checked state
  *                     (a checkmark glyph). Plugins toggle subsequently
  *                     via NPPM_SETMENUITEMCHECK; a click never ticks or
- *                     unticks the item by itself. Honoured on Windows
- *                     and Linux.
+ *                     unticks the item by itself. Honoured on every
+ *                     platform.
  *   _pShKey         — optional accelerator. Heap-allocated by the plugin
  *                     (typically `new ShortcutKey{...}`); ownership stays
  *                     with the plugin and survives until SHUTDOWN.
@@ -177,9 +177,10 @@ typedef struct FuncItem_ {
  *   4. beNotified() is called for every NPPN_ / SCN_ notification
  *      delivered while the plugin is loaded.
  *   5. messageProc() is called for plugin-targeted Win32 messages
- *      that aren't NPPN/SCN notifications. On Linux it also receives
- *      the DMN_* notifications about the plugin's dock panels, which
- *      Windows sends to the panel's own window instead (Docking.h).
+ *      that aren't NPPN/SCN notifications. On Linux and macOS it also
+ *      receives the DMN_* notifications about the plugin's dock panels,
+ *      which Windows sends to the panel's own window instead
+ *      (Docking.h).
  *   6. NPPN_SHUTDOWN fires at exit. The DLL is not unloaded.
  *
  * Plugins must not perform expensive work in setInfo or getName —
