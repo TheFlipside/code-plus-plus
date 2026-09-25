@@ -30,9 +30,9 @@ extern "C" {
  * and passes a pointer in lParam. The host reads each field; ownership
  * of every pointer-typed field stays with the plugin. The host reads
  * pszName / pszAddInfo / pszModuleName at every call that depends on
- * the value (e.g. UPDATEDISPINFO refreshes the panel's caption from
- * pszName) — the plugin must keep the buffer alive for the lifetime
- * of the registration.
+ * the value (e.g. UPDATEDISPINFO re-reads pszName as the name the
+ * panel is looked up by) — the plugin must keep the buffer alive for
+ * the lifetime of the registration.
  *
  * Layout (x64): 72 bytes.
  *   offset  0  HWND          hClient
@@ -108,6 +108,39 @@ extern "C" {
  * rcFloat, iPrevCont and pszAddInfo are stored but not yet acted
  * on: the host decides the floating rectangle itself, and a
  * torn-off panel opens at a third of the main window.
+ *
+ * On Linux (the GTK backend) the struct is read the same way, but
+ * its two handle-typed fields carry toolkit objects:
+ *
+ *   hClient   a GtkWidget* the plugin created and has not added to
+ *             a container or made a window of. The host takes its
+ *             own reference (sinking a floating one, as a
+ *             container's add does) and puts the widget in a
+ *             scrolled container of its own, which is what moves as
+ *             the panel docks, floats and tabs. A panel smaller than
+ *             the widget's minimum size scrolls rather than painting
+ *             over its neighbour. The host shows the widget itself
+ *             once, as Notepad++ shows hClient; showing and hiding
+ *             the panel after that shows and hides the container,
+ *             so ask gtk_widget_is_visible or gtk_widget_get_mapped,
+ *             not gtk_widget_get_visible, whether the panel is on
+ *             screen. The host never destroys the widget. A plugin
+ *             that destroys it ends the registration, and the panel
+ *             closes.
+ *   hIconTab  a GdkPixbuf*, drawn on the panel's tab under the same
+ *             DWS_ICONTAB rule; the host takes its own reference.
+ *             Anything that is not a pixbuf gets the generic glyph.
+ *
+ * NPPM_DMMREGASDCKDLG refuses there a widget that is already in a
+ * container (every widget of the host's own is), a toplevel, and
+ * anything that is not a widget. Those checks catch mistakes, not
+ * malice: a pointer cannot be tested for being a live object
+ * without reading it, so pass only a widget you made. The DMN_*
+ * notifications cannot be sent to a widget, which has no window
+ * procedure; see "On Linux" under DMN_* below.
+ *
+ * macOS does not host plugin panels yet: NPPM_DMMREGASDCKDLG
+ * returns 0 there.
  */
 typedef struct tTbData_ {
     HWND        hClient;        /* plugin's docking-dialog HWND */
@@ -209,6 +242,14 @@ typedef struct tTbData_ {
  * panel's container (not the main window) as tabs are switched and
  * containers are rearranged; a plugin must not depend on them under
  * Code++ today.
+ *
+ * On Linux, where hClient is a widget, the same notifications go to
+ * the plugin's messageProc export instead: message WM_NOTIFY
+ * (0x004E), lParam the same NMHDR with the same fields, and wParam
+ * the panel's hClient, the only way left to say which of the
+ * plugin's panels the notification is about. The return value is
+ * ignored. Everything else above holds as written, the ordering and
+ * the queueing included.
  */
 #define DMN_FIRST        1050
 #define DMN_CLOSE        (DMN_FIRST + 1)  /* user closed the panel (panel hidden) */

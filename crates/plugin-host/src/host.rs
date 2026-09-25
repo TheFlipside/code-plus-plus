@@ -825,6 +825,16 @@ impl PluginHost {
         }
         None
     }
+
+    /// The `messageProc` of the loaded plugin at registry index `idx`,
+    /// marked as that plugin when called — see
+    /// [`crate::PluginMessageProc::send`]. `None` for an index nothing is
+    /// registered at, or a plugin that is not loaded.
+    #[must_use]
+    pub fn message_target(&self, idx: usize) -> Option<crate::PluginMessageProc> {
+        let func = self.plugins.get(idx)?.message_proc_fn()?;
+        Some(crate::PluginMessageProc { owner: idx, func })
+    }
 }
 
 impl Drop for PluginHost {
@@ -852,9 +862,10 @@ impl Drop for PluginHost {
     ///
     /// What is lost by not unloading: nothing the OS does not do a
     /// moment later. The process is exiting; every mapping goes with
-    /// it. `NPPN_SHUTDOWN` still fires (from each backend's
-    /// `WM_DESTROY`, while everything is still mapped), so a plugin
-    /// still gets its documented chance to save state.
+    /// it. `NPPN_SHUTDOWN` still fires while everything is still
+    /// mapped — from `WM_CLOSE` on Win32 and from the quit path on
+    /// GTK — so a plugin still gets its documented chance to save
+    /// state. The Cocoa backend does not send it yet (DESIGN.md §7.4).
     ///
     /// This is the one place the host deviates from DESIGN.md §6.4's
     /// "on exit: `NPPN_SHUTDOWN` → unload", and §6.4 records why.

@@ -14,6 +14,12 @@
 //! the `SCI_INSERTTEXT` payload, so the assertion is exact ("Hello from
 //! plugin") rather than a screenshot.
 //!
+//! It also covers the plugin's guard against a host with no display.
+//! `load_blocking` delivers `NPPN_TBMODIFICATION`, where example-hello
+//! registers its dock panel, and this process never opens a display:
+//! the plugin must build no widget there. Before the guard existed, GTK
+//! aborted this test's process at the first one.
+//!
 //! `#[ignore]` because it needs `libexample_hello.so`, which
 //! `cargo build --workspace` produces but `cargo test -p
 //! codepp-plugin-host` does not. Run after a workspace build:

@@ -225,6 +225,14 @@ Expect the Linux runner's first build after this change to take 1–3
 minutes longer: it now compiles the vendored Scintilla and Lexilla C++
 sources, which it previously skipped.
 
+The runner must also run the tests as an ordinary account, not as root.
+Two of the plugin-panel key tests need a file their own account cannot
+read, and root reads every file. Run as root they skip on a
+developer's machine, but they *fail* when `CI` is set: `cargo test`
+hides a passing test's output, so a skip there would drop the coverage
+while the run stayed green — the trap §2.6 describes for the Windows
+symlink tests.
+
 ---
 
 ## 4. macOS
@@ -434,7 +442,10 @@ a Windows resource with `rc.exe` for that target, which the variable
 does not skip. `ui_gtk` cannot be checked this way: the GTK bindings'
 own build scripts, which the variable does not reach, need the target's
 GTK development files through `pkg-config`, so check it on Linux, or in
-a Linux container.
+a Linux container. The same holds for `codepp-platform` on a Linux
+target, and so for nearly every crate above it: its plugin panel key
+takes its HMAC from GLib through `glib-sys`, whose build script needs
+the target's GLib development files.
 
 `cargo check` never links, so skipping the native build costs nothing
 there. Anything that *does* link — a binary or a test target — fails

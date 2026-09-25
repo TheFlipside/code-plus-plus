@@ -43,8 +43,8 @@
 //! for free — until the window class matches the main class.
 
 use codepp_core::dock::{
-    compute_frame, resolve_drop, DockContainer, DockLayout, DockLocation, DockPanel, DockRect,
-    DockSide, DragSubject, DropTarget, DropZones, MIN_FLOAT_H, MIN_FLOAT_W,
+    compute_frame, resolve_drop, DockLayout, DockLocation, DockPanel, DockRect, DockSide,
+    DragSubject, DropTarget, DropZones, MIN_FLOAT_H, MIN_FLOAT_W,
 };
 use std::ffi::c_void;
 use windows::core::{w, PCWSTR};
@@ -623,58 +623,6 @@ pub(crate) unsafe fn apply_dock_layout(main_hwnd: HWND) {
     }
 }
 
-/// Notepad++'s number for a docked container: its `CONT_*` value
-/// (`CONT_LEFT` 0, `CONT_RIGHT` 1, `CONT_TOP` 2, `CONT_BOTTOM` 3).
-///
-/// Written out rather than borrowed from [`side_index`], which
-/// happens to agree today but indexes the splitter array and is free
-/// to be reordered for that; this one is ABI. A test pins it against
-/// the `DWS_DF_CONT_*` nibble decoding, which is the same numbering
-/// arriving from the other direction.
-pub(crate) fn npp_container_index(side: DockSide) -> u32 {
-    match side {
-        DockSide::Left => 0,
-        DockSide::Right => 1,
-        DockSide::Top => 2,
-        DockSide::Bottom => 3,
-    }
-}
-
-/// Upstream's count of docked containers, and so the first number a
-/// floating container can have.
-const DOCKCONT_MAX: u32 = 4;
-
-/// The `nmhdr.code` for a panel now in `container`:
-/// `MAKELONG(DMN_DOCK or DMN_FLOAT, container number)`.
-///
-/// The container number rides in the high word because that is where
-/// upstream puts it, and where a plugin built from Notepad++'s
-/// docking-dialog template reads it — `HIWORD(code)` on `DMN_DOCK` is
-/// how that template learns which side it is docked to, and it
-/// switches on `LOWORD(code)`, which is why the two halves must not be
-/// swapped or merged. Floating containers are numbered from
-/// [`DOCKCONT_MAX`] in the order the model lists floating groups; a
-/// hidden panel whose remembered spot is floating is reported as the
-/// container a new floating group would get. That number carries
-/// less than the docked one — nothing in the template reads it — and
-/// is reported because the code has to carry *something* there.
-pub(crate) fn container_code(layout: &DockLayout, container: DockContainer) -> u32 {
-    let (dmn, index) = match container {
-        DockContainer::Docked(side) => (codepp_plugin_host::DMN_DOCK, npp_container_index(side)),
-        DockContainer::Floating(group) => {
-            let ordinal = group
-                .and_then(|id| layout.floating_ordinal(id))
-                .unwrap_or_else(|| layout.floating_groups().count());
-            let ordinal = u32::try_from(ordinal).unwrap_or(u32::MAX);
-            (
-                codepp_plugin_host::DMN_FLOAT,
-                DOCKCONT_MAX.saturating_add(ordinal).min(0xFFFF),
-            )
-        }
-    };
-    (index << 16) | (dmn & 0xFFFF)
-}
-
 /// Record, for every registered plugin panel, the container it is in
 /// now, and return a `(h_client, code)` notification for each one
 /// whose container differs from what its plugin was last told —
@@ -712,7 +660,10 @@ pub(crate) fn container_notices(
         let told = entry.dmn_container.is_some_and(|last| last.is_same(now));
         entry.dmn_container = Some(now);
         if !told {
-            out.push((entry.h_client, container_code(layout, now)));
+            out.push((
+                entry.h_client,
+                codepp_plugin_host::docking::dock_container_code(layout, now),
+            ));
         }
     }
     out
@@ -1831,54 +1782,6 @@ extern "system" fn dock_side_splitter_wnd_proc(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// The container numbers are ABI in both directions: a plugin
-    /// names a side through `DWS_DF_CONT_*` when it registers, and is
-    /// told its side back through `DMN_DOCK`'s high word. The two
-    /// must be one numbering, or a plugin asking for the bottom is
-    /// told it is docked on the right.
-    #[test]
-    fn container_numbers_match_the_registration_nibble() {
-        for side in DockSide::ALL {
-            let n = npp_container_index(side);
-            assert_eq!(
-                crate::dock_side_from_u_mask(n << 28),
-                Some(side),
-                "container {n} decodes to a different side than it encodes"
-            );
-        }
-    }
-
-    #[test]
-    fn container_code_packs_the_notification_low_and_the_container_high() {
-        let layout = DockLayout::new();
-        let docked = container_code(&layout, DockContainer::Docked(DockSide::Bottom));
-        assert_eq!(docked & 0xFFFF, codepp_plugin_host::DMN_DOCK);
-        assert_eq!(docked >> 16, 3, "CONT_BOTTOM");
-        let left = container_code(&layout, DockContainer::Docked(DockSide::Left));
-        assert_eq!(
-            left,
-            codepp_plugin_host::DMN_DOCK,
-            "CONT_LEFT is 0: the bare code"
-        );
-        let floating = container_code(&layout, DockContainer::Floating(None));
-        assert_eq!(floating & 0xFFFF, codepp_plugin_host::DMN_FLOAT);
-        assert_eq!(floating >> 16, DOCKCONT_MAX, "first floating container");
-    }
-
-    #[test]
-    fn container_code_numbers_floating_groups_after_the_docked_four() {
-        let a = codepp_core::dock::intern_plugin_panel("cc-a.dll", "CC A").expect("intern");
-        let b = codepp_core::dock::intern_plugin_panel("cc-b.dll", "CC B").expect("intern");
-        let mut l = DockLayout::new();
-        l.show(a);
-        l.show(b);
-        l.move_panel(a, DropTarget::Floating(DockRect::new(0, 0, 300, 200)));
-        l.move_panel(b, DropTarget::Floating(DockRect::new(40, 40, 300, 200)));
-        let code_of = |p| container_code(&l, l.container_of(p)) >> 16;
-        assert_eq!(code_of(a), DOCKCONT_MAX);
-        assert_eq!(code_of(b), DOCKCONT_MAX + 1);
-    }
 
     /// What bounds the `DMN_DOCK` / `DMN_FLOAT` round trip is an
     /// ordering no unit test can see: the container is *recorded*

@@ -36,11 +36,15 @@
 //! memory-safe GTK equivalent of Win32's `PLUGIN_CALL_ACTIVE` guard;
 //! `with_state`'s `try_borrow_mut` already declines true re-entry.
 
+use std::cell::Cell;
+use std::collections::{HashMap, HashSet};
 use std::ffi::c_void;
+use std::rc::Rc;
 use std::sync::atomic::{AtomicPtr, Ordering};
 use std::sync::OnceLock;
 use std::thread::ThreadId;
 
+use gtk::gdk_pixbuf::Pixbuf;
 use gtk::glib;
 use gtk::prelude::*;
 
@@ -357,6 +361,17 @@ fn dispatch_nppm(msg: u32, wparam: usize, lparam: isize) -> isize {
     if dirty_edge {
         crate::refresh_tab_chrome();
     }
+    // A `NPPM_DMM*` handler may have registered, shown, hidden or
+    // re-activated a plugin panel. The *model* can change inside the
+    // dispatch; the widget tree cannot, because the reconcile syncs the
+    // session through `with_state` and would be declined under the live
+    // borrow. So the handler marks and the reconcile happens here, with
+    // the borrow ended — the same shape as `needs_rebind` above, and as
+    // Win32's `dock_dirty`. It also sends the `DMN_DOCK` / `DMN_FLOAT` a
+    // registration owes the plugin, before its `SendMessage` returns.
+    if crate::dock::take_dirty() {
+        crate::dock::apply_layout();
+    }
     // `Some` means the dispatch ran on the main thread with the borrow
     // now dropped, so a prompt it queued — the export Save-As, or
     // `NPPM_RELOADBUFFERID`'s reload confirmation — can be presented
@@ -364,6 +379,332 @@ fn dispatch_nppm(msg: u32, wparam: usize, lparam: isize) -> isize {
     // Notepad++ shows the same prompts.
     crate::present_deferred_dialogs();
     routed
+}
+
+// --- plugin dock panels ------------------------------------------------------------
+//
+// What `NPPM_DMMREGASDCKDLG` means on this backend. On Windows a plugin
+// hands the host its dialog's `HWND`; a recompiled Linux plugin hands it
+// the GTK analogue — a `GtkWidget*` it built, unparented — and the host
+// adopts that widget as a dock panel's content, exactly as the Win32
+// host adopts a window. The panel is then an ordinary dock panel
+// (`crate::dock`). The one thing a widget cannot do that a window can is
+// receive a message, so the `DMN_*` notifications a Win32 plugin gets as
+// `WM_NOTIFY` at its dialog's window procedure arrive here at the
+// plugin's own `messageProc` instead, `wParam` naming the panel — see
+// `codepp_plugin_host::WM_NOTIFY`.
+
+thread_local! {
+    /// `DMN_DOCK` / `DMN_FLOAT` notices waiting to be sent. See
+    /// [`deliver_dock_notices`].
+    static DOCK_NOTICES: std::cell::RefCell<std::collections::VecDeque<crate::dock::DockNotice>> =
+        const { std::cell::RefCell::new(std::collections::VecDeque::new()) };
+    /// Set while [`deliver_dock_notices`] is draining.
+    static DOCK_NOTICES_DELIVERING: Cell<bool> = const { Cell::new(false) };
+    /// Set while a `DMN_CLOSE` is being delivered. See
+    /// [`close_plugin_panel`].
+    static DMN_CLOSE_ACTIVE: Cell<bool> = const { Cell::new(false) };
+}
+
+/// `NPPM_DMMREGASDCKDLG` on this backend: adopt the plugin's widget as a
+/// dock panel's content, returning the panel it interns to — for the
+/// shell to record, and sign, the command that reopens it.
+///
+/// `hClient` must be a `GtkWidget*` the plugin made and has not put in a
+/// container or made a window of; the host takes its own reference
+/// (sinking a floating one, as a container's `add` would) and never
+/// destroys it. The checks below refuse what can be told apart without
+/// trusting the pointer — the npp handle, the host's own Scintilla view —
+/// then what a type check can tell: not a widget, a toplevel, a widget
+/// that already has a parent (which covers every host widget, and a
+/// widget registered twice). They are bug containment, not a boundary
+/// (DESIGN.md §6.5): an arbitrary or dangling pointer cannot be told from
+/// a live object — there is no `IsWindow` for memory — and faults in the
+/// type check instead of being declined. A plugin runs in this process
+/// and needs no help from the host to reparent a widget anyway.
+///
+/// Registration does not show the panel — `NPPM_DMMSHOW` does, the ABI's
+/// own split. The widget goes into a scrolled container of the host's,
+/// and that container joins the tree at the reconcile the NPPM dispatch
+/// runs once its state borrow has ended.
+pub(crate) fn register_dock_dialog(
+    params: codepp_plugin_host::DockDialogParams,
+) -> Option<codepp_core::dock::DockPanel> {
+    use gtk::glib::translate::{from_glib_borrow, from_glib_none, Borrowed};
+
+    let handle = params.h_client;
+    if let Err(why) = refuse_host_handle(handle) {
+        tracing::warn!(why, "NPPM_DMMREGASDCKDLG: refused");
+        return None;
+    }
+    // SAFETY: `handle` is non-null and not one of the host's own
+    // non-widget handles; by the ABI's contract on this backend it
+    // points at a live `GtkWidget` — see `is_instance_of` for what
+    // happens when it does not.
+    if !unsafe { is_instance_of(handle, gtk::Widget::static_type()) } {
+        tracing::warn!("NPPM_DMMREGASDCKDLG: refused: hClient is not a GtkWidget");
+        return None;
+    }
+    // SAFETY: a live `GtkWidget`, per the check above. Borrowed, not
+    // referenced: nothing about the plugin's widget changes unless every
+    // check passes.
+    let widget: Borrowed<gtk::Widget> =
+        unsafe { from_glib_borrow(handle.cast::<gtk::ffi::GtkWidget>()) };
+    if widget.is_toplevel() {
+        tracing::warn!("NPPM_DMMREGASDCKDLG: refused: hClient is a toplevel window");
+        return None;
+    }
+    if widget.parent().is_some() {
+        tracing::warn!(
+            "NPPM_DMMREGASDCKDLG: refused: hClient is already inside a container — \
+             register a free-standing widget"
+        );
+        return None;
+    }
+    let Some(panel) = codepp_shell::intern_plugin_dock_panel(&params.name, &params.module_name)
+    else {
+        // Both halves are the plugin's own text, so they are logged as
+        // the chrome would show them.
+        tracing::warn!(
+            module = codepp_shell::sanitize_str_for_display(&params.module_name),
+            panel = codepp_shell::plugin_dock_title(&params.name, &params.module_name),
+            "NPPM_DMMREGASDCKDLG: unusable panel identity, or the panel table is full"
+        );
+        return None;
+    };
+    let gone = Rc::new(Cell::new(false));
+    let spec = crate::dock::PluginPanelSpec {
+        panel,
+        handle,
+        tb_data: params.tb_data,
+        icon: tab_icon(&params),
+        initial_side: codepp_plugin_host::docking::dock_side_from_u_mask(params.u_mask),
+        name: params.name,
+        module_name: params.module_name,
+        caller: params.caller,
+        gone: Rc::clone(&gone),
+    };
+    // SAFETY: the same live widget. `from_glib_none` takes the host's own
+    // reference — sinking a floating one, as a container's `add` would —
+    // and the dock calls this only once the registration is certain to
+    // stand, so a refusal never drops a reference the plugin was relying
+    // on.
+    let adopted = crate::dock::register_plugin_panel(spec, || unsafe {
+        from_glib_none(handle.cast::<gtk::ffi::GtkWidget>())
+    });
+    match adopted {
+        Ok(widget) => {
+            watch_for_disposal(&widget, gone);
+            Some(panel)
+        }
+        Err(why) => {
+            tracing::warn!(
+                why,
+                panel = panel.persist_key(),
+                "NPPM_DMMREGASDCKDLG: refused"
+            );
+            None
+        }
+    }
+}
+
+/// Refuse the handles that are the host's own and can be recognised
+/// without dereferencing them: the npp handle — a sentinel address, not
+/// an object at all — and the main Scintilla view. The Document Map's
+/// view is a widget with a parent and is refused by that check instead.
+fn refuse_host_handle(handle: *mut c_void) -> Result<(), &'static str> {
+    if handle.is_null() {
+        return Err("hClient is null");
+    }
+    if std::ptr::eq(handle, npp_sentinel()) {
+        return Err("hClient is the npp handle, not a widget");
+    }
+    if is_valid_scintilla(handle) {
+        return Err("hClient is the host's own Scintilla view");
+    }
+    Ok(())
+}
+
+/// Whether `ptr` is an instance of `gtype` or of a type derived from it.
+///
+/// # Safety
+///
+/// `ptr` must be null or point at a live `GTypeInstance`: the check
+/// reads the instance's class pointer. That is exactly the check a
+/// plugin's mistake cannot pass through safely — a dangling or garbage
+/// pointer faults here — and there is no way to test an arbitrary
+/// address for being a live object first. Win32 has `IsWindow` for its
+/// handles; memory has no equivalent.
+unsafe fn is_instance_of(ptr: *mut c_void, gtype: glib::Type) -> bool {
+    use gtk::glib::translate::IntoGlib;
+    // SAFETY: forwarded from the caller; a null pointer is answered
+    // without being read.
+    !ptr.is_null()
+        && unsafe { glib::gobject_ffi::g_type_check_instance_is_a(ptr.cast(), gtype.into_glib()) }
+            != glib::ffi::GFALSE
+}
+
+/// The plugin's own tab icon: `tTbData.hIconTab`, which on this backend
+/// is a `GdkPixbuf*`, honoured when `uMask` carries `DWS_ICONTAB`. The
+/// host takes its own reference. `None` — the generic plugin glyph — for
+/// no icon, or for something that is not a pixbuf.
+fn tab_icon(params: &codepp_plugin_host::DockDialogParams) -> Option<Pixbuf> {
+    use gtk::glib::translate::from_glib_none;
+
+    let icon = params.h_icon_tab;
+    if params.u_mask & codepp_plugin_host::DWS_ICONTAB == 0 || icon.is_null() {
+        return None;
+    }
+    // SAFETY: by the ABI's contract on this backend, `hIconTab` with
+    // `DWS_ICONTAB` points at a live `GdkPixbuf`; see `is_instance_of`.
+    if !unsafe { is_instance_of(icon, Pixbuf::static_type()) } {
+        tracing::warn!(
+            "NPPM_DMMREGASDCKDLG: hIconTab is not a GdkPixbuf; the tab shows the generic glyph"
+        );
+        return None;
+    }
+    // SAFETY: a live `GdkPixbuf`, per the check above; `from_glib_none`
+    // takes the host's own reference.
+    Some(unsafe { from_glib_none(icon.cast::<gtk::gdk_pixbuf::ffi::GdkPixbuf>()) })
+}
+
+/// Drop the registration once the plugin destroys its own widget: mark
+/// it gone at once — so nothing puts the disposed widget back in a
+/// container — and let an idle close the panel, since `destroy` can fire
+/// inside a reconcile that holds the dock borrow.
+fn watch_for_disposal(widget: &gtk::Widget, gone: Rc<Cell<bool>>) {
+    widget.connect_destroy(move |_| {
+        crate::at_callback_boundary("plugin:panel:destroy", (), || {
+            gone.set(true);
+            glib::idle_add_local_once(|| {
+                crate::at_callback_boundary(
+                    "plugin:panel:forget",
+                    (),
+                    crate::dock::forget_destroyed_plugin_panels,
+                );
+            });
+        });
+    });
+}
+
+/// `NPPM_DMMUPDATEDISPINFO`: re-read the panel's `tTbData` and take its
+/// current `pszName` / `pszModuleName` as the panel's lookup keys.
+/// `false` for a handle nothing is registered under.
+pub(crate) fn update_dock_disp_info(handle: *mut c_void) -> bool {
+    let Some(tb_data) = crate::dock::plugin_panel_tb_data(handle) else {
+        return false;
+    };
+    // SAFETY: the `tTbData` the panel was registered with, which its
+    // plugin must keep alive for the registration's lifetime — the
+    // contract on `DockDialogParams::tb_data`, which the host has no way
+    // to verify.
+    if let Some(disp) = unsafe { codepp_plugin_host::read_dock_disp_info(tb_data) } {
+        crate::dock::rename_plugin_panel(handle, disp.name, disp.module_name);
+    }
+    true
+}
+
+/// Close a plugin's panel from its group's ✕ (or its floating window's
+/// close), telling the plugin first.
+///
+/// The `DMN_CLOSE` is how a plugin keeps a "Show Console" style menu
+/// check in step with what the user can see; without it the plugin
+/// believes its panel is still open. Sent before the panel hides, as
+/// upstream does, with no borrow held, so the plugin may call `NPPM_*`
+/// back from its handler.
+///
+/// A latch bounds the round trip: a plugin's handler may close the panel
+/// again — directly or through something that reaches this path — and
+/// without the latch that recurses until the stack runs out. A close
+/// nested inside any other close skips its notification and just hides,
+/// the coarse direction Win32's `DmnCloseGuard` takes for the same reason.
+pub(crate) fn close_plugin_panel(panel: codepp_core::dock::DockPanel) {
+    if let Some((handle, caller)) = crate::dock::plugin_panel_notify_target(panel) {
+        if !DMN_CLOSE_ACTIVE.with(Cell::get) {
+            let _closing = crate::FlagGuard::set(&DMN_CLOSE_ACTIVE);
+            send_dock_notification(panel, handle, caller, codepp_plugin_host::DMN_CLOSE);
+        }
+    }
+    crate::dock::set_panel_visible(panel, false);
+}
+
+/// Send each `DMN_DOCK` / `DMN_FLOAT` notice.
+///
+/// **Notices raised while one is being delivered are queued, not sent.**
+/// The plugin's handler runs with no borrow held, so it may send
+/// `NPPM_*` back — including `NPPM_DMMREGASDCKDLG` for a panel nothing
+/// has been told about, which reconciles again from inside this loop and
+/// raises a notice of its own. Sent there and then, that notice's
+/// handler could do the same, nesting a full round trip per link until
+/// the registration cap or the stack ran out. So a call made while a
+/// delivery is running only appends to the queue and returns, and the
+/// outermost call drains it in order: nothing is dropped, and the
+/// nesting stays one level deep whatever the plugin does. The same queue
+/// Win32's `deliver_container_notices` keeps.
+pub(crate) fn deliver_dock_notices(notices: Vec<crate::dock::DockNotice>) {
+    DOCK_NOTICES.with(|q| q.borrow_mut().extend(notices));
+    if DOCK_NOTICES_DELIVERING.with(Cell::get) {
+        return;
+    }
+    let _delivering = crate::FlagGuard::set(&DOCK_NOTICES_DELIVERING);
+    while let Some(notice) = DOCK_NOTICES.with(|q| q.borrow_mut().pop_front()) {
+        // A handler for an earlier notice may have destroyed this
+        // one's widget; the record is already written, so skipping it
+        // loses nothing that could still be delivered.
+        if !crate::dock::plugin_panel_is_live(notice.panel, notice.handle) {
+            continue;
+        }
+        tracing::debug!(
+            panel = notice.panel.persist_key(),
+            dmn = if notice.code & 0xFFFF == codepp_plugin_host::DMN_DOCK {
+                "DMN_DOCK"
+            } else {
+                "DMN_FLOAT"
+            },
+            container = notice.code >> 16,
+            "dock container notification"
+        );
+        send_dock_notification(notice.panel, notice.handle, notice.caller, notice.code);
+    }
+}
+
+/// Deliver one `DMN_*` about `panel` to the plugin that should hear it —
+/// see `Shell::plugin_panel_message_target` — through its `messageProc`:
+/// `WM_NOTIFY`, `wParam` the panel's `hClient`, `lParam` an `NMHDR` from
+/// the npp handle with `idFrom` 0 and `code` as given. Called with no
+/// borrow held.
+fn send_dock_notification(
+    panel: codepp_core::dock::DockPanel,
+    handle: *mut c_void,
+    caller: Option<usize>,
+    code: u32,
+) {
+    let Some(target) =
+        with_state(|st| st.shell.plugin_panel_message_target(caller, panel)).flatten()
+    else {
+        tracing::debug!(
+            panel = panel.persist_key(),
+            code,
+            "no loaded plugin to tell about its dock panel"
+        );
+        return;
+    };
+    let nmhdr = codepp_plugin_host::SciNotifyHeader {
+        hwnd_from: npp_sentinel(),
+        id_from: 0,
+        code,
+    };
+    // SAFETY: a loaded plugin's `messageProc`, run as that plugin on the
+    // UI thread with no state borrow held. `nmhdr` outlives the call, and
+    // `wParam` is the handle the plugin itself registered the panel
+    // under.
+    let _ = unsafe {
+        target.send(
+            codepp_plugin_host::WM_NOTIFY,
+            handle as usize,
+            &raw const nmhdr as isize,
+        )
+    };
 }
 
 /// The `NppData` handed to each plugin's `setInfo`: the npp sentinel plus
@@ -407,36 +748,95 @@ pub(crate) fn discover() {
     }
 }
 
-/// Lazy-load every pending plugin, **holding no `with_state` borrow
-/// while plugin code runs**.
+/// Which plugins a [`load_plugins_where`] pass may load.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum LoadScope {
+    /// Every discovered plugin — DESIGN.md §6.4's lazy triggers: the
+    /// Plugins menu, a plugin hotkey.
+    All,
+    /// Only the plugins owning a dock panel the restored session had
+    /// open — the startup pass. Without it a restored plugin panel waits
+    /// for a widget that only its plugin can supply, and nothing loads
+    /// the plugin until the user opens a menu they have no reason to
+    /// connect with the panel they are missing.
+    RestoredPanels,
+}
+
+/// Lazy-load every pending plugin. See [`load_plugins_where`].
+fn load_pending_plugins() {
+    load_plugins_where(LoadScope::All);
+}
+
+/// Load the plugins whose dock panels the restored session had open,
+/// and bring those panels back — the startup counterpart of the lazy
+/// triggers, and the one exception to DESIGN.md §8's "no plugin loads at
+/// startup" (a restored panel is a recorded interaction with its
+/// plugin). With Preferences → Security's guard on, only panels whose
+/// record Code++ signed count (`Shell::modules_with_restored_panels`).
+///
+/// Called once from `run()`, after the dock layout is restored and the
+/// plugins are discovered, and before the main loop starts, so the first
+/// frame already carries the panels. Parks whatever no loaded plugin can
+/// supply even when nothing loads, so no group is left on screen empty.
+pub(crate) fn restore_panel_plugins() {
+    load_plugins_where(LoadScope::RestoredPanels);
+    // The load may have absorbed shortcut defaults; make their chords
+    // live, as `ensure_loaded_and_rebuild` does after a lazy load.
+    rebuild_plugin_accel_group();
+}
+
+/// Load the plugins `scope` admits, **holding no `with_state` borrow
+/// while plugin code runs**, and bring back the dock panels they had
+/// open.
 ///
 /// This used to be one `ensure_plugins_loaded` call inside
-/// `with_state`, so a plugin's `setInfo` querying the host was
-/// declined re-entrantly and read 0 — which real plugins take as a
-/// definitive answer. `NppExec` asks for the host version there and
-/// refuses to start without one.
+/// `with_state`, so a plugin's `setInfo` querying the host was declined
+/// re-entrantly and read 0 — which real plugins take as a definitive
+/// answer. `NppExec` asks for the host version there and refuses to
+/// start without one. Now each step takes what it needs under a borrow,
+/// runs the plugin's entry points with none held, and commits under a
+/// fresh one. A nested pass (a plugin re-entering the loader from
+/// `setInfo`) is bounded inside `PluginHost`, which answers "nothing
+/// pending" while a load is outstanding.
 ///
-/// Take what the load needs under a borrow, run the plugin's own
-/// entry points with none held, commit under a fresh borrow, and once
-/// every pending plugin is loaded deliver the load-time notifications
-/// — Notepad++'s order, see `LoadNotifications` — with none held again.
-/// A nested pass (a plugin re-entering the loader from `setInfo`) is
-/// bounded inside `PluginHost`, which answers "nothing pending" while
-/// a load is outstanding.
-fn load_pending_plugins() {
+/// Then, the same steps in the same order as Win32's `load_plugins_where`
+/// — a function for each, so the two read side by side:
+///
+///   1. the plugins' commands become known, so a tick set from a load-time
+///      notification is recorded ([`absorb_loaded_commands`]);
+///   2. parked panels these plugins can now supply go back where they
+///      were ([`unpark_loaded_plugins_panels`]), and what to restore is
+///      noted before any plugin runs ([`PanelRestore`]);
+///   3. the load-time notifications — Notepad++'s order, see
+///      `LoadNotifications` — with each open panel's own command run
+///      between `NPPN_TBMODIFICATION` and `NPPN_BUFFERACTIVATED`
+///      ([`restore_plugin_panels`]);
+///   4. once `NPPN_READY` is over: a restored panel whose plugin loaded
+///      and still supplied nothing is closed, one whose command the guard
+///      withheld is parked, and one no loaded plugin can supply is parked.
+fn load_plugins_where(scope: LoadScope) {
     // Holding the borrow across the whole load used to make this
-    // unnecessary: a wake landing mid-load found the state borrowed
-    // and deferred itself. Dropping the borrow between steps gives
-    // that up, so the guard has to be explicit — otherwise a worker
-    // result could be applied *between* two plugins' loads, moving
-    // the very tabs a `setInfo` is asking about.
+    // unnecessary: a wake landing mid-load found the state borrowed and
+    // deferred itself. Dropping the borrow between steps gives that up,
+    // so the guard has to be explicit — otherwise a worker result could
+    // be applied *between* two plugins' loads, moving the very tabs a
+    // `setInfo` is asking about.
     let _freeze = crate::DrainFreeze::new();
     let data = npp_data();
     let dispatch: Option<HostDispatchFn> = Some(plugin_dispatch);
     // Every plugin this pass loads is notified together, after the
     // loop, in Notepad++'s order — see `LoadNotifications`.
     let mut notices = codepp_plugin_host::LoadNotifications::default();
-    while let Some(pending) = with_state(|st| st.shell.next_plugin_to_load()).flatten() {
+    let mut loaded_now: Vec<usize> = Vec::new();
+    loop {
+        let pending = with_state(|st| match scope {
+            LoadScope::All => st.shell.next_plugin_to_load(),
+            LoadScope::RestoredPanels => st.shell.next_restored_panel_plugin_to_load(),
+        })
+        .flatten();
+        let Some(pending) = pending else {
+            break;
+        };
         // No borrow held: `setInfo` runs here and its `NPPM_*` are
         // answered for real. The `catch_unwind` is not about the
         // plugin — `execute_load` already guards each of its entry
@@ -449,37 +849,347 @@ fn load_pending_plugins() {
         }))
         .unwrap_or_else(|_| Err("plugin panicked during load".to_string()));
         let Some(ready) = with_state(|st| st.shell.commit_plugin_load(&pending, loaded)) else {
-            // The state went away between the two phases — the
-            // window torn down under a `setInfo`. Nothing commits,
-            // so the latch stays set and no further plugin loads;
-            // say so, because the symptom is otherwise silent.
+            // The state went away between the two phases — the window
+            // torn down under a `setInfo`. Nothing commits, so the latch
+            // stays set and no further plugin loads; say so, because the
+            // symptom is otherwise silent.
             tracing::error!("lost the UI state mid plugin load; plugin loading is now disabled");
             break;
         };
         if let Some(ready) = ready {
             notices.push(ready);
+            loaded_now.push(pending.idx);
         }
     }
     with_state(|st| st.shell.after_plugin_loads());
-    // No borrow held: a plugin that queries the host from
-    // `NPPN_READY` is doing something ordinary. This backend's plugin
-    // menu is rebuilt by the caller afterwards, which is not the
-    // Win32 order — but a plugin cannot reach this menu at all here
-    // (`NPPM_GETMENUHANDLE` answers NULL and `NPPM_SETMENUITEMCHECK`
-    // is not implemented), so when it is built is not observable.
-    // The active buffer is read per plugin, at delivery — see
-    // `LoadNotifications::deliver` — under a borrow that ends before
-    // that plugin runs.
-    //
-    // No panel restore: `NPPM_DMMREGASDCKDLG` carries an `HWND`, so
-    // this backend hosts no plugin panel, and the dock restore's
-    // `drop_plugin_panels` removes any a Windows-written session
-    // names before the layout is applied. Nothing to bring back.
-    notices.deliver(
-        data.npp_handle,
-        || with_state(|st| st.shell.active_buffer_id()).flatten(),
-        || {},
-    );
+    // The commands these plugins publish are known before any of them is
+    // told anything, so a tick set from `NPPN_TBMODIFICATION` or
+    // `NPPN_READY` is recorded — Notepad++ has the items installed by
+    // then. The menu itself is rebuilt by the caller afterwards, which is
+    // not the Win32 order, and not observable either: a mark is kept by
+    // command id (`PluginChecks`) and painted on every rebuild, and
+    // `NPPM_GETMENUHANDLE` answers NULL here, so no plugin can reach the
+    // menu before it exists.
+    absorb_loaded_commands();
+    // A panel parked because its plugin could not supply it is put back
+    // first, so a plugin that has become loadable since — re-enabled in
+    // the Plugin Manager — gets its panel restored the way it would have
+    // been at startup. Then what to restore is noted, before any of these
+    // plugins runs and can change it.
+    let unparked = unpark_loaded_plugins_panels(&loaded_now);
+    let restore = PanelRestore::capture(&loaded_now);
+    if unparked {
+        // The groups those panels are back in need building before the
+        // plugins that fill them run.
+        crate::dock::apply_layout();
+    }
+    // No borrow held: a plugin that queries the host from `NPPN_READY` is
+    // doing something ordinary. The active buffer is read per plugin, at
+    // delivery — see `LoadNotifications::deliver` — under a borrow that
+    // ends before that plugin runs. Delivered even if a step above lost
+    // the state: these plugins are loaded, and a plugin that never hears
+    // READY never finishes its own initialisation.
+    let mut withheld: Vec<codepp_core::dock::DockPanel> = Vec::new();
+    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        notices.deliver(
+            data.npp_handle,
+            || with_state(|st| st.shell.active_buffer_id()).flatten(),
+            || restore_plugin_panels(&restore, &mut withheld),
+        );
+    }));
+    // Only now, after READY: a plugin may register its panel from there,
+    // and one that does must not find it already closed — or parked.
+    close_unregistered_restored_panels(&restore, &withheld);
+    // A panel whose command was withheld is not broken, so it keeps its
+    // place rather than being closed.
+    park_withheld_panels(&withheld);
+    // And a panel whose plugin could not be loaded at all is parked
+    // rather than left on screen with nothing in it.
+    park_unsupplied_plugin_panels();
+}
+
+/// What a load pass needs to bring back the dock panels its plugins had
+/// open. Captured before any of those plugins is notified — see
+/// [`load_plugins_where`].
+#[derive(Default)]
+struct PanelRestore {
+    /// The open plugin panels owned by the plugins this pass loaded, in
+    /// group then tab order.
+    panels: Vec<codepp_core::dock::DockPanel>,
+    /// Panels owned by the plugins this pass loaded that stay parked
+    /// because Preferences → Security's guard does not trust their record
+    /// — see [`unpark_loaded_plugins_panels`]. Restored after all if
+    /// their plugin registers them from `NPPN_TBMODIFICATION`, which puts
+    /// them back and records a command the plugin itself declared.
+    held: Vec<codepp_core::dock::DockPanel>,
+    /// Every group's front tab as the pass began.
+    fronts: Vec<(u32, codepp_core::dock::DockPanel)>,
+}
+
+impl PanelRestore {
+    fn capture(loaded: &[usize]) -> Self {
+        if loaded.is_empty() {
+            return Self::default();
+        }
+        let Some(layout) = crate::dock::layout_snapshot() else {
+            return Self::default();
+        };
+        let open = layout.open_plugin_panels();
+        let parked = layout.parked_panels();
+        with_state(|st| Self {
+            panels: st.shell.panels_owned_by(&open, loaded),
+            held: st.shell.panels_owned_by(&parked, loaded),
+            fronts: layout.fronts(),
+        })
+        .unwrap_or_default()
+    }
+}
+
+/// Put back where they were the parked panels whose plugins a load pass
+/// has just loaded; returns whether any came back.
+///
+/// A panel is parked when no loaded plugin can supply it — see
+/// [`park_unsupplied_plugin_panels`] — and a plugin disabled at startup
+/// can be re-enabled in the Plugin Manager and loaded later in the same
+/// session. Putting its panels back before the pass notes what to
+/// restore is what lets the ordinary restore run their commands, exactly
+/// as it would have at startup.
+///
+/// With Preferences → Security's guard on, only a panel whose record
+/// Code++ signed comes back here. An unsigned one's command will not
+/// run, so putting it back would only show an empty group until the pass
+/// parks it again; it stays parked and is noted as held
+/// ([`PanelRestore::held`]), and comes back the moment its plugin
+/// registers it.
+fn unpark_loaded_plugins_panels(loaded: &[usize]) -> bool {
+    if loaded.is_empty() {
+        return false;
+    }
+    let Some(layout) = crate::dock::layout_snapshot() else {
+        return false;
+    };
+    let back: Vec<codepp_core::dock::DockPanel> = with_state(|st| {
+        st.shell
+            .panels_owned_by(&layout.parked_panels(), loaded)
+            .into_iter()
+            .filter(|&panel| st.shell.panel_record_is_trusted(&layout, panel))
+            .collect()
+    })
+    .unwrap_or_default();
+    !back.is_empty() && crate::dock::update_layout(|l| l.unpark(&back))
+}
+
+/// Bring back the dock panels a load pass's plugins had open, the way
+/// Notepad++ does: by running each one's own menu command.
+///
+/// A panel's `tTbData.dlgID` is the index of the plugin's `FuncItem` that
+/// shows it, recorded at registration and persisted with the panel.
+/// Running that command is the only restore that works for every plugin:
+/// many register their panel only from it — `NppExec`'s console among
+/// them — and a plugin keeps its own "is my panel open" state and its menu
+/// check there, so even a panel whose widget already exists comes back
+/// half-restored if the plugin never hears it. Measured against
+/// Notepad++ 8.9.6: it runs the command for every panel it recorded open,
+/// between `NPPN_TBMODIFICATION` and `NPPN_READY` — which is where
+/// `LoadNotifications::deliver` calls this.
+///
+/// Each command runs exactly as a click on its menu item does
+/// ([`on_plugin_item_activated`]). The list is resolved under a borrow
+/// that ends before the first one runs: it is the plugin's own code, and
+/// it talks back to the host. Each show brings its panel to the front of
+/// its group, so the tabs the user had in front are put back in front
+/// afterwards, as Notepad++ also does.
+///
+/// With Preferences → Security's guard on, a command runs only if Code++
+/// signed it — which it does only for a command the panel's own plugin
+/// registered. Each panel whose command is held back goes into
+/// `withheld`, for the caller to park once READY is over. The command is
+/// read now rather than when the pass began, so one a plugin has just
+/// registered from `NPPN_TBMODIFICATION` is the one judged — and a held
+/// panel it registered, back from parking, is restored with the rest.
+fn restore_plugin_panels(restore: &PanelRestore, withheld: &mut Vec<codepp_core::dock::DockPanel>) {
+    if restore.panels.is_empty() && restore.held.is_empty() {
+        return;
+    }
+    let Some(layout) = crate::dock::layout_snapshot() else {
+        return;
+    };
+    let commands: Vec<i32> = with_state(|st| {
+        let mut out: Vec<i32> = Vec::new();
+        for &panel in restore.panels.iter().chain(&restore.held) {
+            // A held panel its plugin has not registered is still
+            // parked, and stays so.
+            if layout.is_parked(panel) {
+                continue;
+            }
+            let Some((index, seal)) = layout.open_command(panel) else {
+                continue;
+            };
+            if !st.shell.may_run_panel_command(panel, index, seal) {
+                tracing::info!(
+                    panel = panel.persist_key(),
+                    "not running this panel's startup command: Code++ did not sign it \
+                     (Preferences > Security)"
+                );
+                withheld.push(panel);
+                continue;
+            }
+            // One command can open several panels; a second run of a
+            // toggle would close what the first opened.
+            if let Some(cmd) = st
+                .shell
+                .panel_open_command_id(panel, index)
+                .filter(|cmd| !out.contains(cmd))
+            {
+                out.push(cmd);
+            }
+        }
+        out
+    })
+    .unwrap_or_default();
+    for &cmd in &commands {
+        tracing::debug!(cmd, "restoring a plugin panel by running its command");
+        // A boundary per command, as each click on a menu item has:
+        // host bookkeeping that fails for one panel must not cost the
+        // rest of the pass their restores.
+        crate::at_callback_boundary("plugin:restore:command", (), || {
+            on_plugin_item_activated(cmd);
+        });
+    }
+    if !commands.is_empty() && crate::dock::update_layout(|l| l.restore_fronts(&restore.fronts)) {
+        crate::dock::apply_layout();
+    }
+}
+
+/// Close each restored panel whose plugin loaded, was told to restore
+/// it, heard `NPPN_READY` — and still never supplied a widget.
+///
+/// Such a panel is a group with a caption and nothing in it, and nothing
+/// is going to fill it this session. Closing it (the layout remembers
+/// where it was) is the honest outcome, and it is also what the user
+/// would see under Notepad++, which has no container for a panel that was
+/// never registered. A panel whose command the guard withheld is not
+/// closed: nothing about it is known to be wrong, and
+/// [`park_withheld_panels`] keeps its place instead.
+fn close_unregistered_restored_panels(
+    restore: &PanelRestore,
+    withheld: &[codepp_core::dock::DockPanel],
+) {
+    let unregistered: Vec<codepp_core::dock::DockPanel> = restore
+        .panels
+        .iter()
+        .copied()
+        .filter(|p| !withheld.contains(p) && !crate::dock::is_plugin_panel_registered(*p))
+        .collect();
+    if unregistered.is_empty() {
+        return;
+    }
+    let changed = crate::dock::update_layout(|l| {
+        let mut changed = false;
+        for &panel in &unregistered {
+            if l.is_visible(panel) {
+                tracing::warn!(
+                    panel = panel.persist_key(),
+                    "a restored plugin panel was never registered by its plugin; closing it"
+                );
+                l.hide(panel);
+                changed = true;
+            }
+        }
+        changed
+    });
+    if changed {
+        crate::dock::apply_layout();
+    }
+}
+
+/// Park each restored panel whose startup command Preferences →
+/// Security's guard withheld and whose plugin, READY over, has not
+/// registered it anyway.
+///
+/// Closing it, which is what happens to a panel whose command ran and
+/// produced nothing, would record it closed. Nothing is wrong with this
+/// one: Code++ declined to run a command it did not sign. Parked, it is
+/// saved where it was and comes back there the moment its plugin
+/// registers it — when the user opens it from that plugin's menu, which
+/// also records the command, signed, for next time.
+fn park_withheld_panels(withheld: &[codepp_core::dock::DockPanel]) {
+    let waiting: Vec<codepp_core::dock::DockPanel> = withheld
+        .iter()
+        .copied()
+        .filter(|p| !crate::dock::is_plugin_panel_registered(*p))
+        .collect();
+    if waiting.is_empty() {
+        return;
+    }
+    let changed = crate::dock::update_layout(|l| {
+        let visible: Vec<codepp_core::dock::DockPanel> = waiting
+            .iter()
+            .copied()
+            .filter(|p| l.is_visible(*p))
+            .collect();
+        l.park(&visible)
+    });
+    if changed {
+        crate::dock::apply_layout();
+    }
+}
+
+/// Park every open plugin panel that has no widget and no loaded plugin
+/// to supply one — its plugin is not installed, is disabled, failed to
+/// load, or (on this platform) exists only for another one, named by a
+/// session written on Windows.
+///
+/// Left in its group, such a panel is a caption with nothing under it for
+/// the whole session. Closed, it would be recorded as closed and not come
+/// back once its plugin does. Notepad++ does neither: measured against
+/// 8.9.6 with the plugin removed, a panel it had saved open shows
+/// nothing, its saved record is written back unchanged, and the panel
+/// returns the next time the plugin is installed. A parked panel behaves
+/// the same way — nothing presents it, and the layout still saves it
+/// where it was (`DockLayout::park`).
+///
+/// Runs at the end of every load pass, and only ever finds something
+/// after the startup one: every other open plugin panel was opened by its
+/// plugin registering it. A panel with a widget is never parked, whichever
+/// plugin its name belongs to.
+fn park_unsupplied_plugin_panels() {
+    let Some(layout) = crate::dock::layout_snapshot() else {
+        return;
+    };
+    let widgetless: Vec<codepp_core::dock::DockPanel> = layout
+        .open_plugin_panels()
+        .into_iter()
+        .filter(|p| !crate::dock::is_plugin_panel_registered(*p))
+        .collect();
+    if widgetless.is_empty() {
+        return;
+    }
+    let unsupplied: Vec<codepp_core::dock::DockPanel> = with_state(|st| {
+        let unsupplied = st.shell.panels_without_a_loaded_plugin(&widgetless);
+        for &panel in &unsupplied {
+            if st.shell.panel_record_is_trusted(&layout, panel) {
+                tracing::info!(
+                    panel = panel.persist_key(),
+                    "no loaded plugin can supply this dock panel; keeping it for when one can"
+                );
+            } else {
+                // Its plugin may well be installed: the guard is what
+                // kept it from loading at startup.
+                tracing::info!(
+                    panel = panel.persist_key(),
+                    "keeping this dock panel for when its plugin is loaded: Code++ did not \
+                     sign its record, so the plugin was not loaded for it at startup \
+                     (Preferences > Security)"
+                );
+            }
+        }
+        unsupplied
+    })
+    .unwrap_or_default();
+    if crate::dock::update_layout(|l| l.park(&unsupplied)) {
+        crate::dock::apply_layout();
+    }
 }
 
 /// Lazy-load every pending plugin and rebuild the Plugins menu from the
@@ -499,9 +1209,242 @@ pub(crate) fn ensure_loaded_and_rebuild(menu: &gtk::Menu) {
     crate::drain_shell();
 }
 
+/// A menu item's display chord: Ctrl, Alt, Shift, and the Win32 virtual
+/// key, as `Shell::plugin_shortcut_chord_for_cmd_id` reports it.
+type Chord = (bool, bool, bool, u8);
+
 /// One row of a plugin submenu: label, command id, whether it is a
 /// command (vs. a separator), and its display chord if any.
-type PluginMenuRow = (String, i32, bool, Option<(bool, bool, bool, u8)>);
+type PluginMenuRow = (String, i32, bool, Option<Chord>);
+
+/// The plugins' check marks on their own menu items, keyed by command id.
+///
+/// A Notepad++ plugin ticks its items by command id whenever it likes —
+/// from `NPPN_TBMODIFICATION` or `NPPN_READY`, from one of its commands,
+/// from a `DMN_CLOSE` about its panel — and a click never ticks or
+/// unticks an item by itself: the mark changes only when the plugin says
+/// so (`NPPM_SETMENUITEMCHECK`), or at load (`_init2Check`). This backend
+/// rebuilds the Plugins menu from scratch every time it opens, so a mark
+/// cannot live on a widget; it lives here, and every rebuild paints from
+/// it. That also makes the order of loading and menu-building
+/// unobservable: a tick set before the menu has ever been built is simply
+/// waiting here for it.
+#[derive(Debug, Default)]
+struct PluginChecks {
+    /// Every command a loaded plugin's `FuncItem` array publishes — the
+    /// only ids a mark is recorded for, which bounds the map by what the
+    /// plugins published rather than by what a buggy one sends.
+    commands: HashSet<i32>,
+    /// The last mark recorded for each command. A command with no entry
+    /// has never been ticked or unticked, and its item is drawn as a
+    /// plain one — no empty check box beside an action that is not a
+    /// toggle, which is what an unchecked item looks like on Win32.
+    marks: HashMap<i32, bool>,
+}
+
+impl PluginChecks {
+    /// Take in the commands a load pass's plugins publish, as
+    /// `(command id, is a command rather than a separator, _init2Check)`.
+    /// `_init2Check` ticks a command that has no mark yet; a mark already
+    /// recorded is the plugin's later word and is kept.
+    fn absorb(&mut self, funcs: impl IntoIterator<Item = (i32, bool, bool)>) {
+        for (cmd_id, is_command, init_checked) in funcs {
+            if !is_command {
+                continue;
+            }
+            self.commands.insert(cmd_id);
+            if init_checked {
+                self.marks.entry(cmd_id).or_insert(true);
+            }
+        }
+    }
+
+    /// Record a plugin's mark for `cmd_id`. `false` — nothing recorded —
+    /// for an id no loaded plugin published as a command: a built-in
+    /// `IDM_*` (this backend maps none), a separator, or a stray value.
+    fn set(&mut self, cmd_id: i32, checked: bool) -> bool {
+        if !self.commands.contains(&cmd_id) {
+            return false;
+        }
+        self.marks.insert(cmd_id, checked);
+        true
+    }
+
+    /// The mark recorded for `cmd_id`, if the plugin has ever set one.
+    fn get(&self, cmd_id: i32) -> Option<bool> {
+        self.marks.get(&cmd_id).copied()
+    }
+}
+
+/// The Plugins-menu item currently built for one command, with what it
+/// was built from — enough to build it again as a check item in place,
+/// the first time its plugin ticks it while the menu is up.
+struct LiveItem {
+    item: gtk::MenuItem,
+    label: String,
+    chord: Option<Chord>,
+}
+
+thread_local! {
+    /// See [`PluginChecks`].
+    static PLUGIN_CHECKS: std::cell::RefCell<PluginChecks> =
+        std::cell::RefCell::new(PluginChecks::default());
+    /// The items the current Plugins menu holds, by command id. Replaced
+    /// wholesale on every rebuild.
+    static LIVE_ITEMS: std::cell::RefCell<HashMap<i32, LiveItem>> =
+        std::cell::RefCell::new(HashMap::new());
+    /// Set while the host itself changes a check item's state. GTK 3's
+    /// `gtk_check_menu_item_set_active` re-emits `activate` when the
+    /// state really changes, and without this that would run the
+    /// plugin's command as if the user had clicked.
+    static SYNCING_CHECKS: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Record the mark a plugin set on one of its items through
+/// `NPPM_SETMENUITEMCHECK`, and show it on the item if the menu is up.
+/// `false` when `cmd_id` is none of the loaded plugins' commands.
+///
+/// Called from inside the dispatch's state borrow, so it touches only
+/// this module's own state and the item's widget; the item's `activate`
+/// handler returns at once while [`SYNCING_CHECKS`] is set.
+pub(crate) fn set_menu_check(cmd_id: i32, checked: bool) -> bool {
+    if !PLUGIN_CHECKS.with(|c| c.borrow_mut().set(cmd_id, checked)) {
+        tracing::trace!(
+            cmd_id,
+            "NPPM_SETMENUITEMCHECK: no loaded plugin's command has that id on this backend"
+        );
+        return false;
+    }
+    show_recorded_mark(cmd_id);
+    true
+}
+
+/// Take in the commands every loaded plugin publishes — see
+/// [`PluginChecks::absorb`]. Run after each load pass and **before** its
+/// notifications, so a plugin ticking an item from
+/// `NPPN_TBMODIFICATION` or `NPPN_READY` finds its commands known, as
+/// Notepad++ has them installed by then.
+fn absorb_loaded_commands() {
+    let funcs: Vec<(i32, bool, bool)> = with_state(|st| {
+        st.shell
+            .loaded_plugin_funcs()
+            .flat_map(|(_, funcs)| {
+                funcs
+                    .iter()
+                    .map(|f| (f.cmd_id, f.p_func.is_some(), f.init2_check != 0))
+            })
+            .collect()
+    })
+    .unwrap_or_default();
+    PLUGIN_CHECKS.with(|c| c.borrow_mut().absorb(funcs));
+}
+
+/// Make the live item for `cmd_id`, if the menu holds one, show the mark
+/// recorded for it: set a check item's state, or build a plain item
+/// again as a check item in the same place — the first time its plugin
+/// ticks it while the menu is up.
+fn show_recorded_mark(cmd_id: i32) {
+    let Some(mark) = PLUGIN_CHECKS.with(|c| c.borrow().get(cmd_id)) else {
+        return;
+    };
+    let live = LIVE_ITEMS.with(|l| {
+        l.borrow()
+            .get(&cmd_id)
+            .map(|live| (live.item.clone(), live.label.clone(), live.chord))
+    });
+    let Some((item, label, chord)) = live else {
+        return;
+    };
+    if let Some(check) = item.downcast_ref::<gtk::CheckMenuItem>() {
+        if check.is_active() != mark {
+            let _syncing = crate::FlagGuard::set(&SYNCING_CHECKS);
+            check.set_active(mark);
+        }
+        return;
+    }
+    let Some(menu) = item.parent().and_then(|p| p.downcast::<gtk::Menu>().ok()) else {
+        return;
+    };
+    let Some(pos) = menu
+        .children()
+        .iter()
+        .position(|c| c == item.upcast_ref::<gtk::Widget>())
+    else {
+        return;
+    };
+    let rebuilt = build_command_item(&label, cmd_id, chord);
+    menu.remove(&item);
+    menu.insert(&rebuilt, i32::try_from(pos).unwrap_or(-1));
+    rebuilt.show();
+}
+
+/// Build the Plugins-menu item for one plugin command: a check item
+/// showing the recorded mark once the plugin has set one, a plain item
+/// before that. Registered as the command's live item.
+fn build_command_item(label: &str, cmd_id: i32, chord: Option<Chord>) -> gtk::MenuItem {
+    let mark = PLUGIN_CHECKS.with(|c| c.borrow().get(cmd_id));
+    let item: gtk::MenuItem = match mark {
+        Some(active) => {
+            let check = gtk::CheckMenuItem::with_label(label);
+            // Seeded before `activate` is connected, so it runs nothing.
+            check.set_active(active);
+            check.upcast()
+        }
+        None => gtk::MenuItem::with_label(label),
+    };
+    item.connect_activate(move |_| {
+        crate::at_callback_boundary("plugin:item:activate", (), || {
+            on_plugin_item_activated(cmd_id);
+        });
+    });
+    // Show the shortcut hint via the display-only accel group (never
+    // routes the key — the real binding is `register_startup_shortcuts`).
+    // Only a chord that will actually fire is advertised (the shell
+    // filtered policy-refused / dedupe-losing chords).
+    if let Some((ctrl, alt, shift, key)) = chord {
+        if let Some((gdk_key, mods)) = chord_to_gdk(ctrl, alt, shift, key) {
+            PLUGIN_HINT_ACCEL.with(|h| {
+                if let Some(hint) = h.borrow().as_ref() {
+                    item.add_accelerator(
+                        "activate",
+                        hint,
+                        *gdk_key,
+                        mods,
+                        gtk::AccelFlags::VISIBLE,
+                    );
+                }
+            });
+        }
+    }
+    LIVE_ITEMS.with(|l| {
+        l.borrow_mut().insert(
+            cmd_id,
+            LiveItem {
+                item: item.clone(),
+                label: label.to_owned(),
+                chord,
+            },
+        );
+    });
+    item
+}
+
+/// A click on a plugin's menu item: run its command, then put back the
+/// plugin's own mark.
+///
+/// GTK toggles a check item's state in its class handler, before this
+/// runs; a Notepad++ item changes its tick only when the plugin says so.
+/// So whatever the click did to the state is undone here, after the
+/// command — which may itself have set a new mark, and that is the one
+/// shown.
+fn on_plugin_item_activated(cmd_id: i32) {
+    if SYNCING_CHECKS.with(Cell::get) {
+        // The host changing the state itself, not a click.
+        return;
+    }
+    on_plugin_command(cmd_id);
+    show_recorded_mark(cmd_id);
+}
 
 /// Rebuild the Plugins menu: one submenu per loaded plugin (its items
 /// taken from the plugin's `FuncItem` array, null `p_func` → separator),
@@ -514,6 +1457,9 @@ fn rebuild_menu(menu: &gtk::Menu) {
     for child in menu.children() {
         menu.remove(&child);
     }
+    // The items just removed are gone; `build_command_item` registers
+    // the ones that replace them.
+    LIVE_ITEMS.with(|l| l.borrow_mut().clear());
     let entries = with_state(|st| {
         st.shell
             .loaded_plugin_funcs()
@@ -544,33 +1490,7 @@ fn rebuild_menu(menu: &gtk::Menu) {
             let submenu = gtk::Menu::new();
             for (label, cmd_id, is_command, chord) in items {
                 if is_command {
-                    let item = gtk::MenuItem::with_label(&label);
-                    item.connect_activate(move |_| {
-                        crate::at_callback_boundary("plugin:item:activate", (), || {
-                            on_plugin_command(cmd_id);
-                        });
-                    });
-                    // Show the shortcut hint via the display-only accel
-                    // group (never routes the key — the real binding is
-                    // `register_startup_shortcuts`). Only a chord that
-                    // will actually fire is advertised (the shell
-                    // filtered policy-refused / dedupe-losing chords).
-                    if let Some((ctrl, alt, shift, key)) = chord {
-                        if let Some((gdk_key, mods)) = chord_to_gdk(ctrl, alt, shift, key) {
-                            PLUGIN_HINT_ACCEL.with(|h| {
-                                if let Some(hint) = h.borrow().as_ref() {
-                                    item.add_accelerator(
-                                        "activate",
-                                        hint,
-                                        *gdk_key,
-                                        mods,
-                                        gtk::AccelFlags::VISIBLE,
-                                    );
-                                }
-                            });
-                        }
-                    }
-                    submenu.append(&item);
+                    submenu.append(&build_command_item(&label, cmd_id, chord));
                 } else {
                     submenu.append(&gtk::SeparatorMenuItem::new());
                 }
@@ -1013,6 +1933,28 @@ pub(crate) fn deliver_notifications() {
     crate::present_deferred_dialogs();
 }
 
+/// Tell every loaded plugin the host is shutting down:
+/// `NPPN_BEFORESHUTDOWN` to each of them, then `NPPN_SHUTDOWN` to each —
+/// the pair Win32 sends from `WM_CLOSE`, while the plugins' panels still
+/// exist.
+///
+/// Delivered from a snapshot with no borrow held, so a plugin that saves
+/// its settings here can ask the host where (`NPPM_GETPLUGINSCONFIGDIR`)
+/// and be answered — which Win32, whose teardown cannot drop its borrow
+/// first, declines. A plugin cannot veto the shutdown: the notifications
+/// are informational, as they are there. Called once, by `crate::quit`.
+pub(crate) fn notify_shutdown() {
+    let Some(targets) = with_state(|st| st.shell.notify_targets()) else {
+        return;
+    };
+    for note in [
+        codepp_plugin_host::Notification::BeforeShutdown,
+        codepp_plugin_host::Notification::Shutdown,
+    ] {
+        targets.deliver(&note, npp_sentinel());
+    }
+}
+
 /// Deliver one [`codepp_shell::SyncNotification`] — the `NPPN_*BEFORE*`
 /// family the shell hands out for delivery *ahead* of the operation it
 /// announces — with no `with_state` borrow held, then present anything
@@ -1133,6 +2075,59 @@ pub(crate) mod cross_thread_tests {
 }
 
 #[cfg(test)]
+mod check_tests {
+    use super::PluginChecks;
+
+    /// Only a loaded plugin's own commands take a mark — not a built-in
+    /// id, not a separator's slot, not a stray value — so the table is
+    /// bounded by what the plugins published.
+    #[test]
+    fn a_mark_is_recorded_only_for_a_published_command() {
+        let mut checks = PluginChecks::default();
+        checks.absorb([(50_000, true, false), (50_001, false, false)]);
+        assert!(checks.set(50_000, true));
+        assert_eq!(checks.get(50_000), Some(true));
+        assert!(!checks.set(50_001, true), "a separator is no command");
+        assert!(
+            !checks.set(42_001, true),
+            "a built-in IDM_* id is not mapped"
+        );
+        assert!(!checks.set(-1, false));
+        assert_eq!(checks.get(50_001), None);
+        assert_eq!(checks.get(42_001), None);
+    }
+
+    /// `_init2Check` ticks a command that has no mark yet and yields to
+    /// one the plugin set since — a later load pass re-absorbing the same
+    /// commands must not undo the plugin's own untick.
+    #[test]
+    fn init2check_seeds_a_mark_without_overriding_one() {
+        let mut checks = PluginChecks::default();
+        checks.absorb([(50_010, true, true), (50_011, true, false)]);
+        assert_eq!(checks.get(50_010), Some(true), "_init2Check ticks it");
+        assert_eq!(checks.get(50_011), None, "no mark: drawn as a plain item");
+        assert!(checks.set(50_010, false));
+        checks.absorb([(50_010, true, true)]);
+        assert_eq!(
+            checks.get(50_010),
+            Some(false),
+            "the plugin's untick survives"
+        );
+    }
+
+    /// An untick is a mark too: an item the plugin has unticked is a
+    /// toggle the user should see as one, empty, rather than a plain
+    /// action.
+    #[test]
+    fn an_untick_is_recorded_as_a_mark() {
+        let mut checks = PluginChecks::default();
+        checks.absorb([(50_020, true, false)]);
+        assert!(checks.set(50_020, false));
+        assert_eq!(checks.get(50_020), Some(false));
+    }
+}
+
+#[cfg(test)]
 mod shortcut_tests {
     use super::chord_to_gdk;
 
@@ -1162,5 +2157,40 @@ mod shortcut_tests {
 
         // A layout-dependent OEM key has no portable mapping.
         assert!(chord_to_gdk(true, false, false, 0xBF).is_none());
+    }
+}
+
+/// A refused registration logs the plugin's two strings as the chrome
+/// would draw them — the twin of `ui_win32`'s
+/// `a_refused_registration_is_logged_sanitized`, which says why.
+#[cfg(test)]
+mod registration_log_tests {
+    use crate::source_scan::{code_only, strip_test_modules};
+
+    #[test]
+    fn a_refused_registration_is_logged_sanitized() {
+        let flat = strip_test_modules(&code_only(include_str!("plugin.rs")))
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
+        for (field, sanitized) in [
+            (
+                "module",
+                "codepp_shell::sanitize_str_for_display(&params.module_name)",
+            ),
+            (
+                "panel",
+                "codepp_shell::plugin_dock_title(&params.name, &params.module_name)",
+            ),
+        ] {
+            assert!(
+                flat.contains(&format!("{field} = {sanitized}")),
+                "the refusal log's {field} field is not sanitized"
+            );
+        }
+        assert!(
+            !flat.contains("= params.name") && !flat.contains("= params.module_name"),
+            "a log field records the plugin's raw text"
+        );
     }
 }

@@ -100,6 +100,59 @@ impl PluginCommand {
     }
 }
 
+/// One plugin's `messageProc`, with the plugin it belongs to — the
+/// [`PluginCommand`] of a message rather than of a menu item.
+///
+/// For the host messages a plugin receives one at a time rather than by
+/// broadcast: an `NPPM_MSGTOPLUGIN` another plugin sent it, and — on
+/// the backends with no window procedure to deliver a `WM_NOTIFY` to —
+/// the `DMN_*` notifications about its own dock panels. Private fields
+/// for the same reason as [`PluginCommand`]'s: [`Self::send`] is the
+/// only way to reach the function from outside this crate, so a backend
+/// cannot call a plugin's `messageProc` without marking it, and a dock
+/// panel the plugin registers from inside the call is then known to be
+/// its own.
+#[derive(Clone, Copy, Debug)]
+pub struct PluginMessageProc {
+    /// Registry index of the plugin whose `messageProc` this is.
+    pub(crate) owner: usize,
+    /// The plugin's exported `messageProc`.
+    pub(crate) func: crate::ffi::MessageProcFn,
+}
+
+impl PluginMessageProc {
+    /// Registry index of the plugin this reaches.
+    #[must_use]
+    pub fn owner(self) -> usize {
+        self.owner
+    }
+
+    /// Call the plugin's `messageProc(msg, wparam, lparam)` as that
+    /// plugin, marked with [`CallingPlugin`] for the length of the call.
+    ///
+    /// No `catch_unwind` sits around the call, because it could never
+    /// catch anything: `messageProc` is a plain `extern "C"` function,
+    /// and a panic cannot unwind out of one — it aborts the process
+    /// inside the plugin, before control would return here. The same
+    /// holds for [`PluginCommand::run`] and for Win32's `SendMessageW`
+    /// to a plugin's window. A wrapper would only suggest a guarantee
+    /// that does not exist.
+    ///
+    /// # Safety
+    ///
+    /// Call on the UI thread while the `PluginHost` this came from is
+    /// alive — plugins are never unloaded before it drops. `wparam` and
+    /// `lparam` must be valid for whatever `msg` means to the plugin: a
+    /// pointer passed in `lparam` must stay live for the call.
+    #[must_use]
+    pub unsafe fn send(self, msg: u32, wparam: usize, lparam: isize) -> isize {
+        let _calling = CallingPlugin::enter(self.owner);
+        // SAFETY: forwarded from the caller; `func` is the plugin's
+        // exported `messageProc`, whose C signature this matches.
+        unsafe { (self.func)(msg, wparam, lparam) }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -160,6 +213,42 @@ mod tests {
         // SAFETY: `record_caller` is a plain function in this binary.
         unsafe { command.run() };
         assert_eq!(SEEN.with(Cell::get), Some(4));
+        assert_eq!(calling_plugin(), None, "and the mark ends with it");
+    }
+
+    /// What [`record_message`] saw: the mark, then the three arguments.
+    type Seen = (Option<usize>, u32, usize, isize);
+
+    thread_local! {
+        static MESSAGE_SEEN: Cell<Option<Seen>> = const { Cell::new(None) };
+    }
+
+    /// Records the mark and the arguments rather than asserting on
+    /// them: a panic cannot leave an `extern "C"` function, so a failed
+    /// assertion in here would abort the test binary instead of failing
+    /// the one test.
+    unsafe extern "C" fn record_message(msg: u32, wparam: usize, lparam: isize) -> isize {
+        MESSAGE_SEEN.with(|s| s.set(Some((calling_plugin(), msg, wparam, lparam))));
+        42
+    }
+
+    /// A `messageProc` runs marked as its own plugin, gets exactly the
+    /// arguments sent, and its answer comes back.
+    #[test]
+    fn a_message_runs_as_its_plugin() {
+        let target = PluginMessageProc {
+            owner: 6,
+            func: record_message,
+        };
+        assert_eq!(target.owner(), 6);
+        // SAFETY: `record_message` is a plain function in this binary
+        // and dereferences nothing.
+        let answer = unsafe { target.send(0x004E, 0xABCD, -7) };
+        assert_eq!(answer, 42);
+        assert_eq!(
+            MESSAGE_SEEN.with(Cell::get),
+            Some((Some(6), 0x004E, 0xABCD, -7))
+        );
         assert_eq!(calling_plugin(), None, "and the mark ends with it");
     }
 }

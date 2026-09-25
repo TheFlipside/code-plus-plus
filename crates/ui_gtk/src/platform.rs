@@ -786,6 +786,57 @@ impl UiPlatform for GtkUi {
     fn set_clipboard(&mut self, payloads: &[ClipboardData]) -> bool {
         set_clipboard_payloads(payloads)
     }
+
+    fn register_dock_dialog(
+        &mut self,
+        params: codepp_plugin_host::DockDialogParams,
+    ) -> Option<codepp_core::dock::DockPanel> {
+        // `hClient` is a `GtkWidget*` on this backend; the checks and the
+        // adoption live beside the plugin bridge. See
+        // `crate::plugin::register_dock_dialog`.
+        crate::plugin::register_dock_dialog(params)
+    }
+
+    fn record_panel_open_command(
+        &mut self,
+        panel: codepp_core::dock::DockPanel,
+        command: i32,
+        seal: Option<codepp_core::dock::CommandSeal>,
+    ) {
+        crate::dock::set_open_command(panel, command, seal);
+    }
+
+    fn show_dock_dialog(&mut self, h_client: codepp_plugin_host::Hwnd) -> bool {
+        crate::dock::show_plugin_panel(h_client)
+    }
+
+    fn hide_dock_dialog(&mut self, h_client: codepp_plugin_host::Hwnd) -> bool {
+        crate::dock::hide_plugin_panel(h_client)
+    }
+
+    fn view_other_dock_tab(&mut self, name: &str) -> bool {
+        crate::dock::view_plugin_panel(name)
+    }
+
+    fn update_dock_disp_info(&mut self, h_client: codepp_plugin_host::Hwnd) -> bool {
+        crate::plugin::update_dock_disp_info(h_client)
+    }
+
+    fn dock_hwnd_by_name(&self, name: &str, module_name: Option<&str>) -> codepp_plugin_host::Hwnd {
+        crate::dock::plugin_panel_handle(name, module_name).unwrap_or(std::ptr::null_mut())
+    }
+
+    fn set_npp_menu_item_check(&mut self, idm: i32, checked: bool) -> bool {
+        // A plugin's own commands only: the built-in `IDM_*` ids are not
+        // mapped on this backend, as `NPPM_MENUCOMMAND` is not, and the
+        // View menu's own toggles repaint from live state on every open
+        // anyway. Unlike the dock overrides above, this one touches a
+        // widget from inside the dispatch's borrow — the menu item, if
+        // the menu is up — which is safe because the item's own handler
+        // returns at once while the mark is set. See
+        // `crate::plugin::set_menu_check`.
+        crate::plugin::set_menu_check(idm, checked)
+    }
 }
 
 /// One planned clipboard target: how the bytes for a given target atom

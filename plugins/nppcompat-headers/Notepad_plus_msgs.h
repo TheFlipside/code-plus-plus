@@ -281,8 +281,11 @@ typedef struct sessionInfo_ {
  *     host re-reads the tTbData pointer it was given at
  *     registration, so that pointer and the strings it names must
  *     still be alive — see the lifetime note in Docking.h. A
- *     changed pszName moves the panel's caption and its
- *     NPPM_DMMGETPLUGINHWNDBYNAME key together, as upstream does.
+ *     changed pszName moves the name NPPM_DMMGETPLUGINHWNDBYNAME
+ *     and NPPM_DMMVIEWOTHERTAB find the panel by, as upstream
+ *     does. The caption does not move: it is the name the panel's
+ *     saved position is kept under, and a caption that followed
+ *     every rename would lose the user's layout each time.
  *     Returns 1 if the HWND is registered, 0 otherwise. */
 #define NPPM_DMMUPDATEDISPINFO            (NPPMSG + 32)
 /* v3: register a plugin's HWND as a dockable dialog. wParam
@@ -298,7 +301,12 @@ typedef struct sessionInfo_ {
  *     Returns 1 on success, 0 for null hClient / dead HWND /
  *     an hClient owned by another process or belonging to the
  *     host itself / duplicate registration / the host's
- *     per-session registration cap. */
+ *     per-session registration cap / a new pszName once the
+ *     same pszModuleName has registered 8 distinct names in
+ *     this session.
+ *     On Linux hClient is a GtkWidget* instead, and hIconTab a
+ *     GdkPixbuf*: see Docking.h for that contract and for how the
+ *     DMN_* notifications reach the plugin there. */
 #define NPPM_DMMREGASDCKDLG               (NPPMSG + 33)
 /* v2: open every titled file listed in a session-XML at lParam,
  *     in the order they appear. The recorded active-tab is

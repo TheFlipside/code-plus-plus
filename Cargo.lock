@@ -213,6 +213,7 @@ name = "codepp-platform"
 version = "0.1.0"
 dependencies = [
  "crossbeam-channel",
+ "glib-sys",
  "libc",
  "notify",
  "tempfile",

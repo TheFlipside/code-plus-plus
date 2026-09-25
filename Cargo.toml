@@ -61,6 +61,11 @@ globset = "0.4"
 # 3.24 is itself API-frozen, so there is nothing left for the bindings
 # to track. MIT.
 gtk = "0.18"
+# The raw GLib bindings `gtk` is built on, named directly by
+# `codepp-platform`'s Linux key store for `GHmac` (HMAC-SHA256) — the
+# same version `gtk` 0.18 already pulls in, so nothing new is compiled.
+# MIT.
+glib-sys = "0.18"
 # Only for `O_NOFOLLOW` / `O_NONBLOCK` in the find-in-files worker's
 # open path, and `mkfifo` in its tests; not a general-purpose escape
 # hatch. MIT OR Apache-2.0.

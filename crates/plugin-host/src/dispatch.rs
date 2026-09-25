@@ -105,8 +105,8 @@ pub const NPPM_LAUNCHFINDINFILESDLG: u32 = NPPMSG + 29;
 // plugin panel docks to any side, floats, shares a container with
 // other panels as tabs, reorders by drag and persists across runs —
 // the same machinery the host's Folder as Workspace and Document
-// Map use. Only the Win32 host accepts the registration; the other
-// two backends decline it (DESIGN.md §7.4).
+// Map use. The Win32 and GTK hosts accept the registration; Cocoa
+// declines it (DESIGN.md §7.4).
 pub const NPPM_DMMSHOW: u32 = NPPMSG + 30;
 pub const NPPM_DMMHIDE: u32 = NPPMSG + 31;
 pub const NPPM_DMMUPDATEDISPINFO: u32 = NPPMSG + 32;

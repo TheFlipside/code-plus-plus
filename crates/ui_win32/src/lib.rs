@@ -123,7 +123,7 @@ use codepp_editor::EditorHandle;
 // `editor` with the lexer theme table (see `codepp_editor::theme`)
 // so the GTK backend can share them; imported by name here so the
 // call sites read exactly as they did before the move.
-use codepp_core::dock::{DockPanel, DockSide};
+use codepp_core::dock::DockPanel;
 use codepp_editor::theme::{
     apply_brace_styles, apply_default_styles, apply_indent_guide_style, apply_line_number_margin,
 };
@@ -685,40 +685,6 @@ fn dock_client_ex_style(ex_style: u32) -> u32 {
     ex_style & !DOCK_CLIENT_DROPPED_EX_STYLES
 }
 
-/// The side a plugin asked its panel to dock to, from `tTbData`'s
-/// `u_mask`.
-///
-/// The container preference lives in the top nibble: `DWS_DF_FLOATING`
-/// in bit 31 means "open floating", and bits 28..30 carry a
-/// `CONT_LEFT`/`RIGHT`/`TOP`/`BOTTOM` id otherwise. `None` for a
-/// plugin that asked to float or expressed nothing — the panel then
-/// takes `DockPanel::default_side`.
-///
-/// Floating is answered with `None` rather than a side because a
-/// plugin panel that opens floating is exactly the pre-dock behaviour
-/// this milestone replaced; honouring it would put the panel back in
-/// a window of its own. A plugin that wants to float can be dragged
-/// out, which is the same affordance the host's own panels have.
-fn dock_side_from_u_mask(u_mask: u32) -> Option<DockSide> {
-    use codepp_plugin_host::{
-        DWS_DF_CONT_BOTTOM, DWS_DF_CONT_LEFT, DWS_DF_CONT_RIGHT, DWS_DF_CONT_TOP, DWS_DF_FLOATING,
-    };
-    if u_mask & DWS_DF_FLOATING != 0 {
-        return None;
-    }
-    // The nibble is a value, not a bitmask: CONT_LEFT is 0, so a
-    // mask-and-test would read "left" out of every u_mask that
-    // happens to carry none of the other three.
-    const CONT_MASK: u32 = 0x7000_0000;
-    match u_mask & CONT_MASK {
-        v if v == DWS_DF_CONT_LEFT & CONT_MASK => Some(DockSide::Left),
-        v if v == DWS_DF_CONT_RIGHT & CONT_MASK => Some(DockSide::Right),
-        v if v == DWS_DF_CONT_TOP & CONT_MASK => Some(DockSide::Top),
-        v if v == DWS_DF_CONT_BOTTOM & CONT_MASK => Some(DockSide::Bottom),
-        _ => None,
-    }
-}
-
 /// Prefix shared by every window class this crate registers. The
 /// discriminator behind [`is_host_own_window`]: a plugin's own window
 /// cannot carry one of our class names, and the host's own windows
@@ -1187,7 +1153,7 @@ const TAB_DRAG_THRESHOLD_PX: i32 = 4;
 /// register dialogs with the same display name.
 ///
 /// `u_mask`'s `DWS_DF_CONT_*` nibble is acted on — see
-/// [`dock_side_from_u_mask`] — but the `pszAddInfo` add-info string
+/// [`codepp_plugin_host::docking::dock_side_from_u_mask`] — but the `pszAddInfo` add-info string
 /// and the `iPrevCont` previous-container hint are still only
 /// snapshotted.
 struct DockEntry {
@@ -1222,7 +1188,7 @@ struct DockEntry {
     /// verbatim by `dock_hwnd_by_name` and by
     /// `view_other_dock_tab`, both of which a plugin addresses with
     /// the string it registered, while the panel's caption shows
-    /// `dock_frame_title`'s sanitized rendering of it. A
+    /// `codepp_shell::plugin_dock_title`'s sanitized rendering of it. A
     /// plugin-supplied string reaching a caption is a display
     /// sink like any other — same split the workspace tree and
     /// the find-in-files dock make.
@@ -1254,7 +1220,7 @@ struct DockEntry {
     ///
     /// The `DWS_DF_CONT_*` nibble is acted on, but from
     /// `params.u_mask` at the moment of registration — see
-    /// [`dock_side_from_u_mask`] — because it seeds a *first*
+    /// [`codepp_plugin_host::docking::dock_side_from_u_mask`] — because it seeds a *first*
     /// position and re-reading it later would override wherever the
     /// user has since put the panel. `DWS_ICONTAB` is likewise read
     /// from `params` at registration. Nothing reads this copy back;
@@ -3423,50 +3389,37 @@ impl UiPlatform for Win32Ui {
                 );
                 return None;
             }
-            // Intern the panel identity from the module and the
-            // *sanitized* display name.
-            //
-            // Sanitizing here rather than at each paint site is what
-            // keeps `DockPanel::title` — which every caption and tab
-            // label goes through, on a `&'static str` — safe by
-            // construction for a plugin-supplied string. It also
-            // makes the identity deterministic, which matters because
-            // `persist_key` is derived from it: the same plugin gets
-            // the same key every run.
-            // Both halves of the identity are sanitized, not just the
-            // one that is displayed. The module half reaches no chrome
-            // sink today — but it *is* half of `persist_key`, so a raw
-            // control character in it would be written into
-            // `session.xml`, and a NUL there produces a file the next
-            // launch cannot parse. Sanitizing at the one boundary that
-            // creates the identity is also what stops a future
-            // consumer of `DockPanel::plugin_module` — a Plugin
-            // Manager column is the obvious one — reintroducing the
-            // bidi-override bug this project has now closed four
-            // times. The *raw* module name is kept on `DockEntry`,
-            // which is what `NPPM_DMMGETPLUGINHWNDBYNAME` matches
-            // against, because a plugin knows only what it registered.
-            let display_module = sanitize_str_for_display(&params.module_name);
-            let display_name = dock_frame_title(&params.name, &params.module_name);
+            // Intern the panel identity from the *sanitized* module and
+            // display name — `codepp_shell::intern_plugin_dock_panel`,
+            // which every backend hosting plugin panels shares, so one
+            // plugin's panel persists under one key whichever host
+            // wrote the session. Sanitizing there rather than at each
+            // paint site is what keeps `DockPanel::title` safe by
+            // construction for a plugin-supplied string; see that
+            // function for why the module half is sanitized too. The
+            // *raw* module name is kept on `DockEntry`, which is what
+            // `NPPM_DMMGETPLUGINHWNDBYNAME` matches against, because a
+            // plugin knows only what it registered.
             let Some(panel) =
-                codepp_core::dock::intern_plugin_panel(&display_module, &display_name)
+                codepp_shell::intern_plugin_dock_panel(&params.name, &params.module_name)
             else {
-                // `intern_plugin_panel` refuses an unusable identity
-                // as well as a full table: an empty or over-long
-                // half, or one carrying the `|` its persist key is
-                // split on. The message names both so a plugin author
-                // reading the log is not sent looking for a cap they
-                // are nowhere near.
+                // Refused as an unusable identity as well as a full
+                // table: an empty or over-long half, or one carrying
+                // the `|` its persist key is split on. The message
+                // names both so a plugin author reading the log is not
+                // sent looking for a cap they are nowhere near — as the
+                // chrome would show them, since both are the plugin's
+                // own text.
                 tracing::warn!(
-                    module = params.module_name,
-                    panel = display_name,
+                    module = codepp_shell::sanitize_str_for_display(&params.module_name),
+                    panel = codepp_shell::plugin_dock_title(&params.name, &params.module_name),
                     "NPPM_DMMREGASDCKDLG: unusable panel identity, or the panel table is full"
                 );
                 return None;
             };
             if dialogs.iter().any(|e| e.panel == panel) {
                 tracing::warn!(
-                    panel = display_name,
+                    panel = panel.title(),
                     "NPPM_DMMREGASDCKDLG: that panel is already registered"
                 );
                 return None;
@@ -3541,7 +3494,7 @@ impl UiPlatform for Win32Ui {
             // preference. Those bits were snapshotted and ignored for
             // as long as every plugin panel was a floating frame of
             // its own; they finally mean something.
-            if let Some(side) = dock_side_from_u_mask(params.u_mask) {
+            if let Some(side) = codepp_plugin_host::docking::dock_side_from_u_mask(params.u_mask) {
                 (*self.dock_layout).set_initial_side(panel, side);
             }
             // A panel parked because no loaded plugin could supply it
@@ -20193,37 +20146,6 @@ unsafe fn paint_docmap_viewport_overlay(dst_hdc: HDC, client_rect: RECT, main_hw
 /// users running many docked plugins simultaneously.
 const DOCK_DIALOG_REGISTRATION_CAP: usize = 64;
 
-/// Caption text for a plugin's floating dock frame.
-///
-/// Two jobs, and they are separable on purpose. The **fallback
-/// chain** answers what to show when the plugin supplied nothing
-/// usable: an empty `psz_name` (NULL pointer, or a payload
-/// `wide_ptr_to_string` rejected for unpaired surrogates) falls
-/// back to the module name, and if both are empty to a generic
-/// label — a frame with a blank caption and no close affordance
-/// legible against the background is worse than a wrong-ish name.
-///
-/// The **sanitization** is the same rule every other plugin-supplied
-/// string that reaches Code++'s chrome follows (`NPPM_SETSTATUSBAR`
-/// is the precedent): `psz_name` comes from a DLL the user dropped
-/// into a folder, and a caption is a display sink, so bidi
-/// overrides and friends are substituted rather than rendered. The
-/// *unsanitized* name stays on `DockEntry::name` because that is
-/// the `NPPM_DMMGETPLUGINHWNDBYNAME` lookup key — substituting
-/// there would make a plugin unable to find its own dialog.
-fn dock_frame_title(name: &str, module_name: &str) -> String {
-    let raw = if name.is_empty() {
-        if module_name.is_empty() {
-            "Plugin Dialog"
-        } else {
-            module_name
-        }
-    } else {
-        name
-    };
-    sanitize_str_for_display(raw)
-}
-
 /// Lazy-load every pending plugin, **holding no `WindowState` borrow
 /// while plugin code runs**.
 ///
@@ -31023,68 +30945,73 @@ mod drain_freeze_guards {
 
 #[cfg(test)]
 mod dock_dialog_tests {
-    //! The plugin docking-dialog surface: the caption's fallback and
-    //! sanitization rules as unit tests, and source-level guards for
-    //! the two `DMN_CLOSE` facts that are ABI rather than taste.
+    //! The plugin docking-dialog surface: source-level guards for the
+    //! panel identity's derivation and for the two `DMN_CLOSE` facts that
+    //! are ABI rather than taste. The caption's fallback and sanitization
+    //! rules are unit-tested where they now live, in `codepp_shell`
+    //! (`plugin_dock_title` / `intern_plugin_dock_panel`), which every
+    //! backend hosting plugin panels shares.
 
-    use super::dock_frame_title;
     use super::plugin_reentry_guards::{code_only, fn_body, production_src};
 
-    #[test]
-    fn the_caption_prefers_the_name_then_the_module_then_a_generic_label() {
-        assert_eq!(dock_frame_title("Console", "NppExec"), "Console");
-        assert_eq!(dock_frame_title("", "NppExec"), "NppExec");
-        assert_eq!(dock_frame_title("", ""), "Plugin Dialog");
-    }
-
-    /// The caption is a display sink and `psz_name` comes out of a DLL
-    /// the user dropped into a folder, so the same substitution every
-    /// other plugin-supplied string gets applies here.
-    #[test]
-    fn the_caption_substitutes_display_hostile_characters() {
-        let title = dock_frame_title("invoice\u{202E}fdp", "");
-        assert!(
-            !title.contains('\u{202E}'),
-            "a bidi override reached the frame caption: {title:?}"
-        );
-        assert!(
-            title.starts_with("invoice") && title.ends_with("fdp"),
-            "sanitizing should substitute, not truncate: {title:?}"
-        );
-    }
-
-    /// Both halves of a plugin's panel identity are sanitized
-    /// **once, at interning**.
+    /// The registration interns its panel through the shared
+    /// `codepp_shell::intern_plugin_dock_panel`, which sanitizes both
+    /// halves — never through `intern_plugin_panel` directly, which
+    /// would take the plugin's raw strings as the identity.
     ///
-    /// For the name that is what makes `DockPanel::title` — which
-    /// every caption and tab label goes through, returning
-    /// `&'static str` — safe by construction rather than by each
-    /// paint site remembering; interning the raw name would push the
-    /// obligation back out to the paint sites, and there are two of
-    /// them in another module. For the module it is one step ahead of
-    /// a sink rather than at one: nothing renders it today, but it is
-    /// half of `persist_key`, so a raw control character in it would
-    /// land in `session.xml`.
+    /// For the name that is what makes `DockPanel::title` — which every
+    /// caption and tab label goes through, returning `&'static str` —
+    /// safe by construction rather than by each paint site remembering.
+    /// For the module it is one step ahead of a sink: nothing renders
+    /// it today, but it is half of `persist_key`, so a raw control
+    /// character in it would land in `session.xml`. And a backend
+    /// deriving the identity its own way would persist one plugin's
+    /// panel under a key the other backend never produces.
     #[test]
-    fn the_panel_identity_is_interned_from_sanitized_halves() {
+    fn the_panel_identity_is_interned_through_the_shared_helper() {
         let body = code_only(&fn_body(production_src(), "register_dock_dialog"));
-        let sanitize = body
-            .find("dock_frame_title(")
-            .expect("the registration no longer sanitizes the plugin's name");
-        let intern = body
-            .find("intern_plugin_panel(")
-            .expect("the registration no longer interns a panel identity");
         assert!(
-            sanitize < intern,
-            "the name must be sanitized before it becomes the panel identity"
+            body.contains(
+                "codepp_shell::intern_plugin_dock_panel(&params.name, &params.module_name)"
+            ),
+            "the registration no longer interns through the shared, sanitizing helper"
         );
         assert!(
-            body.contains("intern_plugin_panel(&display_module, &display_name)"),
-            "the interned identity is not built from the sanitized halves"
+            !body.contains("intern_plugin_panel("),
+            "the registration interns a raw identity, bypassing the sanitizing helper"
         );
+    }
+
+    /// A refused registration logs the plugin's two strings as the
+    /// chrome would draw them. The default log format escapes control
+    /// characters on its own, but a structured sink need not — JSON
+    /// leaves a bidi override as it is — so the fields are sanitized
+    /// where they are recorded, as they were before the identity moved
+    /// into `codepp_shell`. The GTK backend carries the same guard.
+    #[test]
+    fn a_refused_registration_is_logged_sanitized() {
+        let body = code_only(&fn_body(production_src(), "register_dock_dialog"))
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
+        for (field, sanitized) in [
+            (
+                "module",
+                "codepp_shell::sanitize_str_for_display(&params.module_name)",
+            ),
+            (
+                "panel",
+                "codepp_shell::plugin_dock_title(&params.name, &params.module_name)",
+            ),
+        ] {
+            assert!(
+                body.contains(&format!("{field} = {sanitized}")),
+                "the refusal log's {field} field is not sanitized"
+            );
+        }
         assert!(
-            body.contains("sanitize_str_for_display(&params.module_name)"),
-            "the module half of the identity is no longer sanitized"
+            !body.contains("= params.name") && !body.contains("= params.module_name"),
+            "a log field records the plugin's raw text"
         );
     }
 

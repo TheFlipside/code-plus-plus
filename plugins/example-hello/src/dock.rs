@@ -9,49 +9,63 @@
 //!
 //! What it demonstrates, in the order a user would click:
 //!
-//! 1. **"Show Dock Panel"** creates a plain child window (as a real
-//!    Notepad++ plugin does, except a real one usually builds it
-//!    from a dialog template), hands it to the host with
+//! 1. **"Show Dock Panel"** creates the panel's content — a plain
+//!    child window on Windows (as a real Notepad++ plugin does, except
+//!    a real one usually builds it from a dialog template), a GTK
+//!    widget on Linux — hands it to the host with
 //!    `NPPM_DMMREGASDCKDLG`, and shows it with `NPPM_DMMSHOW`. The
-//!    host wraps it in a frame of its own; this window is only ever
-//!    a child of that frame.
+//!    host hosts it as a dock panel; this content is only ever a child
+//!    of the host's container. The menu item is ticked
+//!    (`NPPM_SETMENUITEMCHECK`) while the panel is open.
 //! 2. **"Rename Dock Panel"** re-points the *same* `tTbData`'s
 //!    `psz_name` at a different static string and sends
-//!    `NPPM_DMMUPDATEDISPINFO`. The frame caption changes, which is
-//!    observable and is the whole content of that message.
-//! 3. **Closing the panel** with the frame's ✕ makes the host send
-//!    `DMN_CLOSE`, which arrives here as an ordinary `WM_NOTIFY` on
-//!    this window — *not* through `beNotified` — and the panel
-//!    reports it on the status bar.
+//!    `NPPM_DMMUPDATEDISPINFO`. The host takes the new name as the
+//!    panel's lookup key — "Switch To Other Dock Panel" then finds the
+//!    panel by it — while the caption keeps the identity the panel was
+//!    registered under, which is what its saved position is keyed on.
+//! 3. **Closing the panel** with the ✕ on its caption makes the host
+//!    send `DMN_CLOSE` — *not* through `beNotified` — and the panel
+//!    reports it on the status bar and unticks its menu item. On
+//!    Windows it arrives as an ordinary `WM_NOTIFY` at this panel's
+//!    window procedure; on Linux, where a widget has no window
+//!    procedure, as the same `WM_NOTIFY` at this plugin's own
+//!    `messageProc`, `wParam` naming the panel.
 //! 4. **Quitting with a panel open and starting again** brings it
 //!    back, and the two panels come back two different ways. The
-//!    first is registered from `NPPN_TBMODIFICATION`, so its window
+//!    first is registered from `NPPN_TBMODIFICATION`, so its content
 //!    is there before anything else happens. The second is only ever
 //!    registered from its own menu command, the way `NppExec`'s
 //!    console is — and it still comes back, because the host runs
 //!    that command at startup: `tTbData.dlgID` names it, and
 //!    Notepad++ restores every panel that way.
 //!
-//! Windows-only: `h_client` is an HWND, and `register_dock_dialog`
-//! is defaulted (and so declines) on the GTK and Cocoa backends. The
-//! menu items exist on every platform and say so rather than
-//! disappearing, which keeps one `FuncItem` array across all three.
+//! Windows and Linux. The macOS host accepts no dock registration,
+//! and there the menu items say so rather than disappearing, which
+//! keeps one `FuncItem` array across all three platforms.
 
 #[cfg(target_os = "windows")]
-pub use win::{register_panels, rename_panel, show_panel, show_second_panel, view_other_tab};
+pub use win::{
+    message, register_panels, rename_panel, show_panel, show_second_panel, view_other_tab,
+};
 
-#[cfg(not(target_os = "windows"))]
-pub use stub::{register_panels, rename_panel, show_panel, show_second_panel, view_other_tab};
+#[cfg(target_os = "linux")]
+pub use gtk_panel::{
+    message, register_panels, rename_panel, show_panel, show_second_panel, view_other_tab,
+};
 
-/// The non-Windows arm. `NPPM_DMMREGASDCKDLG` carries an HWND, so
-/// there is nothing to send; DESIGN.md §7.4 tracks what a
-/// plugin-owned panel should even mean on those backends.
-#[cfg(not(target_os = "windows"))]
+#[cfg(not(any(target_os = "windows", target_os = "linux")))]
+pub use stub::{
+    message, register_panels, rename_panel, show_panel, show_second_panel, view_other_tab,
+};
+
+/// The macOS arm: the Cocoa host hosts no plugin panel, so there is
+/// nothing to register; DESIGN.md §7.4 tracks what one should be there.
+#[cfg(not(any(target_os = "windows", target_os = "linux")))]
 mod stub {
     use codepp_plugin_sdk as sdk;
 
     pub fn show_panel() {
-        sdk::set_status("Example Hello: docking panels are Windows-only in this build");
+        sdk::set_status("Example Hello: docking panels are not available on this platform yet");
     }
 
     pub fn rename_panel() {
@@ -67,6 +81,403 @@ mod stub {
     }
 
     pub fn register_panels() {}
+
+    /// No `DMN_*` arrive here: nothing is registered.
+    pub fn message(_msg: u32, _wparam: usize, _lparam: isize) -> isize {
+        0
+    }
+}
+
+/// The Linux arm: the panels are GTK widgets.
+///
+/// A recompiled plugin hands the GTK host a `GtkWidget*` as `hClient`
+/// where a Windows one hands it a dialog `HWND` — unparented, and not a
+/// window of its own; the host takes its own reference and moves the
+/// widget between its dock containers, so this module never frees it.
+/// The widget's children are shown here (`gtk_widget_show_all`); the
+/// widget itself is the host's to show and hide.
+///
+/// The few GTK calls are declared here rather than taken from a binding
+/// crate, as the Windows arm does for `user32`: a demo panel is a
+/// handful of functions, and a plugin that a third party might copy as
+/// a starting point is better off showing the dependency-free shape.
+/// `libgtk-3` is the library the host has already loaded, so linking it
+/// adds nothing to the process.
+#[cfg(target_os = "linux")]
+mod gtk_panel {
+    use codepp_plugin_sdk::{self as sdk, Hwnd, SciNotifyHeader, SyncCell, TbData, TbRect};
+    use core::ffi::{c_char, c_int, c_uint, c_void, CStr};
+    use core::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
+
+    #[link(name = "gdk-3")]
+    extern "C" {
+        fn gdk_display_get_default() -> *mut c_void;
+    }
+
+    #[link(name = "gobject-2.0")]
+    extern "C" {
+        fn g_object_ref_sink(object: *mut c_void) -> *mut c_void;
+    }
+
+    #[link(name = "gtk-3")]
+    extern "C" {
+        fn gtk_box_new(orientation: c_int, spacing: c_int) -> *mut c_void;
+        fn gtk_container_add(container: *mut c_void, widget: *mut c_void);
+        fn gtk_container_set_border_width(container: *mut c_void, width: c_uint);
+        fn gtk_label_new(text: *const c_char) -> *mut c_void;
+        fn gtk_label_set_line_wrap(label: *mut c_void, wrap: c_int);
+        fn gtk_label_set_xalign(label: *mut c_void, xalign: f32);
+        fn gtk_widget_show_all(widget: *mut c_void);
+    }
+
+    /// `GTK_ORIENTATION_VERTICAL`.
+    const VERTICAL: c_int = 1;
+    /// Inner margin around the label, in pixels.
+    const LABEL_INSET: c_uint = 8;
+
+    // ---- Static payloads ----------------------------------------
+    //
+    // `menu_label` NUL-pads to a fixed width, which makes each of
+    // these a valid null-terminated wide string as long as the text is
+    // shorter than the array — so they double as `psz_*` buffers.
+
+    /// `tTbData.pszModuleName`: the plugin's own file name, extension
+    /// included — the convention Notepad++ keeps with `.dll`, and what
+    /// the host matches a restored panel to its plugin by.
+    const MODULE_NAME: [u16; sdk::MENU_TITLE_LENGTH] = sdk::menu_label(b"example_hello.so");
+    const TITLE_A: [u16; sdk::MENU_TITLE_LENGTH] = sdk::menu_label(b"Example Hello Panel");
+    const TITLE_B: [u16; sdk::MENU_TITLE_LENGTH] =
+        sdk::menu_label(b"Example Hello Panel (renamed)");
+    /// The second panel exists so `NPPM_DMMVIEWOTHERTAB` has something
+    /// to switch *to*: the message means "bring that panel to the front
+    /// of the container it shares", which needs two panels to be
+    /// observable at all.
+    const TITLE_2: [u16; sdk::MENU_TITLE_LENGTH] = sdk::menu_label(b"Example Hello Notes");
+    const LABEL_TEXT: &CStr = c"Close me to fire DMN_CLOSE.";
+    const LABEL_TEXT_2: &CStr = c"Drag my tab onto the other panel.";
+
+    /// The registration payload. It lives in a `static` because the
+    /// host keeps the pointer: `NPPM_DMMUPDATEDISPINFO` re-reads this
+    /// struct, so a stack temporary would leave the host holding a
+    /// dangling pointer the moment the menu handler returned.
+    static TB_DATA: SyncCell<TbData> = SyncCell::new(TbData {
+        h_client: core::ptr::null_mut(),
+        psz_name: core::ptr::null(),
+        // The command that opens this panel.
+        dlg_id: crate::imp::CMD_SHOW_DOCK_PANEL,
+        // Both demo panels ask for the *bottom container*: two panels
+        // naming the same one become two tabs of a single dock group,
+        // which is the arrangement `NPPM_DMMVIEWOTHERTAB` switches
+        // between.
+        u_mask: sdk::DWS_DF_CONT_BOTTOM,
+        h_icon_tab: core::ptr::null_mut(),
+        psz_add_info: core::ptr::null(),
+        rc_float: TbRect {
+            left: 0,
+            top: 0,
+            right: 0,
+            bottom: 0,
+        },
+        i_prev_cont: -1,
+        psz_module_name: core::ptr::null(),
+    });
+
+    /// This plugin's panel widget — the `hClient` the host knows it by.
+    /// Null until it is first needed. From then on the plugin holds a
+    /// reference of its own for the rest of the process, so the pointer
+    /// here names a live object whatever else happens to the widget —
+    /// even a plugin that later destroyed its panel would find a
+    /// destroyed object here, not freed memory.
+    static PANEL: AtomicPtr<c_void> = AtomicPtr::new(core::ptr::null_mut());
+    /// Whether `NPPM_DMMREGASDCKDLG` has been accepted. Registering the
+    /// same widget twice is refused, so this keeps a second "Show Dock
+    /// Panel" to a plain `NPPM_DMMSHOW`.
+    static REGISTERED: AtomicBool = AtomicBool::new(false);
+    /// Which of the two titles `psz_name` currently points at.
+    static RENAMED: AtomicBool = AtomicBool::new(false);
+
+    /// The second panel's payload, widget and registration — same
+    /// lifetime rules as the first.
+    static TB_DATA_2: SyncCell<TbData> = SyncCell::new(TbData {
+        h_client: core::ptr::null_mut(),
+        psz_name: core::ptr::null(),
+        dlg_id: crate::imp::CMD_SHOW_SECOND_DOCK_PANEL,
+        u_mask: sdk::DWS_DF_CONT_BOTTOM,
+        h_icon_tab: core::ptr::null_mut(),
+        psz_add_info: core::ptr::null(),
+        rc_float: TbRect {
+            left: 0,
+            top: 0,
+            right: 0,
+            bottom: 0,
+        },
+        i_prev_cont: -1,
+        psz_module_name: core::ptr::null(),
+    });
+    static PANEL_2: AtomicPtr<c_void> = AtomicPtr::new(core::ptr::null_mut());
+    static REGISTERED_2: AtomicBool = AtomicBool::new(false);
+
+    /// Whether GTK is up to build widgets with: a default display is
+    /// open. Always so inside the GTK host; a host that loads plugins
+    /// without a display — a headless test harness — would otherwise
+    /// have GTK abort the process at the first widget.
+    fn gtk_ready() -> bool {
+        // SAFETY: takes nothing; answers null until a display is open.
+        !unsafe { gdk_display_get_default() }.is_null()
+    }
+
+    /// Build a panel's widget on first use: a box with a label in it,
+    /// held by a reference of the plugin's own. Returns the widget, or
+    /// null if GTK is not up or could not make it.
+    fn create_in(slot: &'static AtomicPtr<c_void>, text: &CStr) -> Hwnd {
+        let existing = slot.load(Ordering::Acquire);
+        if !existing.is_null() {
+            return existing;
+        }
+        if !gtk_ready() {
+            return core::ptr::null_mut();
+        }
+        // SAFETY: plain GTK calls on the UI thread — a plugin menu
+        // command or notification runs there by the ABI's contract, and
+        // the host has initialised GTK. `text` is a NUL-terminated
+        // static string; every widget passed on is one just created.
+        unsafe {
+            let panel = gtk_box_new(VERTICAL, 0);
+            if panel.is_null() {
+                return core::ptr::null_mut();
+            }
+            // Sink the floating reference, making it the plugin's own —
+            // never released, as `PANEL`'s doc says. The host takes a
+            // reference of its own when it adopts the widget.
+            g_object_ref_sink(panel);
+            gtk_container_set_border_width(panel, LABEL_INSET);
+            let label = gtk_label_new(text.as_ptr());
+            if !label.is_null() {
+                gtk_label_set_xalign(label, 0.0);
+                gtk_label_set_line_wrap(label, 1);
+                gtk_container_add(panel, label);
+            }
+            // Shown, children and all: the host shows and hides the
+            // container it puts the panel in, never the panel.
+            gtk_widget_show_all(panel);
+            slot.store(panel, Ordering::Release);
+            panel
+        }
+    }
+
+    /// Create and register one panel, without showing it. Idempotent
+    /// through `registered`, because the host refuses a second
+    /// registration of the same widget. Returns the widget, or null if
+    /// it could not be created or the host refused it.
+    fn register_one(
+        slot: &'static AtomicPtr<c_void>,
+        text: &CStr,
+        tb_data: &'static SyncCell<TbData>,
+        title: *const u16,
+        registered: &'static AtomicBool,
+    ) -> Hwnd {
+        let panel = create_in(slot, text);
+        if panel.is_null() || registered.load(Ordering::Acquire) {
+            return panel;
+        }
+        // SAFETY: single-threaded — notifications and menu commands
+        // both run on the host's UI thread, and this is the only writer.
+        unsafe {
+            let tb = tb_data.get();
+            (*tb).h_client = panel;
+            (*tb).psz_name = title;
+            (*tb).psz_module_name = MODULE_NAME.as_ptr();
+        }
+        // SAFETY: the `tTbData` is a live `static` for the process's
+        // whole life, which is exactly the lifetime the host's
+        // `DockDialogParams::tb_data` contract asks for.
+        let ok = unsafe {
+            sdk::SendMessageW(
+                sdk::npp_handle(),
+                sdk::NPPM_DMMREGASDCKDLG,
+                0,
+                tb_data.get().cast_const() as isize,
+            )
+        };
+        if ok == 0 {
+            return core::ptr::null_mut();
+        }
+        registered.store(true, Ordering::Release);
+        panel
+    }
+
+    /// Register the first panel with the docking manager, without
+    /// showing it. Called from `NPPN_TBMODIFICATION`, which is the
+    /// moment the ABI sets aside for it. The second panel is registered
+    /// only by its own menu command — see the Windows arm, which keeps
+    /// the same split for the same reason.
+    pub fn register_panels() {
+        // Silently, with no display: that is a host with nowhere to put a
+        // panel, not a refusal worth reporting.
+        if !gtk_ready() {
+            return;
+        }
+        let a = register_one(&PANEL, LABEL_TEXT, &TB_DATA, TITLE_A.as_ptr(), &REGISTERED);
+        if a.is_null() {
+            sdk::set_status("Example Hello: the host refused a dock registration");
+        }
+    }
+
+    /// Show a registered panel and tick the menu item that opens it.
+    fn show(panel: Hwnd, item: i32, done: &str) {
+        // SAFETY: `panel` is the registered `hClient`; this message takes
+        // it by value, not by pointer.
+        unsafe {
+            sdk::SendMessageW(sdk::npp_handle(), sdk::NPPM_DMMSHOW, 0, panel as isize);
+        }
+        crate::imp::set_item_check(item, true);
+        sdk::set_status(done);
+    }
+
+    pub fn show_panel() {
+        let panel = register_one(&PANEL, LABEL_TEXT, &TB_DATA, TITLE_A.as_ptr(), &REGISTERED);
+        if panel.is_null() {
+            sdk::set_status("Example Hello: could not open the dock panel");
+            return;
+        }
+        show(
+            panel,
+            crate::imp::CMD_SHOW_DOCK_PANEL,
+            "Example Hello: dock panel shown",
+        );
+    }
+
+    /// Create, register and show the second panel — a near-copy of
+    /// [`show_panel`] on purpose, since what it demonstrates is that a
+    /// plugin may register *several* panels and the host keeps them
+    /// distinct.
+    pub fn show_second_panel() {
+        let panel = register_one(
+            &PANEL_2,
+            LABEL_TEXT_2,
+            &TB_DATA_2,
+            TITLE_2.as_ptr(),
+            &REGISTERED_2,
+        );
+        if panel.is_null() {
+            sdk::set_status("Example Hello: could not open the second panel");
+            return;
+        }
+        show(
+            panel,
+            crate::imp::CMD_SHOW_SECOND_DOCK_PANEL,
+            "Example Hello: second dock panel shown",
+        );
+    }
+
+    /// Ask the host to bring the *first* panel to the front of whatever
+    /// container it is in — `NPPM_DMMVIEWOTHERTAB`, by the name the
+    /// panel currently has.
+    pub fn view_other_tab() {
+        let name = if RENAMED.load(Ordering::Acquire) {
+            TITLE_B.as_ptr()
+        } else {
+            TITLE_A.as_ptr()
+        };
+        // SAFETY: the title arrays are `static` and NUL-terminated; the
+        // host reads the string during the call and does not retain it.
+        let shown = unsafe {
+            sdk::SendMessageW(
+                sdk::npp_handle(),
+                sdk::NPPM_DMMVIEWOTHERTAB,
+                0,
+                name as isize,
+            )
+        };
+        if shown == 0 {
+            sdk::set_status("Example Hello: the host knows no panel by that name");
+        } else {
+            // The host shows the panel if it was closed, so its menu
+            // item is ticked here exactly as after "Show Dock Panel".
+            crate::imp::set_item_check(crate::imp::CMD_SHOW_DOCK_PANEL, true);
+            sdk::set_status("Example Hello: switched to the other panel");
+        }
+    }
+
+    /// Re-point `psz_name` at the other title and ask the host to
+    /// notice — exactly what `NPPM_DMMUPDATEDISPINFO` exists for.
+    pub fn rename_panel() {
+        if !REGISTERED.load(Ordering::Acquire) {
+            sdk::set_status("Example Hello: show the dock panel first");
+            return;
+        }
+        let renamed = !RENAMED.load(Ordering::Acquire);
+        // SAFETY: single-threaded, as in `register_one`.
+        unsafe {
+            (*TB_DATA.get()).psz_name = if renamed {
+                TITLE_B.as_ptr()
+            } else {
+                TITLE_A.as_ptr()
+            };
+        }
+        RENAMED.store(renamed, Ordering::Release);
+        let panel = PANEL.load(Ordering::Acquire);
+        // SAFETY: `panel` is the registered `hClient`.
+        unsafe {
+            sdk::SendMessageW(
+                sdk::npp_handle(),
+                sdk::NPPM_DMMUPDATEDISPINFO,
+                0,
+                panel as isize,
+            );
+        }
+        sdk::set_status("Example Hello: dock panel renamed");
+    }
+
+    /// The host's `DMN_*` about this plugin's panels, which on this
+    /// platform arrive at `messageProc` as `WM_NOTIFY` with the panel's
+    /// widget in `wParam` — the host has no window procedure to send
+    /// them to. `lParam` is the same `NMHDR` a Windows plugin gets.
+    pub fn message(msg: u32, wparam: usize, lparam: isize) -> isize {
+        // A zero `wParam` names no panel: the host sends a registered
+        // widget, never null — and a panel not created yet reads as null
+        // below, so this also keeps one from matching it.
+        if msg != sdk::WM_NOTIFY || lparam == 0 || wparam == 0 {
+            return 0;
+        }
+        let item = if wparam == PANEL.load(Ordering::Acquire) as usize {
+            crate::imp::CMD_SHOW_DOCK_PANEL
+        } else if wparam == PANEL_2.load(Ordering::Acquire) as usize {
+            crate::imp::CMD_SHOW_SECOND_DOCK_PANEL
+        } else {
+            return 0;
+        };
+        // SAFETY: by the host's contract `lParam` points at an `NMHDR`
+        // that stays live for this call.
+        let (from, code) = unsafe {
+            let nmhdr = lparam as *const SciNotifyHeader;
+            ((*nmhdr).hwnd_from, (*nmhdr).code)
+        };
+        // Accepted only from the host's main handle, as Notepad++'s
+        // docking-dialog template accepts them — which makes the demo a
+        // test of the field, not only of the code.
+        if from != sdk::npp_handle() {
+            return 0;
+        }
+        // Switch on the low word: DMN_DOCK and DMN_FLOAT carry their
+        // container number in the high one.
+        match code & 0xFFFF {
+            sdk::DMN_CLOSE => {
+                crate::imp::set_item_check(item, false);
+                sdk::set_status("Example Hello: panel closed (DMN_CLOSE received)");
+            }
+            sdk::DMN_DOCK => sdk::set_status(&format!(
+                "Example Hello: panel docked (DMN_DOCK, container {})",
+                code >> 16
+            )),
+            sdk::DMN_FLOAT => sdk::set_status(&format!(
+                "Example Hello: panel floating (DMN_FLOAT, container {})",
+                code >> 16
+            )),
+            _ => {}
+        }
+        0
+    }
 }
 
 #[cfg(target_os = "windows")]
@@ -309,6 +720,12 @@ mod win {
                     // carry their container number in the high one.
                     match code & 0xFFFF {
                         sdk::DMN_CLOSE => {
+                            let item = if hwnd == PANEL_2.load(Ordering::Acquire) {
+                                crate::imp::CMD_SHOW_SECOND_DOCK_PANEL
+                            } else {
+                                crate::imp::CMD_SHOW_DOCK_PANEL
+                            };
+                            crate::imp::set_item_check(item, false);
                             sdk::set_status("Example Hello: panel closed (DMN_CLOSE received)");
                         }
                         sdk::DMN_DOCK => {
@@ -545,6 +962,7 @@ mod win {
         unsafe {
             sdk::SendMessageW(sdk::npp_handle(), sdk::NPPM_DMMSHOW, 0, panel as isize);
         }
+        crate::imp::set_item_check(crate::imp::CMD_SHOW_DOCK_PANEL, true);
         sdk::set_status("Example Hello: dock panel shown");
     }
 
@@ -570,6 +988,7 @@ mod win {
         unsafe {
             sdk::SendMessageW(sdk::npp_handle(), sdk::NPPM_DMMSHOW, 0, panel as isize);
         }
+        crate::imp::set_item_check(crate::imp::CMD_SHOW_SECOND_DOCK_PANEL, true);
         sdk::set_status("Example Hello: second dock panel shown");
     }
 
@@ -602,8 +1021,18 @@ mod win {
         if shown == 0 {
             sdk::set_status("Example Hello: the host knows no panel by that name");
         } else {
+            // The host shows the panel if it was closed, so its menu
+            // item is ticked here exactly as after "Show Dock Panel".
+            crate::imp::set_item_check(crate::imp::CMD_SHOW_DOCK_PANEL, true);
             sdk::set_status("Example Hello: switched to the other panel");
         }
+    }
+
+    /// Nothing reaches `messageProc` for the panels here: on Windows the
+    /// `DMN_*` arrive at the panel's own window procedure,
+    /// `panel_wnd_proc`.
+    pub fn message(_msg: u32, _wparam: usize, _lparam: isize) -> isize {
+        0
     }
 
     /// Re-point `psz_name` at the other title and ask the host to
@@ -634,6 +1063,6 @@ mod win {
                 panel as isize,
             );
         }
-        sdk::set_status("Example Hello: dock panel title updated");
+        sdk::set_status("Example Hello: dock panel renamed");
     }
 }

@@ -87,8 +87,10 @@
 //! the two `RefCell`s from deadlocking on each other: code holding the
 //! dock borrow **never** calls `with_state` (every shell read happens
 //! before the dock borrow is taken, every shell write after it is
-//! dropped), while a `with_state` closure may take a brief read-only
-//! dock borrow ([`is_visible`], [`legacy_band_width`]).
+//! dropped), while a `with_state` closure may take a brief dock borrow:
+//! a read such as [`is_visible`] or [`legacy_band_width`], or one of the
+//! model-only writes the `NPPM_DMM*` handlers make from inside the NPPM
+//! dispatch's borrow (see the plugin-panel section).
 //!
 //! The second half of that rule reaches further than it looks: a GTK
 //! call made under the dock borrow can run a *signal handler*
@@ -101,12 +103,13 @@
 //! layout pass), never corrupts, but "declined" is logged at `debug`
 //! so a new instance is findable.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::io::Cursor;
+use std::rc::Rc;
 
 use codepp_core::dock::{
-    compute_frame, resolve_drop, DockGroup, DockLayout, DockLocation, DockPanel, DockRect,
-    DockSide, DragSubject, DropTarget, DropZones, MIN_FLOAT_H, MIN_FLOAT_W,
+    compute_frame, resolve_drop, DockContainer, DockGroup, DockLayout, DockLocation, DockPanel,
+    DockRect, DockSide, DragSubject, DropTarget, DropZones, MIN_FLOAT_H, MIN_FLOAT_W,
 };
 use gtk::gdk;
 use gtk::gdk_pixbuf::Pixbuf;
@@ -219,6 +222,111 @@ struct SplitterDrag {
     size_at_start: i32,
 }
 
+/// One plugin's docking dialog, adopted as a dock panel's content: the
+/// GTK counterpart of `ui_win32`'s `DockEntry`.
+///
+/// What gets here has already been checked by
+/// `crate::plugin::register_dock_dialog` — a live, free-standing,
+/// non-toplevel `GtkWidget` the plugin made. From then on it is an
+/// ordinary panel: it docks, floats, tabs with the host's own panels and
+/// persists in `session.xml`, all through the model and the reconciler
+/// the built-in panels use.
+struct PluginPanel {
+    /// The panel this registration owns — interned from the sanitized
+    /// module and title (`codepp_shell::intern_plugin_dock_panel`), so
+    /// stable across runs and what `session.xml` keys its position on.
+    /// The panel is the identity; everything else here is the plugin's
+    /// current view of it.
+    panel: DockPanel,
+    /// The host's own reference to the plugin's widget, held for as long
+    /// as the registration stands and never used to destroy it. It is
+    /// what keeps [`Self::handle`] naming this object: registrations are
+    /// found by the widget's address, and an object finalized while its
+    /// registration stood — pulled out of [`Self::content`] by the
+    /// plugin, or destroyed before [`forget_destroyed_plugin_panels`]
+    /// runs — would free that address for a new widget to reuse and be
+    /// mistaken for. A plugin that destroys the widget sets
+    /// [`Self::gone`], and the registration is then dropped.
+    _widget: gtk::Widget,
+    /// What the dock shows and moves for this panel: the host's scrolled
+    /// container around [`Self::widget`] — see [`scrolled_content`]. The
+    /// widget stays inside it for the registration's lifetime.
+    content: gtk::Widget,
+    /// `tTbData.hClient` as the plugin sent it: the handle it addresses
+    /// the panel by in `NPPM_DMMSHOW` / `NPPM_DMMHIDE` /
+    /// `NPPM_DMMUPDATEDISPINFO`, gets back from
+    /// `NPPM_DMMGETPLUGINHWNDBYNAME`, and finds in the `wParam` of every
+    /// `DMN_*` about the panel. Compared, never dereferenced.
+    handle: *mut std::ffi::c_void,
+    /// The plugin's `tTbData`, retained so `NPPM_DMMUPDATEDISPINFO` has
+    /// something to re-read. Stored here, read only by
+    /// `crate::plugin::update_dock_disp_info`; see
+    /// `codepp_plugin_host::DockDialogParams::tb_data` for the lifetime
+    /// contract the plugin owes it.
+    tb_data: *const codepp_plugin_host::TbData,
+    /// `pszName`, raw — the lookup key `NPPM_DMMVIEWOTHERTAB` and
+    /// `NPPM_DMMGETPLUGINHWNDBYNAME` match, because a plugin knows only
+    /// what it registered. The caption shows the sanitized form the
+    /// panel identity carries.
+    name: String,
+    /// `pszModuleName`, raw — the optional disambiguator for
+    /// `NPPM_DMMGETPLUGINHWNDBYNAME`.
+    module_name: String,
+    /// Registry index of the plugin that registered the panel, if the
+    /// registration arrived while the host was calling a plugin — where
+    /// its `DMN_*` go first (`Shell::plugin_panel_message_target`).
+    caller: Option<usize>,
+    /// The plugin's own tab icon (`tTbData.hIconTab`, a `GdkPixbuf`
+    /// here, with `DWS_ICONTAB`), or `None` for the generic plugin
+    /// glyph.
+    icon: Option<Pixbuf>,
+    /// The container this plugin was last told its panel is in, through
+    /// `DMN_DOCK` / `DMN_FLOAT`. `None` until the first reconcile after
+    /// registration, which is what makes that reconcile send the
+    /// registration-time notification. Written before the notification
+    /// goes out — see [`container_notices`].
+    told: Option<DockContainer>,
+    /// Set from the widget's `destroy` handler when the plugin destroys
+    /// its own panel. Checked by everything that would use the widget, so
+    /// a disposed widget is never put back into a container, until
+    /// [`forget_destroyed_plugin_panels`] drops the registration.
+    gone: Rc<Cell<bool>>,
+}
+
+impl PluginPanel {
+    /// Whether this registration still stands for a live widget.
+    fn live(&self) -> bool {
+        !self.gone.get()
+    }
+}
+
+/// What `crate::plugin::register_dock_dialog` hands the dock once a
+/// plugin's widget has passed its checks. See [`PluginPanel`] for the
+/// fields.
+pub(crate) struct PluginPanelSpec {
+    pub panel: DockPanel,
+    pub handle: *mut std::ffi::c_void,
+    pub tb_data: *const codepp_plugin_host::TbData,
+    pub name: String,
+    pub module_name: String,
+    pub caller: Option<usize>,
+    pub icon: Option<Pixbuf>,
+    /// `tTbData.uMask`'s `DWS_DF_CONT_*` preference, decoded — where the
+    /// panel first opens.
+    pub initial_side: Option<DockSide>,
+    pub gone: Rc<Cell<bool>>,
+}
+
+/// One `DMN_DOCK` / `DMN_FLOAT` to send: the notification code for the
+/// container `panel` is in now, and whom to tell. Built by
+/// [`container_notices`], sent by `crate::plugin::deliver_dock_notices`.
+pub(crate) struct DockNotice {
+    pub panel: DockPanel,
+    pub handle: *mut std::ffi::c_void,
+    pub caller: Option<usize>,
+    pub code: u32,
+}
+
 /// Everything the dock mechanism owns for the window's lifetime.
 struct Ui {
     /// The model. Synced to the shell's session cache by
@@ -251,28 +359,61 @@ struct Ui {
     /// The dock area's last allocation — the `mid` rect every layout
     /// pass carves.
     area_size: (i32, i32),
+    /// Every plugin docking dialog registered this session, in
+    /// registration order. See [`PluginPanel`].
+    plugin_panels: Vec<PluginPanel>,
+    /// The model has changed under a `NPPM_DMM*` handler and the widget
+    /// tree has not caught up. Those handlers run inside the dispatch's
+    /// state borrow, where [`apply_layout`] cannot run — it syncs the
+    /// session through `with_state` — so they only mark, and the NPPM
+    /// dispatch reconciles once its borrow has ended ([`take_dirty`]).
+    /// The same shape as Win32's `dock_dirty`.
+    dirty: bool,
 }
 
 impl Ui {
-    /// The content widget for `panel`. A field per panel rather than a
-    /// map, so adding a `DockPanel` variant is a compile error here —
-    /// which is what makes "every panel is hosted" hold by
+    /// The content widget for `panel`. A field per built-in panel rather
+    /// than a map, so adding a `DockPanel` variant is a compile error
+    /// here — which is what makes "every panel is hosted" hold by
     /// construction rather than by a test remembering to check.
     ///
-    /// `None` only for a plugin panel, which this backend has no
-    /// content widget for: `NPPM_DMMREGASDCKDLG` is Win32-only
-    /// (DESIGN.md §7.4), so nothing here ever supplies one.
-    /// [`DockLayout::drop_plugin_panels`] is called at restore for
-    /// exactly that reason, so a layout reaching this function cannot
-    /// name one — `None` is the fail-safe, not the expected path, and
-    /// every caller skips rather than substituting a placeholder the
-    /// user could neither use nor close.
+    /// A plugin panel's content is its registered widget, and is `None`
+    /// until the plugin registers it — the normal case for a panel a
+    /// restored layout names before its plugin has loaded — and once the
+    /// plugin has destroyed it. Every caller skips a `None` rather than
+    /// substituting a placeholder the user could neither use nor close;
+    /// a panel no plugin will supply this session is parked instead
+    /// (`crate::plugin`'s load pass).
     fn panel_content(&self, panel: DockPanel) -> Option<gtk::Widget> {
         match panel {
             DockPanel::Workspace => Some(self.workspace_content.clone()),
             DockPanel::DocMap => Some(self.docmap_content.clone()),
-            DockPanel::Plugin(_) => None,
+            DockPanel::Plugin(_) => self
+                .plugin_panels
+                .iter()
+                .find(|p| p.panel == panel && p.live())
+                .map(|p| p.content.clone()),
         }
+    }
+
+    /// The icon a plugin panel's tab shows: its plugin's own, if it gave
+    /// one.
+    fn plugin_icon(&self, panel: DockPanel) -> Option<Pixbuf> {
+        self.plugin_panels
+            .iter()
+            .find(|p| p.panel == panel && p.live())
+            .and_then(|p| p.icon.clone())
+    }
+
+    /// The live registration for the widget a plugin addresses by
+    /// `handle`.
+    fn plugin_panel_by_handle(&self, handle: *mut std::ffi::c_void) -> Option<&PluginPanel> {
+        if handle.is_null() {
+            return None;
+        }
+        self.plugin_panels
+            .iter()
+            .find(|p| std::ptr::eq(p.handle, handle) && p.live())
     }
 
     fn group_index(&self, id: u32) -> Option<usize> {
@@ -468,6 +609,8 @@ pub(crate) fn install(
         drag: None,
         splitter_drag: None,
         area_size: (0, 0),
+        plugin_panels: Vec::new(),
+        dirty: false,
     };
     DOCK.with(|d| *d.borrow_mut() = Some(ui));
 }
@@ -697,7 +840,14 @@ fn build_caption(id: u32) -> (gtk::EventBox, gtk::Label) {
 }
 
 /// One tab of a multi-panel group: icon, plus the label when active.
-fn build_tab(id: u32, index: usize, panel: DockPanel, active: bool, scale: i32) -> gtk::EventBox {
+fn build_tab(
+    id: u32,
+    index: usize,
+    panel: DockPanel,
+    own_icon: Option<&Pixbuf>,
+    active: bool,
+    scale: i32,
+) -> gtk::EventBox {
     let tab = gtk::EventBox::new();
     tab.add_events(
         gdk::EventMask::BUTTON_PRESS_MASK
@@ -713,7 +863,7 @@ fn build_tab(id: u32, index: usize, panel: DockPanel, active: bool, scale: i32) 
     let row = gtk::Box::new(gtk::Orientation::Horizontal, DOCK_TAB_ICON_GAP);
     row.set_margin_start(DOCK_TAB_PAD);
     row.set_margin_end(DOCK_TAB_PAD);
-    if let Some(icon) = panel_icon(panel, scale) {
+    if let Some(icon) = panel_icon(panel, own_icon, scale) {
         row.pack_start(&icon, false, false, 0);
     }
     if active {
@@ -760,33 +910,40 @@ fn build_tab(id: u32, index: usize, panel: DockPanel, active: bool, scale: i32) 
 
 /// The tab-bar icon for `panel` — the same quick-action-bar art the
 /// Win32 tabs blit, decoded at the window's scale so it stays sharp on
-/// high-DPI screens. `None` on a decode failure (cosmetic; the tab keeps its
-/// label and tooltip).
-fn panel_icon(panel: DockPanel, scale: i32) -> Option<gtk::Image> {
-    let (at_1x, at_2x): (&[u8], &[u8]) = match panel {
-        DockPanel::Workspace => (
-            include_bytes!("../../../assets/icons/folder-workspace.png"),
-            include_bytes!("../../../assets/icons/folder-workspace@2x.png"),
-        ),
-        DockPanel::DocMap => (
-            include_bytes!("../../../assets/icons/document-map.png"),
-            include_bytes!("../../../assets/icons/document-map@2x.png"),
-        ),
-        // No artwork for a panel this backend cannot host. A tab
-        // without an icon keeps its label, which is the same
-        // degradation a decode failure takes.
-        DockPanel::Plugin(_) => return None,
-    };
-    let bytes = if scale >= 2 { at_2x } else { at_1x };
-    let pixbuf = match Pixbuf::from_read(Cursor::new(bytes)) {
-        Ok(pixbuf) => pixbuf,
-        Err(err) => {
-            tracing::warn!(?err, ?panel, "dock: tab icon decode failed");
-            return None;
+/// high-DPI screens. A plugin panel shows its plugin's own icon when it
+/// gave one (`own`), else a generic plugin glyph — never the Document
+/// Map's, which left two plugin panels in one group indistinguishable
+/// from each other and from the map. `None` on a decode failure
+/// (cosmetic; the tab keeps its label and tooltip).
+fn panel_icon(panel: DockPanel, own: Option<&Pixbuf>, scale: i32) -> Option<gtk::Image> {
+    let px = DOCK_TAB_ICON_PX * scale.max(1);
+    let source = if let Some(own) = own {
+        own.clone()
+    } else {
+        let (at_1x, at_2x): (&[u8], &[u8]) = match panel {
+            DockPanel::Workspace => (
+                include_bytes!("../../../assets/icons/folder-workspace.png"),
+                include_bytes!("../../../assets/icons/folder-workspace@2x.png"),
+            ),
+            DockPanel::DocMap => (
+                include_bytes!("../../../assets/icons/document-map.png"),
+                include_bytes!("../../../assets/icons/document-map@2x.png"),
+            ),
+            DockPanel::Plugin(_) => (
+                include_bytes!("../../../assets/icons/plugin-panel.png"),
+                include_bytes!("../../../assets/icons/plugin-panel@2x.png"),
+            ),
+        };
+        let bytes = if scale >= 2 { at_2x } else { at_1x };
+        match Pixbuf::from_read(Cursor::new(bytes)) {
+            Ok(pixbuf) => pixbuf,
+            Err(err) => {
+                tracing::warn!(?err, ?panel, "dock: tab icon decode failed");
+                return None;
+            }
         }
     };
-    let px = DOCK_TAB_ICON_PX * scale.max(1);
-    let scaled = pixbuf.scale_simple(px, px, gtk::gdk_pixbuf::InterpType::Bilinear)?;
+    let scaled = source.scale_simple(px, px, gtk::gdk_pixbuf::InterpType::Bilinear)?;
     let surface = scaled.create_surface(scale.max(1), None::<&gdk::Window>)?;
     Some(gtk::Image::from_surface(Some(&surface)))
 }
@@ -838,6 +995,7 @@ fn build_float_window(main: &gtk::Window) -> gtk::Window {
 /// nest in that direction.
 pub(crate) fn apply_layout() {
     let docmap_visible = with_dock(|d| {
+        d.dirty = false;
         reconcile(d);
         relayout(d);
         d.layout.is_visible(DockPanel::DocMap)
@@ -849,6 +1007,45 @@ pub(crate) fn apply_layout() {
     }
     sync_indicators();
     sync_to_shell();
+    // Last, so a plugin reacting to where its panel is finds the tree and
+    // the session already settled — and with no borrow held, so its
+    // handler's `NPPM_*` is answered rather than declined.
+    let notices = with_dock(container_notices).unwrap_or_default();
+    crate::plugin::deliver_dock_notices(notices);
+}
+
+/// Record, for every registered plugin panel, the container it is in
+/// now, and return a notice for each one whose container differs from
+/// what its plugin was last told — including every panel whose plugin has
+/// been told nothing yet, which is how a freshly registered panel gets
+/// upstream's registration-time notification.
+///
+/// Recording happens here, under the borrow, before
+/// `crate::plugin::deliver_dock_notices` sends anything, and that order
+/// is what stops a transition being told twice: a plugin's handler may
+/// show or hide a panel, which reconciles again from inside the
+/// delivery, and the nested pass must find the transition already
+/// recorded. What bounds the round trip when a handler registers a *new*
+/// panel — which the nested pass has genuinely not told — is the
+/// delivery's queue, not this order. Win32's `container_notices` in
+/// `dock_panels.rs` is the same function, and a source scan pins the
+/// order on both.
+fn container_notices(d: &mut Ui) -> Vec<DockNotice> {
+    let mut out = Vec::new();
+    for entry in d.plugin_panels.iter_mut().filter(|p| p.live()) {
+        let now = d.layout.container_of(entry.panel);
+        let told = entry.told.is_some_and(|last| last.is_same(now));
+        entry.told = Some(now);
+        if !told {
+            out.push(DockNotice {
+                panel: entry.panel,
+                handle: entry.handle,
+                caller: entry.caller,
+                code: codepp_plugin_host::docking::dock_container_code(&d.layout, now),
+            });
+        }
+    }
+    out
 }
 
 /// Phase one of [`apply_layout`]: widgets only.
@@ -884,8 +1081,14 @@ fn reconcile(d: &mut Ui) {
         fill_group(d, gi, group);
     }
 
-    // 4. Hidden panels go to parking.
-    for panel in DockPanel::BUILT_IN {
+    // 4. Hidden panels go to parking: the two built-in ones and every
+    //    registered plugin panel — a model-parked one included, since
+    //    `DockLayout::park` takes it out of every group.
+    let hosted: Vec<DockPanel> = DockPanel::BUILT_IN
+        .into_iter()
+        .chain(d.plugin_panels.iter().filter(|p| p.live()).map(|p| p.panel))
+        .collect();
+    for panel in hosted {
         if !layout.is_visible(panel) {
             park(d, panel);
         }
@@ -993,6 +1196,7 @@ fn set_float_margin(frame: &gtk::EventBox, px: i32) {
 fn fill_group(d: &mut Ui, gi: usize, group: &DockGroup) {
     let contents: Vec<Option<gtk::Widget>> =
         group.panels.iter().map(|p| d.panel_content(*p)).collect();
+    let icons: Vec<Option<Pixbuf>> = group.panels.iter().map(|p| d.plugin_icon(*p)).collect();
     // Read live rather than cached at install: a float dragged to a
     // monitor with another scale factor gets its tab icons re-decoded
     // at the next reconcile.
@@ -1013,12 +1217,14 @@ fn fill_group(d: &mut Ui, gi: usize, group: &DockGroup) {
     if let Some(win) = &g.float {
         win.set_title(title);
     }
-    rebuild_tab_bar(g, group, scale);
+    rebuild_tab_bar(g, group, &icons, scale);
 }
 
 /// Rebuild a group's tab bar from scratch — a handful of small widgets,
 /// far cheaper than diffing, and it runs only on a dock mutation.
-fn rebuild_tab_bar(g: &mut GroupWidget, group: &DockGroup, scale: i32) {
+/// `icons` holds each tab's plugin-supplied icon, aligned with
+/// `group.panels`.
+fn rebuild_tab_bar(g: &mut GroupWidget, group: &DockGroup, icons: &[Option<Pixbuf>], scale: i32) {
     for child in g.tab_bar.children() {
         g.tab_bar.remove(&child);
     }
@@ -1027,7 +1233,8 @@ fn rebuild_tab_bar(g: &mut GroupWidget, group: &DockGroup, scale: i32) {
         return;
     }
     for (i, panel) in group.panels.iter().enumerate() {
-        let tab = build_tab(g.id, i, *panel, i == group.active, scale);
+        let own = icons.get(i).and_then(Option::as_ref);
+        let tab = build_tab(g.id, i, *panel, own, i == group.active, scale);
         g.tab_bar.pack_start(&tab, false, false, 0);
     }
     g.tab_bar.show();
@@ -1165,12 +1372,13 @@ pub(crate) fn apply_saved() {
     if root.is_none() && layout.is_visible(DockPanel::Workspace) {
         layout.hide(DockPanel::Workspace);
     }
-    // `session.xml` is portable but plugin dock panels are not: only
-    // the Win32 host accepts `NPPM_DMMREGASDCKDLG` (DESIGN.md §7.4),
-    // so a layout written there names panels this backend can never
-    // supply a content widget for. Dropping them here is what lets
-    // `Ui::panel_content`'s `None` arm stay unreachable.
-    layout.drop_plugin_panels();
+    // Plugin panels are kept: their groups wait for the widgets their
+    // plugins register, and the startup load pass
+    // (`crate::plugin::restore_panel_plugins`) loads the plugins that
+    // supply them, runs each panel's own command, and parks whatever no
+    // loaded plugin can supply — one a Windows-written session names for
+    // a Windows-only plugin included — so nothing is left on screen
+    // empty.
     // A float rect persisted on a bigger display (or hand-edited to
     // the moon) must stay retrievable. The main window is not realized
     // yet at this point, so the area is its saved geometry, falling
@@ -1239,13 +1447,33 @@ pub(crate) fn legacy_band_width(panel: DockPanel) -> i32 {
     .unwrap_or(0)
 }
 
+thread_local! {
+    /// Set by [`freeze_session`] once the quit has captured the layout.
+    static SESSION_FROZEN: Cell<bool> = const { Cell::new(false) };
+}
+
 /// Push the model into the shell's session cache so the next
 /// `save_session` persists it. Called after every mutation and from
-/// the autosave / shutdown path.
+/// the autosave / shutdown path. A no-op once [`freeze_session`] has
+/// run.
 pub(crate) fn sync_to_shell() {
+    if SESSION_FROZEN.with(Cell::get) {
+        return;
+    }
     if let Some(session) = with_dock(|d| d.layout.to_session()) {
         with_state(|st| st.shell.set_dock_session(Some(session)));
     }
+}
+
+/// Stop the layout reaching the session from here on. Called by
+/// `crate::quit` straight after it captures the layout and before the
+/// plugins hear they are shutting down, so the arrangement saved is the
+/// one the user left: a plugin that hides or shows its panel from
+/// `NPPN_SHUTDOWN` changes the model — and so, without this, the session
+/// the next start restores. Win32 gets the same result by declining its
+/// plugins' messages during shutdown.
+pub(crate) fn freeze_session() {
+    SESSION_FROZEN.with(|f| f.set(true));
 }
 
 /// Drive the View-menu checks and toolbar toggles from the model.
@@ -1269,13 +1497,10 @@ fn close_panel(panel: DockPanel) {
     match panel {
         DockPanel::Workspace => crate::workspace::set_visible(false),
         DockPanel::DocMap => crate::docmap::set_visible(false),
-        // Unreachable in practice: this backend never hosts one
-        // (see `Ui::panel_content`), and `drop_plugin_panels` keeps
-        // a restored layout from naming one. Hiding through the same
-        // funnel the two built-ins reach is the safe degradation — it
-        // reconciles, so a ✕ that does nothing is not left behind on
-        // an empty group.
-        DockPanel::Plugin(_) => set_panel_visible(panel, false),
+        // Closing a plugin's panel owes the plugin a `DMN_CLOSE`, sent
+        // before the panel hides — how a plugin keeps a "Show Console"
+        // style menu check in step with what the user can see.
+        DockPanel::Plugin(_) => crate::plugin::close_plugin_panel(panel),
     }
 }
 
@@ -1284,6 +1509,343 @@ fn close_active_panel(id: u32) {
     if let Some(panel) = panel {
         close_panel(panel);
     }
+}
+
+// --- plugin panels -------------------------------------------------------------------
+//
+// The `NPPM_DMM*` handlers reach these from inside the NPPM dispatch's
+// state borrow, so the ones that change the model change *only* the
+// model and mark `Ui::dirty`; the dispatch reconciles once its borrow
+// has ended ([`take_dirty`]). None of them calls `with_state`. The
+// only widgets touched here are ones not in the window's tree:
+// registration builds the panel's scrolled container, and
+// [`forget_destroyed_plugin_panels`] — run from an idle, not from a
+// handler — takes an emptied one out of it.
+
+/// The container a plugin panel's widget lives in, which is what the dock
+/// then shows, hides and moves: a scrolled window, so a panel smaller
+/// than the widget's minimum size scrolls instead of painting over its
+/// neighbour.
+///
+/// A plugin's widget may ask for any minimum — a label that does not
+/// wrap, a row of buttons — and `GtkLayout` allocates a child no smaller
+/// than its minimum. Measured with `example-hello`'s panel in an 80 px
+/// left band: its label drew across the splitter into the editor. The
+/// built-in panels never met this, because their content already
+/// scrolls; a plugin's need not. Scrollbars appear only when the panel
+/// is smaller than the widget asks for.
+///
+/// A widget that scrolls by itself (a text view, a tree view) goes in
+/// directly; anything else through a viewport with no frame, so the
+/// panel looks as it would without the wrapper. The host shows the
+/// widget itself once, here, as Notepad++ shows `hClient` — the one
+/// property of the plugin's widget it sets. After that, showing and
+/// hiding the panel shows and hides this container.
+fn scrolled_content(widget: &gtk::Widget) -> gtk::ScrolledWindow {
+    let scrolled = gtk::ScrolledWindow::new(None::<&gtk::Adjustment>, None::<&gtk::Adjustment>);
+    scrolled.set_policy(gtk::PolicyType::Automatic, gtk::PolicyType::Automatic);
+    scrolled.set_shadow_type(gtk::ShadowType::None);
+    if widget.is::<gtk::Scrollable>() {
+        scrolled.add(widget);
+    } else {
+        let viewport = gtk::Viewport::new(None::<&gtk::Adjustment>, None::<&gtk::Adjustment>);
+        viewport.set_shadow_type(gtk::ShadowType::None);
+        viewport.add(widget);
+        viewport.show();
+        scrolled.add(&viewport);
+    }
+    widget.show();
+    scrolled
+}
+
+/// Register a plugin's docking dialog as a dock panel — the commit half
+/// of `crate::plugin::register_dock_dialog`, which has checked the widget.
+///
+/// `adopt` takes the host's own reference to the widget and is called
+/// only once every refusal below has been ruled out, under the same
+/// borrow as the commit. That order is load-bearing: adopting sinks a
+/// floating reference, so a registration refused *after* adopting would
+/// drop the only reference and finalize the plugin's widget out from
+/// under it. Refused, the widget is never touched.
+///
+/// Returns the adopted widget, for the caller to watch. It goes into its
+/// [`scrolled_content`] here, and that container joins the tree at the
+/// reconcile the dispatch runs afterwards.
+pub(crate) fn register_plugin_panel(
+    spec: PluginPanelSpec,
+    adopt: impl FnOnce() -> gtk::Widget,
+) -> Result<gtk::Widget, &'static str> {
+    with_dock(|d| {
+        let live = || d.plugin_panels.iter().filter(|p| p.live());
+        if live().any(|p| std::ptr::eq(p.handle, spec.handle)) {
+            return Err("that widget is already registered");
+        }
+        if live().any(|p| p.panel == spec.panel) {
+            return Err("that panel is already registered");
+        }
+        if live().count() >= codepp_core::dock::MAX_PLUGIN_PANELS {
+            return Err("the plugin panel cap is reached");
+        }
+        let widget = adopt();
+        let content = scrolled_content(&widget).upcast();
+        d.plugin_panels.push(PluginPanel {
+            panel: spec.panel,
+            _widget: widget.clone(),
+            content,
+            handle: spec.handle,
+            tb_data: spec.tb_data,
+            name: spec.name,
+            module_name: spec.module_name,
+            caller: spec.caller,
+            icon: spec.icon,
+            told: None,
+            gone: spec.gone,
+        });
+        // Where the panel opens the first time it is shown, from the
+        // plugin's own `DWS_DF_CONT_*` preference — never over a
+        // position the user or a restored session has since given it.
+        if let Some(side) = spec.initial_side {
+            d.layout.set_initial_side(spec.panel, side);
+        }
+        // A panel parked because no loaded plugin could supply it comes
+        // back where it was the moment its widget arrives — the way
+        // Notepad++ shows a panel it saved open when its plugin registers
+        // it.
+        d.layout.unpark(&[spec.panel]);
+        // A restored layout can already name this panel, its group
+        // waiting since startup for the widget only registration
+        // supplies. So the tree needs a reconcile even when the model did
+        // not change.
+        d.dirty = true;
+        Ok(widget)
+    })
+    .unwrap_or(Err("the dock is busy (a re-entrant registration)"))
+}
+
+/// Record the command that reopens `panel` at the next start, with the
+/// seal the shell made for it — see
+/// `UiPlatform::record_panel_open_command`. Model only; persisted by the
+/// reconcile that follows the registration.
+pub(crate) fn set_open_command(
+    panel: DockPanel,
+    command: i32,
+    seal: Option<codepp_core::dock::CommandSeal>,
+) {
+    with_dock(|d| d.layout.set_open_command(panel, command, seal));
+}
+
+/// `NPPM_DMMSHOW`: show the panel registered for `handle` and bring it to
+/// the front of its group. `false` for a handle nothing is registered
+/// under. Model only — see [`take_dirty`].
+pub(crate) fn show_plugin_panel(handle: *mut std::ffi::c_void) -> bool {
+    with_dock(|d| {
+        let Some(panel) = d.plugin_panel_by_handle(handle).map(|p| p.panel) else {
+            return false;
+        };
+        d.layout.show(panel);
+        d.layout.activate(panel);
+        d.dirty = true;
+        true
+    })
+    .unwrap_or(false)
+}
+
+/// `NPPM_DMMHIDE`: hide the panel registered for `handle`. The
+/// registration survives, and so does the panel's position — a later
+/// `NPPM_DMMSHOW` reopens it where it was. No `DMN_CLOSE`: the plugin
+/// asked. Model only — see [`take_dirty`].
+pub(crate) fn hide_plugin_panel(handle: *mut std::ffi::c_void) -> bool {
+    with_dock(|d| {
+        let Some(panel) = d.plugin_panel_by_handle(handle).map(|p| p.panel) else {
+            return false;
+        };
+        d.layout.hide(panel);
+        d.dirty = true;
+        true
+    })
+    .unwrap_or(false)
+}
+
+/// `NPPM_DMMVIEWOTHERTAB`: show the panel registered under `name` — its
+/// plugin's raw `pszName`, which is what the plugin knows — and make it
+/// the front tab of its group. A hidden panel is shown first, since
+/// "view" can only mean "put it in front of the user". Model only.
+pub(crate) fn view_plugin_panel(name: &str) -> bool {
+    with_dock(|d| {
+        let Some(panel) = d
+            .plugin_panels
+            .iter()
+            .find(|p| p.live() && p.name == name)
+            .map(|p| p.panel)
+        else {
+            return false;
+        };
+        d.layout.show(panel);
+        d.layout.activate(panel);
+        d.dirty = true;
+        true
+    })
+    .unwrap_or(false)
+}
+
+/// `NPPM_DMMGETPLUGINHWNDBYNAME`: the handle registered under the raw
+/// `name`, and under `module` too when one is given.
+pub(crate) fn plugin_panel_handle(
+    name: &str,
+    module: Option<&str>,
+) -> Option<*mut std::ffi::c_void> {
+    with_dock(|d| {
+        d.plugin_panels
+            .iter()
+            .find(|p| p.live() && p.name == name && module.is_none_or(|m| m == p.module_name))
+            .map(|p| p.handle)
+    })
+    .flatten()
+}
+
+/// The `tTbData` the panel registered for `handle` was registered with,
+/// for `NPPM_DMMUPDATEDISPINFO` to re-read.
+pub(crate) fn plugin_panel_tb_data(
+    handle: *mut std::ffi::c_void,
+) -> Option<*const codepp_plugin_host::TbData> {
+    with_dock(|d| d.plugin_panel_by_handle(handle).map(|p| p.tb_data)).flatten()
+}
+
+/// Take a re-read `pszName` / `pszModuleName` for the panel registered
+/// for `handle`: the keys `NPPM_DMMVIEWOTHERTAB` and
+/// `NPPM_DMMGETPLUGINHWNDBYNAME` match, which a plugin addresses by its
+/// *current* name.
+///
+/// The caption does not move, and that is deliberate rather than an
+/// omission — the same call Win32 makes. A panel's title is its interned
+/// identity, and `session.xml` keys the panel's remembered position on
+/// it, so a caption that followed the plugin would either lose the
+/// user's layout on every rename or need a second, divergent name to
+/// persist under.
+pub(crate) fn rename_plugin_panel(
+    handle: *mut std::ffi::c_void,
+    name: String,
+    module_name: String,
+) {
+    with_dock(|d| {
+        if let Some(entry) = d
+            .plugin_panels
+            .iter_mut()
+            .find(|p| p.live() && std::ptr::eq(p.handle, handle))
+        {
+            entry.name = name;
+            entry.module_name = module_name;
+        }
+    });
+}
+
+/// Whether a `NPPM_DMM*` handler changed the model since the last
+/// reconcile, clearing the mark. The NPPM dispatch asks once its state
+/// borrow has ended and runs [`apply_layout`] if so. A reconcile for any
+/// other reason clears it too, since it catches the tree up with
+/// everything.
+pub(crate) fn take_dirty() -> bool {
+    with_dock(|d| std::mem::take(&mut d.dirty)).unwrap_or(false)
+}
+
+/// Whom to tell about `panel`: its registered handle and its registrant,
+/// or `None` if no live widget is registered for it.
+pub(crate) fn plugin_panel_notify_target(
+    panel: DockPanel,
+) -> Option<(*mut std::ffi::c_void, Option<usize>)> {
+    with_dock(|d| {
+        d.plugin_panels
+            .iter()
+            .find(|p| p.live() && p.panel == panel)
+            .map(|p| (p.handle, p.caller))
+    })
+    .flatten()
+}
+
+/// Whether a notice raised for `panel` under `handle` still has a live
+/// registration to go to. A handler for an earlier notice may have
+/// destroyed the widget, and its address may even have been reused by a
+/// widget registered since — so both halves are checked.
+pub(crate) fn plugin_panel_is_live(panel: DockPanel, handle: *mut std::ffi::c_void) -> bool {
+    with_dock(|d| {
+        d.plugin_panels
+            .iter()
+            .any(|p| p.live() && p.panel == panel && std::ptr::eq(p.handle, handle))
+    })
+    .unwrap_or(false)
+}
+
+/// Whether a live widget is registered for plugin `panel`.
+pub(crate) fn is_plugin_panel_registered(panel: DockPanel) -> bool {
+    with_dock(|d| d.plugin_panels.iter().any(|p| p.live() && p.panel == panel)).unwrap_or(false)
+}
+
+/// Drop the registrations whose plugins destroyed their widgets, closing
+/// their panels. Runs from an idle scheduled by the widget's `destroy`
+/// handler rather than from the handler itself, which can fire inside a
+/// reconcile holding the dock borrow.
+///
+/// Closing is the honest outcome: nothing is left to show, and the plugin
+/// registers a fresh widget if it wants the panel back — the dropped
+/// registration no longer stands in its way, and the layout still
+/// remembers where the panel was.
+pub(crate) fn forget_destroyed_plugin_panels() {
+    let changed = with_dock(|d| {
+        // Once each: a plugin can destroy two widgets registered in turn
+        // under one name before this idle runs.
+        let mut gone: Vec<DockPanel> = Vec::new();
+        for p in d.plugin_panels.iter().filter(|p| !p.live()) {
+            if !gone.contains(&p.panel) {
+                gone.push(p.panel);
+            }
+        }
+        if gone.is_empty() {
+            return false;
+        }
+        // Each panel's scrolled container is the host's own and stays
+        // wherever the dock last put it, now empty — GTK took only the
+        // destroyed widget out of it. Taken out too, or it would keep its
+        // share of a group that goes on showing other panels. Dropping
+        // the last reference to it then finalizes nothing of the
+        // plugin's.
+        for p in d.plugin_panels.iter().filter(|p| !p.live()) {
+            unparent(&p.content);
+        }
+        d.plugin_panels.retain(PluginPanel::live);
+        for panel in gone {
+            // A plugin that destroyed its widget and registered a
+            // replacement under the same name before this idle ran — a
+            // natural way to rebuild a panel — holds the panel again.
+            // Closing it now would take away the replacement.
+            if d.plugin_panels.iter().any(|p| p.panel == panel) {
+                continue;
+            }
+            tracing::info!(
+                panel = panel.persist_key(),
+                "a plugin destroyed its dock panel's widget; closing the panel"
+            );
+            if d.layout.is_visible(panel) {
+                d.layout.hide(panel);
+            }
+        }
+        true
+    });
+    if changed == Some(true) {
+        apply_layout();
+    }
+}
+
+/// A copy of the model, for decisions that also need the shell — which
+/// cannot be asked while the dock is borrowed.
+pub(crate) fn layout_snapshot() -> Option<DockLayout> {
+    with_dock(|d| d.layout.clone())
+}
+
+/// Apply a model-only change `f` and report whether it changed anything,
+/// without reconciling — the load pass batches its changes and reconciles
+/// once. `false` when the dock is busy.
+pub(crate) fn update_layout(f: impl FnOnce(&mut DockLayout) -> bool) -> bool {
+    with_dock(|d| f(&mut d.layout)).unwrap_or(false)
 }
 
 // --- gesture handlers ------------------------------------------------------------------
@@ -1682,6 +2244,87 @@ fn on_splitter_release(ev: &gdk::EventButton) -> glib::Propagation {
     glib::Propagation::Stop
 }
 
+/// The plugin panel's scrolled container. Display-gated, because it
+/// builds real widgets: driven by `crate::display_tests`, which owns the
+/// invocation and explains why these cannot be `#[test]`s of their own.
+#[cfg(test)]
+pub(crate) mod content_tests {
+    use super::scrolled_content;
+    use codepp_core::dock::MIN_DOCK_BAND_PX;
+    use gtk::prelude::*;
+
+    /// Whatever a plugin's widget asks for, the container the dock
+    /// allocates asks for less than the narrowest band — across and down,
+    /// since a band on the left or right constrains the width and one on
+    /// the top or bottom the height. The dock's `GtkLayout` allocates a
+    /// child no smaller than its minimum, so this is what stops a panel
+    /// painting over its neighbour.
+    pub(crate) fn a_plugin_panel_asks_for_less_than_the_narrowest_band() {
+        gtk::init().expect("gtk::init failed — no display?");
+        // Wide: a label that cannot wrap, like the one that overflowed an
+        // 80 px band. Tall: a column of them.
+        let wide: gtk::Widget = gtk::Label::new(Some(
+            "one line of text, far wider than the narrowest band a panel can be given",
+        ))
+        .upcast();
+        let tall = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        for i in 0..12 {
+            tall.pack_start(&gtk::Label::new(Some(&format!("row {i}"))), false, false, 0);
+        }
+        let tall: gtk::Widget = tall.upcast();
+        // Shown as a plugin shows its own: GTK 3 gives a hidden widget no
+        // size at all, which would make every assertion below vacuous.
+        wide.show();
+        tall.show_all();
+        assert!(
+            wide.preferred_width().0 > MIN_DOCK_BAND_PX,
+            "the wide fixture must ask for more than the narrowest band"
+        );
+        assert!(
+            tall.preferred_height().0 > MIN_DOCK_BAND_PX,
+            "the tall fixture must ask for more than the narrowest band"
+        );
+
+        let across = scrolled_content(&wide);
+        let down = scrolled_content(&tall);
+        // Shown as the dock shows the active panel's container, for the
+        // same reason.
+        across.show();
+        down.show();
+        let (across_min, _) = across.preferred_width();
+        let (down_min, _) = down.preferred_height();
+        assert!(
+            across_min < MIN_DOCK_BAND_PX,
+            "a wide widget's container asks for {across_min} px across"
+        );
+        assert!(
+            down_min < MIN_DOCK_BAND_PX,
+            "a tall widget's container asks for {down_min} px down"
+        );
+
+        // The widget is shown, inside a viewport with no frame, inside
+        // the container.
+        assert!(wide.is_visible(), "the host shows the plugin's widget");
+        let viewport = wide
+            .parent()
+            .and_then(|p| p.downcast::<gtk::Viewport>().ok())
+            .expect("a widget that does not scroll goes in through a viewport");
+        assert_eq!(viewport.shadow_type(), gtk::ShadowType::None);
+        assert_eq!(
+            viewport.parent().as_ref(),
+            Some(across.upcast_ref::<gtk::Widget>())
+        );
+
+        // One that scrolls by itself goes in directly.
+        let text: gtk::Widget = gtk::TextView::new().upcast();
+        let direct = scrolled_content(&text);
+        assert_eq!(
+            text.parent().as_ref(),
+            Some(direct.upcast_ref::<gtk::Widget>())
+        );
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{geometry_rect, resize_edge, side_drag_size, tear_off_grab, tear_off_size};
@@ -1755,5 +2398,102 @@ mod tests {
         let no_pos = codepp_core::WindowGeometry { x: None, ..full };
         assert_eq!(geometry_rect(Some(no_pos)), None);
         assert_eq!(geometry_rect(None), None);
+    }
+}
+
+/// Source guards for orderings no unit test can see: the one that bounds
+/// the `DMN_DOCK` / `DMN_FLOAT` round trip, and the one that keeps the
+/// dock borrow and `with_state` from deadlocking on each other.
+#[cfg(test)]
+mod source_guards {
+    use crate::source_scan::{code_only, skip_char_literal, strip_test_modules};
+
+    /// The text of the top-level function whose definition starts with
+    /// `signature`, up to its closing brace at the start of a line.
+    fn body_of(src: &str, signature: &str) -> String {
+        let start = src
+            .find(signature)
+            .unwrap_or_else(|| panic!("`{signature}` not found"));
+        let rest = &src[start..];
+        rest[..rest.find("\n}").unwrap_or(rest.len())].to_string()
+    }
+
+    /// The twin of `ui_win32`'s test of the same name, whose comment
+    /// gives the reason. Here the record is written by
+    /// `container_notices` under the dock borrow, and `apply_layout`
+    /// hands the notices to `crate::plugin::deliver_dock_notices` only
+    /// after that borrow has ended.
+    #[test]
+    fn the_container_is_recorded_before_the_notification_is_sent() {
+        let dock = strip_test_modules(&code_only(include_str!("dock.rs")));
+        let apply = body_of(&dock, "pub(crate) fn apply_layout()");
+        let record = apply
+            .find("with_dock(container_notices)")
+            .expect("the reconcile no longer records containers under the dock borrow");
+        let send = apply
+            .find("deliver_dock_notices(notices)")
+            .expect("the reconcile no longer sends the notices");
+        assert!(record < send, "the send now precedes the record");
+
+        let notices = body_of(&dock, "fn container_notices(");
+        assert!(
+            notices.contains("entry.told = Some(now);"),
+            "container_notices no longer writes the record"
+        );
+        assert!(
+            !notices.contains("deliver_dock_notices") && !notices.contains(".send("),
+            "container_notices sends while the dock borrow is live"
+        );
+
+        let plugin = strip_test_modules(&code_only(include_str!("plugin.rs")));
+        let deliver = body_of(&plugin, "pub(crate) fn deliver_dock_notices(");
+        assert!(
+            !deliver.contains(".told"),
+            "the record moved into the send loop, after the send it must precede"
+        );
+    }
+
+    /// Code holding the dock borrow never calls `with_state` — the rule
+    /// the module docs give for keeping the two `RefCell`s from
+    /// deadlocking on each other. Checks every argument handed to
+    /// `with_dock`, closure or function name; the body of a function
+    /// passed by name is not followed, so it keeps the same rule by hand.
+    #[test]
+    fn nothing_under_the_dock_borrow_asks_for_the_state() {
+        let dock = strip_test_modules(&code_only(include_str!("dock.rs")));
+        let bytes = dock.as_bytes();
+        let mut checked = 0;
+        for (at, _) in dock.match_indices("with_dock(") {
+            let open = at + "with_dock".len();
+            let mut depth = 0usize;
+            let mut i = open;
+            while i < bytes.len() {
+                match bytes[i] {
+                    b'\'' => {
+                        i = skip_char_literal(bytes, i).max(i + 1);
+                        continue;
+                    }
+                    b'(' => depth += 1,
+                    b')' => {
+                        depth -= 1;
+                        if depth == 0 {
+                            break;
+                        }
+                    }
+                    _ => {}
+                }
+                i += 1;
+            }
+            let argument = &dock[open..i.min(dock.len())];
+            assert!(
+                !argument.contains("with_state"),
+                "a `with_dock` call asks for the state under the dock borrow: {argument}"
+            );
+            checked += 1;
+        }
+        assert!(
+            checked > 10,
+            "found only {checked} `with_dock` calls: the scan is not reading the module"
+        );
     }
 }

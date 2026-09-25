@@ -27,7 +27,7 @@ use gtk::{gio, prelude::*};
 use crate::state::with_state;
 use crate::{
     close_active_tab, drain_shell, editor_is_pristine, rebind_active_view, refresh_tab_chrome,
-    save_session_now, sync_tab_strip,
+    sync_tab_strip,
 };
 
 /// Menu item labels paired with the accelerator each one advertises.
@@ -868,10 +868,7 @@ fn build_file_menu_lower(menu: &gtk::Menu, accel: &gtk::AccelGroup) {
         gtk::AccelFlags::VISIBLE,
     );
     exit.connect_activate(|_| {
-        crate::at_callback_boundary("menu:exit:activate", (), || {
-            save_session_now();
-            gtk::main_quit();
-        });
+        crate::at_callback_boundary("menu:exit:activate", (), crate::quit);
     });
     menu.append(&exit);
 }

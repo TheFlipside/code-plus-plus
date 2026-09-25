@@ -144,11 +144,17 @@ pub unsafe fn SendMessageW(hwnd: Hwnd, msg: u32, wparam: usize, lparam: isize) -
 
 // ---- SyncCell ---------------------------------------------------
 //
-// Wrapper providing `Sync` for `UnsafeCell<T>`. The host writes
-// `cmd_id` into our static FuncItem array at load time — the
-// inherent "shared memory mutated by foreign code" pattern
-// `UnsafeCell` exists for. The plugin itself never reads back the
-// mutated field; we just hand the host a pointer it owns.
+// Wrapper providing `Sync` for `UnsafeCell<T>`, for the statics a
+// plugin shares with the host. The host writes `cmd_id` into a
+// plugin's static FuncItem array at load time — the inherent "shared
+// memory mutated by foreign code" pattern `UnsafeCell` exists for —
+// and reads a plugin's static `tTbData` whenever the docking messages
+// say it may. A plugin may read `cmd_id` back (to tick its own items
+// with NPPM_SETMENUITEMCHECK, as example-hello does) and fill in its
+// `tTbData`. All of it is sound for one reason: every one of those
+// accesses, the host's and the plugin's, happens on the host's UI
+// thread, where the host calls plugins and plugins answer, so none is
+// ever concurrent with another.
 //
 // We deliberately do **not** bound `T: Send`: `FuncItem` carries a
 // `*mut ShortcutKey` raw pointer that prevents auto-derivation of
@@ -160,9 +166,9 @@ pub unsafe fn SendMessageW(hwnd: Hwnd, msg: u32, wparam: usize, lparam: isize) -
 #[repr(transparent)]
 pub struct SyncCell<T>(UnsafeCell<T>);
 
-// SAFETY: see the module-level comment above. The host's
-// single-threaded mutation of `cmd_id` is the only write; plugin-
-// side reads of the array don't observe `cmd_id`.
+// SAFETY: see the comment above. Every access to the inner value — the
+// host's writes and reads, and the plugin's — happens on the host's UI
+// thread, so no two are ever concurrent.
 unsafe impl<T> Sync for SyncCell<T> {}
 
 impl<T> SyncCell<T> {
@@ -297,10 +303,18 @@ pub const DMN_DOCK: u32 = 1050 + 2;
 /// up).
 pub const DMN_FLOAT: u32 = 1050 + 3;
 
-/// `WM_NOTIFY` — the Win32 message [`DMN_CLOSE`] arrives on.
-/// Declared here so a plugin needn't pull in a Win32 binding crate
-/// just to name it.
-pub const WM_NOTIFY: u32 = 0x004E;
+/// `WM_NOTIFY` — the message every `DMN_*` arrives on: at the panel's
+/// window procedure on Windows, at the plugin's own `messageProc`
+/// elsewhere, with the panel's `h_client` in `wParam` (see
+/// `codepp_plugin_host::WM_NOTIFY`). Re-exported so a plugin needn't
+/// pull in a Win32 binding crate just to name it.
+pub use codepp_plugin_host::WM_NOTIFY;
+
+/// `NPPM_SETMENUITEMCHECK(cmdID, BOOL)` — tick or untick one of the
+/// plugin's own menu items, by the `cmd_id` the host wrote into its
+/// `FuncItem`. A click never ticks an item by itself; this is how a
+/// "Show Panel" style item stays in step with the panel.
+pub const NPPM_SETMENUITEMCHECK: u32 = NPPMSG + 40;
 
 /// Base of the `NPPN_*` notification codes a plugin receives in
 /// `SCNotification.nmhdr.code` through `beNotified`.
@@ -599,6 +613,28 @@ pub fn set_status(text: &str) {
     }
 }
 
+/// Tick or untick one of this plugin's own menu items —
+/// [`NPPM_SETMENUITEMCHECK`]. `cmd_id` is the id the host wrote into the
+/// item's `FuncItem` at load. A click never ticks an item by itself, so
+/// this is how a "Show Panel" style item stays in step with the panel.
+///
+/// No-op if `setInfo` hasn't run yet (`NPP_HANDLE` is null), or for a
+/// negative id, which no `FuncItem` carries.
+pub fn set_menu_item_check(cmd_id: i32, checked: bool) {
+    let npp = NPP_HANDLE.load(Ordering::Acquire);
+    let Ok(cmd_id) = usize::try_from(cmd_id) else {
+        return;
+    };
+    if npp.is_null() {
+        return;
+    }
+    // SAFETY: both arguments are plain integers; the message
+    // dereferences nothing.
+    unsafe {
+        SendMessageW(npp, NPPM_SETMENUITEMCHECK, cmd_id, isize::from(checked));
+    }
+}
+
 // ---- Code++ host services (export dialog + clipboard) -----------
 //
 // These wrap the two Code++ extension messages so a plugin never has
@@ -716,6 +752,7 @@ mod abi_lock {
         assert_eq!(super::NPPM_DMMHIDE, host::NPPM_DMMHIDE);
         assert_eq!(super::NPPM_DMMUPDATEDISPINFO, host::NPPM_DMMUPDATEDISPINFO);
         assert_eq!(super::NPPM_DMMVIEWOTHERTAB, host::NPPM_DMMVIEWOTHERTAB);
+        assert_eq!(super::NPPM_SETMENUITEMCHECK, host::NPPM_SETMENUITEMCHECK);
     }
 
     /// `DMN_CLOSE` lives in the host's `ffi` module rather than

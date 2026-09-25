@@ -354,10 +354,12 @@ pub struct NppDarkModeColors {
 /// aligned dereference.
 #[repr(C)]
 pub struct TbData {
-    /// Plugin's docking-dialog HWND. The frame the host creates
-    /// owns this HWND as its child for sizing; the plugin retains
-    /// the lifetime contract (the plugin destroys the HWND, not
-    /// the host).
+    /// The panel's content. On Windows the plugin's docking-dialog
+    /// `HWND`, which the host restyles as a child window and parents
+    /// into its dock; on Linux a `GtkWidget*` the plugin created and
+    /// has not put in a container, which the host takes a reference
+    /// to and puts in a scrolled container of its own. Either way the
+    /// plugin owns its lifetime: the host never destroys it.
     pub h_client: *mut c_void,
     /// Wide-char display title. Used for the panel's caption and
     /// as the lookup key for `NPPM_DMMGETPLUGINHWNDBYNAME` and
@@ -371,7 +373,10 @@ pub struct TbData {
     pub dlg_id: i32,
     /// Bit-mask of `DWS_*` flags.
     pub u_mask: u32,
-    /// Optional title-bar icon. NULL skips icon rendering.
+    /// Optional tab icon, drawn when `u_mask` carries `DWS_ICONTAB`:
+    /// an `HICON` on Windows, a `GdkPixbuf*` on Linux. NULL — or, on
+    /// Linux, anything that is not a pixbuf — gets the generic
+    /// plugin glyph.
     pub h_icon_tab: *mut c_void,
     /// Optional extra-info wide string shown alongside the title.
     /// NULL skips. Plugin owns the buffer.
@@ -386,8 +391,9 @@ pub struct TbData {
     /// nibble instead, and everything after that from where the
     /// user last put it.
     pub i_prev_cont: i32,
-    /// The plugin's DLL file name, extension included
-    /// (`"MyPlugin.dll"`) — upstream's contract, since Notepad++
+    /// The plugin's library file name, extension included
+    /// (`"MyPlugin.dll"`, or `"MyPlugin.so"` on Linux) — upstream's
+    /// contract, since Notepad++
     /// persists the string and finds the plugin again by it. Used by
     /// `GETPLUGINHWNDBYNAME`'s second argument (the optional
     /// module-name disambiguator). Plugin owns the buffer.
@@ -421,6 +427,27 @@ pub const DWS_DF_CONT_TOP: u32 = 0x2000_0000;
 /// Default-container nibble: dock-bottom preference.
 pub const DWS_DF_CONT_BOTTOM: u32 = 0x3000_0000;
 
+// --- CONT_* container ids --------------------------------------------
+//
+// Notepad++'s numbering of its docking containers: one per side, then
+// the floating ones from `DOCKCONT_MAX` up. The same numbering travels
+// in both directions — shifted into `u_mask`'s top nibble as
+// `DWS_DF_CONT_*` on the way in, and in the high word of `DMN_DOCK` /
+// `DMN_FLOAT` on the way out — so `crate::docking` builds both from
+// these, once.
+
+/// The left container.
+pub const CONT_LEFT: u32 = 0;
+/// The right container.
+pub const CONT_RIGHT: u32 = 1;
+/// The top container.
+pub const CONT_TOP: u32 = 2;
+/// The bottom container.
+pub const CONT_BOTTOM: u32 = 3;
+/// How many docked containers there are, and so the first number a
+/// floating container can have.
+pub const DOCKCONT_MAX: u32 = 4;
+
 // --- DMN_* dock notifications ----------------------------------------
 //
 // Not delivered through `beNotified`. Each is a plain `WM_NOTIFY` sent
@@ -429,6 +456,19 @@ pub const DWS_DF_CONT_BOTTOM: u32 = 0x3000_0000;
 // upstream's shape, measured against Notepad++ 8.9.6 with a probe
 // plugin loaded into both hosts. `plugins/nppcompat-headers/Docking.h`
 // states the contract a plugin author reads.
+
+/// `WM_NOTIFY` — the message every `DMN_*` travels on.
+///
+/// On Windows it is the ordinary Win32 message, sent to the plugin's own
+/// `h_client` window: `wParam` 0, `lParam` the `NMHDR`. Off Windows a
+/// panel's `h_client` is a toolkit widget, which has no window procedure
+/// to receive a message — so the host calls the plugin's own
+/// `messageProc` export with this message instead, `lParam` the same
+/// `NMHDR` (`hwnd_from` the npp handle, `id_from` 0), and `wParam` the
+/// panel's `h_client`, since that is the only way left to say which of
+/// the plugin's panels the notification is about. See
+/// `plugins/nppcompat-headers/Docking.h`.
+pub const WM_NOTIFY: u32 = 0x004E;
 
 /// First DMN_* code: 1050, as upstream defines it. It was `0x1000`
 /// until this was measured, which made every `DMN_*` this host sent a

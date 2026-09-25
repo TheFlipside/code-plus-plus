@@ -36,6 +36,14 @@ windows = { version = "0.62", features = [
     "Win32_System_SystemInformation",
 ] }
 
-# The dlopen/dlsym/dlclose arm of `dynlib` on Unix (Linux plugin loading).
+# The dlopen/dlsym/dlclose arm of `dynlib` on Unix (Linux plugin
+# loading), and `getrandom` / `flock` / `geteuid` for `panel_key`'s Linux
+# backend.
 [target.'cfg(unix)'.dependencies]
 libc = { workspace = true }
+
+# `panel_key` on Linux: HMAC-SHA256 through GLib's `GHmac` — the
+# platform's own primitive in the sense CNG is Windows', already mapped
+# into every process of the GTK backend, so no crypto crate is added.
+[target.'cfg(target_os = "linux")'.dependencies]
+glib-sys = { workspace = true }

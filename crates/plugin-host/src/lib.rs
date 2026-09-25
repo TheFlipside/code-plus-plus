@@ -37,10 +37,11 @@
 pub mod caller;
 pub mod codepp_ext;
 pub mod dispatch;
+pub mod docking;
 pub mod ffi;
 pub mod host;
 
-pub use caller::{calling_plugin, CallingPlugin, PluginCommand};
+pub use caller::{calling_plugin, CallingPlugin, PluginCommand, PluginMessageProc};
 pub use codepp_ext::{
     ClipEntry, ClipboardSetRequest, ExportSaveRequest, CLIP_FORMAT_HTML, CLIP_FORMAT_PLAIN,
     CLIP_FORMAT_RTF, CODEPPMSG, CODEPPMSG_RANGE, CODEPPM_EXPORTSAVEDIALOG, CODEPPM_GETZOOMLEVEL,
@@ -50,10 +51,11 @@ pub use codepp_ext::{
 pub use ffi::{
     BeNotifiedFn, CommunicationInfo, FuncItem, GetFuncsArrayFn, GetNameFn, HostDispatchFn, Hwnd,
     IsUnicodeFn, MessageProcFn, NppDarkModeColors, NppData, PluginCmd, SCNotification,
-    SciNotifyHeader, SessionInfo, SetInfoFn, ShortcutKey, TbData, TbRect, ToolbarIcons, DMN_CLOSE,
-    DMN_DOCK, DMN_FIRST, DMN_FLOAT, DMN_FLOATDROPPED, DMN_SWITCHIN, DMN_SWITCHOFF, DWS_ADDINFO,
-    DWS_DF_CONT_BOTTOM, DWS_DF_CONT_LEFT, DWS_DF_CONT_RIGHT, DWS_DF_CONT_TOP, DWS_DF_FLOATING,
-    DWS_ICONBAR, DWS_ICONTAB, DWS_USEOWNDARKMODE, MENU_TITLE_LENGTH,
+    SciNotifyHeader, SessionInfo, SetInfoFn, ShortcutKey, TbData, TbRect, ToolbarIcons,
+    CONT_BOTTOM, CONT_LEFT, CONT_RIGHT, CONT_TOP, DMN_CLOSE, DMN_DOCK, DMN_FIRST, DMN_FLOAT,
+    DMN_FLOATDROPPED, DMN_SWITCHIN, DMN_SWITCHOFF, DOCKCONT_MAX, DWS_ADDINFO, DWS_DF_CONT_BOTTOM,
+    DWS_DF_CONT_LEFT, DWS_DF_CONT_RIGHT, DWS_DF_CONT_TOP, DWS_DF_FLOATING, DWS_ICONBAR,
+    DWS_ICONTAB, DWS_USEOWNDARKMODE, MENU_TITLE_LENGTH, WM_NOTIFY,
 };
 
 pub use dispatch::{

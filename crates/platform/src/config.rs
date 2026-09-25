@@ -174,8 +174,9 @@ pub fn styles_xml_path() -> Option<PathBuf> {
 }
 
 /// Path to the key Code++ signs plugin panels' startup commands with —
-/// `config_dir/panel-restore.key`, encrypted for the current Windows
-/// account (see `panel_key`). Next to `session.xml`, whose signatures it
+/// `config_dir/panel-restore.key`: encrypted for the current account on
+/// Windows, the raw key in an owner-only file on Linux (see
+/// `panel_key`). Next to `session.xml`, whose signatures it
 /// checks, rather than in the machine-local profile: a roaming profile
 /// takes both along, and a scratch profile — a demo, a test — has its
 /// own. `panel-restore.key.lock` beside it is the lock two instances

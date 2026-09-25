@@ -180,7 +180,16 @@ pub fn run(initial_path: Option<PathBuf>, perf: Perf) -> Result<(), GtkUiError> 
             crate::at_callback_boundary("lib:wake", (), drain_shell);
         });
     });
-    let shell = Shell::new(wake).map_err(|e| GtkUiError::Shell(e.to_string()))?;
+    let mut shell = Shell::new(wake).map_err(|e| GtkUiError::Shell(e.to_string()))?;
+    // What signs a plugin panel's startup command, so that with
+    // Preferences → Security's guard on (the default) a panel this host
+    // recorded comes back by running its command, and one from an edited
+    // or copied session does not. Before discovery and the startup
+    // restore, which both consult it; the key itself is not touched until
+    // something is signed or checked. See `codepp_platform::panel_key`.
+    let panel_signer =
+        codepp_platform::panel_key::PanelSigner::new(codepp_platform::panel_key_path());
+    shell.set_panel_signer(Box::new(move |message| panel_signer.sign(message)));
 
     // --- Widgets ---------------------------------------------------
     let window = gtk::Window::new(gtk::WindowType::Toplevel);
@@ -360,8 +369,15 @@ pub fn run(initial_path: Option<PathBuf>, perf: Perf) -> Result<(), GtkUiError> 
     connect_session_persistence(&window);
 
     window.show_all();
-    // Focus the editor so the first keystroke lands in the buffer
-    // rather than on the menu bar.
+    // Load the plugins whose dock panels the restored session had open
+    // and bring those panels back by running their own commands, the way
+    // Notepad++ restores a plugin panel. After the window is shown, as
+    // Win32 does, and before the main loop, so the first frame already
+    // carries the panels. Parks what no loaded plugin can supply.
+    plugin::restore_panel_plugins();
+    // Focus the editor so the first keystroke lands in the buffer rather
+    // than on the menu bar — after the restore, since a plugin's command
+    // may have focused its own panel.
     sci_widget.grab_focus();
 
     gtk::main();
@@ -421,13 +437,7 @@ fn connect_session_persistence(window: &gtk::Window) {
             "lib:window:delete_event",
             glib::Propagation::Proceed,
             || {
-                // The save runs at its own boundary so a panic inside it
-                // cannot skip `main_quit`: with one shared boundary the
-                // window would close (GTK's default handling proceeds)
-                // while the loop kept running with nothing left to quit
-                // it from.
-                crate::at_callback_boundary("lib:window:delete_event:save", (), save_session_now);
-                gtk::main_quit();
+                quit();
                 glib::Propagation::Proceed
             },
         )
@@ -1212,6 +1222,16 @@ impl Drop for DrainFreeze {
 pub(crate) fn present_deferred_dialogs() {
     let dialogs = with_state(|st| st.shell.take_deferred_dialogs()).unwrap_or_default();
     if dialogs.is_empty() {
+        return;
+    }
+    if QUITTING.with(Cell::get) {
+        // Queued once the quit began — by a plugin's shutdown handler,
+        // say: the window is going, and a modal now would hold the quit
+        // hostage. Win32 drops these at `WM_DESTROY` for the same reason.
+        tracing::debug!(
+            count = dialogs.len(),
+            "dropping dialogs queued during shutdown"
+        );
         return;
     }
     DIALOG_QUEUE.with(|q| q.borrow_mut().extend(dialogs));
@@ -2092,20 +2112,70 @@ fn window_geometry_to_persist(
 
 /// Persist the session. Safe to call repeatedly.
 pub(crate) fn save_session_now() {
-    // Snapshot the live workspace-panel + window state into the shell
-    // first, so `save_session` carries the current root / visibility /
-    // width / window geometry — the same "sync right before every save"
-    // discipline `ui_win32` follows.
+    capture_ui_state_to_shell();
+    persist_session();
+}
+
+/// Snapshot the live dock layout, workspace-panel and window state into
+/// the shell, so `save_session` carries the current arrangement / root /
+/// visibility / width / window geometry — the same "sync right before
+/// every save" discipline `ui_win32` follows.
+fn capture_ui_state_to_shell() {
     dock::sync_to_shell();
     workspace::sync_to_shell();
     docmap::sync_to_shell();
     sync_window_geometry_to_shell();
+}
+
+/// Write the session the shell holds to disk, as it stands.
+fn persist_session() {
     with_state(|st| {
         let (shell, mut ui) = st.split();
         if let Err(err) = shell.save_session(&mut ui) {
             tracing::warn!(?err, "session save failed");
         }
     });
+}
+
+thread_local! {
+    /// Set once [`quit`] has begun. See there.
+    static QUITTING: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Leave the application: tell the plugins, save the session, end the
+/// main loop. The one way out — the window's close and File → Exit both
+/// come here — and it runs once, whichever is first.
+///
+/// The order is Win32's `notify_plugins_of_shutdown` followed by its
+/// `WM_DESTROY` save, and each step matters:
+///
+///   1. The UI's state is captured into the shell *first*, and the dock
+///      layout then pinned (`dock::freeze_session`), so the saved
+///      arrangement is the one the user left — not whatever a plugin
+///      hides or shows from its shutdown handler. A plugin panel open at
+///      quit comes back open.
+///   2. `NPPN_BEFORESHUTDOWN` then `NPPN_SHUTDOWN`, while the plugins'
+///      panels still exist, with no borrow held — so a plugin saving its
+///      settings can ask the host where to put them
+///      (`NPPM_GETPLUGINSCONFIGDIR`) and is answered. Win32 declines those
+///      questions, because its teardown cannot drop its borrow first; this
+///      one can. A dialog a handler queues is dropped rather than shown.
+///   3. The session is saved as captured, and the main loop told to end.
+///
+/// Each step runs at its own boundary, so a panic in one cannot skip the
+/// save or leave the loop running with nothing left to quit it from.
+pub(crate) fn quit() {
+    if QUITTING.with(|q| q.replace(true)) {
+        return;
+    }
+    crate::at_callback_boundary("lib:quit:capture", (), capture_ui_state_to_shell);
+    // Outside the capture's boundary, so it holds even if the capture
+    // panicked: either way a plugin's shutdown handler must not get to
+    // change what is saved. Setting a flag cannot panic itself.
+    dock::freeze_session();
+    crate::at_callback_boundary("lib:quit:notify", (), plugin::notify_shutdown);
+    crate::at_callback_boundary("lib:quit:save", (), persist_session);
+    gtk::main_quit();
 }
 
 /// Re-read the active buffer's modify bit into `Tab.dirty`, returning
@@ -2675,6 +2745,13 @@ mod dock_reparenting_source_invariant {
         let mut out = Vec::new();
         for (at, _) in src.match_indices("destroy(") {
             let before = &src[..at];
+            // `connect_destroy(` connects a handler to a widget's
+            // `destroy` signal — it destroys nothing. The plugin bridge
+            // watches a plugin's panel widget that way, so it can drop the
+            // registration when the *plugin* destroys its own widget.
+            if before.ends_with("connect_") {
+                continue;
+            }
             if let Some(head) = before.strip_suffix('.') {
                 let receiver: String = head
                     .chars()
@@ -2707,11 +2784,13 @@ WidgetExt::destroy(&mut w);
 make().destroy();
 unsafe { gtk::ffi::gtk_widget_destroy(raw_ptr) };
 fn destroy_all() {}
+widget.connect_destroy(move |_| {});
 ";
         let calls = destroy_calls(sample);
         let receivers: Vec<&str> = calls.iter().map(|(r, _)| r.as_str()).collect();
         // The `fn destroy_all()` declaration is not a call and is not
-        // matched (`destroy_` is followed by `all(`, not `(`).
+        // matched (`destroy_` is followed by `all(`, not `(`), and a
+        // `connect_destroy(` handler connection destroys nothing.
         assert_eq!(receivers, ["dialog", "g", "w", "", "raw_ptr"]);
         assert!(calls[3].1.contains("make().destroy()"));
     }
@@ -3261,5 +3340,6 @@ mod display_tests {
         crate::platform::doc_binding_tests::view_binding_follows_the_requested_document();
         crate::print::tests::build_print_operation_exports_a_pdf();
         crate::plugin::cross_thread_tests::a_plugins_worker_thread_reaches_scintilla_through_the_main_loop();
+        crate::dock::content_tests::a_plugin_panel_asks_for_less_than_the_narrowest_band();
     }
 }

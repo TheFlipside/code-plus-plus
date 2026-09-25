@@ -103,6 +103,11 @@ pub struct PluginPanelIdent {
     /// [`DockPanel::persist_key`]'s answer, precomputed so it can be
     /// returned as `&'static str` like the built-in panels'.
     key: String,
+    /// Whether persisted text — a restored `session.xml` — created this
+    /// identity, rather than a plugin's registration. Only identities a
+    /// registration created count against
+    /// [`MAX_PLUGIN_PANELS_PER_MODULE`].
+    restored: bool,
 }
 
 /// Registered plugin panels, in interning order.
@@ -131,6 +136,31 @@ static PLUGIN_PANELS: std::sync::Mutex<Vec<&'static PluginPanelIdent>> =
 /// *is* tested is the boundary that a caller can actually cross,
 /// [`MAX_PLUGIN_PANEL_FIELD_LEN`].
 pub const MAX_PLUGIN_PANELS: usize = 64;
+
+/// How many panel identities one module's registrations may create in a
+/// process.
+///
+/// The table above never gives a slot back, so without this one plugin
+/// could fill it: register a panel under a fresh name each time — title
+/// it after the current file, say, and register anew on every switch —
+/// and from the 64th name on every plugin's registration is refused
+/// until the process ends. With it, such a plugin runs out of names of
+/// its own and nobody else's. Counted per module name over identities a
+/// registration created; one a restored session created is not charged,
+/// so a crafted `session.xml` cannot spend a real plugin's allowance
+/// either — persisted text has [`MAX_RESTORED_PLUGIN_PANELS`] for that.
+/// Generous against real plugins, which register one or two panels.
+///
+/// The module name is what the registering plugin *declares*
+/// (`tTbData.pszModuleName`); nothing ties it to the plugin that sent
+/// the message. So a plugin that varies its module name gets round the
+/// allowance, and one that declares another plugin's name can spend
+/// that plugin's. Neither is a mistake a plugin makes by accident — a
+/// module name is a file name, not text a plugin composes — and a
+/// plugin set on doing it runs in this process and needs no help from
+/// the host to do worse (DESIGN.md §6.5), the same reasoning the
+/// command signature's docs give for the same declared name.
+pub const MAX_PLUGIN_PANELS_PER_MODULE: usize = 8;
 
 /// Ceiling on the bytes of either half of a plugin panel's identity.
 ///
@@ -182,8 +212,9 @@ static RESTORED_PLUGIN_PANELS: AtomicUsize = AtomicUsize::new(0);
 /// that compare unequal.
 ///
 /// `None` for an empty or over-long `module` / `name` (see
-/// [`MAX_PLUGIN_PANEL_FIELD_LEN`]), and once [`MAX_PLUGIN_PANELS`]
-/// distinct panels exist.
+/// [`MAX_PLUGIN_PANEL_FIELD_LEN`]), once [`MAX_PLUGIN_PANELS`]
+/// distinct panels exist, and for a new name once `module`'s
+/// registrations have created [`MAX_PLUGIN_PANELS_PER_MODULE`].
 ///
 /// A `|` in either half is refused too: it is the separator
 /// [`DockPanel::persist_key`] joins them with, so a name carrying one
@@ -201,12 +232,17 @@ static RESTORED_PLUGIN_PANELS: AtomicUsize = AtomicUsize::new(0);
 /// check at the one place identities are made covers both routes.
 #[must_use]
 pub fn intern_plugin_panel(module: &str, name: &str) -> Option<DockPanel> {
-    intern_plugin_panel_with(module, name, || true)
+    intern_plugin_panel_with(module, name, false, || true)
 }
 
 /// [`intern_plugin_panel`], asking `may_create` — under the table's lock
 /// — before it creates a *new* identity. An identity already in the
 /// table resolves without asking: it takes no slot.
+///
+/// `restored` says where the name comes from: `true` for persisted
+/// text, which a restore budgets through `may_create`, and `false` for a
+/// registration, which is held to [`MAX_PLUGIN_PANELS_PER_MODULE`]
+/// instead.
 ///
 /// The lock is not reentrant, so `may_create` must not intern anything
 /// itself: a closure that reached back into the table would deadlock
@@ -215,6 +251,7 @@ pub fn intern_plugin_panel(module: &str, name: &str) -> Option<DockPanel> {
 fn intern_plugin_panel_with(
     module: &str,
     name: &str,
+    restored: bool,
     may_create: impl FnOnce() -> bool,
 ) -> Option<DockPanel> {
     let usable = |s: &str| {
@@ -230,16 +267,34 @@ fn intern_plugin_panel_with(
     if let Some(found) = panels.iter().find(|p| p.module == module && p.name == name) {
         return Some(DockPanel::Plugin(found));
     }
-    if panels.len() >= MAX_PLUGIN_PANELS || !may_create() {
+    // `may_create` goes last: it charges a budget, which a refusal for
+    // any other reason must not spend.
+    if panels.len() >= MAX_PLUGIN_PANELS
+        || (!restored && !registrations_may_create(&panels, module))
+        || !may_create()
+    {
         return None;
     }
     let ident: &'static PluginPanelIdent = Box::leak(Box::new(PluginPanelIdent {
         module: module.to_string(),
         name: name.to_string(),
         key: format!("{PLUGIN_PANEL_KEY_PREFIX}{module}{PLUGIN_PANEL_SEPARATOR}{name}"),
+        restored,
     }));
     panels.push(ident);
     Some(DockPanel::Plugin(ident))
+}
+
+/// Whether `module`'s registrations may create another identity in
+/// `panels`: fewer than [`MAX_PLUGIN_PANELS_PER_MODULE`] of the ones a
+/// registration created carry that module name. Identities a restore
+/// created are not counted.
+fn registrations_may_create(panels: &[&PluginPanelIdent], module: &str) -> bool {
+    panels
+        .iter()
+        .filter(|p| !p.restored && p.module == module)
+        .count()
+        < MAX_PLUGIN_PANELS_PER_MODULE
 }
 
 /// A plugin panel's persisted key split into its module and name, with
@@ -268,8 +323,9 @@ pub enum DockPanel {
     /// "Document Map" — the miniature second Scintilla view.
     DocMap,
     /// A panel a plugin registered through `NPPM_DMMREGASDCKDLG`.
-    /// Only the Win32 backend ever creates these: the message
-    /// carries an `HWND`, and the other two backends decline it.
+    /// The Win32 and GTK backends create these — the message carries
+    /// the plugin's own window, an `HWND` there and a `GtkWidget*`
+    /// here — and Cocoa declines it.
     Plugin(&'static PluginPanelIdent),
 }
 
@@ -279,9 +335,9 @@ impl DockPanel {
     /// **Not every panel**: plugin panels are interned at
     /// registration and are not in here, so a caller that means
     /// "every panel this layout might mention" must not iterate
-    /// this. There is deliberately no such iterator — the one place
-    /// that needs the full set is the Win32 dock reconciler, which
-    /// builds it from the live registrations it already holds, so
+    /// this. There is deliberately no such iterator — the places that
+    /// need the full set are the Win32 and GTK dock reconcilers, which
+    /// build it from the live registrations they already hold, so
     /// that a panel whose plugin has not loaded yet is absent rather
     /// than present with no content window.
     pub const BUILT_IN: [DockPanel; 2] = [DockPanel::Workspace, DockPanel::DocMap];
@@ -335,6 +391,10 @@ impl DockPanel {
     /// goes through [`DockLayout::from_session`], which routes every
     /// plugin key through the budget and hands this function only the
     /// host's own keys. Crate-private so no other crate can bypass that.
+    /// A plugin key that did reach here would be interned as a
+    /// registration, charged to its module's
+    /// [`MAX_PLUGIN_PANELS_PER_MODULE`] — the other reason no restore
+    /// may use it. Only tests pass it one.
     #[must_use]
     pub(crate) fn from_persist_key(key: &str) -> Option<DockPanel> {
         match key {
@@ -1408,14 +1468,16 @@ impl DockLayout {
     /// placement tables.
     ///
     /// For a backend that cannot host one. A plugin registers its
-    /// dock dialog through `NPPM_DMMREGASDCKDLG`, which only the
-    /// Win32 host accepts (DESIGN.md §7.4 — the `HWND`-shaped
-    /// `UiPlatform` methods keep their trait defaults on GTK and
-    /// Cocoa), yet `session.xml` is portable and a layout written on
-    /// Windows names panels by a key that interns on any platform. A
+    /// dock dialog through `NPPM_DMMREGASDCKDLG`, which the Cocoa
+    /// host declines (DESIGN.md §7.4 — the `HWND`-shaped
+    /// `UiPlatform` methods keep their trait defaults there), yet
+    /// `session.xml` is portable and a layout written on Windows or
+    /// Linux names panels by a key that interns on any platform. A
     /// backend that called this at restore never sees a panel it has
     /// no content window for; one that did not would render an empty
-    /// group and have no way to close it.
+    /// group and have no way to close it. The backends that do host
+    /// plugin panels park one whose plugin cannot supply it instead
+    /// ([`Self::park`]), so it is saved back where it was.
     pub fn drop_plugin_panels(&mut self) {
         self.groups.retain_mut(|g| {
             g.panels.retain(|p| !matches!(p, DockPanel::Plugin(_)));
@@ -1829,7 +1891,7 @@ impl DockLayout {
             let Some((module, name)) = plugin_key_parts(kind) else {
                 return DockPanel::from_persist_key(kind);
             };
-            intern_plugin_panel_with(module, name, || {
+            intern_plugin_panel_with(module, name, true, || {
                 // Relaxed: this runs under the table's lock, which
                 // already orders it against every other charge.
                 budget
@@ -2283,6 +2345,48 @@ pub fn tab_drop_index(widths: &[i32], from: usize, cursor_x: i32) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The per-module allowance counts what registrations created for
+    /// that module, and nothing else. Checked over a table built here:
+    /// no unit test fills the process-wide one (see
+    /// `MAX_PLUGIN_PANELS`), which is why the check is a function of its
+    /// own. `crates/core/tests/plugin_panel_quota.rs` drives the real
+    /// table, in a process of its own.
+    #[test]
+    fn a_modules_registrations_have_an_allowance_of_their_own() {
+        let ident = |module: &str, name: String, restored: bool| PluginPanelIdent {
+            module: module.to_string(),
+            name,
+            key: String::new(),
+            restored,
+        };
+        let registered: Vec<PluginPanelIdent> = (0..MAX_PLUGIN_PANELS_PER_MODULE)
+            .map(|i| ident("a.dll", format!("A {i}"), false))
+            .collect();
+        let mut table: Vec<&PluginPanelIdent> = registered.iter().skip(1).collect();
+        assert!(
+            registrations_may_create(&table, "a.dll"),
+            "one short of the allowance"
+        );
+        table.push(&registered[0]);
+        assert!(
+            !registrations_may_create(&table, "a.dll"),
+            "at the allowance"
+        );
+        assert!(
+            registrations_may_create(&table, "b.dll"),
+            "another module's allowance is its own"
+        );
+
+        let restored: Vec<PluginPanelIdent> = (0..MAX_PLUGIN_PANELS_PER_MODULE)
+            .map(|i| ident("c.dll", format!("C {i}"), true))
+            .collect();
+        let table: Vec<&PluginPanelIdent> = restored.iter().collect();
+        assert!(
+            registrations_may_create(&table, "c.dll"),
+            "identities a restore created are not charged"
+        );
+    }
 
     fn mid() -> DockRect {
         DockRect::new(0, 0, 1000, 700)

@@ -502,8 +502,9 @@ pub trait UiPlatform {
     /// place it. Returns the panel the registration interned to — the
     /// shell then records its startup command through
     /// [`Self::record_panel_open_command`] — or `None` when it was
-    /// refused. Defaulted to `None`: only the Win32 backend accepts
-    /// the registration (DESIGN.md §7.4).
+    /// refused. Defaulted to `None`, which is Cocoa's answer: the
+    /// Win32 and GTK backends accept the registration, Cocoa does not
+    /// (DESIGN.md §7.4).
     fn register_dock_dialog(
         &mut self,
         _params: codepp_plugin_host::DockDialogParams,
@@ -543,10 +544,10 @@ pub trait UiPlatform {
     }
 
     /// Bring the dock panel named `name` to the front of the
-    /// group it shares. Drives `NPPM_DMMVIEWOTHERTAB`. Defaulted
-    /// to `false` — the message addresses a panel registered
-    /// through `NPPM_DMMREGASDCKDLG`, which only the Win32
-    /// backend accepts.
+    /// group it shares, showing it first if it is hidden. Drives
+    /// `NPPM_DMMVIEWOTHERTAB`. Defaulted to `false` — the message
+    /// addresses a panel registered through `NPPM_DMMREGASDCKDLG`,
+    /// which the Cocoa backend declines.
     fn view_other_dock_tab(&mut self, _name: &str) -> bool {
         false
     }
@@ -703,14 +704,16 @@ pub trait UiPlatform {
     }
 
     /// Set the checked state of the menu item bound to N++-ABI
-    /// command id `idm`. Drives `NPPM_SETMENUITEMCHECK`. The
+    /// command id `idm`. Drives `NPPM_SETMENUITEMCHECK`. The Win32
     /// implementation maps built-in `IDM_*` ids through the same
     /// table as [`Self::dispatch_npp_menu_command`], falls through
     /// for plugin-allocated cmd ids, and issues the native
-    /// "check menu item by command" call. Returns `true` if the
-    /// state was applied, `false` if the id has no menu item
-    /// (unmapped built-in id, or a plugin cmd id whose owning
-    /// plugin didn't publish a menu entry).
+    /// "check menu item by command" call. The GTK one takes plugin
+    /// cmd ids only, and records the mark for the Plugins menu to
+    /// paint whenever it is built. Returns `true` if the state was
+    /// applied, `false` if the id has no menu item (unmapped
+    /// built-in id, or a plugin cmd id whose owning plugin didn't
+    /// publish a menu entry).
     fn set_npp_menu_item_check(&mut self, _idm: i32, _checked: bool) -> bool {
         false
     }
@@ -1323,6 +1326,73 @@ pub fn sanitize_filename_for_display(name: &str) -> String {
 #[must_use]
 pub fn sanitize_str_for_display(s: &str) -> String {
     s.chars().map(sanitize_display_char).collect()
+}
+
+/// The caption a plugin's dock panel is shown under, from the
+/// `pszName` and `pszModuleName` it registered with.
+///
+/// Two jobs, and they are separable on purpose. The **fallback chain**
+/// answers what to show when the plugin supplied nothing usable: an
+/// empty `pszName` (a null pointer, or a payload the dispatcher's
+/// wide-string reader rejected for unpaired surrogates) falls back to
+/// the module name, and if both are empty to a generic label — a group
+/// with a blank caption is worse than a wrong-ish name.
+///
+/// The **sanitization** is the rule every other plugin-supplied string
+/// reaching Code++'s chrome follows (`NPPM_SETSTATUSBAR` is the
+/// precedent): `pszName` comes from a library the user dropped into a
+/// folder, and a caption is a display sink, so bidi overrides and
+/// friends are substituted rather than rendered. A backend keeps the
+/// *unsanitized* name beside the registration, because that is the
+/// `NPPM_DMMGETPLUGINHWNDBYNAME` lookup key — substituting there would
+/// make a plugin unable to find its own panel.
+///
+/// Shared by every backend that hosts plugin panels, because it is half
+/// of the panel's identity (see [`intern_plugin_dock_panel`]): two
+/// backends deriving it differently would persist one plugin's panel
+/// under two keys, and a `session.xml` carried between them would
+/// restore neither.
+#[must_use]
+pub fn plugin_dock_title(name: &str, module_name: &str) -> String {
+    let raw = if name.is_empty() {
+        if module_name.is_empty() {
+            "Plugin Dialog"
+        } else {
+            module_name
+        }
+    } else {
+        name
+    };
+    sanitize_str_for_display(raw)
+}
+
+/// The dock-panel identity a plugin's `NPPM_DMMREGASDCKDLG` interns to:
+/// its sanitized module name and [`plugin_dock_title`].
+///
+/// Both halves are sanitized, not just the one that is displayed. The
+/// title is what every caption and tab label draws through
+/// `DockPanel::title` — a `&'static str` — so sanitizing it once here is
+/// what makes those sinks safe by construction rather than by each one
+/// remembering. The module half reaches no chrome sink today, but it is
+/// half of `DockPanel::persist_key`, so a raw control character in it
+/// would be written into `session.xml`, and a NUL there produces a file
+/// the next launch cannot parse. Sanitizing at the one boundary that
+/// creates the identity also stops a future consumer of
+/// `DockPanel::plugin_module` reintroducing the bidi-override bug this
+/// project has closed four times.
+///
+/// `None` when `codepp_core::dock::intern_plugin_panel` refuses the
+/// identity: an empty or over-long half, one carrying the `|` its
+/// persist key is split on, or a full table.
+#[must_use]
+pub fn intern_plugin_dock_panel(
+    name: &str,
+    module_name: &str,
+) -> Option<codepp_core::dock::DockPanel> {
+    codepp_core::dock::intern_plugin_panel(
+        &sanitize_str_for_display(module_name),
+        &plugin_dock_title(name, module_name),
+    )
 }
 
 /// The user-facing display name for a tab — the same string the tab
@@ -3207,6 +3277,36 @@ impl Shell {
         self.plugins.iter().position(|p| p.module_key() == key)
     }
 
+    /// Where the `DMN_*` notifications about plugin `panel` go on a
+    /// backend that has no window procedure to send them to — the GTK
+    /// one, where a panel's content is a widget: the `messageProc` of
+    /// the plugin that registered the panel, `caller`
+    /// (`codepp_plugin_host::DockDialogParams::caller`), or, when the
+    /// registration arrived from outside any call the host made into a
+    /// plugin, the plugin the panel's module name identifies. `None`
+    /// when neither is loaded, or `panel` is one of the host's own.
+    ///
+    /// The registrant comes first because the content is its widget. On
+    /// Win32 the notification goes to the window, and so to whoever made
+    /// it, whatever name it registered under; the registrant is the
+    /// closest thing to that a widget offers, and a plugin that
+    /// registered a panel under another plugin's name is the one that
+    /// needs to hear it closed.
+    #[must_use]
+    pub fn plugin_panel_message_target(
+        &self,
+        caller: Option<usize>,
+        panel: codepp_core::dock::DockPanel,
+    ) -> Option<codepp_plugin_host::PluginMessageProc> {
+        panel.plugin_module()?;
+        caller
+            .and_then(|idx| self.plugins.message_target(idx))
+            .or_else(|| {
+                self.panel_owner(panel)
+                    .and_then(|idx| self.plugins.message_target(idx))
+            })
+    }
+
     /// Whether the plugin owning `panel` is installed and loaded.
     fn panel_owner_is_loaded(&self, panel: codepp_core::dock::DockPanel) -> bool {
         self.panel_owner(panel)
@@ -3286,7 +3386,7 @@ impl Shell {
     /// Install what signs plugin panels' startup commands.
     ///
     /// A backend that hosts plugin panels installs one before its
-    /// startup restore; only Win32 does. Without one nothing is signed,
+    /// startup restore; Win32 and GTK do. Without one nothing is signed,
     /// so with Preferences → Security's guard on no saved command runs
     /// and no restored panel loads its plugin at startup.
     pub fn set_panel_signer(&mut self, sign: PanelSignFn) {
@@ -9015,13 +9115,12 @@ impl<U: UiPlatform> HostServices for HostBridge<'_, U> {
         // appears in the Plugins menu). An unloaded or panicked
         // plugin returns `None` here and the lookup misses — the
         // upstream contract says "0 when target isn't loaded."
-        let Some((target_idx, proc)) = self
+        let Some(target) = self
             .shell
             .plugins
             .iter()
-            .enumerate()
-            .find(|(_, p)| p.name.as_deref() == Some(target_name))
-            .and_then(|(idx, p)| p.message_proc_fn().map(|f| (idx, f)))
+            .position(|p| p.name.as_deref() == Some(target_name))
+            .and_then(|idx| self.shell.plugins.message_target(idx))
         else {
             tracing::trace!(
                 target = target_name,
@@ -9030,39 +9129,24 @@ impl<U: UiPlatform> HostServices for HostBridge<'_, U> {
             );
             return 0;
         };
-        // Wrap in `catch_unwind` so a Rust-authored target
-        // plugin's panic doesn't unwind across the C ABI — same
-        // safety boundary as `notify_all` for beNotified.
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            // The target runs as itself, not as the plugin that sent it
-            // the message.
-            let _calling = codepp_plugin_host::CallingPlugin::enter(target_idx);
-            // SAFETY: `proc` is the plugin's exported
-            // `messageProc` — declared `unsafe extern "C" fn(u32,
-            // usize, isize) -> isize` in `ffi.rs`. The plugin
-            // contract is to read `info_ptr` as a
-            // `CommunicationInfo*`; the host has done the
-            // null-check before calling here.
-            //
-            // The `i32 -> u32` cast preserves the bit pattern. A
-            // plugin sending a negative `long` for `internal_msg`
-            // (legal upstream) sees the same `0xFFFF_FFFF`-style
-            // value the equivalent N++ relay produces — N++'s
-            // call site `target->messageProc(info->internalMsg, …)`
-            // applies the same implicit cast since the
-            // `messageProc` signature's first parameter is `UINT`.
-            unsafe { proc(internal_msg as u32, info_ptr, 0) }
-        }));
-        if let Ok(lresult) = result {
-            lresult
-        } else {
-            tracing::warn!(
-                target = target_name,
-                msg = internal_msg,
-                "NPPM_MSGTOPLUGIN: target plugin panicked in messageProc",
-            );
-            0
-        }
+        // SAFETY: `target` is the loaded plugin's exported
+        // `messageProc`, and `send` runs it marked as the target — as
+        // itself, not as the plugin that sent it the message. The plugin
+        // contract is to read `info_ptr` as a `CommunicationInfo*`; the
+        // dispatcher null-checked it before calling here, and the plugin
+        // that sent it keeps it live for the length of its
+        // `SendMessage`. Nothing here contains a panic in the target: it
+        // cannot unwind out of its `extern "C"` entry point, and aborts
+        // there — see `PluginMessageProc::send`.
+        //
+        // The `i32 -> u32` cast preserves the bit pattern. A plugin
+        // sending a negative `long` for `internal_msg` (legal upstream)
+        // sees the same `0xFFFF_FFFF`-style value the equivalent N++
+        // relay produces — N++'s call site
+        // `target->messageProc(info->internalMsg, …)` applies the same
+        // implicit cast since the `messageProc` signature's first
+        // parameter is `UINT`.
+        unsafe { target.send(internal_msg as u32, info_ptr, 0) }
     }
 
     fn save_all_files(&mut self) {
@@ -9829,6 +9913,61 @@ mod tab_display_name_tests {
         // message; a name-length budget would truncate mid-glyph.
         let long: String = std::iter::repeat_n('x', DISPLAY_NAME_MAX_CHARS * 4).collect();
         assert_eq!(sanitize_str_for_display(&long).chars().count(), long.len());
+    }
+
+    #[test]
+    fn a_dock_caption_prefers_the_name_then_the_module_then_a_generic_label() {
+        use super::plugin_dock_title;
+        assert_eq!(plugin_dock_title("Console", "NppExec"), "Console");
+        assert_eq!(plugin_dock_title("", "NppExec"), "NppExec");
+        assert_eq!(plugin_dock_title("", ""), "Plugin Dialog");
+    }
+
+    /// The caption is a display sink and `pszName` comes out of a
+    /// library the user dropped into a folder, so the same substitution
+    /// every other plugin-supplied string gets applies here.
+    #[test]
+    fn a_dock_caption_substitutes_display_hostile_characters() {
+        use super::plugin_dock_title;
+        let title = plugin_dock_title("invoice\u{202E}fdp", "");
+        assert!(
+            !title.contains('\u{202E}'),
+            "a bidi override reached the caption: {title:?}"
+        );
+        assert!(
+            title.starts_with("invoice") && title.ends_with("fdp"),
+            "sanitizing should substitute, not truncate: {title:?}"
+        );
+    }
+
+    /// Both halves of a registered panel's identity come out sanitized,
+    /// so neither the caption (`title`) nor `session.xml` (`persist_key`)
+    /// ever carries what a plugin smuggled in — and the same
+    /// registration always interns to the same panel, which is what lets
+    /// a restored layout and a live registration meet.
+    #[test]
+    fn a_registered_panel_is_interned_from_sanitized_halves() {
+        use super::intern_plugin_dock_panel;
+        let panel = intern_plugin_dock_panel("Pan\u{202E}el", "evil\u{0007}.dll")
+            .expect("a hostile registration still gets an identity");
+        for hostile in ['\u{202E}', '\u{0007}'] {
+            assert!(!panel.title().contains(hostile), "{:?}", panel.title());
+            assert!(
+                !panel.persist_key().contains(hostile),
+                "{:?}",
+                panel.persist_key()
+            );
+        }
+        assert_eq!(
+            intern_plugin_dock_panel("Pan\u{202E}el", "evil\u{0007}.dll"),
+            Some(panel),
+            "the same registration interns to the same panel"
+        );
+        assert_eq!(
+            intern_plugin_dock_panel("Pipe|Name", "pipe.dll"),
+            None,
+            "a `|` would make the persisted key split differently"
+        );
     }
 
     #[test]
@@ -12522,9 +12661,13 @@ mod tests {
 
     /// `NPPM_MSGTOPLUGIN` runs the target's `messageProc` marked as the
     /// target rather than as the plugin that sent the message, so a dock
-    /// panel the target registers from it is its own. A source check,
-    /// because a `messageProc` that reports its caller needs a plugin
-    /// built for it.
+    /// panel the target registers from it is its own. The mark lives in
+    /// `PluginMessageProc::send`, whose fields are private precisely so
+    /// that it is the only way to reach a plugin's `messageProc` (tested
+    /// in `codepp_plugin_host::caller`); what is left to pin here is that
+    /// the forwarder goes through it rather than the raw function
+    /// pointer. A source check, because a `messageProc` that reports its
+    /// caller needs a plugin built for it.
     #[test]
     fn an_inter_plugin_message_runs_as_its_target() {
         // LF only, because the end of the body is found by `"\n    }\n"`.
@@ -12538,15 +12681,13 @@ mod tests {
         let body = &body[..body
             .find("\n    }\n")
             .expect("end of forward_plugin_message")];
-        let mark = body
-            .find("CallingPlugin::enter(target_idx)")
-            .expect("the target's messageProc no longer runs marked as the target");
-        let call = body
-            .find("proc(internal_msg as u32, info_ptr, 0)")
-            .expect("the messageProc call");
         assert!(
-            mark < call,
-            "the mark must be set before the target's code runs"
+            body.contains(".message_target(idx)") && body.contains("target.send("),
+            "the target's messageProc no longer runs through the marking wrapper"
+        );
+        assert!(
+            !body.contains("message_proc_fn("),
+            "the forwarder reaches for the raw messageProc, which runs unmarked"
         );
     }
 
@@ -12778,13 +12919,19 @@ mod tests {
         assert_eq!(seals, vec![true, false, false]);
     }
 
-    /// The built `example_hello.dll`, or `None` when it has not been
+    /// The built `example_hello` cdylib — `example_hello.dll`, or
+    /// `libexample_hello.so` on Linux — or `None` when it has not been
     /// built (`cargo test -p codepp-shell` does not build it).
-    #[cfg(target_os = "windows")]
+    #[cfg(any(target_os = "windows", target_os = "linux"))]
     fn built_example_hello() -> Option<std::path::PathBuf> {
+        let name = if cfg!(target_os = "windows") {
+            "example_hello.dll"
+        } else {
+            "libexample_hello.so"
+        };
         std::env::current_exe()
             .ok()
-            .and_then(|exe| Some(exe.parent()?.parent()?.join("example_hello.dll")))
+            .and_then(|exe| Some(exe.parent()?.parent()?.join(name)))
             .filter(|p| p.is_file())
     }
 
@@ -12792,7 +12939,7 @@ mod tests {
     /// that loaded. Null handles: a plugin only stores them in
     /// `setInfo`, and nothing here delivers a notification or runs a
     /// command that would make it send one.
-    #[cfg(target_os = "windows")]
+    #[cfg(any(target_os = "windows", target_os = "linux"))]
     fn load_every_plugin(shell: &mut Shell) -> Vec<usize> {
         let npp_data = codepp_plugin_host::NppData {
             npp_handle: core::ptr::null_mut(),
@@ -12807,6 +12954,79 @@ mod tests {
             }
         }
         loaded
+    }
+
+    /// Where a plugin panel's `DMN_*` go on a backend with no window
+    /// procedure to send them to: the plugin that registered it when the
+    /// registration was attributed, else the plugin its module names —
+    /// and nowhere for a panel no loaded plugin can take, or for one of
+    /// the host's own. Against the real `example_hello`, because only a
+    /// loaded plugin has a `messageProc` to reach.
+    #[cfg(any(target_os = "windows", target_os = "linux"))]
+    #[test]
+    fn a_panels_notifications_go_to_its_registrant_then_its_named_plugin() {
+        let Some(lib) = built_example_hello() else {
+            eprintln!(
+                "skipping: example_hello not built. Run `cargo build -p codepp-example-hello`."
+            );
+            return;
+        };
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        // Staged under a name of its own, for the reason
+        // `panel_restore_mapping_against_the_real_example_hello` gives.
+        let ext = codepp_platform::PLUGIN_EXTENSION;
+        std::fs::create_dir(dir.path().join("cpnotify_hello")).unwrap();
+        std::fs::copy(
+            &lib,
+            dir.path()
+                .join("cpnotify_hello")
+                .join(format!("cpnotify_hello.{ext}")),
+        )
+        .unwrap();
+        assert_eq!(shell.discover_plugins(dir.path()).unwrap(), 1);
+        assert_eq!(
+            load_every_plugin(&mut shell),
+            vec![0],
+            "example_hello did not load"
+        );
+
+        let own = codepp_core::dock::intern_plugin_panel("cpnotify_hello.dll", "Notify Panel")
+            .expect("intern");
+        let stranger =
+            codepp_core::dock::intern_plugin_panel("cpnotify_elsewhere.dll", "Stranger Panel")
+                .expect("intern");
+        let target = |caller, panel| {
+            shell
+                .plugin_panel_message_target(caller, panel)
+                .map(codepp_plugin_host::PluginMessageProc::owner)
+        };
+        assert_eq!(
+            target(Some(0), stranger),
+            Some(0),
+            "attributed: the registrant, whatever name the panel carries"
+        );
+        assert_eq!(
+            target(None, own),
+            Some(0),
+            "unattributed: the plugin the module name identifies"
+        );
+        assert_eq!(
+            target(None, stranger),
+            None,
+            "no loaded plugin answers to that name"
+        );
+        assert_eq!(
+            target(Some(7), own),
+            Some(0),
+            "a registrant nothing loaded answers to falls back to the name"
+        );
+        assert_eq!(
+            target(Some(0), codepp_core::dock::DockPanel::Workspace),
+            None,
+            "the host's own panels have no plugin to tell"
+        );
     }
 
     /// Against the real `example_hello.dll`: a pass owns exactly its
