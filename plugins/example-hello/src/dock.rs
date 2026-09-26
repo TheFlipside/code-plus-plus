@@ -47,6 +47,12 @@
 //! 6. **On macOS, "Show Dock Panel" has a toolbar button**
 //!    (`NPPM_ADDTOOLBARICON`), added at `NPPN_TBMODIFICATION`. It runs
 //!    the command and shows its check mark as pressed.
+//! 7. **On macOS, switching between the two panels' tabs**, dragging a
+//!    panel out to float or resizing its band reports what the host
+//!    sends on the status bar: `DMN_SWITCHIN` for the panel coming in,
+//!    `DMN_SWITCHOFF` for the one going behind it, and
+//!    `DMN_FLOATDROPPED` for each panel laid out somewhere new — once
+//!    a drag has ended, not at every step of it.
 //!
 //! Linux and macOS share everything but how the content is built —
 //! [`hosted`] registers, shows, renames and hears the `DMN_*`, and a
@@ -450,8 +456,16 @@ Drag my tab onto the other panel.";
         if from != sdk::npp_handle() {
             return 0;
         }
+        // The switch and relayout notices name a panel, and with two
+        // panels in one group a tab switch is about both of them.
+        let which = if item == crate::imp::CMD_SHOW_DOCK_PANEL {
+            "panel"
+        } else {
+            "notes panel"
+        };
         // Switch on the low word: DMN_DOCK and DMN_FLOAT carry their
-        // container number in the high one.
+        // container number in the high one. (The other three carry
+        // nothing there, so the whole code would do as well.)
         match code & 0xFFFF {
             sdk::DMN_CLOSE => {
                 crate::imp::set_item_check(item, false);
@@ -464,6 +478,15 @@ Drag my tab onto the other panel.";
             sdk::DMN_FLOAT => sdk::set_status(&format!(
                 "Example Hello: panel floating (DMN_FLOAT, container {})",
                 code >> 16
+            )),
+            sdk::DMN_SWITCHIN => sdk::set_status(&format!(
+                "Example Hello: {which} came on screen (DMN_SWITCHIN)"
+            )),
+            sdk::DMN_SWITCHOFF => sdk::set_status(&format!(
+                "Example Hello: {which} went behind another tab (DMN_SWITCHOFF)"
+            )),
+            sdk::DMN_FLOATDROPPED => sdk::set_status(&format!(
+                "Example Hello: {which} laid out anew (DMN_FLOATDROPPED)"
             )),
             _ => {}
         }

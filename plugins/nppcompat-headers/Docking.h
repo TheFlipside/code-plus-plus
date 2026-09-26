@@ -275,27 +275,70 @@ typedef struct tTbData_ {
  * nesting them, so a plugin cannot drive the host's stack arbitrarily
  * deep; every notice is still delivered, in order.
  *
- * DMN_SWITCHIN, DMN_SWITCHOFF and DMN_FLOATDROPPED are declared for
- * completeness and are NOT sent yet. Notepad++ sends them from the
- * panel's container (not the main window) as tabs are switched and
- * containers are rearranged; a plugin must not depend on them under
- * Code++ today.
+ * DMN_SWITCHIN, DMN_SWITCHOFF and DMN_FLOATDROPPED tell a panel how it
+ * is being shown. Their code is the bare number, with nothing in the
+ * high word — Notepad++'s own panels compare the whole code for these.
+ *
+ *   - DMN_SWITCHIN: the panel came on screen. Its tab is now the one
+ *     its group shows, and it had been hidden or behind another tab.
+ *   - DMN_SWITCHOFF: another tab of the panel's group was brought in
+ *     front of it; the panel is still open, behind it. A panel that is
+ *     closed gets no DMN_SWITCHOFF: DMN_CLOSE, or the plugin's own
+ *     NPPM_DMMHIDE, already says so.
+ *   - DMN_FLOATDROPPED: the panel has been laid out somewhere new —
+ *     shown, or its group moved, resized, floated or docked, or its tab
+ *     bar came or went. Docked panels get it too, despite the name, as
+ *     they do in Notepad++. A plugin that keeps a window of its own
+ *     positioned over its panel moves it here.
+ *
+ * Each is sent once, on the change. Notepad++ also repeats
+ * DMN_SWITCHIN when a panel already in front is shown or its tab
+ * clicked again, or moves to another container while in front, and
+ * sends DMN_FLOATDROPPED to every panel of a container whenever it
+ * lays the container out, a plain tab switch included; Code++ sends
+ * none of those repeats. A resize — of the window, a band, a floating
+ * panel — is reported when it ends, not at every step of the drag.
+ * When one change owes several notifications they go out in this
+ * order: DMN_DOCK / DMN_FLOAT, then every DMN_SWITCHIN, then every
+ * DMN_SWITCHOFF, then every DMN_FLOATDROPPED — so a tab switch tells
+ * the panel coming in before the one it replaced, as Notepad++ does.
+ * One queued behind a handler (see above) that is no longer true when
+ * its turn comes — a DMN_SWITCHIN for a panel closed meanwhile — is
+ * dropped rather than sent. And handlers that keep changing the layout
+ * in answer to these — two panels each bringing itself back to the
+ * front whenever told it went behind — are cut off: past 768
+ * notifications in one delivery, Code++ drops the rest and logs a
+ * warning.
+ *
+ * Code++ sends these three on macOS; Windows and Linux do not send
+ * them yet, so a portable plugin must not depend on them there. In
+ * Notepad++ their hwndFrom is the panel's container window rather
+ * than the main window, so a handler behind the docking-dialog
+ * template's hwndFrom check never sees them: handle them without it.
+ * Of what is said here about Notepad++'s own behaviour, only that —
+ * the container sends them as tabs switch — was measured, with a
+ * probe plugin; the rest (when it repeats them, that docked panels get
+ * DMN_FLOATDROPPED, that a closed panel gets no DMN_SWITCHOFF, the
+ * order) was read from its source.
  *
  * Off Windows — on Linux and macOS, where hClient is a widget or a
  * view — the same notifications go to the plugin's messageProc
- * export instead: message WM_NOTIFY (0x004E), lParam the same NMHDR
- * with the same fields, and wParam the panel's hClient, the only way
- * left to say which of the plugin's panels the notification is
- * about. The return value is ignored. Everything else above holds as
- * written, the ordering and the queueing included.
+ * export instead: message WM_NOTIFY (0x004E), lParam the same NMHDR,
+ * and wParam the panel's hClient, the only way left to say which of
+ * the plugin's panels the notification is about. hwndFrom is the npp
+ * handle for every DMN_*, these three included: the host's containers
+ * are its own, and no handle to one would be of use to a plugin — its
+ * own view says where the panel is. The return value is ignored.
+ * Everything else above holds as written, the ordering and the
+ * queueing included.
  */
 #define DMN_FIRST        1050
 #define DMN_CLOSE        (DMN_FIRST + 1)  /* user closed the panel (panel hidden) */
 #define DMN_DOCK         (DMN_FIRST + 2)  /* panel is docked; HIWORD(code) = CONT_* */
 #define DMN_FLOAT        (DMN_FIRST + 3)  /* panel is floating; HIWORD(code) >= 4 */
-#define DMN_SWITCHIN     (DMN_FIRST + 4)  /* not sent by Code++ yet */
-#define DMN_SWITCHOFF    (DMN_FIRST + 5)  /* not sent by Code++ yet */
-#define DMN_FLOATDROPPED (DMN_FIRST + 6)  /* not sent by Code++ yet */
+#define DMN_SWITCHIN     (DMN_FIRST + 4)  /* panel came on screen (macOS only so far) */
+#define DMN_SWITCHOFF    (DMN_FIRST + 5)  /* panel went behind another tab (macOS only so far) */
+#define DMN_FLOATDROPPED (DMN_FIRST + 6)  /* panel laid out anew (macOS only so far) */
 
 #ifdef __cplusplus
 } /* extern "C" */

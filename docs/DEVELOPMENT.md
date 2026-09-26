@@ -300,19 +300,23 @@ A plain `cargo test` reports it as ignored in the summary line rather
 than skipping it silently, so a runner without a window session cannot
 drop the coverage while still looking green.
 
-It runs five scenarios from one `main` — the direct-call round trip,
+It runs six scenarios from one `main` — the direct-call round trip,
 notification delivery, the cross-thread `SCI_*` marshal (a plugin
 worker thread's message hopping onto the main queue), plugin dock
 panels hosted by a real dock (a plugin's `NSView` adopted, refused,
-hidden and taken back), and what a plugin asks the host to make (a
-Scintilla view of its own, a toolbar button, a modeless-dialog
-registration). A new display-gated scenario belongs in
+hidden and taken back), what a plugin is told about how its panels are
+shown (`DMN_SWITCHIN` / `DMN_SWITCHOFF` / `DMN_FLOATDROPPED`, recorded
+as they are sent, since the rig has no plugin to send them to), and
+what a plugin asks the host to make (a Scintilla view of its own, a
+toolbar button, a modeless-dialog registration). The notices scenario
+floats a panel, so a small borderless window may flash up while it
+runs. A new display-gated scenario belongs in
 `smoke::run` beside them, for the same reason the GTK scenarios share
 one `#[test]` (§3.3); the private items it needs are reached through
 the crate's `#[doc(hidden)]` `smoke_support` re-export rather than by
 moving the scenario in-crate, where libtest could never hand it the
 main thread. That surface exists only in debug builds, so a
-`--release` run of the smoke binary reports the last three scenarios as
+`--release` run of the smoke binary reports the last four scenarios as
 ignored.
 
 Launched from a **non-interactive** shell (an agent session, `ssh`,

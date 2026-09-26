@@ -4,7 +4,7 @@
 //! `setInfo` stash, `getName` / `getFuncsArray` / `isUnicode`
 //! identification, a menu command that inserts "Hello from plugin"
 //! at the editor's current caret, and a real docking panel that
-//! exercises the host's `NPPM_DMM*` / `DMN_CLOSE` surface (see
+//! exercises the host's `NPPM_DMM*` / `DMN_*` surface (see
 //! [`dock`]). On macOS it also asks the host for a Scintilla view of
 //! its own, a toolbar button and a modeless-dialog registration (see
 //! [`dock`] and [`dialog`]). The insertion path exercises both the

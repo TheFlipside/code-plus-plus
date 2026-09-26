@@ -493,13 +493,22 @@ pub const DMN_DOCK: u32 = DMN_FIRST + 2;
 /// The panel is floating. Low word of `code`, with a floating
 /// container number (4 and up) in the high word. See [`DMN_DOCK`].
 pub const DMN_FLOAT: u32 = DMN_FIRST + 3;
-/// A panel's tab became the active one. Not sent by this host yet;
-/// Notepad++ sends it from the panel's container window.
+/// The panel came on screen: its tab is now the one its group shows,
+/// where it had been hidden or behind another tab. The bare code, with
+/// nothing in the high word, as upstream sends it. Notepad++ sends it
+/// from the panel's container window; so far only the Cocoa backend
+/// sends it here, with the npp handle as `hwnd_from` as for every
+/// `DMN_*` off Windows. When it is owed is `docking::PanelTold`'s
+/// decision.
 pub const DMN_SWITCHIN: u32 = DMN_FIRST + 4;
-/// A panel's tab stopped being the active one. Not sent yet; see
+/// Another tab of the panel's group came in front of it, and the panel
+/// is still open behind it — never sent for a panel being closed. See
 /// [`DMN_SWITCHIN`].
 pub const DMN_SWITCHOFF: u32 = DMN_FIRST + 5;
-/// Not sent yet; see [`DMN_SWITCHIN`].
+/// The panel was laid out somewhere new: shown, or its group moved,
+/// resized, floated or docked, or its tab bar came or went. Docked
+/// panels get it too, despite the name, as in Notepad++. See
+/// [`DMN_SWITCHIN`].
 pub const DMN_FLOATDROPPED: u32 = DMN_FIRST + 6;
 
 #[cfg(test)]

@@ -504,7 +504,7 @@ fn dispatch_nppm(msg: u32, wparam: usize, lparam: isize) -> isize {
 // `codepp_plugin_host::WM_NOTIFY`.
 
 thread_local! {
-    /// `DMN_DOCK` / `DMN_FLOAT` notices waiting to be sent. See
+    /// `DMN_*` notices a dock reconcile owes, waiting to be sent. See
     /// [`deliver_dock_notices`].
     static DOCK_NOTICES: RefCell<VecDeque<crate::dock::DockNotice>> =
         const { RefCell::new(VecDeque::new()) };
@@ -513,6 +513,18 @@ thread_local! {
     /// Set while a `DMN_CLOSE` is being delivered. See
     /// [`close_plugin_panel`].
     static DMN_CLOSE_ACTIVE: Cell<bool> = const { Cell::new(false) };
+}
+
+#[cfg(debug_assertions)]
+thread_local! {
+    /// What [`deliver_dock_notices`] has sent, as `(panel, code)`, while
+    /// the smoke binary is recording it — `None` otherwise, which is
+    /// always outside that binary. Its rig drives a real dock with no
+    /// shell behind it, so there is no plugin to deliver to; this is how
+    /// it sees what each change owed. Compiled out of release builds with
+    /// the rest of the test surface ([`smoke_support`]).
+    static SENT_DOCK_NOTICES: RefCell<Option<Vec<(DockPanel, u32)>>> =
+        const { RefCell::new(None) };
 }
 
 /// `NPPM_DMMREGASDCKDLG` on this backend: adopt the plugin's view as a
@@ -689,7 +701,26 @@ pub(crate) fn close_plugin_panel(panel: DockPanel) {
     crate::dock::set_panel_visible(panel, false);
 }
 
-/// Send each `DMN_DOCK` / `DMN_FLOAT` notice.
+/// The most notices one outermost [`deliver_dock_notices`] works through
+/// before it gives up on the rest: three a panel — a container, a switch
+/// and a relayout, the most one reconcile owes — for every registration
+/// the panel table allows, four reconciles deep.
+///
+/// The queue keeps a plugin re-entering from its handler one level deep;
+/// this keeps it from running forever. Plugins whose handlers keep
+/// reversing the layout — two of them each bringing its own panel back to
+/// the front whenever told it went behind, say — would otherwise hold
+/// the loop, and the UI thread with it, for as long as they kept at it,
+/// every handler's reconcile queuing more. Past the cap the rest of the
+/// queue is dropped with a warning. That loses notices, since their
+/// records are already written — but only in a cascade no plugin could
+/// have kept up with, and the view tree, which never waits on a notice,
+/// is right throughout.
+const MAX_DOCK_NOTICES_PER_DELIVERY: usize = 4 * 3 * codepp_core::dock::MAX_PLUGIN_PANELS;
+
+/// Send each notice a dock reconcile owes: `DMN_DOCK` / `DMN_FLOAT`,
+/// `DMN_SWITCHIN` / `DMN_SWITCHOFF` and `DMN_FLOATDROPPED`, in the order
+/// `crate::dock::panel_notices` queued them.
 ///
 /// **Notices raised while one is being delivered are queued, not sent.**
 /// The plugin's handler runs with no borrow held, so it may send
@@ -699,31 +730,57 @@ pub(crate) fn close_plugin_panel(panel: DockPanel) {
 /// could do the same, nesting a full round trip per link until the
 /// registration cap or the stack ran out. So a call made while a delivery
 /// is running only appends to the queue and returns, and the outermost
-/// call drains it in order: nothing is dropped, and the nesting stays one
-/// level deep whatever the plugin does. The same queue Win32's
-/// `deliver_container_notices` and GTK's keep.
+/// call drains it in order: nothing is dropped that is still true, and
+/// the nesting stays one level deep whatever the plugin does. The same
+/// queue Win32's `deliver_container_notices` and GTK's keep; the cap
+/// below is this backend's alone so far (DESIGN.md §7.4).
+///
+/// Queued behind a handler that may change the layout, a notice is
+/// checked again when its turn comes (`crate::dock::notice_still_applies`)
+/// and skipped if it no longer says something true — a view taken back,
+/// a panel switched in and closed again before hearing of it. The record
+/// is already written, so a skipped notice loses nothing that could
+/// still be delivered.
+///
+/// The queue bounds depth, and [`MAX_DOCK_NOTICES_PER_DELIVERY`] bounds
+/// time: past it, the rest of the queue is dropped.
 pub(crate) fn deliver_dock_notices(notices: Vec<crate::dock::DockNotice>) {
     DOCK_NOTICES.with(|q| q.borrow_mut().extend(notices));
     if DOCK_NOTICES_DELIVERING.with(Cell::get) {
         return;
     }
     let _delivering = crate::FlagGuard::set(&DOCK_NOTICES_DELIVERING);
+    let mut taken = 0usize;
     while let Some(notice) = DOCK_NOTICES.with(|q| q.borrow_mut().pop_front()) {
-        // A handler for an earlier notice may have taken this one's view
-        // back; the record is already written, so skipping it loses
-        // nothing that could still be delivered.
-        if !crate::dock::plugin_panel_is_live(notice.panel, notice.handle) {
+        taken += 1;
+        if taken > MAX_DOCK_NOTICES_PER_DELIVERY {
+            let dropped = 1 + DOCK_NOTICES.with(|q| {
+                let mut q = q.borrow_mut();
+                let left = q.len();
+                q.clear();
+                left
+            });
+            tracing::warn!(
+                dropped,
+                "plugins keep changing the dock layout from their DMN_* handlers; \
+                 dropping the notifications still queued"
+            );
+            break;
+        }
+        if !crate::dock::notice_still_applies(&notice) {
             continue;
         }
+        #[cfg(debug_assertions)]
+        SENT_DOCK_NOTICES.with(|sent| {
+            if let Some(sent) = sent.borrow_mut().as_mut() {
+                sent.push((notice.panel, notice.code));
+            }
+        });
         tracing::debug!(
             panel = notice.panel.persist_key(),
-            dmn = if notice.code & 0xFFFF == codepp_plugin_host::DMN_DOCK {
-                "DMN_DOCK"
-            } else {
-                "DMN_FLOAT"
-            },
+            dmn = codepp_plugin_host::docking::dmn_name(notice.code),
             container = notice.code >> 16,
-            "dock container notification"
+            "dock panel notification"
         );
         send_dock_notification(notice.panel, notice.handle, notice.caller, notice.code);
     }
@@ -1366,6 +1423,126 @@ pub mod smoke_support {
             panel_scenario::a_replacement_before_the_sweep_keeps_the_panel(&rig, &view, panel, mtm);
         // Kept for the process, like every view this binary makes.
         std::mem::forget((rig, view, notes, replacement));
+    }
+
+    /// What a plugin is told about how its panels are shown, driven
+    /// against real views in a real dock: `DMN_SWITCHIN` /
+    /// `DMN_SWITCHOFF` as tabs come and go, `DMN_FLOATDROPPED` as groups
+    /// are laid out anew. The rig has no plugin to deliver to, so the
+    /// notices are recorded as they are sent. Panics on the first failed
+    /// check.
+    ///
+    /// What it pins is what `codepp_plugin_host::docking`'s unit tests
+    /// cannot see: every reconcile records each live registration and
+    /// sends in the policy's order; a resize outside the model is never
+    /// reported from inside a layout pass, only by the check the run loop
+    /// runs in its default mode — once, however many passes the resize
+    /// took; a floating window AppKit moves is reported through its
+    /// delegate; and one delivery stops at its cap.
+    pub fn plugin_panels_hear_how_they_are_shown() {
+        use codepp_core::dock::{DockRect, DropTarget};
+        use codepp_plugin_host::{
+            CONT_BOTTOM, DMN_DOCK, DMN_FLOAT, DMN_FLOATDROPPED as RELAID, DMN_SWITCHIN as IN,
+            DMN_SWITCHOFF as OFF, DOCKCONT_MAX,
+        };
+        use panel_scenario::{expect_nothing_more, expect_sent, expect_sent_now, handle_of};
+
+        let mtm = objc2_foundation::MainThreadMarker::new()
+            .expect("the smoke binary owns the main thread");
+        let rig = panel_scenario::Rig::install(mtm);
+        // Whatever an earlier scenario left queued on the run loop runs
+        // now, against the fresh dock, before anything is recorded.
+        panel_scenario::run_default_mode();
+        panel_scenario::record_notices();
+        let (first, second) = (
+            panel_scenario::plugin_view(mtm),
+            panel_scenario::plugin_view(mtm),
+        );
+        let a = panel_scenario::register_apart(&rig, &first, "Notice A");
+        let b = panel_scenario::register_apart(&rig, &second, "Notice B");
+
+        // Registered: told the container, and nothing else — neither is
+        // on screen. The layout pass that follows moves nothing.
+        panel_scenario::reconcile();
+        let docked_bottom = (CONT_BOTTOM << 16) | DMN_DOCK;
+        expect_sent_now(&[(a, docked_bottom), (b, docked_bottom)], "registration");
+        expect_nothing_more("a relayout that moved nothing");
+
+        assert!(crate::dock::show_plugin_panel(handle_of(&first)));
+        panel_scenario::reconcile();
+        expect_sent_now(&[(a, IN), (a, RELAID)], "the first panel shown");
+
+        // The panel coming in before the one going out, then both relaid
+        // out: the tab bar the second tab brings takes height from both.
+        assert!(crate::dock::show_plugin_panel(handle_of(&second)));
+        panel_scenario::reconcile();
+        expect_sent_now(
+            &[(b, IN), (a, OFF), (a, RELAID), (b, RELAID)],
+            "a second tab",
+        );
+
+        assert!(crate::dock::show_plugin_panel(handle_of(&first)));
+        panel_scenario::reconcile();
+        expect_sent_now(&[(a, IN), (b, OFF)], "a tab switch, which lays nothing out");
+
+        // The closed panel hears nothing; the other comes in, relaid out
+        // without the tab bar.
+        assert!(crate::dock::hide_plugin_panel(handle_of(&first)));
+        panel_scenario::reconcile();
+        expect_sent_now(&[(b, IN), (b, RELAID)], "the front tab closed");
+
+        // Reopened, it gets a group of its own in the same band, which
+        // halves the other's.
+        assert!(crate::dock::show_plugin_panel(handle_of(&first)));
+        panel_scenario::reconcile();
+        expect_sent_now(
+            &[(a, IN), (a, RELAID), (b, RELAID)],
+            "a second group in the band",
+        );
+        expect_nothing_more("settled");
+
+        // Resized outside the model, three layout passes in a row: nothing
+        // from inside them, then one `DMN_FLOATDROPPED` a panel.
+        crate::dock::layout_area(1000.0, 600.0);
+        crate::dock::layout_area(1000.0, 550.0);
+        crate::dock::layout_area(1000.0, 500.0);
+        expect_sent_now(&[], "a layout pass tells the plugins nothing itself");
+        expect_sent(
+            &[(a, RELAID), (b, RELAID)],
+            "a resize, once the run loop is back",
+        );
+        crate::dock::layout_area(1000.0, 500.0);
+        expect_nothing_more("the same size again");
+        crate::dock::layout_area(1000.0, 700.0);
+        expect_sent(&[(a, RELAID), (b, RELAID)], "the size restored");
+
+        // Floated: a new container and a new placement, and no switch — it
+        // never left the screen. The one left in the band is relaid out.
+        assert!(crate::dock::update_layout(|l| {
+            l.move_panel(b, DropTarget::Floating(DockRect::new(240, 200, 320, 240)));
+            true
+        }));
+        crate::dock::apply_layout();
+        let floating = (DOCKCONT_MAX << 16) | DMN_FLOAT;
+        expect_sent_now(&[(b, floating), (a, RELAID), (b, RELAID)], "floated");
+        // Whatever AppKit made of the rect on screen, settled before the
+        // next step measures anything.
+        panel_scenario::run_default_mode();
+        let _ = panel_scenario::take_notices();
+
+        // Moved by AppKit rather than by the dock: its delegate reports it.
+        let window = second.window().expect("a floating panel is in a window");
+        let origin = window.frame().origin;
+        window.setFrameOrigin(objc2_foundation::NSPoint::new(
+            origin.x + 40.0,
+            origin.y - 30.0,
+        ));
+        expect_sent_now(&[], "the delegate tells the plugins nothing itself");
+        expect_sent(&[(b, RELAID)], "a floating window moved");
+
+        panel_scenario::a_runaway_delivery_is_cut_off(&first, a);
+        panel_scenario::stale_notices_are_not_sent(&first, a, &second, b);
+        std::mem::forget((rig, first, second));
     }
 
     /// What a plugin asks the host to make — `NPPM_CREATESCINTILLAHANDLE`,
@@ -2032,6 +2209,159 @@ pub mod smoke_support {
             assert!(crate::dock::is_plugin_panel_registered(panel));
             assert_hosted(&replacement, &rig.area);
             replacement
+        }
+
+        /// Register `view` as [`Rig::params`] would, but under a module of
+        /// its own, so one scenario's panels take none of another's
+        /// per-module allowance of panel identities.
+        pub(super) fn register_apart(rig: &Rig, view: &NSView, name: &str) -> DockPanel {
+            let mut params = rig.params(handle_of(view), name);
+            "smoke_notices.dylib".clone_into(&mut params.module_name);
+            super::super::register_dock_dialog(params).expect("a free-standing view is adopted")
+        }
+
+        /// Record the dock notices sent from now on, starting from none.
+        pub(super) fn record_notices() {
+            super::super::SENT_DOCK_NOTICES.with(|sent| *sent.borrow_mut() = Some(Vec::new()));
+        }
+
+        /// The notices sent since the last call.
+        pub(super) fn take_notices() -> Vec<(DockPanel, u32)> {
+            super::super::SENT_DOCK_NOTICES.with(|sent| {
+                sent.borrow_mut()
+                    .as_mut()
+                    .map(std::mem::take)
+                    .unwrap_or_default()
+            })
+        }
+
+        fn sent_count() -> usize {
+            super::super::SENT_DOCK_NOTICES.with(|sent| sent.borrow().as_ref().map_or(0, Vec::len))
+        }
+
+        /// Notices as a reader would name them, for a failed check.
+        fn readable(notices: &[(DockPanel, u32)]) -> Vec<String> {
+            notices
+                .iter()
+                .map(|(panel, code)| {
+                    format!(
+                        "{} {} ({})",
+                        panel.title(),
+                        codepp_plugin_host::docking::dmn_name(*code),
+                        code >> 16
+                    )
+                })
+                .collect()
+        }
+
+        /// Exactly `expected` has been sent — already, without the run
+        /// loop having run since.
+        pub(super) fn expect_sent_now(expected: &[(DockPanel, u32)], what: &str) {
+            let sent = take_notices();
+            assert!(
+                sent == expected,
+                "{what}: sent {:?}, expected {:?}",
+                readable(&sent),
+                readable(expected)
+            );
+        }
+
+        /// Exactly `expected` is sent once the run loop has run in its
+        /// default mode — where the placement check is queued — and
+        /// nothing after it.
+        pub(super) fn expect_sent(expected: &[(DockPanel, u32)], what: &str) {
+            spin_until(|| sent_count() >= expected.len());
+            run_default_mode();
+            expect_sent_now(expected, what);
+        }
+
+        /// Nothing is sent, even once the run loop has run.
+        pub(super) fn expect_nothing_more(what: &str) {
+            run_default_mode();
+            expect_sent_now(&[], what);
+        }
+
+        /// A few turns of the run loop's default mode: enough for anything
+        /// queued there to run.
+        pub(super) fn run_default_mode() {
+            for _ in 0..20 {
+                let deadline = NSDate::dateWithTimeIntervalSinceNow(0.01);
+                // SAFETY: main thread and a live mode constant.
+                let _ = unsafe {
+                    NSRunLoop::mainRunLoop().runMode_beforeDate(NSDefaultRunLoopMode, &deadline)
+                };
+            }
+        }
+
+        /// One delivery works through at most its cap of notices, however
+        /// many are queued, and the rest go with the queue: a second
+        /// delivery starts from nothing. `a` must be on screen, so each
+        /// notice is still true when its turn comes.
+        pub(super) fn a_runaway_delivery_is_cut_off(first: &NSView, a: DockPanel) {
+            let cap = super::super::MAX_DOCK_NOTICES_PER_DELIVERY;
+            let relaid = crate::dock::DockNotice {
+                panel: a,
+                handle: handle_of(first),
+                caller: None,
+                code: codepp_plugin_host::DMN_FLOATDROPPED,
+            };
+            let _ = take_notices();
+            super::super::deliver_dock_notices(vec![relaid; cap + 50]);
+            assert_eq!(
+                take_notices().len(),
+                cap,
+                "one delivery sent more, or fewer, than its cap"
+            );
+            super::super::deliver_dock_notices(Vec::new());
+            assert!(
+                take_notices().is_empty(),
+                "notices past the cap were left queued for the next delivery"
+            );
+        }
+
+        /// A notice queued behind a handler that changed the layout is
+        /// checked again when its turn comes, and one that no longer says
+        /// something true is not sent: a view that is not the
+        /// registration's, a switch-in or a relayout for a panel closed
+        /// since. A switch-off goes out as queued.
+        pub(super) fn stale_notices_are_not_sent(
+            first: &NSView,
+            a: DockPanel,
+            second: &NSView,
+            b: DockPanel,
+        ) {
+            use codepp_plugin_host::{DMN_FLOATDROPPED, DMN_SWITCHIN, DMN_SWITCHOFF};
+            let applies = |panel, view: &NSView, code| {
+                crate::dock::notice_still_applies(&crate::dock::DockNotice {
+                    panel,
+                    handle: handle_of(view),
+                    caller: None,
+                    code,
+                })
+            };
+            assert!(
+                applies(a, first, DMN_SWITCHIN),
+                "a panel in front, as queued"
+            );
+            assert!(
+                !applies(a, second, DMN_SWITCHIN),
+                "another registration's view is not this panel's"
+            );
+            assert!(crate::dock::hide_plugin_panel(handle_of(second)));
+            reconcile();
+            let _ = take_notices();
+            assert!(
+                !applies(b, second, DMN_SWITCHIN),
+                "switched in, then closed"
+            );
+            assert!(
+                !applies(b, second, DMN_FLOATDROPPED),
+                "laid out, then closed"
+            );
+            assert!(
+                applies(b, second, DMN_SWITCHOFF),
+                "a switch-off goes out as queued"
+            );
         }
 
         /// Run the main run loop in its default mode — where the sweep is

@@ -118,14 +118,21 @@
 //! override asks of the host is declined rather than answered — the
 //! position a GTK plugin's `parent-set` handler is in — and `Docking.h`
 //! tells plugin authors so.
+//!
+//! The `DMN_*` a plugin is told about its panels therefore go out only
+//! from outside every borrow: at the end of [`apply_layout`], and from
+//! the check [`schedule_placement_check`] queues in the run loop's
+//! default mode for the relayouts that bypass it. A layout pass, which
+//! runs under the dock borrow, only ever queues.
 
 use std::cell::{Cell, RefCell};
 use std::ffi::c_void;
 
 use codepp_core::dock::{
-    compute_frame, resolve_drop, DockContainer, DockGroup, DockLayout, DockLocation, DockPanel,
+    compute_frame, resolve_drop, DockFrame, DockGroup, DockLayout, DockLocation, DockPanel,
     DockRect, DockSide, DragSubject, DropTarget, DropZones, MIN_FLOAT_H, MIN_FLOAT_W,
 };
+use codepp_plugin_host::docking::PanelTold;
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, Bool, ProtocolObject};
 use objc2::{define_class, msg_send, sel, AnyThread, DefinedClass, MainThreadOnly, Message};
@@ -254,12 +261,14 @@ struct PluginPanel {
     /// The plugin's own tab icon (`tTbData.hIconTab`, an `NSImage` here,
     /// with `DWS_ICONTAB`), or `None` for the generic plugin glyph.
     icon: Option<Retained<NSImage>>,
-    /// The container this plugin was last told its panel is in, through
-    /// `DMN_DOCK` / `DMN_FLOAT`. `None` until the first reconcile after
-    /// registration, which is what makes that reconcile send the
-    /// registration-time notification. Written before the notification
-    /// goes out — see [`container_notices`].
-    told: Option<DockContainer>,
+    /// What this plugin has been told about its panel: the container,
+    /// through `DMN_DOCK` / `DMN_FLOAT`; whether it is the tab its group
+    /// shows, through `DMN_SWITCHIN` / `DMN_SWITCHOFF`; and where it was
+    /// laid out, through `DMN_FLOATDROPPED`. Starts at nothing, which is
+    /// what makes the first reconcile after registration send the
+    /// registration-time notification. Written before any notification
+    /// goes out — see [`panel_notices`].
+    told: PanelTold,
 }
 
 impl PluginPanel {
@@ -289,9 +298,11 @@ pub(crate) struct PluginPanelSpec {
     pub initial_side: Option<DockSide>,
 }
 
-/// One `DMN_DOCK` / `DMN_FLOAT` to send: the notification code for the
-/// container `panel` is in now, and whom to tell. Built by
-/// [`container_notices`], sent by `crate::plugin::deliver_dock_notices`.
+/// One `DMN_*` a reconcile owes a plugin about its panel — a
+/// `DMN_DOCK` / `DMN_FLOAT`, `DMN_SWITCHIN` / `DMN_SWITCHOFF` or
+/// `DMN_FLOATDROPPED` — and whom to tell. Built by [`panel_notices`],
+/// sent by `crate::plugin::deliver_dock_notices`.
+#[derive(Clone, Copy)]
 pub(crate) struct DockNotice {
     pub panel: DockPanel,
     pub handle: *mut c_void,
@@ -1586,42 +1597,162 @@ pub(crate) fn apply_layout() {
     // Last, so a plugin reacting to where its panel is finds the view
     // tree and the session already settled — and with no borrow held, so
     // its handler's `NPPM_*` is answered rather than declined.
-    let notices = with_dock(container_notices).unwrap_or_default();
+    notify_plugin_panels();
+}
+
+/// Tell every plugin what the layout's latest change means for its
+/// panels: record under the dock borrow, then send with none held.
+///
+/// Called at the end of every [`apply_layout`], and from the default-mode
+/// check [`schedule_placement_check`] queues for the changes that bypass
+/// it — a resize or a move that changes where a group is laid out but not
+/// the model's arrangement.
+fn notify_plugin_panels() {
+    let notices = with_dock(panel_notices).unwrap_or_default();
     crate::plugin::deliver_dock_notices(notices);
 }
 
-/// Record, for every registered plugin panel, the container it is in
-/// now, and return a notice for each one whose container differs from
-/// what its plugin was last told — including every panel whose plugin
-/// has been told nothing yet, which is how a freshly registered panel
-/// gets upstream's registration-time notification.
+/// Bring each registered plugin panel's record up to date and return,
+/// in the order they go out, the `DMN_*` its plugin is owed for the
+/// change: `DMN_DOCK` / `DMN_FLOAT` for a new container, `DMN_SWITCHIN` /
+/// `DMN_SWITCHOFF` for a tab that came on screen or went behind another,
+/// and `DMN_FLOATDROPPED` for a panel laid out somewhere new. When each
+/// is owed, and the order, are `codepp_plugin_host::docking`'s to decide
+/// — see `PanelTold::update` and `delivery_order` — so every backend
+/// sends the same thing for the same change.
 ///
 /// Recording happens here, under the borrow, before
 /// `crate::plugin::deliver_dock_notices` sends anything, and that order
-/// is what stops a transition being told twice: a plugin's handler may
-/// show or hide a panel, which reconciles again from inside the
-/// delivery, and the nested pass must find the transition already
-/// recorded. What bounds the round trip when a handler registers a *new*
-/// panel — which the nested pass has genuinely not told — is the
-/// delivery's queue, not this order. The same function as Win32's and
-/// GTK's `container_notices`, and a source scan pins the order on all
-/// three.
-fn container_notices(d: &mut Ui) -> Vec<DockNotice> {
-    let mut out = Vec::new();
-    for entry in d.plugin_panels.iter_mut().filter(|p| p.live()) {
-        let now = d.layout.container_of(entry.panel);
-        let told = entry.told.is_some_and(|last| last.is_same(now));
-        entry.told = Some(now);
-        if !told {
-            out.push(DockNotice {
-                panel: entry.panel,
-                handle: entry.handle,
-                caller: entry.caller,
-                code: codepp_plugin_host::docking::dock_container_code(&d.layout, now),
-            });
-        }
+/// is what stops a change being told twice: a plugin's handler may show
+/// or hide a panel, which reconciles again from inside the delivery, and
+/// the nested pass must find the change already recorded. What bounds the
+/// round trip when a handler registers a *new* panel — which the nested
+/// pass has genuinely not told — is the delivery's queue, not this order.
+/// The same order as Win32's and GTK's `container_notices`, and a source
+/// scan pins it on all three.
+///
+/// Placements are read off the carve [`place_children`] lays the dock
+/// area out with, at the area's last laid-out size; before the area has
+/// one, no docked panel has a placement to be told of.
+fn panel_notices(d: &mut Ui) -> Vec<DockNotice> {
+    let (w, h) = d.area_size;
+    let frame: Option<DockFrame> = (w > 0 && h > 0).then(|| {
+        compute_frame(
+            DockRect::new(0, 0, w, h),
+            &d.layout,
+            MIN_EDITOR_W,
+            MIN_EDITOR_H,
+        )
+    });
+    // Keyed by whom to tell, copied out of the registration, so turning
+    // the ordered codes into notices needs nothing looked up again.
+    let owed: Vec<(NoticeTarget, codepp_plugin_host::docking::Owed)> = d
+        .plugin_panels
+        .iter_mut()
+        .filter(|entry| entry.live())
+        .map(|entry| {
+            let owed = entry.told.update(&d.layout, frame.as_ref(), entry.panel);
+            ((entry.panel, entry.handle, entry.caller), owed)
+        })
+        .collect();
+    codepp_plugin_host::docking::delivery_order(&owed)
+        .into_iter()
+        .map(|((panel, handle, caller), code)| DockNotice {
+            panel,
+            handle,
+            caller,
+            code,
+        })
+        .collect()
+}
+
+/// Whom a [`DockNotice`] goes to: the panel, the view its plugin
+/// registered it under, and the plugin that registered it.
+type NoticeTarget = (DockPanel, *mut c_void, Option<usize>);
+
+thread_local! {
+    /// Set while a [`schedule_placement_check`] block is waiting on the
+    /// run loop, so a live resize — a layout pass per step — queues one.
+    static PLACEMENT_CHECK_QUEUED: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Queue a check of where the plugin panels are laid out, to run once
+/// the main run loop is back in its default mode, so a panel whose group
+/// has moved or changed size hears `DMN_FLOATDROPPED`.
+///
+/// For the changes that do not go through [`apply_layout`], which
+/// notifies for itself: the main window or a chrome band resized, a
+/// band's splitter dragged, a floating window moved or resized by AppKit.
+/// The callers cannot notify there and then — [`place_children`] runs
+/// under the dock borrow and often inside a `with_state` one, where a
+/// plugin's `NPPM_*` would be declined — and a live resize, a splitter
+/// drag and a float's edge drag all run in event-tracking mode, where
+/// this waits for the gesture to end. So a plugin hears once, where the
+/// group came to rest, rather than once per step of the drag: the
+/// Cocoa counterpart of the `WM_SIZE` Notepad++ relays out on, coalesced.
+/// Default mode for the reasons [`schedule_plugin_panel_sweep`] gives,
+/// and nothing is lost if it runs late: the check reads the layout as it
+/// is when it runs.
+///
+/// A plugin that answers `DMN_FLOATDROPPED` by moving or resizing its
+/// floating window again keeps this re-arming for as long as it does so.
+/// Each round is a run-loop turn apart, so the application stays
+/// responsive in between; the loop is the plugin's to fix, as it is in
+/// Notepad++, where the same handler recurses inside the container's
+/// relayout.
+fn schedule_placement_check() {
+    if PLACEMENT_CHECK_QUEUED.with(|queued| queued.replace(true)) {
+        return;
     }
-    out
+    let block = block2::RcBlock::new(|| {
+        crate::at_callback_boundary("dock:plugin:placements", (), || {
+            // Cleared first, so a change made while plugins are being told
+            // is checked by a block of its own — and so a panic in the
+            // telling cannot leave the flag set, which would silence the
+            // check for the rest of the session.
+            PLACEMENT_CHECK_QUEUED.with(|queued| queued.set(false));
+            notify_plugin_panels();
+        });
+    });
+    // SAFETY: an extern static AppKit initialises before any code of ours
+    // runs, read on the main thread.
+    let default_mode: &NSString = unsafe { objc2_foundation::NSDefaultRunLoopMode };
+    let modes = objc2_foundation::NSArray::from_slice(&[default_mode]);
+    // SAFETY: the block is queued on the main run loop from the main
+    // thread, so it runs there — the only thread it may run on — and it
+    // captures nothing.
+    unsafe {
+        objc2_foundation::NSRunLoop::mainRunLoop().performInModes_block(&modes, &block);
+    }
+}
+
+/// Whether a queued notice still says something true about its panel
+/// when its turn to be sent comes — checked by
+/// `crate::plugin::deliver_dock_notices`, since a plugin's handler for an
+/// earlier notice may have changed the layout since this one was queued.
+///
+/// The registration must still stand, under the view the notice names —
+/// a handler may have taken the view back, and its address may even have
+/// been reused by a view registered since, so both halves are checked. A
+/// `DMN_SWITCHIN` must still find the panel in front: one closed
+/// meanwhile is owed nothing for having left — so if it went out now,
+/// nothing would ever correct it. A `DMN_FLOATDROPPED` must still find
+/// the panel in a group. A switch-off and a container notice go out as
+/// queued: whatever changed since is recorded, and owed a notice of its
+/// own, queued behind this one.
+pub(crate) fn notice_still_applies(notice: &DockNotice) -> bool {
+    with_dock(|d| {
+        let live = d
+            .plugin_panels
+            .iter()
+            .any(|p| p.live() && p.panel == notice.panel && std::ptr::eq(p.handle, notice.handle));
+        live && match notice.code {
+            codepp_plugin_host::DMN_SWITCHIN => d.layout.is_active(notice.panel),
+            codepp_plugin_host::DMN_FLOATDROPPED => d.layout.is_visible(notice.panel),
+            _ => true,
+        }
+    })
+    .unwrap_or(false)
 }
 
 /// Phase one of [`apply_layout`]: the view tree only.
@@ -1846,6 +1977,11 @@ fn place_children(d: &Ui) {
                 layout_group_frame(&g.frame);
             }
         }
+    }
+    // A plugin panel whose group this pass moved or resized is owed a
+    // `DMN_FLOATDROPPED`, which cannot go out under this borrow.
+    if !d.plugin_panels.is_empty() {
+        schedule_placement_check();
     }
 }
 
@@ -2115,7 +2251,7 @@ pub(crate) fn register_plugin_panel(
             module_name: spec.module_name,
             caller: spec.caller,
             icon: spec.icon,
-            told: None,
+            told: PanelTold::default(),
         });
         // Where the panel opens the first time it is shown, from the
         // plugin's own `DWS_DF_CONT_*` preference — never over a position
@@ -2267,19 +2403,6 @@ pub(crate) fn plugin_panel_notify_target(panel: DockPanel) -> Option<(*mut c_voi
             .map(|p| (p.handle, p.caller))
     })
     .flatten()
-}
-
-/// Whether a notice raised for `panel` under `handle` still has a live
-/// registration to go to. A handler for an earlier notice may have taken
-/// the view back, and its address may even have been reused by a view
-/// registered since — so both halves are checked.
-pub(crate) fn plugin_panel_is_live(panel: DockPanel, handle: *mut c_void) -> bool {
-    with_dock(|d| {
-        d.plugin_panels
-            .iter()
-            .any(|p| p.live() && p.panel == panel && std::ptr::eq(p.handle, handle))
-    })
-    .unwrap_or(false)
 }
 
 /// Whether a live view is registered for plugin `panel`.
@@ -2633,6 +2756,9 @@ fn resolve_current_drop(
 /// model and re-lay the group's children. Declined re-entrantly while
 /// [`sync_floats`]' caller still holds the borrow — impossible by
 /// construction, since that runs outside it — and otherwise idempotent.
+/// A move or resize that changed the rect owes the group's plugin panels
+/// a `DMN_FLOATDROPPED`, which [`schedule_placement_check`] sends once
+/// the gesture is over.
 fn on_float_configured(notification: &NSNotification) {
     let Some(mtm) = MainThreadMarker::new() else {
         return;
@@ -2645,15 +2771,19 @@ fn on_float_configured(notification: &NSNotification) {
     };
     let primary_h = primary_height(mtm);
     let rect = flip_rect(window.frame(), primary_h);
-    with_dock(|d| {
+    let plugin_panels = with_dock(|d| {
         if let Some(id) = d.group_of_window(&window) {
             d.layout.set_floating_rect(id, rect);
         }
+        !d.plugin_panels.is_empty()
     });
     if let Some(frame) = window.contentView().and_then(|c| nth_subview(&c, 0)) {
         if let Some(frame) = frame.downcast_ref::<GroupFrame>() {
             layout_group_frame(frame);
         }
+    }
+    if plugin_panels == Some(true) {
+        schedule_placement_check();
     }
 }
 

@@ -321,6 +321,24 @@ pub const DMN_DOCK: u32 = 1050 + 2;
 /// up).
 pub const DMN_FLOAT: u32 = 1050 + 3;
 
+/// `DMN_SWITCHIN` — the panel came on screen: its tab is now the one
+/// its group shows, where it had been hidden or behind another tab.
+/// Nothing in the high word — compare the whole code, as Notepad++'s own
+/// panels do. Off Windows it arrives like [`DMN_CLOSE`]; see
+/// `Docking.h` for when each backend sends it.
+pub const DMN_SWITCHIN: u32 = 1050 + 4;
+
+/// `DMN_SWITCHOFF` — another tab of the panel's group was brought in
+/// front of it; the panel is still open behind it. A panel that is
+/// closed gets no `DMN_SWITCHOFF`. Same delivery as [`DMN_SWITCHIN`].
+pub const DMN_SWITCHOFF: u32 = 1050 + 5;
+
+/// `DMN_FLOATDROPPED` — the panel has been laid out somewhere new: its
+/// group was shown, moved, resized, floated or docked, or gained or lost
+/// its tab bar. Docked panels get it too, despite the name, as they do
+/// in Notepad++. Same delivery as [`DMN_SWITCHIN`].
+pub const DMN_FLOATDROPPED: u32 = 1050 + 6;
+
 /// `WM_NOTIFY` — the message every `DMN_*` arrives on: at the panel's
 /// window procedure on Windows, at the plugin's own `messageProc`
 /// elsewhere, with the panel's `h_client` in `wParam` (see
@@ -773,13 +791,19 @@ mod abi_lock {
         assert_eq!(super::NPPM_SETMENUITEMCHECK, host::NPPM_SETMENUITEMCHECK);
     }
 
-    /// `DMN_CLOSE` lives in the host's `ffi` module rather than
-    /// `dispatch` (it is a notification code, not a message id), so it
-    /// gets its own line rather than joining the block above.
+    /// The `DMN_*` codes live in the host's `ffi` module rather than
+    /// `dispatch` (they are notification codes, not message ids), so they
+    /// get their own test rather than joining the block above.
     #[test]
-    fn sdk_dmn_close_matches_the_host() {
+    fn sdk_dmn_notifications_match_the_host() {
         assert_eq!(super::DMN_CLOSE, codepp_plugin_host::DMN_CLOSE);
         assert_eq!(super::DMN_DOCK, codepp_plugin_host::DMN_DOCK);
         assert_eq!(super::DMN_FLOAT, codepp_plugin_host::DMN_FLOAT);
+        assert_eq!(super::DMN_SWITCHIN, codepp_plugin_host::DMN_SWITCHIN);
+        assert_eq!(super::DMN_SWITCHOFF, codepp_plugin_host::DMN_SWITCHOFF);
+        assert_eq!(
+            super::DMN_FLOATDROPPED,
+            codepp_plugin_host::DMN_FLOATDROPPED
+        );
     }
 }

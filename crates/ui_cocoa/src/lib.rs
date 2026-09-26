@@ -5581,40 +5581,90 @@ let msg = \"found scintilla_cocoa_new() calls\";
         out
     }
 
-    /// What bounds the `DMN_DOCK` / `DMN_FLOAT` round trip is an ordering
-    /// no unit test can see: the container is *recorded* under the dock
-    /// borrow, in `container_notices`, and only then sent, with no borrow
-    /// held, by `plugin::deliver_dock_notices`. A handler that shows or
-    /// hides a panel reconciles again from inside the send; if the record
-    /// were written after the send, that nested pass would find the
-    /// transition untold and send it again, from inside which the next
-    /// pass would do the same. The twin of the Win32 and GTK tests of the
-    /// same name.
+    /// What bounds the `DMN_*` round trip is an ordering no unit test can
+    /// see: what a plugin is owed is *recorded* under the dock borrow, in
+    /// `panel_notices`, and only then sent, with no borrow held, by
+    /// `plugin::deliver_dock_notices`. A handler that shows or hides a
+    /// panel reconciles again from inside the send; if the record were
+    /// written after the send, that nested pass would find the change
+    /// untold and send it again, from inside which the next pass would do
+    /// the same. The twin of the Win32 and GTK tests of the same name.
     #[test]
     fn the_container_is_recorded_before_the_notification_is_sent() {
         let dock = dock_src();
         let apply = fn_body(&dock, "apply_layout");
-        let record = apply
-            .find("with_dock(container_notices)")
-            .expect("the reconcile no longer records containers under the dock borrow");
-        let send = apply
+        assert!(
+            apply.contains("notify_plugin_panels();"),
+            "the reconcile no longer tells the plugins"
+        );
+        let notify = fn_body(&dock, "notify_plugin_panels");
+        let record = notify
+            .find("with_dock(panel_notices)")
+            .expect("the plugins' records are no longer written under the dock borrow");
+        let send = notify
             .find("deliver_dock_notices(notices)")
-            .expect("the reconcile no longer sends the notices");
+            .expect("the notices are no longer sent");
         assert!(record < send, "the send now precedes the record");
 
-        let notices = fn_body(&dock, "container_notices");
+        let notices = fn_body(&dock, "panel_notices");
+        let squashed: String = notices.split_whitespace().collect();
         assert!(
-            notices.contains("entry.told = Some(now);"),
-            "container_notices no longer writes the record"
+            squashed.contains("entry.told.update("),
+            "panel_notices no longer writes the record"
         );
         assert!(
             !notices.contains("deliver_dock_notices") && !notices.contains(".send("),
-            "container_notices sends while the dock borrow is live"
+            "panel_notices sends while the dock borrow is live"
         );
         let deliver = fn_body(&plugin_src(), "deliver_dock_notices");
         assert!(
             !deliver.contains(".told"),
             "the record moved into the send loop, after the send it must precede"
+        );
+    }
+
+    /// A group moved or resized outside the model's arrangement — the
+    /// window, a chrome band or a splitter resized, a float moved by
+    /// AppKit — owes its plugin panels a `DMN_FLOATDROPPED`, and the two
+    /// places that learn of it must not send it: `place_children` runs
+    /// under the dock borrow and usually inside a `with_state` one, where
+    /// a plugin's `NPPM_*` would be declined, and both run at every step
+    /// of a live resize. They queue the check, and the check waits for the
+    /// run loop's default mode — not the main dispatch queue, whose blocks
+    /// run inside event tracking too, so a plugin would be told at every
+    /// step of the drag.
+    #[test]
+    fn geometry_changes_queue_the_placement_check_and_never_notify() {
+        let dock = dock_src();
+        for hook in ["place_children", "on_float_configured"] {
+            let body = fn_body(&dock, hook);
+            assert!(
+                body.contains("schedule_placement_check();"),
+                "{hook} no longer queues the placement check"
+            );
+            for sends in [
+                "notify_plugin_panels",
+                "deliver_dock_notices",
+                "panel_notices",
+            ] {
+                assert!(
+                    !body.contains(sends),
+                    "{hook} tells the plugins itself (`{sends}`)"
+                );
+            }
+        }
+        let schedule = fn_body(&dock, "schedule_placement_check");
+        assert!(
+            schedule.contains("NSDefaultRunLoopMode") && schedule.contains("performInModes_block"),
+            "the placement check no longer waits for the default run-loop mode"
+        );
+        assert!(
+            !schedule.contains("DispatchQueue") && !schedule.contains("exec_async"),
+            "the placement check runs from the main dispatch queue, inside event tracking"
+        );
+        assert!(
+            schedule.contains("notify_plugin_panels"),
+            "the placement check no longer tells the plugins"
         );
     }
 
