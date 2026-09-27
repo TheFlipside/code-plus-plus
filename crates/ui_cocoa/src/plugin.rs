@@ -91,6 +91,7 @@ use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, VecDeque};
 use std::ffi::c_void;
 use std::panic::{catch_unwind, AssertUnwindSafe};
+use std::rc::Rc;
 use std::sync::atomic::{AtomicPtr, AtomicUsize, Ordering};
 
 use dispatch2::DispatchQueue;
@@ -841,6 +842,15 @@ struct PluginScintilla {
     /// Nothing ever releases it: a raw pointer rather than a `Retained`,
     /// so no destructor can — see [`create_plugin_scintilla`].
     view: *mut c_void,
+    /// The host's direct-call handle for it, for what the host does to the
+    /// view itself — `None` if Scintilla would not give one, when the view
+    /// goes without that. Sound for the process for the reason `view` is:
+    /// the view is never released.
+    editor: Option<EditorHandle>,
+    /// The horizontal floor's memory for it — see [`floor_plugin_scintilla`].
+    /// An `Rc` so a paint can take it out of the table and use it with no
+    /// borrow of the table held.
+    scroll_floor: Rc<crate::ScrollFloor>,
     /// The plugin that asked for it — the one whose `messageProc` hears
     /// its notifications — or `None` when it was asked for from outside
     /// any host call, where the host cannot tell which plugin asked.
@@ -907,12 +917,9 @@ thread_local! {
 ///
 /// Its notifications go to the plugin's `messageProc` — see
 /// [`on_plugin_sci_notify`]. Its scrollers are permanent, as the host's
-/// own view's are and a Win32 plugin Scintilla's are.
-///
-/// It does not get the host view's scroll-width floor
-/// (`clamp_scroll_width_to_viewport`): that keeps state per view, and
-/// with width tracking on, the blank area right of a short line is not
-/// clickable here (DESIGN.md §7.4).
+/// own view's are and a Win32 plugin Scintilla's are, and the blank area
+/// right of its text is the mouse's, as it is in the host's own view —
+/// see [`floor_plugin_scintilla`].
 pub(crate) fn create_plugin_scintilla(parent: *mut c_void, main_window: &NSWindow) -> *mut c_void {
     let owner = codepp_plugin_host::calling_plugin();
     let into = match plugin_scintilla_parent(parent, main_window) {
@@ -961,8 +968,11 @@ pub(crate) fn create_plugin_scintilla(parent: *mut c_void, main_window: &NSWindo
     // message the host sends a view it made; the sends in this module are
     // the plugins' traffic.
     //
-    // SAFETY: `ptr` is the live view just made, never released.
-    if let Some(editor) = unsafe { EditorHandle::from_cocoa_view(ptr) } {
+    // SAFETY: `ptr` is the live view just made, never released — which is
+    // also what keeps the handle sound for as long as the table below
+    // holds it.
+    let editor = unsafe { EditorHandle::from_cocoa_view(ptr) };
+    if let Some(editor) = editor {
         editor.send(SCI_SETCODEPAGE, SC_CP_UTF8 as usize, 0);
     }
     // Recorded and made routable before it goes anywhere, so a view the
@@ -975,6 +985,8 @@ pub(crate) fn create_plugin_scintilla(parent: *mut c_void, main_window: &NSWindo
         let mut made = made.try_borrow_mut().ok()?;
         made.push(PluginScintilla {
             view: ptr,
+            editor,
+            scroll_floor: Rc::default(),
             owner,
             target: if owner.is_some() {
                 NotifyTarget::Unresolved
@@ -1106,10 +1118,14 @@ fn may_make_plugin_scintilla(
 /// Scintilla gives: the view's control identifier (`SCI_SETIDENTIFIER`,
 /// 0 unless the plugin sets one), as a Win32 `WM_NOTIFY` carries.
 ///
-/// `SCN_PAINTED` also repairs the view's scroller layout first, as the
-/// host's own view's is repaired: the permanent scrollers
-/// [`create_plugin_scintilla`] gives it are what the vendored `tile`
-/// lays out wrong — see `enforce_scroller_layout`.
+/// `SCN_PAINTED` first gets the housekeeping the host's own view gets
+/// after each paint, before the plugin hears of the paint: the scroller
+/// repair — the permanent scrollers [`create_plugin_scintilla`] gives the
+/// view are what the vendored `tile` lays out wrong, see
+/// `enforce_scroller_layout` — and then the horizontal floor
+/// ([`floor_plugin_scintilla`]), in that order for the host view's
+/// reason: the floor measures the clip, which is only right once
+/// repaired.
 ///
 /// # Safety
 ///
@@ -1152,7 +1168,9 @@ unsafe fn forward_plugin_sci_notify(windowid: isize, message: u32, wparam: usize
     if scn.nmhdr.code == SCN_PAINTED {
         if let Some(mtm) = MainThreadMarker::new() {
             // SAFETY: a view made for a plugin, never released.
-            crate::enforce_scroller_layout(unsafe { &*view.cast::<NSView>() }, mtm);
+            let sci_view = unsafe { &*view.cast::<NSView>() };
+            crate::enforce_scroller_layout(sci_view, mtm);
+            floor_plugin_scintilla(index, sci_view);
         }
     }
     let Some(target) = plugin_scintilla_target(index) else {
@@ -1168,6 +1186,33 @@ unsafe fn forward_plugin_sci_notify(windowid: isize, message: u32, wparam: usize
 /// The view at `index` in [`PLUGIN_SCINTILLAS`].
 fn plugin_scintilla_view(index: usize) -> Option<*mut c_void> {
     PLUGIN_SCINTILLAS.with(|made| made.try_borrow().ok()?.get(index).map(|s| s.view))
+}
+
+/// Give the view at `index`, `sci_view`, the host view's horizontal floor
+/// after one of its paints — see `clamp_scroll_width_to_viewport` — with
+/// the view's own memory, never another view's.
+///
+/// The floor is the host's to keep, not the plugin's: on this backend a
+/// scroll width below the viewport leaves the blank area right of the
+/// text dead to the mouse, and a plugin written against Win32 has no
+/// reason to expect that. What a plugin can see of it is
+/// `SCI_GETSCROLLWIDTH` reading the viewport's width where it set less —
+/// which still leaves nothing to scroll, as the width it set would have
+/// on Win32. A width it set at or above the viewport stays as set however
+/// the view is resized, unless it is exactly the width the floor had
+/// installed, which the floor cannot tell from its own.
+///
+/// Nothing of [`PLUGIN_SCINTILLAS`] stays borrowed while the floor
+/// messages the view.
+fn floor_plugin_scintilla(index: usize, sci_view: &NSView) {
+    let Some((editor, floor)) = PLUGIN_SCINTILLAS.with(|made| {
+        let made = made.try_borrow().ok()?;
+        let entry = made.get(index)?;
+        Some((entry.editor?, Rc::clone(&entry.scroll_floor)))
+    }) else {
+        return;
+    };
+    crate::clamp_scroll_width_to_viewport(&editor, sci_view, &floor);
 }
 
 /// The `messageProc` that hears the notifications of the view at `index`,
@@ -1552,12 +1597,14 @@ pub mod smoke_support {
     ///
     /// What it pins is what a source scan cannot see: a view made for a
     /// plugin lands where the plugin asked, hidden and zero-sized, and
-    /// answers `SCI_*` routed to it from any thread; the parents, windows
-    /// and images the host must not take are refused; and a plugin's
-    /// toolbar button runs through the toolbar's own action and comes back
-    /// showing the plugin's mark rather than AppKit's flip. Delivery of a
-    /// plugin view's notifications needs a loaded plugin to deliver to,
-    /// so the real app is where that is shown (DESIGN.md §7.4).
+    /// answers `SCI_*` routed to it from any thread; once painted, the
+    /// blank area right of a short line in it is the mouse's, each view
+    /// keeping its own floor; the parents, windows and images the host
+    /// must not take are refused; and a plugin's toolbar button runs
+    /// through the toolbar's own action and comes back showing the
+    /// plugin's mark rather than AppKit's flip. Delivery of a plugin
+    /// view's notifications needs a loaded plugin to deliver to, so the
+    /// real app is where that is shown (DESIGN.md §7.4).
     ///
     /// # Safety
     ///
@@ -1573,6 +1620,7 @@ pub mod smoke_support {
         let panel = made_for_plugins::scintilla_parents_are_checked(&rig, host_sci, mtm);
         made_for_plugins::a_plugin_panel_is_a_parent_and_its_container_is_not(&rig, panel, mtm);
         made_for_plugins::a_plugin_view_is_routed_from_any_thread(&rig.window, mtm);
+        made_for_plugins::a_plugin_view_takes_the_mouse_right_of_a_short_line(&rig.window, mtm);
         made_for_plugins::modeless_dialogs_are_checked_and_answered(&rig.window, host_sci, mtm);
         made_for_plugins::plugin_toolbar_buttons(mtm);
         // Kept for the process, like every view this binary makes.
@@ -1594,7 +1642,10 @@ pub mod smoke_support {
         };
 
         use super::panel_scenario::{handle_of, plugin_view, reconcile, Rig};
-        use codepp_scintilla_sys::{SCI_GETCODEPAGE, SCI_GETLENGTH, SCI_SETTEXT, SC_CP_UTF8};
+        use codepp_scintilla_sys::{
+            SCI_GETCODEPAGE, SCI_GETLENGTH, SCI_GETSCROLLWIDTH, SCI_SETSCROLLWIDTH,
+            SCI_SETSCROLLWIDTHTRACKING, SCI_SETTEXT, SC_CP_UTF8,
+        };
 
         /// Stand-in for the plugin command a toolbar button runs.
         const SMOKE_CMD: i32 = 22_001;
@@ -1794,6 +1845,170 @@ pub mod smoke_support {
             }
             assert_eq!(worker.join().expect("worker panicked"), 5);
             std::mem::forget(panel);
+        }
+
+        /// The blank area right of a short line in a plugin's view is the
+        /// mouse's, as it is in the host's own view.
+        ///
+        /// Two views are set up the way Notepad++ sets up its own — width
+        /// tracking on, the width seeded at 1 — and given one short line.
+        /// Unpainted, a view's document view is only as wide as its scroll
+        /// width, so a click near the right edge lands on the clip view
+        /// around it. Once painted, the floor has widened each to its
+        /// viewport. The plugin
+        /// then narrows the first, and its floor follows it down — which it
+        /// would not with one memory for both views, because the second's
+        /// paints would have made the first's width look like someone
+        /// else's. Last, a width the plugin set wider than its view, with
+        /// tracking off, is left as set through a resize.
+        pub(super) fn a_plugin_view_takes_the_mouse_right_of_a_short_line(
+            main: &NSWindow,
+            mtm: MainThreadMarker,
+        ) {
+            let first = shown(main, mtm, 400.0);
+            let second = shown(main, mtm, 520.0);
+            for view in [first, second] {
+                super::dispatch(view, SCI_SETSCROLLWIDTHTRACKING, 1, 0);
+                super::dispatch(view, SCI_SETSCROLLWIDTH, 1, 0);
+                assert_eq!(round_trip(view, "abc"), 3);
+            }
+            assert!(
+                !takes_the_mouse_at_its_right(first),
+                "an unpainted view already takes the mouse at its right, so \
+                 the checks below would prove nothing"
+            );
+            paint(first);
+            paint(second);
+            for view in [first, second] {
+                assert_eq!(
+                    scroll_width(view),
+                    viewport(view),
+                    "a plugin's view was not floored at its viewport"
+                );
+                assert!(
+                    takes_the_mouse_at_its_right(view),
+                    "the blank area right of a short line is dead to the mouse"
+                );
+            }
+
+            fit(first, 300.0);
+            paint(first);
+            assert_eq!(
+                scroll_width(first),
+                viewport(first),
+                "the floor stayed at the old width when the plugin narrowed \
+                 its view"
+            );
+            assert!(takes_the_mouse_at_its_right(first));
+
+            super::dispatch(second, SCI_SETSCROLLWIDTHTRACKING, 0, 0);
+            super::dispatch(second, SCI_SETSCROLLWIDTH, 5000, 0);
+            paint(second);
+            fit(second, 300.0);
+            paint(second);
+            assert_eq!(
+                scroll_width(second),
+                5000,
+                "the floor lowered a width the plugin set"
+            );
+        }
+
+        /// A view made for a plugin in a free-standing view of the
+        /// plugin's, then sized to fill it and shown, as the plugin would.
+        fn shown(main: &NSWindow, mtm: MainThreadMarker, width: f64) -> *mut c_void {
+            let panel = NSView::initWithFrame(
+                NSView::alloc(mtm),
+                NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(width, 200.0)),
+            );
+            let made = make(handle_of(&panel), main);
+            assert!(!made.is_null(), "a plugin's free-standing view was refused");
+            fit(made, width);
+            view_at(made).setHidden(false);
+            assert!(
+                viewport(made) > 100,
+                "the view's text area was not laid out"
+            );
+            // Kept for the process, like every view this binary makes.
+            std::mem::forget(panel);
+            made
+        }
+
+        /// Size the view at `handle` as its plugin would.
+        fn fit(handle: *mut c_void, width: f64) {
+            view_at(handle).setFrame(NSRect::new(
+                NSPoint::new(0.0, 0.0),
+                NSSize::new(width, 200.0),
+            ));
+        }
+
+        /// Paint the view at `handle` as a display pass would, which is
+        /// what runs the floor, then paint it again and check the repaint
+        /// leaves the width alone: a floored view must stay as it is.
+        ///
+        /// Measured by printing the width around each of three passes: the
+        /// floor did its work on the first pass every time (1 → 367,
+        /// 1 → 487, and 367 → 267 after the narrowing), and later passes
+        /// changed nothing.
+        fn paint(handle: *mut c_void) {
+            draw(handle);
+            let first = scroll_width(handle);
+            draw(handle);
+            assert_eq!(
+                scroll_width(handle),
+                first,
+                "a repaint moved the width: either the floor did not settle, \
+                 or the first paint went unreported"
+            );
+        }
+
+        /// One drawing pass of the view at `handle`, into a bitmap since
+        /// the view is in no window — which is what sends Scintilla's
+        /// `SCN_PAINTED`.
+        fn draw(handle: *mut c_void) {
+            let view = view_at(handle);
+            let bounds = view.bounds();
+            let rep = view
+                .bitmapImageRepForCachingDisplayInRect(bounds)
+                .expect("a bitmap to draw the view into");
+            view.cacheDisplayInRect_toBitmapImageRep(bounds, &rep);
+        }
+
+        /// The scroll width of the view at `handle`, asked as a plugin would.
+        fn scroll_width(handle: *mut c_void) -> isize {
+            super::dispatch(handle, SCI_GETSCROLLWIDTH, 0, 0)
+        }
+
+        /// The width of the view's text area in whole points — what the
+        /// floor raises a narrower scroll width to.
+        fn viewport(handle: *mut c_void) -> isize {
+            crate::text_area_width(view_at(handle))
+                .expect("a Scintilla view has a scroll view")
+                .floor() as isize
+        }
+
+        /// Whether a click just inside the right edge of the view's text
+        /// area would reach Scintilla — land on its document view — rather
+        /// than on the clip view around it. Midway down, which is right of
+        /// the one short line and needs no view to be flipped either way.
+        fn takes_the_mouse_at_its_right(handle: *mut c_void) -> bool {
+            let scroll = crate::editor_scroll_view(view_at(handle))
+                .expect("a Scintilla view has a scroll view");
+            let document = scroll.documentView().expect("a document view");
+            let clip = scroll.contentView();
+            let bounds = clip.bounds();
+            let inside = NSPoint::new(
+                bounds.origin.x + bounds.size.width - 12.0,
+                bounds.origin.y + bounds.size.height / 2.0,
+            );
+            // `hitTest:` takes the point in the receiver's superview's
+            // coordinates, not its own, so the point is converted into
+            // whatever view holds the clip; asking with clip coordinates
+            // would test a point offset by the clip's own frame origin.
+            // SAFETY: a plain accessor on a live view, on the main thread.
+            let above = unsafe { clip.superview() };
+            let point = clip.convertPoint_toView(inside, above.as_deref());
+            clip.hitTest(point)
+                .is_some_and(|hit| hit.isDescendantOf(&document))
         }
 
         /// A plugin's window is registered — to no effect, answered — and

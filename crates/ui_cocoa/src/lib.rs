@@ -108,10 +108,6 @@ const DEFAULT_HEIGHT: f64 = 768.0;
 pub(crate) const AUTOSAVE_INTERVAL_SECS: f64 = 7.0;
 
 thread_local! {
-    /// Viewport width the horizontal floor was last computed against, so
-    /// [`clamp_scroll_width_to_viewport`] can tell a resize from a
-    /// repaint. `-1` is unreachable, so the first paint always re-seeds.
-    static LAST_VIEWPORT_WIDTH: std::cell::Cell<isize> = const { std::cell::Cell::new(-1) };
     /// The buffer the tab strip was last scrolled to show, so an
     /// ordinary chrome refresh does not undo the overflow arrows. See
     /// [`refresh_tab_chrome`].
@@ -416,6 +412,7 @@ pub fn run(initial_path: Option<PathBuf>, perf: Perf) -> Result<(), CocoaUiError
         sci_view: sci_view.clone(),
         sci_ptr,
         editor,
+        scroll_floor: ScrollFloor::default(),
         status: views.status,
         tabs: views.tab_strip,
         toolbar: views.toolbar,
@@ -876,13 +873,14 @@ unsafe fn on_sci_notify_inner(message: u32, lparam: usize) {
                 // Repair first, measure second. `clamp_scroll_width_to_viewport`
                 // reads the clip's width, and on a paint that follows a
                 // re-tile that width is the wrong, scroller-covering one —
-                // measuring first would raise the horizontal floor above the
-                // real viewport, and since that floor only ever rises it
-                // would stay there.
+                // measuring first would take it for the viewport and floor
+                // the width above the real one, a scroll range for nothing.
+                // The views made for plugins keep the same order
+                // (`plugin::forward_plugin_sci_notify`).
                 if let Some(mtm) = MainThreadMarker::new() {
                     enforce_scroller_layout(&st.sci_view, mtm);
                 }
-                clamp_scroll_width_to_viewport(&st.editor, &st.sci_view);
+                clamp_scroll_width_to_viewport(&st.editor, &st.sci_view, &st.scroll_floor);
             });
         }
         _ => {}
@@ -1410,7 +1408,7 @@ pub(crate) fn seed_horizontal_scroll(editor: &EditorHandle) {
 /// (`cocoa/ScintillaCocoa.mm::SetScrollingSize`) and explicitly clamps
 /// the *height* to the clip rect — "Ensure all of clipRect covered by
 /// Scintilla drawing" — but does **not** do the same for the width:
-/// `docWidth = Wrapping() ? clipRect.width : scrollWidth`. With width
+/// `docWidth = Wrapping() ? clipRect.size.width : scrollWidth`. With width
 /// tracking on, `scrollWidth` is the longest *visible* line, so the
 /// document view ends exactly where the longest line ends and every
 /// click to the right of it lands on the enclosing `NSClipView` instead.
@@ -1423,53 +1421,147 @@ pub(crate) fn seed_horizontal_scroll(editor: &EditorHandle) {
 ///
 /// Fixed host-side rather than by patching the vendored tree, which
 /// DESIGN.md §4.1 keeps unforked. Tracking stays on, so a genuinely long
-/// line still scrolls horizontally and the width still shrinks back when
-/// that line is deleted; this only raises the floor.
-pub(crate) fn clamp_scroll_width_to_viewport(editor: &EditorHandle, sci_view: &NSView) {
+/// line still scrolls horizontally; this raises the floor, and lowers
+/// only a width it raised itself — see [`floor_step`].
+///
+/// **Every Scintilla view that shows text to the mouse gets it**: the
+/// host's own, and each one made for a plugin
+/// (`plugin::create_plugin_scintilla`). The dead strip is this backend's,
+/// not the view's — a plugin written against Win32 has no reason to
+/// expect it, and one that sets its view up the way Notepad++ sets up its
+/// own (`SCI_SETSCROLLWIDTH(1)` with tracking on) meets it on its first
+/// short line. `floor` is the view's own memory; see [`ScrollFloor`]. The
+/// Document Map's miniature needs none, because the overlay above it
+/// takes every click.
+pub(crate) fn clamp_scroll_width_to_viewport(
+    editor: &EditorHandle,
+    sci_view: &NSView,
+    floor: &ScrollFloor,
+) {
     let Some(visible) = text_area_width(sci_view) else {
         return;
     };
-    // Round down: a floor one pixel under the clip width leaves no
-    // dead strip, whereas overshooting would create a scrollable range
-    // that does not exist.
-    let target = visible.floor() as isize;
-    if target <= 0 {
+    let viewport = viewport_points(visible);
+    if viewport <= 0 {
         return;
     }
-    let previous = LAST_VIEWPORT_WIDTH.with(|c| c.replace(target));
     let current = editor.send(codepp_scintilla_sys::SCI_GETSCROLLWIDTH, 0, 0);
-
-    // **When the viewport shrinks, let the floor come down with it — but
-    // only when the floor is all that is holding the width up.**
-    //
-    // This function otherwise only ever raises `scrollWidth`, which is
-    // right while the window keeps its size: the floor is what stops the
-    // blank area right of short lines being unclickable. The raised
-    // value outlives the viewport that justified it, though, so
-    // maximising and un-maximising a three-line file left the document
-    // as wide as the *old* clip and a horizontal scrollbar appeared for
-    // content that was not there.
-    //
-    // The test for "nothing but the floor" is that the width is exactly
-    // the value this function last installed. A content-derived width
-    // never matches that except by coincidence, and a coincidence is
-    // harmless: tracking re-raises it on the next paint while the long
-    // line is still on screen.
-    //
-    // **Re-seeding instead would be wrong, and was.** An earlier version
-    // reset the width to 1 so tracking could recompute — but
-    // `SCI_SETSCROLLWIDTH` also zeroes `lineWidthMaxSeen`, and tracking
-    // only re-raises during a subsequent `Paint`, so reading the width
-    // back in the same pass and clamping it to the viewport pinned it
-    // there. Measured: with a 4 000-character line on screen, resizing
-    // 1500 → 900 collapsed the document from 26 525 pt to 839 pt and it
-    // did not recover, making the rest of that line unreachable.
-    if previous > target && current == previous {
-        editor.send(codepp_scintilla_sys::SCI_SETSCROLLWIDTH, target as usize, 0);
-        return;
+    let step = floor_step(viewport, current, floor.held.get());
+    // Remembered before the write, so anything the write sets off finds
+    // the memory already current.
+    floor.held.set(step.held);
+    if let Some(width) = step.install {
+        editor.send(codepp_scintilla_sys::SCI_SETSCROLLWIDTH, width as usize, 0);
     }
-    if current < target {
-        editor.send(codepp_scintilla_sys::SCI_SETSCROLLWIDTH, target as usize, 0);
+}
+
+/// The text area's width in whole points, as the floor installs it.
+///
+/// Rounded down: a floor one point under the clip width leaves no dead
+/// strip, whereas overshooting would create a scrollable range that does
+/// not exist. Capped at what Scintilla keeps a scroll width in, an `int`:
+/// a plugin sizes its own view, so an absurd frame is possible, and a
+/// wider value would reach Scintilla truncated. `NaN` comes out 0, which
+/// the floor skips.
+fn viewport_points(width: f64) -> isize {
+    (width.floor() as isize).min(i32::MAX as isize)
+}
+
+/// The horizontal floor's memory for one Scintilla view: the width
+/// [`clamp_scroll_width_to_viewport`] last installed there, for as long
+/// as that is still the view's width.
+///
+/// **One per view, because the width it remembers is that view's own.**
+/// Two views sharing one would take each other's widths for their own:
+/// a plugin's view painting between two paints of the host's would make
+/// the floor forget it holds the host's width up, and that width would
+/// then stay behind when the window shrinks. The host's view keeps its
+/// memory on `CocoaUiState`, and each view made for a plugin keeps one
+/// beside it.
+#[derive(Debug, Default)]
+pub(crate) struct ScrollFloor {
+    /// See [`FloorStep::held`].
+    held: Cell<Option<isize>>,
+}
+
+/// What the horizontal floor does to one view's scroll width after a
+/// paint — see [`floor_step`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct FloorStep {
+    /// The scroll width to install, when the view's has to change.
+    install: Option<isize>,
+    /// What the view's [`ScrollFloor`] remembers afterwards: the width the
+    /// floor has installed and still sees in place, or `None` once the
+    /// width is someone else's.
+    held: Option<isize>,
+}
+
+/// The horizontal floor's rule: given the text area's width in whole
+/// points (`viewport`, positive), the view's scroll width (`current`) and
+/// what the view's [`ScrollFloor`] holds (`held`), what to install and
+/// what to remember.
+///
+/// **Below the viewport, the width is raised, whoever set it** — that is
+/// the dead strip the floor exists for. **At or above it, the width is
+/// lowered only when the floor installed it and nothing has changed it
+/// since**, and then only to follow the viewport down. The raised value
+/// outlives the viewport that justified it, so without the lowering,
+/// maximising and un-maximising a three-line file left the document as
+/// wide as the *old* clip, and a horizontal scrollbar appeared for
+/// content that was not there. Scintilla never lowers the width by
+/// itself: tracking and caret scrolling only ever raise it.
+///
+/// **The memory is of the width installed, not of the viewport last
+/// seen**, and the difference is a plugin's view. The floor once
+/// remembered the last viewport and lowered any width equal to it, which
+/// is the same thing only while the floor is what holds the width up. A
+/// width someone else set that happened to equal the old viewport read as
+/// the floor's and was cut down. On the host's view that was harmless —
+/// tracking re-raises a visible line's width on the next paint — but a
+/// plugin's view need not track, and there a width the plugin chose
+/// would have been lowered for good. So the floor stops claiming a width
+/// the moment it finds it changed, and a width it never installed is
+/// never lowered.
+///
+/// **Re-seeding to let tracking recompute is the tempting alternative to
+/// lowering, and was wrong.** `SCI_SETSCROLLWIDTH` also zeroes
+/// `lineWidthMaxSeen`, and tracking only re-raises during a later
+/// `Paint`, so reading the width back in the same pass and flooring it at
+/// the viewport pinned it there. Measured: with a 4 000-character line on
+/// screen, resizing 1500 → 900 collapsed the document from 26 525 pt to
+/// 839 pt and it did not recover, making the rest of that line
+/// unreachable.
+///
+/// Pure, and separated for that reason: this rule is where the floor has
+/// been wrong before, and the cases that decide it — a resize, a long
+/// line, a width someone else set — are exactly what a hands-on demo is
+/// worst at covering. Same reasoning as [`scroller_clip_size`].
+fn floor_step(viewport: isize, current: isize, held: Option<isize>) -> FloorStep {
+    if current < viewport {
+        return FloorStep {
+            install: Some(viewport),
+            held: Some(viewport),
+        };
+    }
+    // At or above the viewport, and not the floor's width — tracking's
+    // for a long line on screen, or a plugin's own — so it is left alone,
+    // and the floor stops claiming it.
+    if held != Some(current) {
+        return FloorStep {
+            install: None,
+            held: None,
+        };
+    }
+    // The floor's own width, held up by nothing else.
+    if viewport < current {
+        return FloorStep {
+            install: Some(viewport),
+            held: Some(viewport),
+        };
+    }
+    FloorStep {
+        install: None,
+        held,
     }
 }
 
@@ -2161,7 +2253,7 @@ fn seed_horizontal_scroll_if_document_changed() {
             return;
         }
         seed_horizontal_scroll(&st.editor);
-        clamp_scroll_width_to_viewport(&st.editor, &st.sci_view);
+        clamp_scroll_width_to_viewport(&st.editor, &st.sci_view, &st.scroll_floor);
     });
 }
 
@@ -2524,7 +2616,7 @@ pub(crate) fn apply_saved_view_settings() {
     with_state(|st| {
         let view = st.shell.saved_view_settings();
         apply_view_settings(&st.editor, view);
-        clamp_scroll_width_to_viewport(&st.editor, &st.sci_view);
+        clamp_scroll_width_to_viewport(&st.editor, &st.sci_view, &st.scroll_floor);
     });
     refresh_toolbar_toggles();
 }
@@ -3540,6 +3632,136 @@ mod scroller_layout_tests {
 }
 
 #[cfg(test)]
+mod scroll_floor_tests {
+    use super::{floor_step, viewport_points, FloorStep};
+
+    /// `(install, held)` for one step of the floor.
+    fn step(
+        viewport: isize,
+        current: isize,
+        held: Option<isize>,
+    ) -> (Option<isize>, Option<isize>) {
+        let FloorStep { install, held } = floor_step(viewport, current, held);
+        (install, held)
+    }
+
+    /// Feed `viewports` through the floor one paint at a time, the width
+    /// starting at `width`, and return the width after each paint. Nothing
+    /// but the floor changes the width here.
+    fn resize(mut width: isize, viewports: &[isize]) -> Vec<isize> {
+        let mut held = None;
+        viewports
+            .iter()
+            .map(|&viewport| {
+                let s = floor_step(viewport, width, held);
+                width = s.install.unwrap_or(width);
+                held = s.held;
+                width
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_width_below_the_viewport_is_raised_to_it() {
+        // Just after a seed, the reset tracking recomputes from.
+        assert_eq!(step(956, 1, None), (Some(956), Some(956)));
+        // Whoever set it: a plugin's own narrow width leaves the same dead
+        // strip.
+        assert_eq!(step(956, 300, None), (Some(956), Some(956)));
+        // And the floor's own, once the viewport has grown past it.
+        assert_eq!(step(1200, 900, Some(900)), (Some(1200), Some(1200)));
+        // A width Scintilla holds as negative, which a plugin gets by
+        // passing `SCI_SETSCROLLWIDTH` a wParam past `INT_MAX`: Scintilla
+        // keeps the width in an `int`. Only compared, never used.
+        assert_eq!(step(956, -2_147_483_648, None), (Some(956), Some(956)));
+    }
+
+    #[test]
+    fn the_viewport_is_in_whole_points_scintilla_can_hold() {
+        assert_eq!(viewport_points(956.9), 956);
+        assert_eq!(viewport_points(956.0), 956);
+        // A plugin sizes its own view: an absurd width is capped at
+        // Scintilla's `int` rather than truncated inside it.
+        assert_eq!(viewport_points(3.0e9), i32::MAX as isize);
+        assert_eq!(viewport_points(f64::INFINITY), i32::MAX as isize);
+        // Nothing for the floor to do; its caller skips both.
+        assert_eq!(viewport_points(f64::NAN), 0);
+        assert!(viewport_points(-4.5) <= 0);
+    }
+
+    #[test]
+    fn the_floors_own_width_follows_the_viewport_down() {
+        // Maximising and un-maximising a three-line file: the reported case.
+        assert_eq!(step(900, 1500, Some(1500)), (Some(900), Some(900)));
+    }
+
+    #[test]
+    fn a_steady_viewport_changes_nothing() {
+        assert_eq!(step(1500, 1500, Some(1500)), (None, Some(1500)));
+    }
+
+    #[test]
+    fn a_long_lines_scroll_range_is_kept() {
+        // Tracking raised the width past the floor for a line on screen:
+        // not the floor's to lower, and no longer the floor's at all.
+        assert_eq!(step(900, 26_525, Some(1500)), (None, None));
+        assert_eq!(step(900, 26_525, None), (None, None));
+        // After a lowering, tracking re-raises for a visible line wider
+        // than the new viewport; that width is tracking's, and a further
+        // shrink leaves it be.
+        assert_eq!(step(900, 1200, Some(900)), (None, None));
+        assert_eq!(step(800, 1200, None), (None, None));
+    }
+
+    /// The case the memory is of the installed width for: a width the floor
+    /// never installed is never lowered, even when it equals the viewport
+    /// the floor last saw. Remembering the last viewport instead — as the
+    /// floor once did — lowered both of these to 900.
+    #[test]
+    fn a_width_someone_else_set_is_never_lowered() {
+        // A plugin's view, tracking off, its width set to exactly the old
+        // viewport.
+        assert_eq!(step(900, 1500, None), (None, None));
+        // Or the floor installed another width, since changed under it.
+        assert_eq!(step(900, 1500, Some(1400)), (None, None));
+    }
+
+    /// Once anything else changes the width, the floor lets go of it, so
+    /// the width coming back to the floor's old value is not the floor's
+    /// either.
+    #[test]
+    fn the_floor_lets_go_once_the_width_is_changed_under_it() {
+        let raised = floor_step(1500, 1600, Some(1500));
+        assert_eq!(
+            raised,
+            FloorStep {
+                install: None,
+                held: None
+            }
+        );
+        assert_eq!(step(900, 1500, raised.held), (None, None));
+    }
+
+    /// A short file through a run of resizes: the document covers the
+    /// viewport exactly at every size, so there is neither a dead strip
+    /// nor a scroll range for content that is not there.
+    #[test]
+    fn a_short_file_follows_every_resize() {
+        let viewports = [1500, 900, 1200, 1200, 600, 2000, 2000, 1];
+        assert_eq!(resize(1, &viewports), viewports);
+    }
+
+    /// A long line through the same resizes: its range is never cut down.
+    #[test]
+    fn a_long_file_keeps_its_width_through_every_resize() {
+        assert_eq!(
+            resize(26_525, &[1500, 900, 1200, 600]),
+            [26_525, 26_525, 26_525, 26_525]
+        );
+    }
+}
+
+#[cfg(test)]
 mod modifier_tests {
     use super::modifiers_type_a_character as types;
     use objc2_app_kit::NSEventModifierFlags as F;
@@ -3911,20 +4133,23 @@ mod source_invariants {
     /// There are exactly two legitimate senders, and both are named
     /// here: `seed_horizontal_scroll` (which pairs the reset with
     /// tracking) and `clamp_scroll_width_to_viewport` (which raises the
-    /// floor so the whole visible area stays clickable). A third call
-    /// site is almost certainly one of the two bugs above coming back.
+    /// floor so the whole visible area stays clickable, and lowers it
+    /// again once the viewport shrinks). A third call site is almost
+    /// certainly one of the two bugs above coming back. The views made
+    /// for plugins reach the floor through the same function — see
+    /// `every_view_the_floor_runs_on_keeps_its_own_memory`.
     #[test]
     fn scroll_width_is_only_set_together_with_tracking() {
         let src = production_src();
         assert!(src.len() > 5_000, "source scan read too little to be real");
         let sets = src.matches("SCI_SETSCROLLWIDTH,").count();
         assert_eq!(
-            sets, 3,
-            "`SCI_SETSCROLLWIDTH` should be sent from exactly three places \
+            sets, 2,
+            "`SCI_SETSCROLLWIDTH` should be sent from exactly two places \
              — `seed_horizontal_scroll`, which also enables tracking, and \
-             the two arms of `clamp_scroll_width_to_viewport`, which raise \
-             the floor to the viewport and lower it again when the viewport \
-             shrinks. Found {sets}. An unpaired reset collapses the document \
+             `clamp_scroll_width_to_viewport`, which installs the floor \
+             `floor_step` decides on: the viewport, raised to or lowered \
+             to. Found {sets}. An unpaired reset collapses the document \
              view to one point wide and kills mouse input entirely; a \
              missing floor makes only the text clickable."
         );
@@ -4189,26 +4414,23 @@ mod source_invariants {
         );
     }
 
-    /// The horizontal floor must be allowed back down when the viewport
-    /// shrinks.
+    /// The horizontal floor follows the viewport down by the rule
+    /// `floor_step` states, never by re-seeding, and remembers what it
+    /// did before it does it.
     ///
     /// The floor exists so the blank area right of short lines stays
-    /// clickable, and it only ever rises — which is right until the
-    /// window gets smaller, at which point the document is still as wide
-    /// as the *old* viewport and a horizontal scrollbar appears for
-    /// content that is not there. Reported after a maximise and
-    /// un-maximise on a three-line file.
-    ///
-    /// It must come down *only* when the width is exactly the floor this
-    /// function last installed. Re-seeding to let tracking recompute is
-    /// the tempting alternative and it loses a real long line's scroll
-    /// range — see the function.
+    /// clickable, and it once only rose — which is right until the window
+    /// gets smaller, at which point the document is still as wide as the
+    /// *old* viewport and a horizontal scrollbar appears for content that
+    /// is not there. Reported after a maximise and un-maximise on a
+    /// three-line file. When it comes down is `floor_step`'s, pinned by
+    /// `scroll_floor_tests`; what a scan can see is that the clamp applies
+    /// that rule to the view's own memory and does not re-seed instead.
+    /// Re-seeding to let tracking recompute is the tempting alternative
+    /// and loses a real long line's scroll range — see `floor_step`.
     #[test]
-    fn the_horizontal_floor_is_reseeded_when_the_viewport_changes() {
+    fn the_horizontal_floor_never_reseeds_and_remembers_before_it_writes() {
         let body = fn_body(production_src(), "clamp_scroll_width_to_viewport");
-        let width_check = body
-            .find("LAST_VIEWPORT_WIDTH")
-            .expect("the clamp no longer notices a viewport resize");
         assert!(
             !body.contains("seed_horizontal_scroll("),
             "the clamp must not re-seed: SCI_SETSCROLLWIDTH zeroes \
@@ -4216,12 +4438,220 @@ mod source_invariants {
              so reading the width back in the same pass pins it to the \
              viewport and a long line's scroll range is lost"
         );
-        let lower = body
-            .find("previous > target")
-            .expect("the clamp no longer lowers its floor when the viewport shrinks");
+        let decide = body
+            .find("floor_step(viewport, current, floor.held.get())")
+            .expect("the clamp no longer decides by `floor_step` on the view's own memory");
+        let remember = body
+            .find("floor.held.set(step.held)")
+            .expect("the clamp no longer records what the floor holds");
+        let write = body
+            .find("SCI_SETSCROLLWIDTH,")
+            .expect("the clamp no longer installs the floor");
         assert!(
-            width_check < lower,
-            "the lowering must be keyed on the remembered viewport width"
+            decide < remember && remember < write,
+            "the floor's memory must be brought up to date before the width \
+             is written, so nothing the write sets off sees it stale"
+        );
+    }
+
+    /// Every `static` declaration in `code`, from the keyword to the `=`
+    /// or `;` that ends its type — so a type written on the next line is
+    /// still part of it, and an `=` or `;` inside the type's own brackets
+    /// (`Item = T`, `[u8; 4]`) does not end it early. The keyword only:
+    /// not a `'static` lifetime, and not an identifier with the word in it.
+    fn static_declarations(code: &str) -> Vec<&str> {
+        code.match_indices("static")
+            .filter(|&(at, word)| {
+                let before = code[..at].chars().next_back();
+                let after = code[at + word.len()..].chars().next();
+                !before.is_some_and(|c| c.is_alphanumeric() || c == '_' || c == '\'')
+                    && after.is_some_and(char::is_whitespace)
+            })
+            .map(|(at, _)| {
+                let rest = &code[at..];
+                &rest[..end_of_static_type(rest)]
+            })
+            .collect()
+    }
+
+    /// Where the type of the `static` declaration at the start of `rest`
+    /// ends: the first `=` or `;` outside any bracket. Everything scanned
+    /// is in type position, so `<` and `>` are brackets here; the `>` of a
+    /// `->` makes the depth run low, which can only end the scan at a later
+    /// `=` than it would otherwise, never an earlier one.
+    fn end_of_static_type(rest: &str) -> usize {
+        let mut depth = 0i32;
+        rest.char_indices()
+            .find(|&(_, c)| match c {
+                '<' | '[' | '(' => {
+                    depth += 1;
+                    false
+                }
+                '>' | ']' | ')' => {
+                    depth -= 1;
+                    false
+                }
+                '=' | ';' => depth <= 0,
+                _ => false,
+            })
+            .map_or(rest.len(), |(i, _)| i)
+    }
+
+    #[test]
+    fn a_static_is_read_to_the_end_of_its_type() {
+        let sample = "\
+fn f() -> &'static str { \"\" }
+let is_static = 1;
+static A: Cell<isize> = Cell::new(0);
+thread_local! {
+    static B:
+        Rc<crate::ScrollFloor> = Rc::default();
+}
+static C: Box<dyn Iterator<Item = Rc<ScrollFloor>>> = todo();
+static D: HashMap<[u8; 4], Rc<ScrollFloor>> = HashMap::new();
+static E: Box<dyn Fn() -> Rc<ScrollFloor>> = todo();
+";
+        let found = static_declarations(sample);
+        assert_eq!(found.len(), 5, "{found:?}");
+        assert_eq!(found[0], "static A: Cell<isize> ");
+        assert!(found[1].starts_with("static B:"));
+        // B across a line break, C past the `=` of `Item = T`, D past the
+        // `;` of an array length, E past a `->`: each read to the end of
+        // its type, where the `ScrollFloor` in it is.
+        for declaration in &found[1..] {
+            assert!(declaration.contains("ScrollFloor"), "{declaration:?}");
+            assert!(!declaration.contains("todo") && !declaration.contains("new"));
+        }
+    }
+
+    /// `src` with the module `name` cut out, braces matched from its
+    /// header. For `plugin.rs`'s test-only `smoke_support` surface, which
+    /// plays a plugin's part and so sends what the host itself must not.
+    fn without_module(src: &str, name: &str) -> String {
+        let header = format!("mod {name} {{");
+        let start = src
+            .find(&header)
+            .unwrap_or_else(|| panic!("no `mod {name}` to cut out"));
+        let open = start + header.len() - 1;
+        let mut depth = 0usize;
+        for (i, c) in src[open..].char_indices() {
+            match c {
+                '{' => depth += 1,
+                '}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return format!("{}{}", &src[..start], &src[open + i + 1..]);
+                    }
+                }
+                _ => {}
+            }
+        }
+        panic!("unterminated module {name}");
+    }
+
+    /// Every Scintilla view the horizontal floor runs on — the host's own,
+    /// and each one made for a plugin — has its own memory, and gets the
+    /// floor after its scroller repair on every paint.
+    ///
+    /// **Shared memory is the failure this pins, and it looks right.** A
+    /// floor keyed on one memory for every view works for each view on its
+    /// own; it breaks only when two paint in turn, because each then takes
+    /// the other's width for the one it installed, lets go of its own, and
+    /// leaves it behind when its view shrinks. The smoke scenario shows it
+    /// on real views; this keeps it from coming back on every `cargo test`.
+    ///
+    /// The order is the one `on_sci_notify`'s `SCN_PAINTED` arm states:
+    /// the floor measures the clip, which is the wrong, scroller-covering
+    /// one until the repair has run, and a width raised off that is one
+    /// the floor then holds. And a plugin hears of the paint only after
+    /// both, so what it reads back is the settled view.
+    #[test]
+    fn every_view_the_floor_runs_on_keeps_its_own_memory() {
+        let code = all_production_code();
+        let statics = static_declarations(&code);
+        assert!(
+            statics.len() > 10,
+            "found only {} statics in the crate; the scan below proves nothing",
+            statics.len()
+        );
+        for declaration in statics {
+            assert!(
+                !declaration.contains("ScrollFloor"),
+                "a `ScrollFloor` is held in a static — one memory for every \
+                 view is the bug this guards: `{}`",
+                declaration.split_whitespace().collect::<Vec<_>>().join(" ")
+            );
+        }
+
+        // The host's view: its memory is the one on `CocoaUiState`, at
+        // every call, and the floor comes after the repair.
+        let src = production_src();
+        let calls = code_only(src)
+            .replace(char::is_whitespace, "")
+            .matches("clamp_scroll_width_to_viewport(&")
+            .count();
+        let with_own_memory = code_only(src)
+            .replace(char::is_whitespace, "")
+            .matches("clamp_scroll_width_to_viewport(&st.editor,&st.sci_view,&st.scroll_floor)")
+            .count();
+        assert!(calls >= 3, "found only {calls} calls of the host's floor");
+        assert_eq!(
+            calls, with_own_memory,
+            "a call of the floor on the host's view does not pass the host \
+             view's own memory"
+        );
+        let painted = fn_body(src, "on_sci_notify_inner");
+        let repair = painted
+            .find("enforce_scroller_layout(")
+            .expect("the host's SCN_PAINTED arm no longer repairs its scrollers");
+        let floor = painted
+            .find("clamp_scroll_width_to_viewport(")
+            .expect("the host's SCN_PAINTED arm no longer floors its width");
+        assert!(
+            repair < floor,
+            "the host view's floor measures the clip before it is repaired"
+        );
+
+        // The views made for plugins: each takes its memory from its own
+        // entry in the table, gets the floor after its repair, and only
+        // then is the plugin told of the paint.
+        let plugin = plugin_src();
+        assert!(
+            fn_body(&plugin, "create_plugin_scintilla").contains("scroll_floor: Rc::default()"),
+            "a view made for a plugin no longer starts with a memory of its own"
+        );
+        let floor_fn = fn_body(&plugin, "floor_plugin_scintilla");
+        assert!(
+            floor_fn.contains("Rc::clone(&entry.scroll_floor)")
+                && floor_fn.contains("clamp_scroll_width_to_viewport("),
+            "a plugin's view no longer gets the floor with its own memory"
+        );
+        let forward = fn_body(&plugin, "forward_plugin_sci_notify");
+        let paint = forward
+            .find("== SCN_PAINTED")
+            .expect("a plugin view's SCN_PAINTED is no longer recognised");
+        let repair = forward
+            .find("enforce_scroller_layout(")
+            .expect("a plugin view's scrollers are no longer repaired");
+        let floor = forward
+            .find("floor_plugin_scintilla(index, sci_view)")
+            .expect("a plugin's view no longer gets the floor after its paints");
+        let told = forward
+            .find("target.send(")
+            .expect("a plugin view's notifications no longer reach the plugin");
+        assert!(
+            paint < repair && repair < floor && floor < told,
+            "a plugin view's paint must be repaired, then floored, then told \
+             to the plugin"
+        );
+
+        // And no view made for a plugin has its width set any other way:
+        // an unpaired `SCI_SETSCROLLWIDTH` is what collapses a document
+        // view to one point wide.
+        assert!(
+            !without_module(&plugin, "smoke_support").contains("SCI_SETSCROLLWIDTH"),
+            "plugin.rs sets a view's scroll width itself; the floor belongs \
+             to `clamp_scroll_width_to_viewport`"
         );
     }
 

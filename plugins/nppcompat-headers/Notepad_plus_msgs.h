@@ -218,8 +218,15 @@ typedef struct sessionInfo_ {
  *     notifications reach the plugin's messageProc as
  *     WM_NOTIFY: wParam the view's control id
  *     (SCI_SETIDENTIFIER, 0 by default), lParam an
- *     SCNotification whose nmhdr.hwndFrom is the view. The GTK
- *     host answers 0. */
+ *     SCNotification whose nmhdr.hwndFrom is the view. After
+ *     each of a view's paints, a scroll width narrower than its
+ *     text area is widened to it, so the blank area right of a
+ *     short line takes the mouse as it does on Windows; that
+ *     width follows the view back down while nothing else has
+ *     changed it, and SCI_GETSCROLLWIDTH reads it. A width set
+ *     at least as wide is left as set, unless it equals the
+ *     width the host last installed, which the host cannot tell
+ *     from its own. The GTK host answers 0. */
 #define NPPM_CREATESCINTILLAHANDLE        (NPPMSG + 20)
 #define NPPM_DESTROYSCINTILLAHANDLE       (NPPMSG + 21)  /* deprecated upstream */
 /* v3: number of user-defined languages (UDL) currently
