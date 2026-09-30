@@ -124,9 +124,25 @@ extern "C" {
  *             the panel after that shows and hides the container,
  *             so ask gtk_widget_is_visible or gtk_widget_get_mapped,
  *             not gtk_widget_get_visible, whether the panel is on
- *             screen. The host never destroys the widget. A plugin
- *             that destroys it ends the registration, and the panel
- *             closes.
+ *             screen. The host never destroys the widget.
+ *
+ *             The widget is the panel only while it is inside the
+ *             host's container. Once you destroy it, or take it out
+ *             of that container (to put it in a window of your own,
+ *             say), NPPM_DMMSHOW, NPPM_DMMHIDE and the other
+ *             NPPM_DMM* messages no longer find it. If it is still
+ *             out when control is back in the main loop, the
+ *             registration ends: the panel closes, with no
+ *             DMN_CLOSE, and the host releases its reference.
+ *             Putting the widget back before then leaves the
+ *             registration as it was, and so does wrapping it in a
+ *             container of your own inside the host's. Take a
+ *             reference of your own before you take the widget out,
+ *             as GTK requires of any widget removed from a
+ *             container, and never keep or reuse the host's
+ *             container. To dock the widget again, register it again
+ *             and show it with NPPM_DMMSHOW: the panel comes back
+ *             where it was.
  *   hIconTab  a GdkPixbuf*, drawn on the panel's tab under the same
  *             DWS_ICONTAB rule; the host takes its own reference.
  *             Anything that is not a pixbuf gets the generic glyph.

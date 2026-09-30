@@ -105,7 +105,6 @@
 
 use std::cell::{Cell, RefCell};
 use std::io::Cursor;
-use std::rc::Rc;
 
 use codepp_core::dock::{
     compute_frame, resolve_drop, DockContainer, DockGroup, DockLayout, DockLocation, DockPanel,
@@ -230,7 +229,8 @@ struct SplitterDrag {
 /// non-toplevel `GtkWidget` the plugin made. From then on it is an
 /// ordinary panel: it docks, floats, tabs with the host's own panels and
 /// persists in `session.xml`, all through the model and the reconciler
-/// the built-in panels use.
+/// the built-in panels use — for as long as the widget stays inside the
+/// host's container ([`Self::live`]).
 struct PluginPanel {
     /// The panel this registration owns — interned from the sanitized
     /// module and title (`codepp_shell::intern_plugin_dock_panel`), so
@@ -238,19 +238,19 @@ struct PluginPanel {
     /// The panel is the identity; everything else here is the plugin's
     /// current view of it.
     panel: DockPanel,
-    /// The host's own reference to the plugin's widget, held for as long
-    /// as the registration stands and never used to destroy it. It is
-    /// what keeps [`Self::handle`] naming this object: registrations are
-    /// found by the widget's address, and an object finalized while its
-    /// registration stood — pulled out of [`Self::content`] by the
-    /// plugin, or destroyed before [`forget_destroyed_plugin_panels`]
-    /// runs — would free that address for a new widget to reuse and be
-    /// mistaken for. A plugin that destroys the widget sets
-    /// [`Self::gone`], and the registration is then dropped.
-    _widget: gtk::Widget,
+    /// The host's own reference to the plugin's widget, held until the
+    /// registration is retired and never used to destroy it. It is what
+    /// keeps [`Self::handle`] naming this object: registrations are found
+    /// by the widget's address, and an object finalized while its
+    /// registration stood would free that address for a new widget to
+    /// reuse and be mistaken for. It is also what [`Self::live`] asks.
+    /// Released at retirement, so a plugin that takes the widget out and
+    /// means to keep it holds a reference of its own — as GTK requires of
+    /// any widget removed from a container.
+    widget: gtk::Widget,
     /// What the dock shows and moves for this panel: the host's scrolled
     /// container around [`Self::widget`] — see [`scrolled_content`]. The
-    /// widget stays inside it for the registration's lifetime.
+    /// registration stands only while the widget is inside it.
     content: gtk::Widget,
     /// `tTbData.hClient` as the plugin sent it: the handle it addresses
     /// the panel by in `NPPM_DMMSHOW` / `NPPM_DMMHIDE` /
@@ -286,17 +286,28 @@ struct PluginPanel {
     /// registration-time notification. Written before the notification
     /// goes out — see [`container_notices`].
     told: Option<DockContainer>,
-    /// Set from the widget's `destroy` handler when the plugin destroys
-    /// its own panel. Checked by everything that would use the widget, so
-    /// a disposed widget is never put back into a container, until
-    /// [`forget_destroyed_plugin_panels`] drops the registration.
-    gone: Rc<Cell<bool>>,
 }
 
 impl PluginPanel {
-    /// Whether this registration still stands for a live widget.
+    /// Whether this registration still stands: the plugin's widget is
+    /// still somewhere inside the host's container.
+    ///
+    /// Read from GTK rather than recorded, so it is right the moment
+    /// anything changes, however it changed. A plugin that moves its
+    /// widget elsewhere — into a window of its own, say — has taken it
+    /// out, and so has one that destroys it: GTK removes a widget from
+    /// its parent at the start of its dispose, before `destroy` is even
+    /// emitted. A plugin that wraps the widget in a container of its own
+    /// *inside* the host's has taken it nowhere, and "inside" rather than
+    /// "a child of" is what keeps that case standing. That matters more
+    /// than it looks: retirement lets go of the host's container, and
+    /// dropping the last reference to a container that still holds the
+    /// widget destroys the widget (measured on GTK 3.24).
+    ///
+    /// A registration that does not stand is invisible to every lookup
+    /// and waits for [`retire_departed_plugin_panels`] to drop it.
     fn live(&self) -> bool {
-        !self.gone.get()
+        self.widget.is_ancestor(&self.content)
     }
 }
 
@@ -314,7 +325,6 @@ pub(crate) struct PluginPanelSpec {
     /// `tTbData.uMask`'s `DWS_DF_CONT_*` preference, decoded — where the
     /// panel first opens.
     pub initial_side: Option<DockSide>,
-    pub gone: Rc<Cell<bool>>,
 }
 
 /// One `DMN_DOCK` / `DMN_FLOAT` to send: the notification code for the
@@ -380,7 +390,8 @@ impl Ui {
     /// A plugin panel's content is its registered widget, and is `None`
     /// until the plugin registers it — the normal case for a panel a
     /// restored layout names before its plugin has loaded — and once the
-    /// plugin has destroyed it. Every caller skips a `None` rather than
+    /// plugin has taken the widget out of the host's container, moving
+    /// it elsewhere or destroying it. Every caller skips a `None` rather than
     /// substituting a placeholder the user could neither use nor close;
     /// a panel no plugin will supply this session is parked instead
     /// (`crate::plugin`'s load pass).
@@ -424,6 +435,12 @@ impl Ui {
 thread_local! {
     /// Installed once on the main thread by [`install`].
     static DOCK: RefCell<Option<Ui>> = const { RefCell::new(None) };
+    /// A retirement pass is queued and has not started. See
+    /// [`schedule_retirement`].
+    static RETIRE_PENDING: Cell<bool> = const { Cell::new(false) };
+    /// A retirement pass found a drag live and stood down; the drag's end
+    /// asks for another. See [`retire_departed_plugin_panels`].
+    static RETIRE_AFTER_DRAG: Cell<bool> = const { Cell::new(false) };
 }
 
 /// Run `f` against the dock state if it is installed and not already
@@ -994,15 +1011,26 @@ fn build_float_window(main: &gtk::Window) -> gtk::Window {
 /// work (`with_state`) — see the module docs for why the two never
 /// nest in that direction.
 pub(crate) fn apply_layout() {
-    let docmap_visible = with_dock(|d| {
+    let (docmap_visible, departed) = with_dock(|d| {
         d.dirty = false;
         reconcile(d);
         relayout(d);
-        d.layout.is_visible(DockPanel::DocMap)
-    });
+        (
+            d.layout.is_visible(DockPanel::DocMap),
+            d.plugin_panels.iter().any(|p| !p.live()),
+        )
+    })
+    .unwrap_or_default();
+    // The backstop for a departure no signal reports — the plugin took
+    // its widget out of a wrapper of its own that stays inside the host's
+    // container — so no registration waits longer than the next
+    // reconcile to be retired.
+    if departed {
+        schedule_retirement();
+    }
     // A freshly shown Document Map needs its doc binding + the
     // viewport box caught up (it skips both while hidden).
-    if docmap_visible == Some(true) {
+    if docmap_visible {
         crate::docmap::sync_to_active_tab();
     }
     sync_indicators();
@@ -1091,6 +1119,21 @@ fn reconcile(d: &mut Ui) {
     for panel in hosted {
         if !layout.is_visible(panel) {
             park(d, panel);
+        }
+    }
+
+    // 4b. A registration whose widget has left its container waits for
+    //     the retirement idle. Until then its container is parked: not
+    //     left in a slot, where it would share the group with a
+    //     replacement the plugin registered in the same main-loop turn,
+    //     and not dropped, since the plugin may yet put the widget back.
+    //     `park` cannot do this — it goes through `panel_content`, which
+    //     answers only for a registration that stands.
+    let parking = d.parking.clone();
+    for p in d.plugin_panels.iter().filter(|p| !p.live()) {
+        if !is_child_of(&p.content, &parking) {
+            unparent(&p.content);
+            parking.add(&p.content);
         }
     }
 
@@ -1516,11 +1559,12 @@ fn close_active_panel(id: u32) {
 // The `NPPM_DMM*` handlers reach these from inside the NPPM dispatch's
 // state borrow, so the ones that change the model change *only* the
 // model and mark `Ui::dirty`; the dispatch reconciles once its borrow
-// has ended ([`take_dirty`]). None of them calls `with_state`. The
-// only widgets touched here are ones not in the window's tree:
-// registration builds the panel's scrolled container, and
-// [`forget_destroyed_plugin_panels`] — run from an idle, not from a
-// handler — takes an emptied one out of it.
+// has ended ([`take_dirty`]). None of them calls `with_state`. Their
+// only widget work is on widgets not yet in the window's tree:
+// registration builds the panel's scrolled container and watches it.
+// The one thing here that takes a container out of the tree is
+// [`retire_departed_plugin_panels`], and it runs from an idle, not from
+// a handler.
 
 /// The container a plugin panel's widget lives in, which is what the dock
 /// then shows, hides and moves: a scrolled window, so a panel smaller
@@ -1568,13 +1612,19 @@ fn scrolled_content(widget: &gtk::Widget) -> gtk::ScrolledWindow {
 /// drop the only reference and finalize the plugin's widget out from
 /// under it. Refused, the widget is never touched.
 ///
-/// Returns the adopted widget, for the caller to watch. It goes into its
-/// [`scrolled_content`] here, and that container joins the tree at the
-/// reconcile the dispatch runs afterwards.
+/// The widget goes into its [`scrolled_content`] here, which is watched
+/// ([`watch_holder`]) and joins the tree at the reconcile the dispatch
+/// runs afterwards.
+///
+/// Registrations whose widgets have left wait for the retirement idle
+/// and count against no cap of their own, so they are bounded here: a
+/// plugin that registers, takes the widget out and registers again in a
+/// loop would otherwise grow the list, and hold a container per turn of
+/// it, until control returned to the main loop.
 pub(crate) fn register_plugin_panel(
     spec: PluginPanelSpec,
     adopt: impl FnOnce() -> gtk::Widget,
-) -> Result<gtk::Widget, &'static str> {
+) -> Result<(), &'static str> {
     with_dock(|d| {
         let live = || d.plugin_panels.iter().filter(|p| p.live());
         if live().any(|p| std::ptr::eq(p.handle, spec.handle)) {
@@ -1586,11 +1636,17 @@ pub(crate) fn register_plugin_panel(
         if live().count() >= codepp_core::dock::MAX_PLUGIN_PANELS {
             return Err("the plugin panel cap is reached");
         }
+        if d.plugin_panels.iter().filter(|p| !p.live()).count()
+            >= codepp_core::dock::MAX_PLUGIN_PANELS
+        {
+            return Err("too many earlier registrations are still waiting to be retired");
+        }
         let widget = adopt();
         let content = scrolled_content(&widget).upcast();
+        watch_holder(&widget);
         d.plugin_panels.push(PluginPanel {
             panel: spec.panel,
-            _widget: widget.clone(),
+            widget,
             content,
             handle: spec.handle,
             tb_data: spec.tb_data,
@@ -1599,7 +1655,6 @@ pub(crate) fn register_plugin_panel(
             caller: spec.caller,
             icon: spec.icon,
             told: None,
-            gone: spec.gone,
         });
         // Where the panel opens the first time it is shown, from the
         // plugin's own `DWS_DF_CONT_*` preference — never over a
@@ -1617,9 +1672,61 @@ pub(crate) fn register_plugin_panel(
         // supplies. So the tree needs a reconcile even when the model did
         // not change.
         d.dirty = true;
-        Ok(widget)
+        Ok(())
     })
     .unwrap_or(Err("the dock is busy (a re-entrant registration)"))
+}
+
+/// Ask for a retirement pass whenever anything is taken out of the
+/// container [`scrolled_content`] put `widget` in.
+///
+/// That is every way a plugin can take its widget out of the panel: it
+/// removes the widget to put it somewhere else, it removes a wrapper it
+/// had put the widget in, or it destroys the widget — GTK takes a
+/// widget out of its parent as its dispose begins. The container is the
+/// host's own, so the handler lives exactly as long as the registration
+/// it serves; watching the plugin's widget instead would leave a handler
+/// on the plugin's object for the host to track and disconnect. The one
+/// departure this does not see — the widget taken out of the plugin's
+/// own wrapper while the wrapper stays — is caught by the next
+/// [`apply_layout`].
+fn watch_holder(widget: &gtk::Widget) {
+    let Some(holder) = widget
+        .parent()
+        .and_then(|p| p.downcast::<gtk::Container>().ok())
+    else {
+        return;
+    };
+    holder.connect_remove(|_, _| {
+        crate::at_callback_boundary("dock:plugin_panel:holder_remove", (), schedule_retirement);
+    });
+}
+
+/// Queue one retirement pass ([`retire_departed_plugin_panels`]) from an
+/// idle; further calls before it starts are absorbed by it.
+///
+/// Never retires on the spot, for two reasons. A plugin may take its
+/// widget out and put it somewhere else — or straight back — in one
+/// call, and one that holds no reference of its own is kept alive in
+/// between only by the host's, which retirement releases; waiting until
+/// control is back in the main loop keeps that working. And the call
+/// that matters most comes from inside the holder's `remove` signal,
+/// where retiring would drop the container still emitting it: a build
+/// that did so crashed with a segmentation fault. Safe to call from
+/// anywhere, the dock borrow included — a plugin's signal handler can
+/// take its widget out during a reconcile — since it only sets a flag
+/// and adds an idle.
+fn schedule_retirement() {
+    if RETIRE_PENDING.with(|p| p.replace(true)) {
+        return;
+    }
+    glib::idle_add_local_once(|| {
+        crate::at_callback_boundary(
+            "dock:plugin_panel:retire",
+            (),
+            retire_departed_plugin_panels,
+        );
+    });
 }
 
 /// Record the command that reopens `panel` at the next start, with the
@@ -1763,9 +1870,10 @@ pub(crate) fn plugin_panel_notify_target(
 }
 
 /// Whether a notice raised for `panel` under `handle` still has a live
-/// registration to go to. A handler for an earlier notice may have
-/// destroyed the widget, and its address may even have been reused by a
-/// widget registered since — so both halves are checked.
+/// registration to go to. A handler for an earlier notice may have taken
+/// the widget out — moved or destroyed it — and its address may even
+/// have been reused by a widget registered since — so both halves are
+/// checked.
 pub(crate) fn plugin_panel_is_live(panel: DockPanel, handle: *mut std::ffi::c_void) -> bool {
     with_dock(|d| {
         d.plugin_panels
@@ -1780,58 +1888,107 @@ pub(crate) fn is_plugin_panel_registered(panel: DockPanel) -> bool {
     with_dock(|d| d.plugin_panels.iter().any(|p| p.live() && p.panel == panel)).unwrap_or(false)
 }
 
-/// Drop the registrations whose plugins destroyed their widgets, closing
-/// their panels. Runs from an idle scheduled by the widget's `destroy`
-/// handler rather than from the handler itself, which can fire inside a
-/// reconcile holding the dock borrow.
+/// Drop the registrations whose widgets have left the host's container —
+/// the plugin moved the widget elsewhere or destroyed it — and close
+/// their panels. Runs only from the idle [`schedule_retirement`] adds;
+/// see there for why never on the spot.
 ///
 /// Closing is the honest outcome: nothing is left to show, and the plugin
-/// registers a fresh widget if it wants the panel back — the dropped
-/// registration no longer stands in its way, and the layout still
-/// remembers where the panel was.
-pub(crate) fn forget_destroyed_plugin_panels() {
-    let changed = with_dock(|d| {
-        // Once each: a plugin can destroy two widgets registered in turn
-        // under one name before this idle runs.
-        let mut gone: Vec<DockPanel> = Vec::new();
-        for p in d.plugin_panels.iter().filter(|p| !p.live()) {
-            if !gone.contains(&p.panel) {
-                gone.push(p.panel);
-            }
+/// registers the widget again, or a fresh one, if it wants the panel back
+/// — the dropped registration no longer stands in its way, and the layout
+/// still remembers where the panel was. No `DMN_CLOSE`: the plugin took
+/// the widget away itself, as with `NPPM_DMMHIDE`.
+///
+/// Stands down while a caption or tab drag is live, and the drag's end
+/// asks again ([`resume_deferred_retirement`]). A reconcile rebuilds the
+/// tab bar and can dismantle the group whose widget holds the drag's
+/// pointer grab, and closing a panel mid-drag leaves the drop to put it
+/// back.
+fn retire_departed_plugin_panels() {
+    // First, so a panic below cannot leave every later departure
+    // waiting on a pass that never comes.
+    RETIRE_PENDING.with(|p| p.set(false));
+    // The registrations leave the model under one borrow and are owned
+    // out here from then on, so however the rest ends — a panic included
+    // — the host's references are released with no borrow held.
+    let Some(departed) = with_dock(|d| {
+        if d.drag.is_some() {
+            RETIRE_AFTER_DRAG.with(|f| f.set(true));
+            return None;
         }
-        if gone.is_empty() {
-            return false;
-        }
-        // Each panel's scrolled container is the host's own and stays
-        // wherever the dock last put it, now empty — GTK took only the
-        // destroyed widget out of it. Taken out too, or it would keep its
-        // share of a group that goes on showing other panels. Dropping
-        // the last reference to it then finalizes nothing of the
-        // plugin's.
-        for p in d.plugin_panels.iter().filter(|p| !p.live()) {
-            unparent(&p.content);
-        }
-        d.plugin_panels.retain(PluginPanel::live);
-        for panel in gone {
-            // A plugin that destroyed its widget and registered a
+        let (live, departed): (Vec<PluginPanel>, Vec<PluginPanel>) =
+            std::mem::take(&mut d.plugin_panels)
+                .into_iter()
+                .partition(PluginPanel::live);
+        d.plugin_panels = live;
+        Some(departed)
+    })
+    .flatten() else {
+        return;
+    };
+    // Each host container stays wherever the dock last put it — a slot,
+    // or parking — and is taken out, or it would keep its share of a
+    // group that goes on showing other panels. A GTK call, so outside the
+    // borrow: moving a widget can run signal handlers synchronously.
+    for p in &departed {
+        unparent(&p.content);
+    }
+    let closed = with_dock(|d| {
+        let mut closed: Vec<DockPanel> = Vec::new();
+        for p in &departed {
+            // A plugin that took its widget away and registered a
             // replacement under the same name before this idle ran — a
             // natural way to rebuild a panel — holds the panel again.
-            // Closing it now would take away the replacement.
-            if d.plugin_panels.iter().any(|p| p.panel == panel) {
+            // Closing it now would take away the replacement. Once each:
+            // a plugin can take two widgets registered in turn under one
+            // name away before this runs.
+            if closed.contains(&p.panel) || d.plugin_panels.iter().any(|q| q.panel == p.panel) {
                 continue;
             }
-            tracing::info!(
-                panel = panel.persist_key(),
-                "a plugin destroyed its dock panel's widget; closing the panel"
-            );
-            if d.layout.is_visible(panel) {
-                d.layout.hide(panel);
+            // Parked too: the startup load pass parks a panel it finds
+            // unregistered, and one that departed during that pass would
+            // otherwise be saved as open.
+            if d.layout.is_visible(p.panel) || d.layout.is_parked(p.panel) {
+                d.layout.hide(p.panel);
+                closed.push(p.panel);
             }
         }
-        true
+        closed
+    })
+    .unwrap_or_else(|| {
+        // Nothing between the two borrows can hold the dock, so this is
+        // not expected — but if it happens the panels stay open with
+        // nothing in them, and a warning is the only record of why.
+        tracing::warn!(
+            retired = departed.len(),
+            "retired plugin panel registrations but could not close their panels: the dock was busy"
+        );
+        Vec::new()
     });
-    if changed == Some(true) {
-        apply_layout();
+    for panel in closed {
+        tracing::info!(
+            panel = panel.persist_key(),
+            "a plugin took its dock panel's widget out of the host's container, moving or \
+             destroying it; closing the panel"
+        );
+    }
+    // Dropping the host's reference finalizes a widget its plugin took
+    // out without keeping a reference of its own, and the plugin's
+    // `destroy` handlers — which may call `NPPM_*` — must not find the
+    // dock borrowed. None of these containers holds the plugin's widget
+    // any more, so dropping them destroys nothing of it.
+    drop(departed);
+    // Always, not only when something was retired: a reconcile between
+    // the plugin taking its widget out and putting it back parked the
+    // container (reconcile step 4b), and this puts it back in its slot.
+    apply_layout();
+}
+
+/// Ask again for the retirement pass a drag made stand down. Called
+/// wherever a caption or tab drag ends.
+fn resume_deferred_retirement() {
+    if RETIRE_AFTER_DRAG.with(|f| f.replace(false)) {
+        schedule_retirement();
     }
 }
 
@@ -1978,11 +2135,29 @@ fn on_drag_release(ev: &gdk::EventButton) -> glib::Propagation {
     if ev.button() != 1 {
         return glib::Propagation::Proceed;
     }
-    let cursor = root_i32(ev.root());
+    release_at(root_i32(ev.root()));
+    glib::Propagation::Stop
+}
+
+/// What a primary-button release at root point `cursor` does to the
+/// model — the body of [`on_drag_release`], apart so it can be driven
+/// without synthesizing a GDK event.
+fn release_at(cursor: (i32, i32)) {
     let outcome = with_dock(|d| {
         let drag = d.drag.take()?;
         d.hint.hide();
         if drag.cancelled {
+            return None;
+        }
+        // What went while the button was held is neither dropped nor
+        // brought forward: a panel its plugin closed (`NPPM_DMMHIDE` from
+        // a timer, say), a plugin panel whose widget left the host's
+        // container, or a group left with nothing else. `move_panel` puts
+        // a closed panel back into the layout, so a drop would reopen it;
+        // and a panel whose widget has gone would come back, or come to
+        // the front, as an empty group until the retirement pass — held
+        // back by this very drag — closed it.
+        if subject_has_gone(d, drag.subject) {
             return None;
         }
         if drag.started {
@@ -2010,10 +2185,31 @@ fn on_drag_release(ev: &gdk::EventButton) -> glib::Propagation {
         None
     })
     .flatten();
+    resume_deferred_retirement();
     if let Some(Release::Apply) = outcome {
         apply_layout();
     }
-    glib::Propagation::Stop
+}
+
+/// Whether a gesture's subject stopped standing while the button was
+/// held. A panel has gone if it was closed, or if it is a plugin panel
+/// whose registrations have all left the host's container — one that
+/// never had a registration, a restored panel still waiting for its
+/// plugin, has not. A group has gone if every panel in it has, or if
+/// the group itself has.
+fn subject_has_gone(d: &Ui, subject: DragSubject) -> bool {
+    let panel_gone = |panel: DockPanel| {
+        let registrations = || d.plugin_panels.iter().filter(move |p| p.panel == panel);
+        !d.layout.is_visible(panel)
+            || (registrations().next().is_some() && !registrations().any(PluginPanel::live))
+    };
+    match subject {
+        DragSubject::Panel(panel) => panel_gone(panel),
+        DragSubject::Group(id) => d
+            .layout
+            .group(id)
+            .is_none_or(|g| g.panels.iter().all(|p| panel_gone(*p))),
+    }
 }
 
 /// Whether the root point is over tab `index` of group `id` — the
@@ -2067,6 +2263,7 @@ fn on_grab_broken() -> glib::Propagation {
     if splitter_was_live == Some(true) {
         sync_to_shell();
     }
+    resume_deferred_retirement();
     glib::Propagation::Proceed
 }
 
@@ -2325,6 +2522,658 @@ pub(crate) mod content_tests {
     }
 }
 
+/// A plugin taking its panel's widget out of the host's container: the
+/// moves, wraps, destructions and races the retirement pass exists for.
+/// Display-gated, and run from `crate::display_tests`, which owns the one
+/// thread GTK was initialised on. Each scenario uses a module name of its
+/// own, so none spends another's allowance of panel identities, and ends
+/// with nothing of it registered.
+#[cfg(test)]
+pub(crate) mod departure_tests {
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    use codepp_core::dock::{
+        DockGroup, DockLocation, DockPanel, DockSide, DragSubject, DropTarget,
+    };
+    use gtk::prelude::*;
+
+    use super::{
+        apply_layout, hide_plugin_panel, install, is_child_of, is_plugin_panel_registered,
+        is_visible, layout_snapshot, on_grab_broken, release_at, root_rect, set_panel_visible,
+        show_plugin_panel, take_dirty, update_layout, with_dock, Drag, DOCK,
+    };
+
+    /// A dock with no application around it, installed once on this
+    /// thread. Nothing more is needed: the shell-side steps of
+    /// `apply_layout` find no state and do nothing.
+    fn install_bare_dock() {
+        gtk::init().expect("gtk::init failed — no display?");
+        if DOCK.with(|d| d.borrow().is_some()) {
+            return;
+        }
+        let window = gtk::Window::new(gtk::WindowType::Toplevel);
+        window.set_default_size(900, 600);
+        let area = gtk::Layout::new(None::<&gtk::Adjustment>, None::<&gtk::Adjustment>);
+        let editor_cell: gtk::Widget = gtk::Box::new(gtk::Orientation::Vertical, 0).upcast();
+        area.put(&editor_cell, 0, 0);
+        window.add(&area);
+        let workspace: gtk::Widget = gtk::Box::new(gtk::Orientation::Vertical, 0).upcast();
+        let docmap: gtk::Widget = gtk::Box::new(gtk::Orientation::Vertical, 0).upcast();
+        install(&window, &area, &editor_cell, &workspace, &docmap);
+    }
+
+    /// Run the main loop until nothing is pending — the retirement idle
+    /// included.
+    fn pump() {
+        for _ in 0..10_000 {
+            if !gtk::events_pending() {
+                return;
+            }
+            gtk::main_iteration_do(false);
+        }
+        panic!("the main loop never went idle");
+    }
+
+    /// A panel widget as a plugin builds one: a box with a label, shown.
+    fn plugin_widget() -> gtk::Widget {
+        let widget = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        widget.add(&gtk::Label::new(Some("probe")));
+        widget.show_all();
+        widget.upcast()
+    }
+
+    fn handle(widget: &gtk::Widget) -> *mut std::ffi::c_void {
+        widget.as_ptr().cast()
+    }
+
+    /// `NPPM_DMMREGASDCKDLG` for `widget`, then the reconcile the NPPM
+    /// dispatch runs once its borrow has ended.
+    fn register(widget: &gtk::Widget, module: &str, name: &str) -> Option<DockPanel> {
+        // A plugin keeps its `tTbData` alive for as long as the panel is
+        // registered; a test simply never frees it.
+        let tb_data: &'static codepp_plugin_host::TbData =
+            Box::leak(Box::new(codepp_plugin_host::TbData {
+                h_client: handle(widget),
+                psz_name: std::ptr::null(),
+                dlg_id: -1,
+                u_mask: codepp_plugin_host::DWS_DF_CONT_BOTTOM,
+                h_icon_tab: std::ptr::null_mut(),
+                psz_add_info: std::ptr::null(),
+                rc_float: codepp_plugin_host::TbRect::default(),
+                i_prev_cont: -1,
+                psz_module_name: std::ptr::null(),
+            }));
+        let panel = crate::plugin::register_dock_dialog(codepp_plugin_host::DockDialogParams {
+            h_client: handle(widget),
+            name: name.to_owned(),
+            module_name: module.to_owned(),
+            add_info: None,
+            h_icon_tab: std::ptr::null_mut(),
+            rc_float: codepp_plugin_host::TbRect::default(),
+            u_mask: codepp_plugin_host::DWS_DF_CONT_BOTTOM,
+            dlg_id: -1,
+            i_prev_cont: -1,
+            tb_data: std::ptr::from_ref(tb_data),
+            caller: None,
+        });
+        settle_dispatch();
+        panel
+    }
+
+    /// What the NPPM dispatch does once its borrow has ended.
+    fn settle_dispatch() {
+        if take_dirty() {
+            apply_layout();
+        }
+    }
+
+    /// The container `widget` sits in now.
+    fn holder_of(widget: &gtk::Widget) -> gtk::Container {
+        widget
+            .parent()
+            .and_then(|p| p.downcast().ok())
+            .expect("the widget is in no container")
+    }
+
+    /// Register `widget` as `name` and open its panel.
+    fn open(widget: &gtk::Widget, module: &str, name: &str) -> DockPanel {
+        let panel = register(widget, module, name).expect("the registration was refused");
+        set_panel_visible(panel, true);
+        pump();
+        assert!(is_plugin_panel_registered(panel) && is_visible(panel));
+        panel
+    }
+
+    /// End a scenario with nothing of it registered: the plugin takes its
+    /// widget out for good, and the host retires the registration.
+    fn finish(widget: &gtk::Widget) {
+        if let Some(holder) = widget
+            .parent()
+            .and_then(|p| p.downcast::<gtk::Container>().ok())
+        {
+            holder.remove(widget);
+        }
+        pump();
+    }
+
+    /// Registrations for `panel`, standing or not.
+    fn registrations_of(panel: DockPanel) -> usize {
+        with_dock(|d| d.plugin_panels.iter().filter(|p| p.panel == panel).count()).unwrap_or(0)
+    }
+
+    fn location_of(panel: DockPanel) -> Option<DockLocation> {
+        layout_snapshot()?.group_of(panel).map(|g| g.location)
+    }
+
+    /// Whether `panel`'s container sits in a group's slot.
+    fn hosted(panel: DockPanel) -> bool {
+        with_dock(|d| {
+            d.panel_content(panel)
+                .is_some_and(|c| d.groups.iter().any(|g| is_child_of(&c, &g.slot)))
+        })
+        .unwrap_or(false)
+    }
+
+    /// Whether a container whose widget has left still sits in a slot.
+    fn departed_in_a_slot() -> bool {
+        with_dock(|d| {
+            d.plugin_panels
+                .iter()
+                .filter(|p| !p.live())
+                .any(|p| d.groups.iter().any(|g| is_child_of(&p.content, &g.slot)))
+        })
+        .unwrap_or(false)
+    }
+
+    /// Set once the widget is destroyed.
+    fn watch_destroy(widget: &gtk::Widget) -> Rc<Cell<bool>> {
+        let destroyed = Rc::new(Cell::new(false));
+        let flag = Rc::clone(&destroyed);
+        widget.connect_destroy(move |_| flag.set(true));
+        destroyed
+    }
+
+    /// A plugin moves its widget into a window of its own: the
+    /// registration ends at once, the panel closes once control is back in
+    /// the main loop, and the host lets go of its container and its
+    /// reference — destroying nothing of the plugin's. Registered again,
+    /// the widget reopens where the panel was.
+    pub(crate) fn a_widget_moved_elsewhere_ends_its_registration() {
+        const MODULE: &str = "departure_moved.so";
+        install_bare_dock();
+        let widget = plugin_widget();
+        let panel = open(&widget, MODULE, "Departure");
+        // Away from where it first opens, so reopening there is the
+        // layout remembering it rather than the plugin's preference.
+        update_layout(|l| {
+            l.move_panel(panel, DropTarget::Side(DockSide::Left));
+            true
+        });
+        apply_layout();
+        let before = location_of(panel);
+        assert_eq!(before, Some(DockLocation::Side(DockSide::Left)));
+
+        let holder = holder_of(&widget);
+        let container = holder
+            .parent()
+            .expect("the holder is in no container")
+            .downgrade();
+        let destroyed = watch_destroy(&widget);
+        let refs = widget.ref_count();
+        let own = gtk::Window::new(gtk::WindowType::Toplevel);
+        holder.remove(&widget);
+        own.add(&widget);
+        drop(holder);
+        assert!(
+            !is_plugin_panel_registered(panel),
+            "the registration outlived the widget's move"
+        );
+        assert!(
+            !show_plugin_panel(handle(&widget)),
+            "NPPM_DMMSHOW still answers for a widget that has left"
+        );
+        pump();
+        assert!(
+            !is_visible(panel),
+            "the panel stayed open with nothing in it"
+        );
+        assert!(container.upgrade().is_none(), "the host kept its container");
+        assert!(!destroyed.get(), "the host destroyed the plugin's widget");
+        assert_eq!(
+            widget.parent().as_ref(),
+            Some(own.upcast_ref::<gtk::Widget>())
+        );
+        assert_eq!(
+            widget.ref_count(),
+            refs - 1,
+            "the host kept its reference to the widget"
+        );
+
+        own.remove(&widget);
+        assert_eq!(register(&widget, MODULE, "Departure"), Some(panel));
+        assert!(show_plugin_panel(handle(&widget)));
+        settle_dispatch();
+        pump();
+        assert!(is_visible(panel) && hosted(panel));
+        assert_eq!(
+            location_of(panel),
+            before,
+            "the panel came back somewhere else"
+        );
+        finish(&widget);
+        // SAFETY: a toplevel this test made, holding nothing any more.
+        unsafe { own.destroy() };
+    }
+
+    /// Out and straight back in changes nothing — and so does out, a
+    /// reconcile, and back: the reconcile parks the container while the
+    /// widget is away, and the retirement pass puts it back in its slot.
+    pub(crate) fn a_widget_put_back_keeps_its_registration() {
+        install_bare_dock();
+        let widget = plugin_widget();
+        let panel = open(&widget, "departure_back.so", "Departure");
+        let holder = holder_of(&widget);
+
+        holder.remove(&widget);
+        holder.add(&widget);
+        pump();
+        assert!(is_plugin_panel_registered(panel) && is_visible(panel) && hosted(panel));
+
+        holder.remove(&widget);
+        apply_layout();
+        assert!(
+            !departed_in_a_slot(),
+            "a container whose widget had left stayed in its slot"
+        );
+        holder.add(&widget);
+        pump();
+        assert!(is_plugin_panel_registered(panel) && is_visible(panel));
+        assert!(
+            hosted(panel),
+            "the container a reconcile parked was never put back"
+        );
+        finish(&widget);
+    }
+
+    /// A widget the plugin wraps in a container of its own inside the
+    /// host's has gone nowhere; the wrapper leaving takes it along.
+    pub(crate) fn a_wrapped_widget_stays_until_its_wrapper_leaves() {
+        install_bare_dock();
+        let widget = plugin_widget();
+        let panel = open(&widget, "departure_wrapped.so", "Departure");
+        let destroyed = watch_destroy(&widget);
+        let holder = holder_of(&widget);
+        let wrapper = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        holder.remove(&widget);
+        wrapper.add(&widget);
+        wrapper.show();
+        holder.add(&wrapper);
+        pump();
+        assert!(
+            is_plugin_panel_registered(panel),
+            "a widget wrapped inside the host's container lost its registration"
+        );
+        assert!(is_visible(panel) && hosted(panel));
+        assert!(!destroyed.get(), "the host destroyed the wrapped widget");
+
+        holder.remove(&wrapper);
+        pump();
+        assert!(!is_plugin_panel_registered(panel) && !is_visible(panel));
+        assert!(!destroyed.get(), "the host destroyed the plugin's widget");
+        assert_eq!(
+            widget.parent().as_ref(),
+            Some(wrapper.upcast_ref::<gtk::Widget>())
+        );
+    }
+
+    /// A widget taken out of the plugin's own wrapper, the wrapper staying
+    /// in the host's container, raises no signal the host watches: the
+    /// next reconcile, whatever caused it, asks for the retirement pass.
+    pub(crate) fn a_widget_taken_out_of_its_wrapper_is_caught_at_the_next_reconcile() {
+        install_bare_dock();
+        let widget = plugin_widget();
+        let panel = open(&widget, "departure_unwrapped.so", "Departure");
+        let holder = holder_of(&widget);
+        let wrapper = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        holder.remove(&widget);
+        wrapper.add(&widget);
+        wrapper.show();
+        holder.add(&wrapper);
+        pump();
+        assert!(is_plugin_panel_registered(panel) && is_visible(panel));
+
+        wrapper.remove(&widget);
+        assert!(!is_plugin_panel_registered(panel));
+        apply_layout();
+        pump();
+        assert!(
+            !is_visible(panel) && registrations_of(panel) == 0,
+            "a registration whose widget left unseen survived a reconcile"
+        );
+    }
+
+    /// A panel the startup load pass parks after its widget left — the
+    /// pass reads it as unregistered — is closed by the retirement, not
+    /// left parked and saved as open.
+    pub(crate) fn a_panel_parked_after_its_widget_left_is_closed() {
+        install_bare_dock();
+        let widget = plugin_widget();
+        let panel = open(&widget, "departure_parked.so", "Departure");
+        let own = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        holder_of(&widget).remove(&widget);
+        own.add(&widget);
+        assert!(update_layout(|l| l.park(&[panel])));
+        pump();
+        let layout = layout_snapshot().expect("no dock installed");
+        assert!(
+            !layout.is_parked(panel) && !layout.is_visible(panel),
+            "a panel whose widget left stays parked, and would be saved as open"
+        );
+        assert_eq!(registrations_of(panel), 0);
+    }
+
+    /// Destroying the widget still closes the panel — and a replacement
+    /// registered under the same name before the host has caught up keeps
+    /// it.
+    pub(crate) fn a_destroyed_widget_still_closes_its_panel() {
+        const MODULE: &str = "departure_destroyed.so";
+        install_bare_dock();
+        let widget = plugin_widget();
+        let panel = open(&widget, MODULE, "Departure");
+        // SAFETY: the plugin destroying its own widget, which the host
+        // holds a reference to and never uses once it has left.
+        unsafe { widget.destroy() };
+        assert!(!is_plugin_panel_registered(panel));
+        pump();
+        assert!(!is_visible(panel) && registrations_of(panel) == 0);
+
+        let first = plugin_widget();
+        assert_eq!(register(&first, MODULE, "Departure"), Some(panel));
+        set_panel_visible(panel, true);
+        pump();
+        // SAFETY: as above.
+        unsafe { first.destroy() };
+        let second = plugin_widget();
+        assert_eq!(
+            register(&second, MODULE, "Departure"),
+            Some(panel),
+            "a replacement for a destroyed widget was refused"
+        );
+        pump();
+        assert!(is_plugin_panel_registered(panel) && is_visible(panel) && hosted(panel));
+        assert_eq!(registrations_of(panel), 1);
+        finish(&second);
+    }
+
+    /// A plugin that takes its widget out keeping no reference of its
+    /// own, and goes on to register another panel in the same call, finds
+    /// the widget still alive: the host lets go only once control is back
+    /// in the main loop, and the widget's `destroy` handlers then run with
+    /// the dock free.
+    pub(crate) fn the_host_lets_go_only_back_in_the_main_loop() {
+        const MODULE: &str = "departure_unowned.so";
+        install_bare_dock();
+        let widget = plugin_widget();
+        let panel = open(&widget, MODULE, "Departure");
+        let alive = widget.downgrade();
+        let dock_free = Rc::new(Cell::new(None));
+        let seen = Rc::clone(&dock_free);
+        widget.connect_destroy(move |_| seen.set(Some(layout_snapshot().is_some())));
+        holder_of(&widget).remove(&widget);
+        drop(widget);
+
+        let other = plugin_widget();
+        assert!(register(&other, MODULE, "Departure (other)").is_some());
+        assert!(
+            alive.upgrade().is_some(),
+            "the host let go of the widget before control was back in the main loop"
+        );
+        pump();
+        assert!(
+            alive.upgrade().is_none(),
+            "the host kept its reference after the registration ended"
+        );
+        assert_eq!(
+            dock_free.get(),
+            Some(true),
+            "the widget's destroy handlers ran with the dock borrowed"
+        );
+        assert!(!is_visible(panel));
+        finish(&other);
+    }
+
+    /// A plugin that swaps its panel's widget for a new one in one call:
+    /// after the reconcile that registration runs, the slot holds only the
+    /// new container, and the panel stays open.
+    pub(crate) fn a_replacement_in_the_same_turn_has_the_slot_to_itself() {
+        const MODULE: &str = "departure_replaced.so";
+        install_bare_dock();
+        let old = plugin_widget();
+        let panel = open(&old, MODULE, "Departure");
+        holder_of(&old).remove(&old);
+        let new = plugin_widget();
+        assert_eq!(register(&new, MODULE, "Departure"), Some(panel));
+        assert!(hosted(panel), "the replacement is not in its slot");
+        assert!(
+            !departed_in_a_slot(),
+            "the old, empty container still shares the slot"
+        );
+        pump();
+        assert!(is_plugin_panel_registered(panel) && is_visible(panel) && hosted(panel));
+        assert_eq!(registrations_of(panel), 1);
+        finish(&new);
+    }
+
+    /// While a caption or tab drag is live nothing is retired — a
+    /// reconcile would rebuild the tab bar holding the pointer grab — and
+    /// the drag's end lets the pass run.
+    pub(crate) fn a_live_drag_holds_retirement_until_it_ends() {
+        install_bare_dock();
+        let widget = plugin_widget();
+        let panel = open(&widget, "departure_dragged.so", "Departure");
+        let group_id = layout_snapshot()
+            .and_then(|l| l.group_of(panel).map(|g| g.id))
+            .expect("the open panel is in no group");
+        with_dock(|d| {
+            d.drag = Some(Drag {
+                subject: DragSubject::Panel(panel),
+                group_id,
+                start: (0, 0),
+                grab: (0, 0),
+                float_size: (200, 150),
+                armed_tab: Some(0),
+                started: false,
+                cancelled: false,
+            });
+        });
+        let own = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        holder_of(&widget).remove(&widget);
+        own.add(&widget);
+        pump();
+        assert!(
+            is_visible(panel),
+            "a panel was retired in the middle of a drag"
+        );
+        assert_eq!(registrations_of(panel), 1);
+
+        let _ = on_grab_broken();
+        pump();
+        assert!(!is_visible(panel) && registrations_of(panel) == 0);
+    }
+
+    /// Arm a caption or tab gesture as its press would.
+    fn arm(subject: DragSubject, group_id: u32, started: bool, armed_tab: Option<usize>) {
+        with_dock(|d| {
+            d.drag = Some(Drag {
+                subject,
+                group_id,
+                start: (0, 0),
+                grab: (0, 0),
+                float_size: (200, 150),
+                armed_tab,
+                started,
+                cancelled: false,
+            });
+        });
+    }
+
+    fn group_of(panel: DockPanel) -> u32 {
+        layout_snapshot()
+            .and_then(|l| l.group_of(panel).map(|g| g.id))
+            .expect("the open panel is in no group")
+    }
+
+    /// The group's front panel.
+    fn front_of(group_id: u32) -> Option<DockPanel> {
+        layout_snapshot()?
+            .group(group_id)
+            .map(DockGroup::active_panel)
+    }
+
+    /// The centre of tab `index` of group `group_id`, on screen.
+    fn tab_centre(group_id: u32, index: usize) -> (i32, i32) {
+        let r = with_dock(|d| {
+            let gi = d.group_index(group_id)?;
+            let tab = d.groups[gi].tab_bar.children().get(index)?.clone();
+            root_rect(&tab)
+        })
+        .flatten()
+        .expect("the tab is not on screen");
+        assert!(r.w > 0 && r.h > 0, "the tab has no size");
+        (r.x + r.w / 2, r.y + r.h / 2)
+    }
+
+    /// A gesture on something that went while the button was held does
+    /// nothing: a panel its plugin closed is not dropped back open, a
+    /// panel or a whole group whose widget left is not moved, and the tab
+    /// of a panel whose widget left is not brought to the front — while a
+    /// group that still has a panel standing moves as ever. Needs the
+    /// window on screen, where a drop resolves to a target and a tab has
+    /// a place to be clicked.
+    pub(crate) fn a_gesture_on_what_went_mid_drag_does_nothing() {
+        const MODULE: &str = "departure_dragged_away.so";
+        install_bare_dock();
+        let window = with_dock(|d| d.main_window.clone()).expect("no dock installed");
+        window.show_all();
+        pump();
+        let area = with_dock(|d| root_rect(&d.area))
+            .flatten()
+            .expect("the dock area is not on screen");
+        let centre = (area.x + area.w / 2, area.y + area.h / 2);
+
+        let closed = plugin_widget();
+        let panel = open(&closed, MODULE, "Closed");
+        arm(DragSubject::Panel(panel), group_of(panel), true, None);
+        assert!(hide_plugin_panel(handle(&closed)));
+        settle_dispatch();
+        release_at(centre);
+        assert!(
+            !is_visible(panel),
+            "the drop opened a panel its plugin had closed"
+        );
+        finish(&closed);
+
+        let own = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        for (name, as_group) in [("Left", false), ("Group", true)] {
+            let widget = plugin_widget();
+            let panel = open(&widget, MODULE, name);
+            let group_id = group_of(panel);
+            let before = location_of(panel);
+            let subject = if as_group {
+                DragSubject::Group(group_id)
+            } else {
+                DragSubject::Panel(panel)
+            };
+            arm(subject, group_id, true, None);
+            holder_of(&widget).remove(&widget);
+            own.add(&widget);
+            release_at(centre);
+            assert_eq!(
+                location_of(panel),
+                before,
+                "a drop moved {name}, whose widget had left while it was held"
+            );
+            pump();
+            assert!(!is_visible(panel) && registrations_of(panel) == 0);
+            own.remove(&widget);
+        }
+
+        let (a, b) = (plugin_widget(), plugin_widget());
+        let panel_a = open(&a, MODULE, "Tab A");
+        let panel_b = open(&b, MODULE, "Tab B");
+        let group_id = group_of(panel_a);
+        assert_eq!(group_of(panel_b), group_id, "the two panels share no group");
+        let index_b = layout_snapshot()
+            .and_then(|l| l.group(group_id).map(|g| g.panels.clone()))
+            .and_then(|panels| panels.iter().position(|p| *p == panel_b))
+            .expect("Tab B is not in the group");
+        // The control: a click on the tab of a panel that stands brings it
+        // forward, so the refusal below is the guard, not a missed click.
+        assert!(show_plugin_panel(handle(&a)));
+        settle_dispatch();
+        pump();
+        arm(DragSubject::Panel(panel_b), group_id, false, Some(index_b));
+        release_at(tab_centre(group_id, index_b));
+        assert_eq!(front_of(group_id), Some(panel_b), "the tab click missed");
+        assert!(show_plugin_panel(handle(&a)));
+        settle_dispatch();
+        pump();
+        let click = tab_centre(group_id, index_b);
+        arm(DragSubject::Panel(panel_b), group_id, false, Some(index_b));
+        holder_of(&b).remove(&b);
+        own.add(&b);
+        release_at(click);
+        assert_eq!(
+            front_of(group_id),
+            Some(panel_a),
+            "a click brought forward a panel whose widget had left"
+        );
+        // A group with a panel that still stands has not gone: dragged by
+        // its caption, it moves, the departed panel's tab with it.
+        let before = location_of(panel_a);
+        arm(DragSubject::Group(group_id), group_id, true, None);
+        release_at(centre);
+        assert_ne!(
+            location_of(panel_a),
+            before,
+            "a drop refused a group that still had a panel standing"
+        );
+        pump();
+        assert!(!is_visible(panel_b) && is_visible(panel_a));
+        own.remove(&b);
+        finish(&a);
+    }
+
+    /// Registrations waiting to be retired are bounded: a plugin that
+    /// registers, takes its widget out and registers again in one call is
+    /// refused once `MAX_PLUGIN_PANELS` are waiting, and registers again
+    /// once control is back in the main loop.
+    pub(crate) fn registrations_awaiting_retirement_are_bounded() {
+        const MODULE: &str = "departure_looped.so";
+        install_bare_dock();
+        let widget = plugin_widget();
+        let panel = register(&widget, MODULE, "Departure").expect("the registration was refused");
+        let mut accepted = 0;
+        loop {
+            holder_of(&widget).remove(&widget);
+            if register(&widget, MODULE, "Departure").is_none() {
+                break;
+            }
+            accepted += 1;
+            assert!(
+                accepted <= 2 * codepp_core::dock::MAX_PLUGIN_PANELS,
+                "registrations waiting to be retired are not bounded"
+            );
+        }
+        assert_eq!(accepted, codepp_core::dock::MAX_PLUGIN_PANELS - 1);
+        pump();
+        assert_eq!(registrations_of(panel), 0);
+        assert_eq!(register(&widget, MODULE, "Departure"), Some(panel));
+        finish(&widget);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{geometry_rect, resize_edge, side_drag_size, tear_off_grab, tear_off_size};
@@ -2450,6 +3299,28 @@ mod source_guards {
         assert!(
             !deliver.contains(".told"),
             "the record moved into the send loop, after the send it must precede"
+        );
+    }
+
+    /// The retirement pass takes containers out of the tree with no dock
+    /// borrow held and then drops them, on the premise that nothing can
+    /// put a plugin's widget back into one in between. That holds because
+    /// the only `remove` handler the dock hangs on a container is the
+    /// holder watch, on the plugin widget's own former parent — never on
+    /// a slot, the parking box or the area, whose `remove` fires as those
+    /// containers are taken out. Pinned, so a second one is a decision
+    /// rather than an accident.
+    #[test]
+    fn the_holder_watch_is_the_docks_only_remove_handler() {
+        let dock = strip_test_modules(&code_only(include_str!("dock.rs")));
+        assert_eq!(
+            dock.matches(".connect_remove(").count(),
+            1,
+            "the dock hangs a `remove` handler somewhere other than the holder watch"
+        );
+        assert!(
+            body_of(&dock, "fn watch_holder(").contains("holder.connect_remove("),
+            "the holder watch no longer connects the holder's `remove`"
         );
     }
 

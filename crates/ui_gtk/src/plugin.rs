@@ -39,7 +39,6 @@
 use std::cell::Cell;
 use std::collections::{HashMap, HashSet};
 use std::ffi::c_void;
-use std::rc::Rc;
 use std::sync::atomic::{AtomicPtr, Ordering};
 use std::sync::OnceLock;
 use std::thread::ThreadId;
@@ -413,7 +412,16 @@ thread_local! {
 /// `hClient` must be a `GtkWidget*` the plugin made and has not put in a
 /// container or made a window of; the host takes its own reference
 /// (sinking a floating one, as a container's `add` would) and never
-/// destroys it. The checks below refuse what can be told apart without
+/// destroys it. The registration stands while the widget stays inside
+/// the host's container. Once the plugin takes it out — to move it
+/// elsewhere, or by destroying it — the `NPPM_DMM*` messages no longer
+/// find it, and if it is still out when control is back in the main
+/// loop the host closes the panel and releases its reference
+/// (`crate::dock`'s retirement pass). A widget taken out and left
+/// free-standing can be registered again; shown, the panel comes back
+/// where it was.
+///
+/// The checks below refuse what can be told apart without
 /// trusting the pointer — the npp handle, the host's own Scintilla view —
 /// then what a type check can tell: not a widget, a toplevel, a widget
 /// that already has a parent (which covers every host widget, and a
@@ -472,7 +480,6 @@ pub(crate) fn register_dock_dialog(
         );
         return None;
     };
-    let gone = Rc::new(Cell::new(false));
     let spec = crate::dock::PluginPanelSpec {
         panel,
         handle,
@@ -482,7 +489,6 @@ pub(crate) fn register_dock_dialog(
         name: params.name,
         module_name: params.module_name,
         caller: params.caller,
-        gone: Rc::clone(&gone),
     };
     // SAFETY: the same live widget. `from_glib_none` takes the host's own
     // reference — sinking a floating one, as a container's `add` would —
@@ -493,10 +499,7 @@ pub(crate) fn register_dock_dialog(
         from_glib_none(handle.cast::<gtk::ffi::GtkWidget>())
     });
     match adopted {
-        Ok(widget) => {
-            watch_for_disposal(&widget, gone);
-            Some(panel)
-        }
+        Ok(()) => Some(panel),
         Err(why) => {
             tracing::warn!(
                 why,
@@ -568,25 +571,6 @@ fn tab_icon(params: &codepp_plugin_host::DockDialogParams) -> Option<Pixbuf> {
     Some(unsafe { from_glib_none(icon.cast::<gtk::gdk_pixbuf::ffi::GdkPixbuf>()) })
 }
 
-/// Drop the registration once the plugin destroys its own widget: mark
-/// it gone at once — so nothing puts the disposed widget back in a
-/// container — and let an idle close the panel, since `destroy` can fire
-/// inside a reconcile that holds the dock borrow.
-fn watch_for_disposal(widget: &gtk::Widget, gone: Rc<Cell<bool>>) {
-    widget.connect_destroy(move |_| {
-        crate::at_callback_boundary("plugin:panel:destroy", (), || {
-            gone.set(true);
-            glib::idle_add_local_once(|| {
-                crate::at_callback_boundary(
-                    "plugin:panel:forget",
-                    (),
-                    crate::dock::forget_destroyed_plugin_panels,
-                );
-            });
-        });
-    });
-}
-
 /// `NPPM_DMMUPDATEDISPINFO`: re-read the panel's `tTbData` and take its
 /// current `pszName` / `pszModuleName` as the panel's lookup keys.
 /// `false` for a handle nothing is registered under.
@@ -648,9 +632,10 @@ pub(crate) fn deliver_dock_notices(notices: Vec<crate::dock::DockNotice>) {
     }
     let _delivering = crate::FlagGuard::set(&DOCK_NOTICES_DELIVERING);
     while let Some(notice) = DOCK_NOTICES.with(|q| q.borrow_mut().pop_front()) {
-        // A handler for an earlier notice may have destroyed this
-        // one's widget; the record is already written, so skipping it
-        // loses nothing that could still be delivered.
+        // A handler for an earlier notice may have taken this one's
+        // widget out of the host's container — moved or destroyed it;
+        // the record is already written, so skipping it loses nothing
+        // that could still be delivered.
         if !crate::dock::plugin_panel_is_live(notice.panel, notice.handle) {
             continue;
         }

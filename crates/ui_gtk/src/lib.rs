@@ -2746,9 +2746,8 @@ mod dock_reparenting_source_invariant {
         for (at, _) in src.match_indices("destroy(") {
             let before = &src[..at];
             // `connect_destroy(` connects a handler to a widget's
-            // `destroy` signal — it destroys nothing. The plugin bridge
-            // watches a plugin's panel widget that way, so it can drop the
-            // registration when the *plugin* destroys its own widget.
+            // `destroy` signal — it destroys nothing, so watching a widget
+            // for its own destruction is never mistaken for causing it.
             if before.ends_with("connect_") {
                 continue;
             }
@@ -3344,5 +3343,16 @@ mod display_tests {
         crate::preferences::dialog_tests::the_category_list_shows_the_page_it_names();
         crate::preferences::dialog_tests::the_dialog_opens_with_focus_in_the_category_list();
         crate::preferences::dialog_tests::read_back_takes_every_page_as_the_user_left_it();
+        crate::dock::departure_tests::a_widget_moved_elsewhere_ends_its_registration();
+        crate::dock::departure_tests::a_widget_put_back_keeps_its_registration();
+        crate::dock::departure_tests::a_wrapped_widget_stays_until_its_wrapper_leaves();
+        crate::dock::departure_tests::a_widget_taken_out_of_its_wrapper_is_caught_at_the_next_reconcile();
+        crate::dock::departure_tests::a_panel_parked_after_its_widget_left_is_closed();
+        crate::dock::departure_tests::a_destroyed_widget_still_closes_its_panel();
+        crate::dock::departure_tests::the_host_lets_go_only_back_in_the_main_loop();
+        crate::dock::departure_tests::a_replacement_in_the_same_turn_has_the_slot_to_itself();
+        crate::dock::departure_tests::a_live_drag_holds_retirement_until_it_ends();
+        crate::dock::departure_tests::a_gesture_on_what_went_mid_drag_does_nothing();
+        crate::dock::departure_tests::registrations_awaiting_retirement_are_bounded();
     }
 }
