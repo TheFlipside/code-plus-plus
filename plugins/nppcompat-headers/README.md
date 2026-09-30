@@ -3,8 +3,8 @@
 Independent, clean-room reimplementation of the Notepad++ plugin ABI.
 Plugins that include these headers and compile to a Win32 DLL load
 into Code++ on Windows unchanged. The same source — recompiled to
-`.so`/`.dylib` — runs in Code++ on Linux/macOS once Phase 5 lands the
-non-Windows backends.
+`.so`/`.dylib` — runs in Code++ on Linux and macOS, where `Docking.h`
+gives the dock-panel contract for each toolkit.
 
 ## What's here
 

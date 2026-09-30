@@ -112,19 +112,21 @@ extern "C" {
  * On Linux (the GTK backend) the struct is read the same way, but
  * its two handle-typed fields carry toolkit objects:
  *
- *   hClient   a GtkWidget* the plugin created and has not added to
- *             a container or made a window of. The host takes its
- *             own reference (sinking a floating one, as a
- *             container's add does) and puts the widget in a
- *             scrolled container of its own, which is what moves as
- *             the panel docks, floats and tabs. A panel smaller than
- *             the widget's minimum size scrolls rather than painting
- *             over its neighbour. The host shows the widget itself
- *             once, as Notepad++ shows hClient; showing and hiding
- *             the panel after that shows and hides the container,
- *             so ask gtk_widget_is_visible or gtk_widget_get_mapped,
- *             not gtk_widget_get_visible, whether the panel is on
- *             screen. The host never destroys the widget.
+ *   hClient   a GtkWidget* the plugin created and has not added to a
+ *             container or made a window of. The host takes its own
+ *             reference, sinking a floating one as a container's add
+ *             does — a floating widget's only reference becomes the
+ *             host's, so g_object_ref_sink it before registering if you
+ *             want to keep one of your own — and puts the widget in a
+ *             scrolled container of its own, which is what moves as the
+ *             panel docks, floats and tabs. A panel smaller than the
+ *             widget's minimum size scrolls rather than painting over
+ *             its neighbour. The host shows the widget itself once, as
+ *             Notepad++ shows hClient; showing and hiding the panel
+ *             after that shows and hides the container, so ask
+ *             gtk_widget_is_visible or gtk_widget_get_mapped, not
+ *             gtk_widget_get_visible, whether the panel is on screen.
+ *             The host never destroys the widget.
  *
  *             The widget is the panel only while it is inside the
  *             host's container. Once you destroy it, or take it out
@@ -136,13 +138,15 @@ extern "C" {
  *             DMN_CLOSE, and the host releases its reference.
  *             Putting the widget back before then leaves the
  *             registration as it was, and so does wrapping it in a
- *             container of your own inside the host's. Take a
+ *             container of your own inside the host's. Hold a
  *             reference of your own before you take the widget out,
  *             as GTK requires of any widget removed from a
- *             container, and never keep or reuse the host's
- *             container. To dock the widget again, register it again
- *             and show it with NPPM_DMMSHOW: the panel comes back
- *             where it was.
+ *             container. Never keep the host's container: use it
+ *             only before control returns to the main loop, to put
+ *             the widget or a wrapper back, since the host releases
+ *             it when the registration ends. To dock the widget
+ *             again, register it again and show it with
+ *             NPPM_DMMSHOW: the panel comes back where it was.
  *   hIconTab  a GdkPixbuf*, drawn on the panel's tab under the same
  *             DWS_ICONTAB rule; the host takes its own reference.
  *             Anything that is not a pixbuf gets the generic glyph.
@@ -151,12 +155,59 @@ extern "C" {
  * container (every widget of the host's own is), a toplevel, and
  * anything that is not a widget. Those checks catch mistakes, not
  * malice: a pointer cannot be tested for being a live object
- * without reading it, so pass only a widget you made. The DMN_*
- * notifications cannot be sent to a widget, which has no window
- * procedure; see "On Linux" under DMN_* below.
+ * without reading it, so pass only a widget you made. Send the host
+ * messages from the main thread only, and not from the widget's own
+ * signal handlers that run while the host adopts, moves or lays it
+ * out (parent-set, hierarchy-changed, show, size-allocate): those
+ * run inside the host's registration or layout pass, where an
+ * NPPM_* message may be declined — answered 0. Send it later
+ * instead, from an idle. The DMN_* notifications cannot be sent to a
+ * widget, which has no window procedure; see "Off Windows" under
+ * DMN_* below.
  *
- * macOS does not host plugin panels yet: NPPM_DMMREGASDCKDLG
- * returns 0 there.
+ * On macOS (the Cocoa backend) the same two fields carry AppKit
+ * objects:
+ *
+ *   hClient   an NSView* the plugin created and has not added to a
+ *             view, nor made a window's content. The host retains
+ *             it for as long as the registration stands and puts it
+ *             in a container of its own, which is what moves as the
+ *             panel docks, floats and tabs. From then on the host
+ *             owns the view's frame, as a Windows host owns a docked
+ *             dialog's: it sizes the view to fill the panel through
+ *             its autoresizing mask (width and height sizable, with
+ *             translatesAutoresizingMaskIntoConstraints on), so lay
+ *             the view's own subviews out to follow its size — Auto
+ *             Layout inside the view keeps working. Content that does
+ *             not fit is clipped at the panel's edge, not scrolled.
+ *             The host unhides the view once, as Notepad++ shows
+ *             hClient; showing and hiding the panel after that shows
+ *             and hides the container, so ask
+ *             isHiddenOrHasHiddenAncestor, not isHidden, whether the
+ *             panel is on screen. The host never releases the plugin's
+ *             own reference. A plugin that takes the view out of the
+ *             host's container — removeFromSuperview, or adding it to
+ *             another view — ends the registration, and the panel
+ *             closes, with no DMN_CLOSE. Unlike on Linux, that goes
+ *             for a view of your own inside the host's container too:
+ *             the view must stay the container's direct subview. To
+ *             dock a view again, register it again and show it with
+ *             NPPM_DMMSHOW: the panel comes back where it was.
+ *   hIconTab  an NSImage*, drawn on the panel's tab under the same
+ *             DWS_ICONTAB rule; the host retains it. Anything that is
+ *             not an image gets the generic glyph.
+ *
+ * NPPM_DMMREGASDCKDLG refuses there a view that is already in a view
+ * (every view of the host's own is), one that belongs to a window,
+ * and anything that is not a view — mistakes, not malice, as on
+ * Linux, so pass only a view you made. The DMN_* notifications go to
+ * messageProc, as on Linux. Send the host messages from the main
+ * thread only, and not from the view's own layout overrides
+ * (setFrameSize:, resizeSubviewsWithOldSize:, layout) or from its
+ * superview and window callbacks (viewWillMoveToSuperview: and the
+ * like): the host resizes and moves the view from inside its own
+ * layout pass, where an NPPM_* message is declined — answered 0.
+ * Send it later instead, from a dispatch_async to the main queue.
  */
 typedef struct tTbData_ {
     HWND        hClient;        /* plugin's docking-dialog HWND */
@@ -253,27 +304,71 @@ typedef struct tTbData_ {
  * nesting them, so a plugin cannot drive the host's stack arbitrarily
  * deep; every notice is still delivered, in order.
  *
- * DMN_SWITCHIN, DMN_SWITCHOFF and DMN_FLOATDROPPED are declared for
- * completeness and are NOT sent yet. Notepad++ sends them from the
- * panel's container (not the main window) as tabs are switched and
- * containers are rearranged; a plugin must not depend on them under
- * Code++ today.
+ * DMN_SWITCHIN, DMN_SWITCHOFF and DMN_FLOATDROPPED tell a panel how it
+ * is being shown. Their code is the bare number, with nothing in the
+ * high word — Notepad++'s own panels compare the whole code for these.
  *
- * On Linux, where hClient is a widget, the same notifications go to
- * the plugin's messageProc export instead: message WM_NOTIFY
- * (0x004E), lParam the same NMHDR with the same fields, and wParam
- * the panel's hClient, the only way left to say which of the
- * plugin's panels the notification is about. The return value is
- * ignored. Everything else above holds as written, the ordering and
- * the queueing included.
+ *   - DMN_SWITCHIN: the panel came on screen. Its tab is now the one
+ *     its group shows, and it had been hidden or behind another tab.
+ *   - DMN_SWITCHOFF: another tab of the panel's group was brought in
+ *     front of it; the panel is still open, behind it. A panel that is
+ *     closed gets no DMN_SWITCHOFF: DMN_CLOSE, or the plugin's own
+ *     NPPM_DMMHIDE, already says so.
+ *   - DMN_FLOATDROPPED: the panel has been laid out somewhere new —
+ *     shown, or its group moved, resized, floated or docked, or its tab
+ *     bar came or went. Docked panels get it too, despite the name, as
+ *     they do in Notepad++. A plugin that keeps a window of its own
+ *     positioned over its panel moves it here.
+ *
+ * Each is sent once, on the change. Notepad++ also repeats
+ * DMN_SWITCHIN when a panel already in front is shown or its tab
+ * clicked again, or moves to another container while in front, and
+ * sends DMN_FLOATDROPPED to every panel of a container whenever it
+ * lays the container out, a plain tab switch included; Code++ sends
+ * none of those repeats. A resize — of the window, a band, a floating
+ * panel — is reported when it ends, not at every step of the drag.
+ * When one change owes several notifications they go out in this
+ * order: DMN_DOCK / DMN_FLOAT, then every DMN_SWITCHIN, then every
+ * DMN_SWITCHOFF, then every DMN_FLOATDROPPED — so a tab switch tells
+ * the panel coming in before the one it replaced, as Notepad++ does.
+ * One queued behind a handler (see above) that is no longer true when
+ * its turn comes — a DMN_SWITCHIN for a panel closed meanwhile — is
+ * dropped rather than sent. And handlers that keep changing the layout
+ * in answer to these — two panels each bringing itself back to the
+ * front whenever told it went behind — are cut off: past 768
+ * notifications in one delivery, Code++ drops the rest and logs a
+ * warning. That cut-off is macOS's alone so far; the other two
+ * backends have none.
+ *
+ * Code++ sends these three on macOS; Windows and Linux do not send
+ * them yet, so a portable plugin must not depend on them there. In
+ * Notepad++ their hwndFrom is the panel's container window rather
+ * than the main window, so a handler behind the docking-dialog
+ * template's hwndFrom check never sees them: handle them without it.
+ * Of what is said here about Notepad++'s own behaviour, only that —
+ * the container sends them as tabs switch — was measured, with a
+ * probe plugin; the rest (when it repeats them, that docked panels get
+ * DMN_FLOATDROPPED, that a closed panel gets no DMN_SWITCHOFF, the
+ * order) was read from its source.
+ *
+ * Off Windows — on Linux and macOS, where hClient is a widget or a
+ * view — the same notifications go to the plugin's messageProc
+ * export instead: message WM_NOTIFY (0x004E), lParam the same NMHDR,
+ * and wParam the panel's hClient, the only way left to say which of
+ * the plugin's panels the notification is about. hwndFrom is the npp
+ * handle for every DMN_*, these three included: the host's containers
+ * are its own, and no handle to one would be of use to a plugin — its
+ * own view says where the panel is. The return value is ignored.
+ * Everything else above holds as written, the ordering and the
+ * queueing included.
  */
 #define DMN_FIRST        1050
 #define DMN_CLOSE        (DMN_FIRST + 1)  /* user closed the panel (panel hidden) */
 #define DMN_DOCK         (DMN_FIRST + 2)  /* panel is docked; HIWORD(code) = CONT_* */
 #define DMN_FLOAT        (DMN_FIRST + 3)  /* panel is floating; HIWORD(code) >= 4 */
-#define DMN_SWITCHIN     (DMN_FIRST + 4)  /* not sent by Code++ yet */
-#define DMN_SWITCHOFF    (DMN_FIRST + 5)  /* not sent by Code++ yet */
-#define DMN_FLOATDROPPED (DMN_FIRST + 6)  /* not sent by Code++ yet */
+#define DMN_SWITCHIN     (DMN_FIRST + 4)  /* panel came on screen (macOS only so far) */
+#define DMN_SWITCHOFF    (DMN_FIRST + 5)  /* panel went behind another tab (macOS only so far) */
+#define DMN_FLOATDROPPED (DMN_FIRST + 6)  /* panel laid out anew (macOS only so far) */
 
 #ifdef __cplusplus
 } /* extern "C" */

@@ -105,8 +105,8 @@ pub const NPPM_LAUNCHFINDINFILESDLG: u32 = NPPMSG + 29;
 // plugin panel docks to any side, floats, shares a container with
 // other panels as tabs, reorders by drag and persists across runs —
 // the same machinery the host's Folder as Workspace and Document
-// Map use. The Win32 and GTK hosts accept the registration; Cocoa
-// declines it (DESIGN.md §7.4).
+// Map use. Every host accepts the registration: Win32 adopts an
+// `HWND`, GTK a `GtkWidget*`, Cocoa an `NSView*` (DESIGN.md §7.4).
 pub const NPPM_DMMSHOW: u32 = NPPMSG + 30;
 pub const NPPM_DMMHIDE: u32 = NPPMSG + 31;
 pub const NPPM_DMMUPDATEDISPINFO: u32 = NPPMSG + 32;
@@ -1343,6 +1343,11 @@ pub trait HostServices {
     /// MUST be told to unregister BEFORE the plugin destroys
     /// the HWND, otherwise the pump will pass a freed handle
     /// to `IsDialogMessageW`. Returns `true` on success.
+    ///
+    /// On macOS the handle is an `NSWindow*` and registering changes
+    /// nothing — AppKit moves focus within a window itself, and plugin
+    /// shortcuts fire only in the main window — so the host checks the
+    /// handle and answers it, as Notepad++ does.
     fn register_modeless_dialog(&mut self, dlg: crate::ffi::Hwnd, register: bool) -> bool;
 
     /// Create a fresh Scintilla control as a child of the
@@ -1364,6 +1369,13 @@ pub trait HostServices {
     /// other Scintilla setting via direct `SendMessage` calls
     /// (or via `SCI_GETDIRECTFUNCTION` / `SCI_GETDIRECTPOINTER`
     /// for the hot-path direct-call API).
+    ///
+    /// On macOS `parent` is an `NSView*`: the new view goes into it,
+    /// hidden and zero-sized, for the plugin to size and show. The npp
+    /// handle as `parent` makes a view in no window. Either way the
+    /// host keeps the view for the rest of the process, as Notepad++
+    /// keeps the Scintillas it makes for plugins, and its notifications
+    /// go to the plugin's `messageProc`.
     fn create_plugin_scintilla(&mut self, parent: crate::ffi::Hwnd) -> crate::ffi::Hwnd;
 
     /// Register a plugin's HWND as a dockable dialog. Drives
@@ -1464,6 +1476,9 @@ pub trait HostServices {
     ///
     /// Returns `true` on success; `false` for null `hicon`,
     /// imagelist-add failure, or `TB_ADDBUTTONS` failure.
+    ///
+    /// On macOS `hicon` is an `NSImage*`, which the host retains; the
+    /// button is added only for a command a loaded plugin published.
     fn add_toolbar_icon(&mut self, cmd_id: i32, hicon: crate::ffi::Hwnd) -> bool;
 
     /// Returns `true` iff the host is currently rendering its
@@ -6523,11 +6538,11 @@ mod tests {
     #[test]
     fn dmm_view_other_tab_declines_when_the_backend_hosts_no_panels() {
         // `MockServices` takes the trait's default, which is what
-        // a backend that cannot host a plugin panel answers — GTK
-        // and Cocoa, where `NPPM_DMMREGASDCKDLG` is also defaulted.
-        // This pins the *decline*, not the message: the Win32 arm
-        // shows the named panel and makes it its group's active
-        // tab, and is exercised end to end by `example-hello`.
+        // a backend that hosts no plugin panel would answer — none
+        // of the three does today, but a new one inherits it. This
+        // pins the *decline*, not the message: the real arms show
+        // the named panel and make it their group's active tab, and
+        // are exercised end to end by `example-hello`.
         let mut s = MockServices::default();
         let name = make_wide("Console");
         let r = unsafe { dispatch_nppm(&mut s, NPPM_DMMVIEWOTHERTAB, 0, name.as_ptr() as isize) };

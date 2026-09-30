@@ -36,7 +36,7 @@ use objc2_app_kit::{
     NSAboutPanelOptionApplicationIcon, NSAboutPanelOptionApplicationName,
     NSAboutPanelOptionApplicationVersion, NSAboutPanelOptionCredits, NSAboutPanelOptionKey,
     NSAboutPanelOptionVersion, NSApplication, NSButton, NSControl, NSEventModifierFlags, NSImage,
-    NSMenu, NSMenuDelegate, NSMenuItem, NSTableView, NSWindowDelegate, NSWorkspace,
+    NSMenu, NSMenuDelegate, NSMenuItem, NSTableView, NSWindow, NSWindowDelegate, NSWorkspace,
 };
 use objc2_foundation::{
     MainThreadMarker, NSAttributedString, NSData, NSDictionary, NSNotification, NSObject,
@@ -87,6 +87,17 @@ define_class!(
                 crate::relayout_chrome_bands();
                 crate::refresh_tab_chrome();
             });
+        }
+
+        /// The main window's close button: on this single-window editor,
+        /// the user quitting — answered by quitting rather than closing.
+        /// See [`crate::main_window_should_close`]. A panic lets the
+        /// window close, which still quits, the old way round.
+        #[unsafe(method(windowShouldClose:))]
+        fn window_should_close(&self, sender: &NSWindow) -> bool {
+            crate::at_callback_boundary("window:shouldClose", true, || {
+                crate::main_window_should_close(sender)
+            })
         }
     }
 
@@ -653,6 +664,27 @@ define_class!(
             });
         }
 
+        /// A plugin's toolbar button (`NPPM_ADDTOOLBARICON`): run the
+        /// command its tag names — a command id, like a menu item's —
+        /// then show the plugin's mark for it. The button is push-on
+        /// push-off so it can show that mark, which means AppKit has
+        /// already flipped its state for the click by now; the mark is
+        /// the plugin's to set, as the menu item's is, so it is put back
+        /// from the plugin's record once the command has run.
+        #[unsafe(method(codeppPluginToolbarCommand:))]
+        fn plugin_toolbar_command(&self, sender: Option<&NSButton>) {
+            crate::at_callback_boundary("toolbar:pluginCommand", (), || {
+                let Some(sender) = sender else {
+                    return;
+                };
+                let Ok(cmd_id) = i32::try_from(sender.tag()) else {
+                    return;
+                };
+                crate::plugin::on_plugin_command(cmd_id);
+                sender.setState(isize::from(crate::plugin::menu_mark(cmd_id)));
+            });
+        }
+
         #[unsafe(method(codeppPluginManager:))]
         fn plugin_manager(&self, _sender: Option<&NSObject>) {
             crate::at_callback_boundary(
@@ -759,6 +791,13 @@ fn validate(item: &NSMenuItem) -> bool {
         // no `VIEW_TOGGLES` tag and is matched on its selector. The mark
         // still comes from live state, like every other one here.
         item.setState(isize::from(crate::docmap::is_visible()));
+    } else if action == sel!(codeppPluginCommand:) {
+        // The plugin's own mark (`NPPM_SETMENUITEMCHECK`, `_init2Check`),
+        // recorded by command id because the Plugins menu is rebuilt on
+        // every open. Read from the plugin module's record, never through
+        // `with_state`: AppKit validates while menus track, which can be
+        // inside a borrow.
+        item.setState(isize::from(crate::plugin::menu_mark(tag as i32)));
     } else if action == sel!(codeppRestoreRecentClosed:)
         || action == sel!(codeppOpenAllRecent:)
         || action == sel!(codeppEmptyRecentFiles:)
@@ -1675,6 +1714,15 @@ const PLUGINS_MENU_TITLE: &str = "Plugins";
 /// True if `menu` is the one [`build_plugins_menu`] built.
 fn is_plugins_menu(menu: &NSMenu) -> bool {
     menu.title().to_string() == PLUGINS_MENU_TITLE
+}
+
+/// The Plugins menu in the menu bar `main`, found by the same title the
+/// delegate matches on.
+pub(crate) fn plugins_menu(main: &NSMenu) -> Option<Retained<NSMenu>> {
+    main.itemArray()
+        .iter()
+        .filter_map(|item| item.submenu())
+        .find(|menu| is_plugins_menu(menu))
 }
 
 /// The Plugins menu.

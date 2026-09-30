@@ -108,10 +108,6 @@ const DEFAULT_HEIGHT: f64 = 768.0;
 pub(crate) const AUTOSAVE_INTERVAL_SECS: f64 = 7.0;
 
 thread_local! {
-    /// Viewport width the horizontal floor was last computed against, so
-    /// [`clamp_scroll_width_to_viewport`] can tell a resize from a
-    /// repaint. `-1` is unreachable, so the first paint always re-seeds.
-    static LAST_VIEWPORT_WIDTH: std::cell::Cell<isize> = const { std::cell::Cell::new(-1) };
     /// The buffer the tab strip was last scrolled to show, so an
     /// ordinary chrome refresh does not undo the overflow arrows. See
     /// [`refresh_tab_chrome`].
@@ -263,25 +259,7 @@ pub fn run(initial_path: Option<PathBuf>, perf: Perf) -> Result<(), CocoaUiError
         tracing::info!(count = staged, "staged bundled plugins");
     }
 
-    // --- Shell, and the §5.4 cross-thread wake ---------------------
-    //
-    // Worker threads (the file loader, the watcher) never touch views or
-    // Scintilla. They push a typed message onto a channel and call this
-    // closure, which hops to the main thread; the main thread then
-    // drains the channel and applies the results.
-    //
-    // `exec_async` takes `FnOnce() + Send`, so the closure must carry no
-    // AppKit references — exactly like Win32's
-    // `PostMessage(WM_APP_WAKE, 0, 0)`, which carries no payload either,
-    // and like GTK's `MainContext::invoke`. It finds the state through a
-    // main-thread thread-local once it arrives, the way the Win32
-    // wnd_proc recovers its state from `GWLP_USERDATA`.
-    let wake: Arc<dyn Fn() + Send + Sync> = Arc::new(|| {
-        DispatchQueue::main().exec_async(|| {
-            drain_shell();
-        });
-    });
-    let shell = Shell::new(wake).map_err(|e| CocoaUiError::Shell(e.to_string()))?;
+    let shell = new_shell()?;
 
     // --- The Scintilla view ---------------------------------------
     //
@@ -434,6 +412,7 @@ pub fn run(initial_path: Option<PathBuf>, perf: Perf) -> Result<(), CocoaUiError
         sci_view: sci_view.clone(),
         sci_ptr,
         editor,
+        scroll_floor: ScrollFloor::default(),
         status: views.status,
         tabs: views.tab_strip,
         toolbar: views.toolbar,
@@ -552,6 +531,38 @@ pub fn run(initial_path: Option<PathBuf>, perf: Perf) -> Result<(), CocoaUiError
     Ok(())
 }
 
+/// Build the `Shell`, with the §5.4 cross-thread wake and the signer for
+/// plugin panels' startup commands.
+///
+/// Worker threads (the file loader, the watcher) never touch views or
+/// Scintilla. They push a typed message onto a channel and call the wake
+/// closure, which hops to the main thread; the main thread then drains
+/// the channel and applies the results. `exec_async` takes
+/// `FnOnce() + Send`, so the closure must carry no AppKit references —
+/// exactly like Win32's `PostMessage(WM_APP_WAKE, 0, 0)`, which carries no
+/// payload either, and like GTK's `MainContext::invoke`. It finds the
+/// state through a main-thread thread-local once it arrives, the way the
+/// Win32 `wnd_proc` recovers its state from `GWLP_USERDATA`.
+///
+/// The signer is what lets a plugin panel this host recorded come back
+/// at the next start by running its command, with Preferences →
+/// Security's guard on (the default), while one from an edited or copied
+/// session does not. Installed before discovery and the startup restore,
+/// which both consult it; the key itself is not touched until something
+/// is signed or checked. See `codepp_platform::panel_key`.
+fn new_shell() -> Result<Shell, CocoaUiError> {
+    let wake: Arc<dyn Fn() + Send + Sync> = Arc::new(|| {
+        DispatchQueue::main().exec_async(|| {
+            drain_shell();
+        });
+    });
+    let mut shell = Shell::new(wake).map_err(|e| CocoaUiError::Shell(e.to_string()))?;
+    let panel_signer =
+        codepp_platform::panel_key::PanelSigner::new(codepp_platform::panel_key_path());
+    shell.set_panel_signer(Box::new(move |message| panel_signer.sign(message)));
+    Ok(shell)
+}
+
 /// RAII freeze of [`drain_shell`] for the span of a modal.
 ///
 /// **This is a correctness guard, not tidiness.** `NSAlert::runModal`
@@ -608,6 +619,27 @@ impl Drop for DrainFreeze {
     }
 }
 
+/// RAII set-and-clear of a thread-local latch, cleared on every exit
+/// path — a panic caught at a callback boundary included, which a bare
+/// `set(true)` … `set(false)` pair would leave stuck for the session.
+/// The same guard `ui_gtk` keeps, for the plugin bridge's re-entry
+/// latches (`plugin::close_plugin_panel`, `plugin::deliver_dock_notices`).
+pub(crate) struct FlagGuard(&'static std::thread::LocalKey<Cell<bool>>);
+
+impl FlagGuard {
+    /// Set `flag` and return the guard that clears it.
+    pub(crate) fn set(flag: &'static std::thread::LocalKey<Cell<bool>>) -> Self {
+        flag.with(|f| f.set(true));
+        Self(flag)
+    }
+}
+
+impl Drop for FlagGuard {
+    fn drop(&mut self) {
+        self.0.with(|f| f.set(false));
+    }
+}
+
 /// Run `f` at a boundary that native code calls into.
 ///
 /// **Why every AppKit and Scintilla callback needs this.** A Rust panic
@@ -652,7 +684,8 @@ pub(crate) fn at_callback_boundary<R>(
 /// Scintilla's notification callback.
 ///
 /// The Cocoa counterpart of GTK's `sci-notify` handler and Win32's
-/// `WM_NOTIFY` arm. Registered once in [`run`]; see
+/// `WM_NOTIFY` arm. Registered once in [`run`], for the host's own view —
+/// the views made for plugins have `plugin::on_plugin_sci_notify` — see
 /// `scintilla_cocoa_set_notify_callback` for why the entry point it goes
 /// through is the deprecated one.
 ///
@@ -840,13 +873,14 @@ unsafe fn on_sci_notify_inner(message: u32, lparam: usize) {
                 // Repair first, measure second. `clamp_scroll_width_to_viewport`
                 // reads the clip's width, and on a paint that follows a
                 // re-tile that width is the wrong, scroller-covering one —
-                // measuring first would raise the horizontal floor above the
-                // real viewport, and since that floor only ever rises it
-                // would stay there.
+                // measuring first would take it for the viewport and floor
+                // the width above the real one, a scroll range for nothing.
+                // The views made for plugins keep the same order
+                // (`plugin::forward_plugin_sci_notify`).
                 if let Some(mtm) = MainThreadMarker::new() {
                     enforce_scroller_layout(&st.sci_view, mtm);
                 }
-                clamp_scroll_width_to_viewport(&st.editor, &st.sci_view);
+                clamp_scroll_width_to_viewport(&st.editor, &st.sci_view, &st.scroll_floor);
             });
         }
         _ => {}
@@ -1294,13 +1328,42 @@ pub(crate) fn activate_main_window() {
     let Some(mtm) = MainThreadMarker::new() else {
         return;
     };
-    with_state(|st| {
-        // Focus the editor so the first keystroke lands in the buffer
-        // rather than on a tab-strip button.
-        st.window.makeFirstResponder(Some(&st.sci_view));
-        st.window.makeKeyAndOrderFront(None);
-    });
+    focus_editor();
+    // Outside the borrow, like the focus: ordering the window in can draw
+    // it, and a plugin panel's own view draws with it.
+    if let Some(window) = with_state(|st| st.window.clone()) {
+        window.makeKeyAndOrderFront(None);
+    }
     NSApplication::sharedApplication(mtm).activate();
+}
+
+/// Make the editor the main window's first responder, so the next
+/// keystroke lands in the buffer rather than on a tab-strip button — or
+/// in a plugin's panel, which is why the delegate asks again after the
+/// startup restore: a plugin's command may have focused its own view.
+///
+/// **Through `SCI_GRABFOCUS`, never `makeFirstResponder:` on
+/// `sci_view`.** That view is the outer `ScintillaView`; the keys go to
+/// the content view inside it, and `makeFirstResponder:` does not ask
+/// `acceptsFirstResponder`, so it hands focus to the container and every
+/// keystroke goes nowhere until the user clicks. It looked right for a
+/// long time because AppKit replaces an unfit first responder when a
+/// window *becomes* key, and the only call used to come before
+/// `makeKeyAndOrderFront`. The second call, after the startup restore,
+/// comes after it and is not corrected. Found by the §8 A/B measurement:
+/// no focused text client meant no `TextInputUI` window and no blinking
+/// caret, so the build measured 17 MB smaller than its baseline.
+///
+/// The handle is copied out and Scintilla called after the borrow ends:
+/// a focus change reaches the outgoing responder's
+/// `resignFirstResponder`, which may be a plugin's view, and a plugin
+/// asking the host something from there is answered only with no borrow
+/// held. The incoming side notifies too (`SCN_FOCUSIN`), and its
+/// handler needs the state.
+pub(crate) fn focus_editor() {
+    if let Some(editor) = with_state(|st| st.editor) {
+        editor.send(codepp_scintilla_sys::SCI_GRABFOCUS, 0, 0);
+    }
 }
 
 /// Emit the `--perf` distribution. Called from the application
@@ -1345,7 +1408,7 @@ pub(crate) fn seed_horizontal_scroll(editor: &EditorHandle) {
 /// (`cocoa/ScintillaCocoa.mm::SetScrollingSize`) and explicitly clamps
 /// the *height* to the clip rect — "Ensure all of clipRect covered by
 /// Scintilla drawing" — but does **not** do the same for the width:
-/// `docWidth = Wrapping() ? clipRect.width : scrollWidth`. With width
+/// `docWidth = Wrapping() ? clipRect.size.width : scrollWidth`. With width
 /// tracking on, `scrollWidth` is the longest *visible* line, so the
 /// document view ends exactly where the longest line ends and every
 /// click to the right of it lands on the enclosing `NSClipView` instead.
@@ -1358,53 +1421,147 @@ pub(crate) fn seed_horizontal_scroll(editor: &EditorHandle) {
 ///
 /// Fixed host-side rather than by patching the vendored tree, which
 /// DESIGN.md §4.1 keeps unforked. Tracking stays on, so a genuinely long
-/// line still scrolls horizontally and the width still shrinks back when
-/// that line is deleted; this only raises the floor.
-pub(crate) fn clamp_scroll_width_to_viewport(editor: &EditorHandle, sci_view: &NSView) {
+/// line still scrolls horizontally; this raises the floor, and lowers
+/// only a width it raised itself — see [`floor_step`].
+///
+/// **Every Scintilla view that shows text to the mouse gets it**: the
+/// host's own, and each one made for a plugin
+/// (`plugin::create_plugin_scintilla`). The dead strip is this backend's,
+/// not the view's — a plugin written against Win32 has no reason to
+/// expect it, and one that sets its view up the way Notepad++ sets up its
+/// own (`SCI_SETSCROLLWIDTH(1)` with tracking on) meets it on its first
+/// short line. `floor` is the view's own memory; see [`ScrollFloor`]. The
+/// Document Map's miniature needs none, because the overlay above it
+/// takes every click.
+pub(crate) fn clamp_scroll_width_to_viewport(
+    editor: &EditorHandle,
+    sci_view: &NSView,
+    floor: &ScrollFloor,
+) {
     let Some(visible) = text_area_width(sci_view) else {
         return;
     };
-    // Round down: a floor one pixel under the clip width leaves no
-    // dead strip, whereas overshooting would create a scrollable range
-    // that does not exist.
-    let target = visible.floor() as isize;
-    if target <= 0 {
+    let viewport = viewport_points(visible);
+    if viewport <= 0 {
         return;
     }
-    let previous = LAST_VIEWPORT_WIDTH.with(|c| c.replace(target));
     let current = editor.send(codepp_scintilla_sys::SCI_GETSCROLLWIDTH, 0, 0);
-
-    // **When the viewport shrinks, let the floor come down with it — but
-    // only when the floor is all that is holding the width up.**
-    //
-    // This function otherwise only ever raises `scrollWidth`, which is
-    // right while the window keeps its size: the floor is what stops the
-    // blank area right of short lines being unclickable. The raised
-    // value outlives the viewport that justified it, though, so
-    // maximising and un-maximising a three-line file left the document
-    // as wide as the *old* clip and a horizontal scrollbar appeared for
-    // content that was not there.
-    //
-    // The test for "nothing but the floor" is that the width is exactly
-    // the value this function last installed. A content-derived width
-    // never matches that except by coincidence, and a coincidence is
-    // harmless: tracking re-raises it on the next paint while the long
-    // line is still on screen.
-    //
-    // **Re-seeding instead would be wrong, and was.** An earlier version
-    // reset the width to 1 so tracking could recompute — but
-    // `SCI_SETSCROLLWIDTH` also zeroes `lineWidthMaxSeen`, and tracking
-    // only re-raises during a subsequent `Paint`, so reading the width
-    // back in the same pass and clamping it to the viewport pinned it
-    // there. Measured: with a 4 000-character line on screen, resizing
-    // 1500 → 900 collapsed the document from 26 525 pt to 839 pt and it
-    // did not recover, making the rest of that line unreachable.
-    if previous > target && current == previous {
-        editor.send(codepp_scintilla_sys::SCI_SETSCROLLWIDTH, target as usize, 0);
-        return;
+    let step = floor_step(viewport, current, floor.held.get());
+    // Remembered before the write, so anything the write sets off finds
+    // the memory already current.
+    floor.held.set(step.held);
+    if let Some(width) = step.install {
+        editor.send(codepp_scintilla_sys::SCI_SETSCROLLWIDTH, width as usize, 0);
     }
-    if current < target {
-        editor.send(codepp_scintilla_sys::SCI_SETSCROLLWIDTH, target as usize, 0);
+}
+
+/// The text area's width in whole points, as the floor installs it.
+///
+/// Rounded down: a floor one point under the clip width leaves no dead
+/// strip, whereas overshooting would create a scrollable range that does
+/// not exist. Capped at what Scintilla keeps a scroll width in, an `int`:
+/// a plugin sizes its own view, so an absurd frame is possible, and a
+/// wider value would reach Scintilla truncated. `NaN` comes out 0, which
+/// the floor skips.
+fn viewport_points(width: f64) -> isize {
+    (width.floor() as isize).min(i32::MAX as isize)
+}
+
+/// The horizontal floor's memory for one Scintilla view: the width
+/// [`clamp_scroll_width_to_viewport`] last installed there, for as long
+/// as that is still the view's width.
+///
+/// **One per view, because the width it remembers is that view's own.**
+/// Two views sharing one would take each other's widths for their own:
+/// a plugin's view painting between two paints of the host's would make
+/// the floor forget it holds the host's width up, and that width would
+/// then stay behind when the window shrinks. The host's view keeps its
+/// memory on `CocoaUiState`, and each view made for a plugin keeps one
+/// beside it.
+#[derive(Debug, Default)]
+pub(crate) struct ScrollFloor {
+    /// See [`FloorStep::held`].
+    held: Cell<Option<isize>>,
+}
+
+/// What the horizontal floor does to one view's scroll width after a
+/// paint — see [`floor_step`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct FloorStep {
+    /// The scroll width to install, when the view's has to change.
+    install: Option<isize>,
+    /// What the view's [`ScrollFloor`] remembers afterwards: the width the
+    /// floor has installed and still sees in place, or `None` once the
+    /// width is someone else's.
+    held: Option<isize>,
+}
+
+/// The horizontal floor's rule: given the text area's width in whole
+/// points (`viewport`, positive), the view's scroll width (`current`) and
+/// what the view's [`ScrollFloor`] holds (`held`), what to install and
+/// what to remember.
+///
+/// **Below the viewport, the width is raised, whoever set it** — that is
+/// the dead strip the floor exists for. **At or above it, the width is
+/// lowered only when the floor installed it and nothing has changed it
+/// since**, and then only to follow the viewport down. The raised value
+/// outlives the viewport that justified it, so without the lowering,
+/// maximising and un-maximising a three-line file left the document as
+/// wide as the *old* clip, and a horizontal scrollbar appeared for
+/// content that was not there. Scintilla never lowers the width by
+/// itself: tracking and caret scrolling only ever raise it.
+///
+/// **The memory is of the width installed, not of the viewport last
+/// seen**, and the difference is a plugin's view. The floor once
+/// remembered the last viewport and lowered any width equal to it, which
+/// is the same thing only while the floor is what holds the width up. A
+/// width someone else set that happened to equal the old viewport read as
+/// the floor's and was cut down. On the host's view that was harmless —
+/// tracking re-raises a visible line's width on the next paint — but a
+/// plugin's view need not track, and there a width the plugin chose
+/// would have been lowered for good. So the floor stops claiming a width
+/// the moment it finds it changed, and a width it never installed is
+/// never lowered.
+///
+/// **Re-seeding to let tracking recompute is the tempting alternative to
+/// lowering, and was wrong.** `SCI_SETSCROLLWIDTH` also zeroes
+/// `lineWidthMaxSeen`, and tracking only re-raises during a later
+/// `Paint`, so reading the width back in the same pass and flooring it at
+/// the viewport pinned it there. Measured: with a 4 000-character line on
+/// screen, resizing 1500 → 900 collapsed the document from 26 525 pt to
+/// 839 pt and it did not recover, making the rest of that line
+/// unreachable.
+///
+/// Pure, and separated for that reason: this rule is where the floor has
+/// been wrong before, and the cases that decide it — a resize, a long
+/// line, a width someone else set — are exactly what a hands-on demo is
+/// worst at covering. Same reasoning as [`scroller_clip_size`].
+fn floor_step(viewport: isize, current: isize, held: Option<isize>) -> FloorStep {
+    if current < viewport {
+        return FloorStep {
+            install: Some(viewport),
+            held: Some(viewport),
+        };
+    }
+    // At or above the viewport, and not the floor's width — tracking's
+    // for a long line on screen, or a plugin's own — so it is left alone,
+    // and the floor stops claiming it.
+    if held != Some(current) {
+        return FloorStep {
+            install: None,
+            held: None,
+        };
+    }
+    // The floor's own width, held up by nothing else.
+    if viewport < current {
+        return FloorStep {
+            install: Some(viewport),
+            held: Some(viewport),
+        };
+    }
+    FloorStep {
+        install: None,
+        held,
     }
 }
 
@@ -1478,18 +1635,29 @@ fn apply_editor_appearance() {
             SELECTION_BACK_INACTIVE as isize,
         );
         st.sci_view.setClipsToBounds(true);
-        if let Some(scroll) = editor_scroll_view(&st.sci_view) {
-            // Permanent bars, matching Win32 and GTK. The layout this
-            // then breaks is repaired below and after every paint.
-            scroll.setScrollerStyle(NSScrollerStyle::Legacy);
-            scroll.setAutohidesScrollers(false);
-        }
+        // Permanent bars, matching Win32 and GTK. The layout this then
+        // breaks is repaired below and after every paint.
+        force_permanent_scrollers(&st.sci_view);
         // After the style, never before: the repair is a no-op while the
         // scrollers are still overlay.
         if let Some(mtm) = mtm {
             enforce_scroller_layout(&st.sci_view, mtm);
         }
     });
+}
+
+/// Give a Scintilla view permanently visible scrollers, overriding the
+/// system's overlay default: the host's own view, and each view it makes
+/// for a plugin, as Win32's are. Overlay scrollers appear only during a
+/// wheel or trackpad gesture, and Scintilla scrolls its own content, so
+/// keyboard navigation and a plugin's scrolls would show no scrollbar at
+/// all. The layout this breaks has to be repaired after every paint by
+/// [`enforce_scroller_layout`], which every caller arranges.
+pub(crate) fn force_permanent_scrollers(sci_view: &NSView) {
+    if let Some(scroll) = editor_scroll_view(sci_view) {
+        scroll.setScrollerStyle(NSScrollerStyle::Legacy);
+        scroll.setAutohidesScrollers(false);
+    }
 }
 
 /// Give the editor permanently visible scrollers, and repair the
@@ -1526,7 +1694,7 @@ fn apply_editor_appearance() {
 /// system is set to overlay scrollers *and* this function has not forced
 /// otherwise, the vendored arithmetic is correct as written and must be
 /// left alone.
-fn enforce_scroller_layout(sci_view: &NSView, mtm: MainThreadMarker) {
+pub(crate) fn enforce_scroller_layout(sci_view: &NSView, mtm: MainThreadMarker) {
     let Some(scroll) = editor_scroll_view(sci_view) else {
         return;
     };
@@ -1706,6 +1874,13 @@ pub(crate) fn drain_shell() {
     if DrainFreeze::active() {
         return;
     }
+    // And stopped for good once the quit has begun: a plugin's shutdown
+    // handler may spin a nested run loop, and a worker's wake landing
+    // there must not deliver notifications after `NPPN_SHUTDOWN`. See
+    // [`quit`].
+    if QUITTING.with(Cell::get) {
+        return;
+    }
     let dialogs = with_state(|st| {
         let (shell, mut ui) = st.split();
         let pending = shell.drain(&mut ui);
@@ -1773,6 +1948,19 @@ thread_local! {
 /// rule and stack an alert on top of the one it interrupts.
 fn pump_dialogs() {
     if PRESENTING.with(Cell::get) {
+        return;
+    }
+    if QUITTING.with(Cell::get) {
+        // Queued once the quit began — by a plugin's shutdown handler,
+        // say, or a worker wake that landed after it: the window is going,
+        // and a modal now would hold the quit hostage. Win32 drops these
+        // at `WM_DESTROY` and GTK once its quit has begun, for the same
+        // reason.
+        let dropped = DIALOG_QUEUE.with(|q| std::mem::take(&mut *q.borrow_mut()));
+        tracing::debug!(
+            count = dropped.len(),
+            "dropping dialogs queued during shutdown"
+        );
         return;
     }
     let _presenting = PresentingGuard::enter();
@@ -2065,7 +2253,7 @@ fn seed_horizontal_scroll_if_document_changed() {
             return;
         }
         seed_horizontal_scroll(&st.editor);
-        clamp_scroll_width_to_viewport(&st.editor, &st.sci_view);
+        clamp_scroll_width_to_viewport(&st.editor, &st.sci_view, &st.scroll_floor);
     });
 }
 
@@ -2428,7 +2616,7 @@ pub(crate) fn apply_saved_view_settings() {
     with_state(|st| {
         let view = st.shell.saved_view_settings();
         apply_view_settings(&st.editor, view);
-        clamp_scroll_width_to_viewport(&st.editor, &st.sci_view);
+        clamp_scroll_width_to_viewport(&st.editor, &st.sci_view, &st.scroll_floor);
     });
     refresh_toolbar_toggles();
 }
@@ -2925,17 +3113,35 @@ fn sync_window_geometry_to_shell() {
 }
 
 /// Persist the session now. Idempotent; safe to call repeatedly.
+///
+/// A no-op once [`quit`] has begun: it has saved the session it pinned,
+/// and an autosave tick landing in a plugin's shutdown handler's nested
+/// run loop must not re-capture what the handler has changed since.
 pub(crate) fn save_session_now() {
+    if QUITTING.with(Cell::get) {
+        return;
+    }
+    capture_ui_state_to_shell();
+    persist_session();
+}
+
+/// Snapshot the live window geometry, dock arrangement and panel state
+/// into the shell, so `save_session` carries them.
+///
+/// The dock arrangement lives in the dock module's thread-local, not in
+/// the shell, so it is pushed across before the save reads the session;
+/// the two legacy per-panel mirrors read the same live model (visibility
+/// and band width) and carry it for downgrade tolerance. Same "sync right
+/// before every save" discipline `ui_gtk` and `ui_win32` follow.
+fn capture_ui_state_to_shell() {
     sync_window_geometry_to_shell();
-    // The dock arrangement lives in the dock module's thread-local, not
-    // in the shell, so it is pushed across before the save reads the
-    // session; the two legacy per-panel mirrors read the same live model
-    // (visibility and band width) and carry it for downgrade tolerance.
-    // Same "sync right before every save" discipline the geometry sync
-    // above and `ui_gtk` follow.
     dock::sync_to_shell();
     docmap::sync_to_shell();
     workspace::sync_to_shell();
+}
+
+/// Write the session the shell holds to disk, as it stands.
+fn persist_session() {
     with_state(|st| {
         let (shell, mut ui) = st.split();
         if let Err(e) = shell.save_session(&mut ui) {
@@ -2945,6 +3151,85 @@ pub(crate) fn save_session_now() {
             tracing::warn!(error = ?e, "session save failed");
         }
     });
+}
+
+thread_local! {
+    /// Set once [`quit`] has begun. See there.
+    static QUITTING: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Leave the application's working state: tell the plugins, save the
+/// session. The one way out: ⌘Q, the Quit menu item and the main
+/// window's close button all reach it through `terminate:` and the
+/// application delegate's `applicationWillTerminate:` (see
+/// [`main_window_should_close`]), and it runs once. `terminate:` then
+/// calls `exit()`, so nothing after this needs undoing.
+///
+/// The order is Win32's `notify_plugins_of_shutdown` followed by its
+/// `WM_DESTROY` save, and `ui_gtk`'s `quit`, and each step matters:
+///
+///   1. The UI's state is captured into the shell *first*, and the dock
+///      layout then pinned (`dock::freeze_session`), so the saved
+///      arrangement is the one the user left — not whatever a plugin
+///      hides or shows from its shutdown handler. A plugin panel open at
+///      quit comes back open.
+///   2. `NPPN_BEFORESHUTDOWN` then `NPPN_SHUTDOWN`, while the plugins'
+///      panels are still on screen, with no borrow held, so a plugin
+///      saving its settings can ask the host where to put them
+///      (`NPPM_GETPLUGINSCONFIGDIR`) and is answered. A dialog a handler
+///      queues is dropped rather than shown (see [`pump_dialogs`]), and
+///      nothing drains the shell or autosaves once this has begun — a
+///      handler that spins a nested run loop must not get a worker's
+///      notifications delivered after `NPPN_SHUTDOWN`, nor an autosave
+///      that re-captures what step 1 pinned.
+///   3. The session is saved as captured.
+///
+/// Each step runs at its own boundary, so a panic in one cannot skip the
+/// save.
+pub(crate) fn quit() {
+    if QUITTING.with(|q| q.replace(true)) {
+        return;
+    }
+    at_callback_boundary("lib:quit:capture", (), capture_ui_state_to_shell);
+    // A boundary of its own, so it holds even if the capture panicked:
+    // either way a plugin's shutdown handler must not get to change what
+    // is saved.
+    at_callback_boundary("lib:quit:freeze", (), dock::freeze_session);
+    at_callback_boundary("lib:quit:notify", (), plugin::notify_shutdown);
+    at_callback_boundary("lib:quit:save", (), persist_session);
+}
+
+/// `windowShouldClose:` for the main window: on this single-window
+/// editor its close button means the user is quitting, so the answer is
+/// to quit — through `terminate:`, the one path ⌘Q takes too — and not
+/// to close.
+///
+/// That leaves one way out rather than two, and it is the right moment:
+/// `applicationWillTerminate:` runs [`quit`] while the window, and every
+/// dock panel in it, is still on screen — where Win32 runs its shutdown
+/// (`WM_CLOSE`) — with no run-loop turn before `exit()` for a timer or a
+/// worker wake to land in. Closing first would tell the plugins they are
+/// shutting down with their panels already off screen, and would rely on
+/// AppKit's last-window rule to end the process at all. `terminate:`
+/// does not return when it succeeds; when it is refused, answering `NO`
+/// keeps the window, and nothing has been torn down.
+///
+/// Any other window is not this function's to veto: `Actions` is the main
+/// window's delegate only today, but a floating dock group or the Find
+/// panel closing must never read as the user leaving.
+pub(crate) fn main_window_should_close(sender: &NSWindow) -> bool {
+    // A declined read — the state already torn down, or borrowed further
+    // up the stack — reads as "not the main window", which lets the close
+    // go ahead. Neither happens today: AppKit asks from its own event
+    // handling, with no borrow of ours held, and the state is removed
+    // only in `applicationWillTerminate:`, after which nothing asks.
+    let is_main =
+        with_state(|st| std::ptr::eq(Retained::as_ptr(&st.window), sender)).unwrap_or(false);
+    let Some(mtm) = MainThreadMarker::new().filter(|_| is_main) else {
+        return true;
+    };
+    NSApplication::sharedApplication(mtm).terminate(None);
+    false
 }
 
 // --- Menu actions --------------------------------------------------
@@ -3347,6 +3632,136 @@ mod scroller_layout_tests {
 }
 
 #[cfg(test)]
+mod scroll_floor_tests {
+    use super::{floor_step, viewport_points, FloorStep};
+
+    /// `(install, held)` for one step of the floor.
+    fn step(
+        viewport: isize,
+        current: isize,
+        held: Option<isize>,
+    ) -> (Option<isize>, Option<isize>) {
+        let FloorStep { install, held } = floor_step(viewport, current, held);
+        (install, held)
+    }
+
+    /// Feed `viewports` through the floor one paint at a time, the width
+    /// starting at `width`, and return the width after each paint. Nothing
+    /// but the floor changes the width here.
+    fn resize(mut width: isize, viewports: &[isize]) -> Vec<isize> {
+        let mut held = None;
+        viewports
+            .iter()
+            .map(|&viewport| {
+                let s = floor_step(viewport, width, held);
+                width = s.install.unwrap_or(width);
+                held = s.held;
+                width
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_width_below_the_viewport_is_raised_to_it() {
+        // Just after a seed, the reset tracking recomputes from.
+        assert_eq!(step(956, 1, None), (Some(956), Some(956)));
+        // Whoever set it: a plugin's own narrow width leaves the same dead
+        // strip.
+        assert_eq!(step(956, 300, None), (Some(956), Some(956)));
+        // And the floor's own, once the viewport has grown past it.
+        assert_eq!(step(1200, 900, Some(900)), (Some(1200), Some(1200)));
+        // A width Scintilla holds as negative, which a plugin gets by
+        // passing `SCI_SETSCROLLWIDTH` a wParam past `INT_MAX`: Scintilla
+        // keeps the width in an `int`. Only compared, never used.
+        assert_eq!(step(956, -2_147_483_648, None), (Some(956), Some(956)));
+    }
+
+    #[test]
+    fn the_viewport_is_in_whole_points_scintilla_can_hold() {
+        assert_eq!(viewport_points(956.9), 956);
+        assert_eq!(viewport_points(956.0), 956);
+        // A plugin sizes its own view: an absurd width is capped at
+        // Scintilla's `int` rather than truncated inside it.
+        assert_eq!(viewport_points(3.0e9), i32::MAX as isize);
+        assert_eq!(viewport_points(f64::INFINITY), i32::MAX as isize);
+        // Nothing for the floor to do; its caller skips both.
+        assert_eq!(viewport_points(f64::NAN), 0);
+        assert!(viewport_points(-4.5) <= 0);
+    }
+
+    #[test]
+    fn the_floors_own_width_follows_the_viewport_down() {
+        // Maximising and un-maximising a three-line file: the reported case.
+        assert_eq!(step(900, 1500, Some(1500)), (Some(900), Some(900)));
+    }
+
+    #[test]
+    fn a_steady_viewport_changes_nothing() {
+        assert_eq!(step(1500, 1500, Some(1500)), (None, Some(1500)));
+    }
+
+    #[test]
+    fn a_long_lines_scroll_range_is_kept() {
+        // Tracking raised the width past the floor for a line on screen:
+        // not the floor's to lower, and no longer the floor's at all.
+        assert_eq!(step(900, 26_525, Some(1500)), (None, None));
+        assert_eq!(step(900, 26_525, None), (None, None));
+        // After a lowering, tracking re-raises for a visible line wider
+        // than the new viewport; that width is tracking's, and a further
+        // shrink leaves it be.
+        assert_eq!(step(900, 1200, Some(900)), (None, None));
+        assert_eq!(step(800, 1200, None), (None, None));
+    }
+
+    /// The case the memory is of the installed width for: a width the floor
+    /// never installed is never lowered, even when it equals the viewport
+    /// the floor last saw. Remembering the last viewport instead — as the
+    /// floor once did — lowered both of these to 900.
+    #[test]
+    fn a_width_someone_else_set_is_never_lowered() {
+        // A plugin's view, tracking off, its width set to exactly the old
+        // viewport.
+        assert_eq!(step(900, 1500, None), (None, None));
+        // Or the floor installed another width, since changed under it.
+        assert_eq!(step(900, 1500, Some(1400)), (None, None));
+    }
+
+    /// Once anything else changes the width, the floor lets go of it, so
+    /// the width coming back to the floor's old value is not the floor's
+    /// either.
+    #[test]
+    fn the_floor_lets_go_once_the_width_is_changed_under_it() {
+        let raised = floor_step(1500, 1600, Some(1500));
+        assert_eq!(
+            raised,
+            FloorStep {
+                install: None,
+                held: None
+            }
+        );
+        assert_eq!(step(900, 1500, raised.held), (None, None));
+    }
+
+    /// A short file through a run of resizes: the document covers the
+    /// viewport exactly at every size, so there is neither a dead strip
+    /// nor a scroll range for content that is not there.
+    #[test]
+    fn a_short_file_follows_every_resize() {
+        let viewports = [1500, 900, 1200, 1200, 600, 2000, 2000, 1];
+        assert_eq!(resize(1, &viewports), viewports);
+    }
+
+    /// A long line through the same resizes: its range is never cut down.
+    #[test]
+    fn a_long_file_keeps_its_width_through_every_resize() {
+        assert_eq!(
+            resize(26_525, &[1500, 900, 1200, 600]),
+            [26_525, 26_525, 26_525, 26_525]
+        );
+    }
+}
+
+#[cfg(test)]
 mod modifier_tests {
     use super::modifiers_type_a_character as types;
     use objc2_app_kit::NSEventModifierFlags as F;
@@ -3492,13 +3907,79 @@ mod source_invariants {
         }
 
         let activate_body = fn_body(src, "activate_main_window");
-        for required in ["makeKeyAndOrderFront", "makeFirstResponder", ".activate("] {
+        for required in ["makeKeyAndOrderFront", "focus_editor()", ".activate("] {
             assert!(
                 activate_body.contains(required),
                 "`activate_main_window` no longer calls `{required}` — the \
                  window would never become key."
             );
         }
+        let focus_body = fn_body(src, "focus_editor");
+        assert!(
+            focus_body.contains("SCI_GRABFOCUS") && !focus_body.contains("makeFirstResponder"),
+            "`focus_editor` must focus the editor with `SCI_GRABFOCUS` — \
+             `makeFirstResponder:` on `sci_view` focuses the outer \
+             `ScintillaView`, which does not take keys"
+        );
+    }
+
+    /// No code hands `makeFirstResponder:` the outer Scintilla view.
+    ///
+    /// The view a host holds is `ScintillaView`, a container; the keys go
+    /// to the content view inside it. `makeFirstResponder:` does not ask
+    /// `acceptsFirstResponder`, so passing it the container focuses a
+    /// view that ignores every keystroke. AppKit repairs that when the
+    /// window *becomes* key, which is how it hid for so long, and does
+    /// not repair it on an already-key window. `SCI_GRABFOCUS` is the
+    /// way to focus an editor.
+    ///
+    /// **An allowlist of targets, not a ban on a name.** A ban on
+    /// `sci_view` passes `let v = st.sci_view.clone(); …(Some(&v))` —
+    /// the regression this test exists for was spelled exactly that way.
+    /// So every call's argument must be one listed here, and a new call
+    /// site has to be added deliberately, after checking it is not a
+    /// Scintilla view.
+    #[test]
+    fn nothing_focuses_the_outer_scintilla_view() {
+        const ALLOWED: [&str; 2] = [
+            // The Find/Replace panel's own fields (`search.rs`).
+            "Some(&dialog.fif_directory)",
+            "Some(&dialog.find_field)",
+        ];
+        let code = all_production_code();
+        let mut calls = 0;
+        let mut rest = code.as_str();
+        while let Some(at) = rest.find("makeFirstResponder(") {
+            let after = &rest[at + "makeFirstResponder(".len()..];
+            let mut depth = 1;
+            let end = after
+                .char_indices()
+                .find(|&(_, c)| {
+                    match c {
+                        '(' => depth += 1,
+                        ')' => depth -= 1,
+                        _ => {}
+                    }
+                    depth == 0
+                })
+                .map_or(after.len(), |(i, _)| i);
+            let args = after[..end].trim();
+            assert!(
+                ALLOWED.contains(&args),
+                "`makeFirstResponder({args})` is not a known focus target. \
+                 If it is a Scintilla view, send `SCI_GRABFOCUS` to its \
+                 handle instead: the view is a container that does not \
+                 take keys. Otherwise add it to `ALLOWED`."
+            );
+            calls += 1;
+            rest = &after[end..];
+        }
+        assert_eq!(
+            calls,
+            ALLOWED.len(),
+            "the scan should find each allowed call once; a count that \
+             does not match means it is not reading the calls it guards"
+        );
     }
 
     /// Cold start must close on a real paint, and nowhere else.
@@ -3652,20 +4133,23 @@ mod source_invariants {
     /// There are exactly two legitimate senders, and both are named
     /// here: `seed_horizontal_scroll` (which pairs the reset with
     /// tracking) and `clamp_scroll_width_to_viewport` (which raises the
-    /// floor so the whole visible area stays clickable). A third call
-    /// site is almost certainly one of the two bugs above coming back.
+    /// floor so the whole visible area stays clickable, and lowers it
+    /// again once the viewport shrinks). A third call site is almost
+    /// certainly one of the two bugs above coming back. The views made
+    /// for plugins reach the floor through the same function — see
+    /// `every_view_the_floor_runs_on_keeps_its_own_memory`.
     #[test]
     fn scroll_width_is_only_set_together_with_tracking() {
         let src = production_src();
         assert!(src.len() > 5_000, "source scan read too little to be real");
         let sets = src.matches("SCI_SETSCROLLWIDTH,").count();
         assert_eq!(
-            sets, 3,
-            "`SCI_SETSCROLLWIDTH` should be sent from exactly three places \
+            sets, 2,
+            "`SCI_SETSCROLLWIDTH` should be sent from exactly two places \
              — `seed_horizontal_scroll`, which also enables tracking, and \
-             the two arms of `clamp_scroll_width_to_viewport`, which raise \
-             the floor to the viewport and lower it again when the viewport \
-             shrinks. Found {sets}. An unpaired reset collapses the document \
+             `clamp_scroll_width_to_viewport`, which installs the floor \
+             `floor_step` decides on: the viewport, raised to or lowered \
+             to. Found {sets}. An unpaired reset collapses the document \
              view to one point wide and kills mouse input entirely; a \
              missing floor makes only the text clickable."
         );
@@ -3894,6 +4378,22 @@ mod source_invariants {
             "the layout repair must run from the SCN_PAINTED arm, or it \
              lasts only until the first long line widens the document"
         );
+        // The views made for plugins get the same permanent bars, so they
+        // need the same repair after each of their own paints.
+        let plugin = plugin_src();
+        if fn_body(&plugin, "create_plugin_scintilla").contains("force_permanent_scrollers(") {
+            let forward = fn_body(&plugin, "forward_plugin_sci_notify");
+            let paint = forward
+                .find("== SCN_PAINTED")
+                .expect("a plugin view's SCN_PAINTED is no longer recognised");
+            let repair = forward
+                .find("enforce_scroller_layout(")
+                .expect("a plugin view's scrollers are forced but never repaired");
+            assert!(
+                paint < repair,
+                "a plugin view's scroller repair must run on its SCN_PAINTED"
+            );
+        }
         // Trimming the line-number ruler to the clip's height is only
         // half of keeping it out of the scrollbar band: Scintilla paints
         // the gutter a whole line-row at a time, so the trim leaves a
@@ -3914,26 +4414,23 @@ mod source_invariants {
         );
     }
 
-    /// The horizontal floor must be allowed back down when the viewport
-    /// shrinks.
+    /// The horizontal floor follows the viewport down by the rule
+    /// `floor_step` states, never by re-seeding, and remembers what it
+    /// did before it does it.
     ///
     /// The floor exists so the blank area right of short lines stays
-    /// clickable, and it only ever rises — which is right until the
-    /// window gets smaller, at which point the document is still as wide
-    /// as the *old* viewport and a horizontal scrollbar appears for
-    /// content that is not there. Reported after a maximise and
-    /// un-maximise on a three-line file.
-    ///
-    /// It must come down *only* when the width is exactly the floor this
-    /// function last installed. Re-seeding to let tracking recompute is
-    /// the tempting alternative and it loses a real long line's scroll
-    /// range — see the function.
+    /// clickable, and it once only rose — which is right until the window
+    /// gets smaller, at which point the document is still as wide as the
+    /// *old* viewport and a horizontal scrollbar appears for content that
+    /// is not there. Reported after a maximise and un-maximise on a
+    /// three-line file. When it comes down is `floor_step`'s, pinned by
+    /// `scroll_floor_tests`; what a scan can see is that the clamp applies
+    /// that rule to the view's own memory and does not re-seed instead.
+    /// Re-seeding to let tracking recompute is the tempting alternative
+    /// and loses a real long line's scroll range — see `floor_step`.
     #[test]
-    fn the_horizontal_floor_is_reseeded_when_the_viewport_changes() {
+    fn the_horizontal_floor_never_reseeds_and_remembers_before_it_writes() {
         let body = fn_body(production_src(), "clamp_scroll_width_to_viewport");
-        let width_check = body
-            .find("LAST_VIEWPORT_WIDTH")
-            .expect("the clamp no longer notices a viewport resize");
         assert!(
             !body.contains("seed_horizontal_scroll("),
             "the clamp must not re-seed: SCI_SETSCROLLWIDTH zeroes \
@@ -3941,12 +4438,220 @@ mod source_invariants {
              so reading the width back in the same pass pins it to the \
              viewport and a long line's scroll range is lost"
         );
-        let lower = body
-            .find("previous > target")
-            .expect("the clamp no longer lowers its floor when the viewport shrinks");
+        let decide = body
+            .find("floor_step(viewport, current, floor.held.get())")
+            .expect("the clamp no longer decides by `floor_step` on the view's own memory");
+        let remember = body
+            .find("floor.held.set(step.held)")
+            .expect("the clamp no longer records what the floor holds");
+        let write = body
+            .find("SCI_SETSCROLLWIDTH,")
+            .expect("the clamp no longer installs the floor");
         assert!(
-            width_check < lower,
-            "the lowering must be keyed on the remembered viewport width"
+            decide < remember && remember < write,
+            "the floor's memory must be brought up to date before the width \
+             is written, so nothing the write sets off sees it stale"
+        );
+    }
+
+    /// Every `static` declaration in `code`, from the keyword to the `=`
+    /// or `;` that ends its type — so a type written on the next line is
+    /// still part of it, and an `=` or `;` inside the type's own brackets
+    /// (`Item = T`, `[u8; 4]`) does not end it early. The keyword only:
+    /// not a `'static` lifetime, and not an identifier with the word in it.
+    fn static_declarations(code: &str) -> Vec<&str> {
+        code.match_indices("static")
+            .filter(|&(at, word)| {
+                let before = code[..at].chars().next_back();
+                let after = code[at + word.len()..].chars().next();
+                !before.is_some_and(|c| c.is_alphanumeric() || c == '_' || c == '\'')
+                    && after.is_some_and(char::is_whitespace)
+            })
+            .map(|(at, _)| {
+                let rest = &code[at..];
+                &rest[..end_of_static_type(rest)]
+            })
+            .collect()
+    }
+
+    /// Where the type of the `static` declaration at the start of `rest`
+    /// ends: the first `=` or `;` outside any bracket. Everything scanned
+    /// is in type position, so `<` and `>` are brackets here; the `>` of a
+    /// `->` makes the depth run low, which can only end the scan at a later
+    /// `=` than it would otherwise, never an earlier one.
+    fn end_of_static_type(rest: &str) -> usize {
+        let mut depth = 0i32;
+        rest.char_indices()
+            .find(|&(_, c)| match c {
+                '<' | '[' | '(' => {
+                    depth += 1;
+                    false
+                }
+                '>' | ']' | ')' => {
+                    depth -= 1;
+                    false
+                }
+                '=' | ';' => depth <= 0,
+                _ => false,
+            })
+            .map_or(rest.len(), |(i, _)| i)
+    }
+
+    #[test]
+    fn a_static_is_read_to_the_end_of_its_type() {
+        let sample = "\
+fn f() -> &'static str { \"\" }
+let is_static = 1;
+static A: Cell<isize> = Cell::new(0);
+thread_local! {
+    static B:
+        Rc<crate::ScrollFloor> = Rc::default();
+}
+static C: Box<dyn Iterator<Item = Rc<ScrollFloor>>> = todo();
+static D: HashMap<[u8; 4], Rc<ScrollFloor>> = HashMap::new();
+static E: Box<dyn Fn() -> Rc<ScrollFloor>> = todo();
+";
+        let found = static_declarations(sample);
+        assert_eq!(found.len(), 5, "{found:?}");
+        assert_eq!(found[0], "static A: Cell<isize> ");
+        assert!(found[1].starts_with("static B:"));
+        // B across a line break, C past the `=` of `Item = T`, D past the
+        // `;` of an array length, E past a `->`: each read to the end of
+        // its type, where the `ScrollFloor` in it is.
+        for declaration in &found[1..] {
+            assert!(declaration.contains("ScrollFloor"), "{declaration:?}");
+            assert!(!declaration.contains("todo") && !declaration.contains("new"));
+        }
+    }
+
+    /// `src` with the module `name` cut out, braces matched from its
+    /// header. For `plugin.rs`'s test-only `smoke_support` surface, which
+    /// plays a plugin's part and so sends what the host itself must not.
+    fn without_module(src: &str, name: &str) -> String {
+        let header = format!("mod {name} {{");
+        let start = src
+            .find(&header)
+            .unwrap_or_else(|| panic!("no `mod {name}` to cut out"));
+        let open = start + header.len() - 1;
+        let mut depth = 0usize;
+        for (i, c) in src[open..].char_indices() {
+            match c {
+                '{' => depth += 1,
+                '}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return format!("{}{}", &src[..start], &src[open + i + 1..]);
+                    }
+                }
+                _ => {}
+            }
+        }
+        panic!("unterminated module {name}");
+    }
+
+    /// Every Scintilla view the horizontal floor runs on — the host's own,
+    /// and each one made for a plugin — has its own memory, and gets the
+    /// floor after its scroller repair on every paint.
+    ///
+    /// **Shared memory is the failure this pins, and it looks right.** A
+    /// floor keyed on one memory for every view works for each view on its
+    /// own; it breaks only when two paint in turn, because each then takes
+    /// the other's width for the one it installed, lets go of its own, and
+    /// leaves it behind when its view shrinks. The smoke scenario shows it
+    /// on real views; this keeps it from coming back on every `cargo test`.
+    ///
+    /// The order is the one `on_sci_notify`'s `SCN_PAINTED` arm states:
+    /// the floor measures the clip, which is the wrong, scroller-covering
+    /// one until the repair has run, and a width raised off that is one
+    /// the floor then holds. And a plugin hears of the paint only after
+    /// both, so what it reads back is the settled view.
+    #[test]
+    fn every_view_the_floor_runs_on_keeps_its_own_memory() {
+        let code = all_production_code();
+        let statics = static_declarations(&code);
+        assert!(
+            statics.len() > 10,
+            "found only {} statics in the crate; the scan below proves nothing",
+            statics.len()
+        );
+        for declaration in statics {
+            assert!(
+                !declaration.contains("ScrollFloor"),
+                "a `ScrollFloor` is held in a static — one memory for every \
+                 view is the bug this guards: `{}`",
+                declaration.split_whitespace().collect::<Vec<_>>().join(" ")
+            );
+        }
+
+        // The host's view: its memory is the one on `CocoaUiState`, at
+        // every call, and the floor comes after the repair.
+        let src = production_src();
+        let calls = code_only(src)
+            .replace(char::is_whitespace, "")
+            .matches("clamp_scroll_width_to_viewport(&")
+            .count();
+        let with_own_memory = code_only(src)
+            .replace(char::is_whitespace, "")
+            .matches("clamp_scroll_width_to_viewport(&st.editor,&st.sci_view,&st.scroll_floor)")
+            .count();
+        assert!(calls >= 3, "found only {calls} calls of the host's floor");
+        assert_eq!(
+            calls, with_own_memory,
+            "a call of the floor on the host's view does not pass the host \
+             view's own memory"
+        );
+        let painted = fn_body(src, "on_sci_notify_inner");
+        let repair = painted
+            .find("enforce_scroller_layout(")
+            .expect("the host's SCN_PAINTED arm no longer repairs its scrollers");
+        let floor = painted
+            .find("clamp_scroll_width_to_viewport(")
+            .expect("the host's SCN_PAINTED arm no longer floors its width");
+        assert!(
+            repair < floor,
+            "the host view's floor measures the clip before it is repaired"
+        );
+
+        // The views made for plugins: each takes its memory from its own
+        // entry in the table, gets the floor after its repair, and only
+        // then is the plugin told of the paint.
+        let plugin = plugin_src();
+        assert!(
+            fn_body(&plugin, "create_plugin_scintilla").contains("scroll_floor: Rc::default()"),
+            "a view made for a plugin no longer starts with a memory of its own"
+        );
+        let floor_fn = fn_body(&plugin, "floor_plugin_scintilla");
+        assert!(
+            floor_fn.contains("Rc::clone(&entry.scroll_floor)")
+                && floor_fn.contains("clamp_scroll_width_to_viewport("),
+            "a plugin's view no longer gets the floor with its own memory"
+        );
+        let forward = fn_body(&plugin, "forward_plugin_sci_notify");
+        let paint = forward
+            .find("== SCN_PAINTED")
+            .expect("a plugin view's SCN_PAINTED is no longer recognised");
+        let repair = forward
+            .find("enforce_scroller_layout(")
+            .expect("a plugin view's scrollers are no longer repaired");
+        let floor = forward
+            .find("floor_plugin_scintilla(index, sci_view)")
+            .expect("a plugin's view no longer gets the floor after its paints");
+        let told = forward
+            .find("target.send(")
+            .expect("a plugin view's notifications no longer reach the plugin");
+        assert!(
+            paint < repair && repair < floor && floor < told,
+            "a plugin view's paint must be repaired, then floored, then told \
+             to the plugin"
+        );
+
+        // And no view made for a plugin has its width set any other way:
+        // an unpaired `SCI_SETSCROLLWIDTH` is what collapses a document
+        // view to one point wide.
+        assert!(
+            !without_module(&plugin, "smoke_support").contains("SCI_SETSCROLLWIDTH"),
+            "plugin.rs sets a view's scroll width itself; the floor belongs \
+             to `clamp_scroll_width_to_viewport`"
         );
     }
 
@@ -4037,7 +4742,8 @@ let msg = \"found scintilla_cocoa_new() calls\";
         );
     }
 
-    /// Exactly two permanent Scintilla views, never destroyed.
+    /// Scintilla views are made in three places, and none is ever
+    /// released.
     ///
     /// `EditorHandle` is `Copy`, carries no lifetime, and holds raw
     /// pointers into a view — so nothing in the type system stops a copy
@@ -4045,7 +4751,10 @@ let msg = \"found scintilla_cocoa_new() calls\";
     /// obligation structurally: the main editor and the Document Map's
     /// miniature are each created once in `run` and never finalised, and
     /// tabs get their own buffers through `SCI_SETDOCPOINTER` rather than
-    /// through views of their own.
+    /// through views of their own. The third place is
+    /// `create_plugin_scintilla`, and its views are kept for the process
+    /// for the same reason from the other side: a plugin that captured a
+    /// view's direct-call pair holds pointers the host cannot invalidate.
     ///
     /// DESIGN.md §7.4 names an `NSView`-per-tab design as the specific
     /// mistake this avoids, and says in as many words that a Cocoa
@@ -4055,7 +4764,7 @@ let msg = \"found scintilla_cocoa_new() calls\";
     /// failing an assertion — so the guard is a source scan, the same
     /// tool and the same reasoning as `ui_gtk`'s.
     #[test]
-    fn exactly_two_scintilla_views_are_ever_created() {
+    fn scintilla_views_are_made_in_three_places_and_never_released() {
         let src = all_production_code();
         assert!(
             src.len() > 20_000,
@@ -4064,12 +4773,54 @@ let msg = \"found scintilla_cocoa_new() calls\";
         );
         let calls = src.matches("scintilla_cocoa_new()").count();
         assert_eq!(
-            calls, 2,
-            "this backend must build exactly two permanent Scintilla views — the main \
-             editor and the Document Map miniature — found {calls}. Each is created once \
-             and shares tab documents via SCI_SETDOCPOINTER; a *per-tab* view would leave \
-             every copied `EditorHandle` dangling when a tab closes, which is the hazard \
-             this count guards. Adding a third permanent view is fine, but update this."
+            calls, 3,
+            "this backend makes Scintilla views in exactly three places — the main \
+             editor and the Document Map miniature, once each, and the views made for \
+             plugins — found {calls}. The two permanent ones share tab documents via \
+             SCI_SETDOCPOINTER; a *per-tab* view would leave every copied `EditorHandle` \
+             dangling when a tab closes, which is the hazard this count guards. Adding \
+             another permanent view is fine, but update this."
+        );
+        // The plugins' views: made in `create_plugin_scintilla` and held
+        // by a raw pointer, so no `Retained` — and no destructor — can
+        // ever release one; and published to the routing table once,
+        // there, which only ever grows.
+        let plugin = plugin_src();
+        let create = fn_body(&plugin, "create_plugin_scintilla");
+        assert_eq!(
+            create.matches("scintilla_cocoa_new()").count(),
+            1,
+            "the views made for plugins are no longer made in `create_plugin_scintilla`"
+        );
+        assert!(
+            !create.contains("Retained::from_raw("),
+            "`create_plugin_scintilla` adopts the view into a `Retained`, which releases \
+             it when dropped — and a plugin may hold its direct-call pair"
+        );
+        assert!(
+            plugin.contains("    view: *mut c_void,"),
+            "`PluginScintilla::view` is no longer a raw pointer; an owning field would \
+             release the view when its entry is dropped"
+        );
+        for (what, publish) in [
+            ("a routing slot", ".store(ptr, Ordering::Relaxed)"),
+            ("the routing count", "PLUGIN_SCI_COUNT.store("),
+        ] {
+            assert_eq!(
+                plugin.matches(publish).count(),
+                1,
+                "{what} is written somewhere besides `create_plugin_scintilla`; the table \
+                 is read from any thread on the promise that it only ever grows"
+            );
+            assert!(
+                create.contains(publish),
+                "{what} is not published where it is made"
+            );
+        }
+        assert!(
+            !plugin.contains("PLUGIN_SCI_COUNT.fetch_sub(")
+                && !plugin.contains("PLUGIN_SCI_COUNT.swap("),
+            "the routing count is decreased somewhere; the table only ever grows"
         );
         // The shim exposes no release entry point, so there is no
         // supported way to finalise one — but removing a view from its
@@ -4914,7 +5665,7 @@ let msg = \"found scintilla_cocoa_new() calls\";
             2,
             "plugin.rs sends to Scintilla from somewhere other than `plugin_dispatch` \
              and `send_sci_on_main`; every send must sit behind the \
-             `is_valid_scintilla` identity check"
+             `is_known_scintilla` identity check"
         );
         assert_eq!(dispatch.matches("scintilla_cocoa_send_message(").count(), 1);
         assert_eq!(marshal.matches("scintilla_cocoa_send_message(").count(), 1);
@@ -4924,8 +5675,22 @@ let msg = \"found scintilla_cocoa_new() calls\";
             "`send_sci_on_main` is called from somewhere other than `plugin_dispatch`"
         );
         let check = dispatch
-            .find("is_valid_scintilla(hwnd)")
+            .find("is_known_scintilla(hwnd)")
             .expect("`plugin_dispatch` no longer identity-checks the handle it was given");
+        // The check admits the host's own view and the views made for
+        // plugins, and nothing else.
+        let known = fn_body(&src, "is_known_scintilla");
+        assert!(
+            known.contains("is_valid_scintilla(hwnd) || is_plugin_scintilla(hwnd)")
+                && known.matches("||").count() == 1,
+            "`is_known_scintilla` must be exactly the host's view or a plugin's view"
+        );
+        let plugin_views = fn_body(&src, "is_plugin_scintilla");
+        assert!(
+            plugin_views.contains(".take(made)")
+                && plugin_views.contains("PLUGIN_SCI_COUNT.load(Ordering::Acquire)"),
+            "`is_plugin_scintilla` must read only the slots the count has published"
+        );
         let send = dispatch
             .find("scintilla_cocoa_send_message(")
             .expect("`plugin_dispatch` no longer forwards to Scintilla at all");
@@ -5081,6 +5846,13 @@ let msg = \"found scintilla_cocoa_new() calls\";
     /// `shortcuts.xml` cache exists to serve, and loading in response
     /// is exactly the lazy-load §6.4 describes. Neither is on `run`'s
     /// startup path, which is the property that actually matters.
+    ///
+    /// And **one** startup pass, the exception §8 names: the plugins a
+    /// restored dock panel belongs to (`restore_panel_plugins`), loaded
+    /// from the application delegate once the app runs, never from `run`,
+    /// and through the scoped loader, which admits nothing else. So the
+    /// loader proper is pinned too — its two callers, and the one place
+    /// the scope that loads at startup is asked for.
     #[test]
     fn startup_discovers_plugins_without_loading_them() {
         assert!(
@@ -5114,6 +5886,46 @@ let msg = \"found scintilla_cocoa_new() calls\";
             fn_body(&src, "fire_plugin_chord").contains("load_pending_plugins()"),
             "the plugin-hotkey path no longer lazy-loads; a cached shortcut would \
              be dead until the user opened the Plugins menu"
+        );
+
+        let all = all_production_code();
+        assert_eq!(
+            all.matches("load_plugins_where(").count(),
+            // The two load functions, plus the definition itself.
+            3,
+            "the scoped loader has a caller beyond the lazy triggers and the \
+             startup restore"
+        );
+        assert!(
+            fn_body(&src, "load_pending_plugins").contains("load_plugins_where(LoadScope::All)"),
+            "the lazy triggers no longer load through the scoped loader"
+        );
+        assert!(
+            fn_body(&src, "restore_panel_plugins")
+                .contains("load_plugins_where(LoadScope::RestoredPanels)"),
+            "the startup restore no longer limits itself to restored panels' plugins"
+        );
+        assert_eq!(
+            all.matches("next_restored_panel_plugin_to_load").count(),
+            1,
+            "the startup scope is asked for somewhere other than the scoped loader"
+        );
+        assert_eq!(
+            all.matches("restore_panel_plugins").count(),
+            // The definition, and the delegate's one call.
+            2,
+            "the startup restore is reached from somewhere other than the delegate"
+        );
+        let delegate = code_only(include_str!("delegate.rs"));
+        assert!(
+            fn_body(&delegate, "did_finish_launching")
+                .contains("crate::plugin::restore_panel_plugins"),
+            "the startup restore is no longer run once the application has launched"
+        );
+        assert!(
+            !fn_body(production_src(), "run").contains("restore_panel_plugins"),
+            "run() restores plugin panels before the run loop — before the \
+             window can be ordered front"
         );
     }
 
@@ -5153,5 +5965,276 @@ let msg = \"found scintilla_cocoa_new() calls\";
             "recent-files menu labels are no longer sanitized, so a filename \
              carrying bidi controls renders reordered in the File menu"
         );
+    }
+
+    /// `crates/ui_cocoa/src/dock.rs`, cut at its own test module.
+    fn dock_src() -> String {
+        let src = include_str!("dock.rs");
+        let cut = src.find("#[cfg(test)]").unwrap_or(src.len());
+        code_only(&src[..cut])
+    }
+
+    /// The argument text of every `with_dock(…)` call in `src`, by paren
+    /// matching. `src` must already have had its comments and string
+    /// contents removed ([`code_only`]); a character literal is stepped
+    /// over, so `'('` cannot unbalance the count, while a lifetime —
+    /// `'static`, which has no closing quote two characters on — is not
+    /// mistaken for one.
+    fn with_dock_arguments(src: &str) -> Vec<String> {
+        let bytes = src.as_bytes();
+        let mut out = Vec::new();
+        for (at, _) in src.match_indices("with_dock(") {
+            let open = at + "with_dock".len();
+            let mut depth = 0usize;
+            let mut i = open;
+            while i < bytes.len() {
+                match bytes[i] {
+                    b'\'' if bytes.get(i + 2) == Some(&b'\'') => i += 2,
+                    b'\''
+                        if bytes.get(i + 1) == Some(&b'\\') && bytes.get(i + 3) == Some(&b'\'') =>
+                    {
+                        i += 3;
+                    }
+                    b'(' => depth += 1,
+                    b')' => {
+                        depth -= 1;
+                        if depth == 0 {
+                            break;
+                        }
+                    }
+                    _ => {}
+                }
+                i += 1;
+            }
+            out.push(src[open..i.min(src.len())].to_owned());
+        }
+        out
+    }
+
+    /// What bounds the `DMN_*` round trip is an ordering no unit test can
+    /// see: what a plugin is owed is *recorded* under the dock borrow, in
+    /// `panel_notices`, and only then sent, with no borrow held, by
+    /// `plugin::deliver_dock_notices`. A handler that shows or hides a
+    /// panel reconciles again from inside the send; if the record were
+    /// written after the send, that nested pass would find the change
+    /// untold and send it again, from inside which the next pass would do
+    /// the same. The twin of the Win32 and GTK tests of the same name.
+    #[test]
+    fn the_container_is_recorded_before_the_notification_is_sent() {
+        let dock = dock_src();
+        let apply = fn_body(&dock, "apply_layout");
+        assert!(
+            apply.contains("notify_plugin_panels();"),
+            "the reconcile no longer tells the plugins"
+        );
+        let notify = fn_body(&dock, "notify_plugin_panels");
+        let record = notify
+            .find("with_dock(panel_notices)")
+            .expect("the plugins' records are no longer written under the dock borrow");
+        let send = notify
+            .find("deliver_dock_notices(notices)")
+            .expect("the notices are no longer sent");
+        assert!(record < send, "the send now precedes the record");
+
+        let notices = fn_body(&dock, "panel_notices");
+        let squashed: String = notices.split_whitespace().collect();
+        assert!(
+            squashed.contains("entry.told.update("),
+            "panel_notices no longer writes the record"
+        );
+        assert!(
+            !notices.contains("deliver_dock_notices") && !notices.contains(".send("),
+            "panel_notices sends while the dock borrow is live"
+        );
+        let deliver = fn_body(&plugin_src(), "deliver_dock_notices");
+        assert!(
+            !deliver.contains(".told"),
+            "the record moved into the send loop, after the send it must precede"
+        );
+    }
+
+    /// A group moved or resized outside the model's arrangement — the
+    /// window, a chrome band or a splitter resized, a float moved by
+    /// AppKit — owes its plugin panels a `DMN_FLOATDROPPED`, and the two
+    /// places that learn of it must not send it: `place_children` runs
+    /// under the dock borrow and usually inside a `with_state` one, where
+    /// a plugin's `NPPM_*` would be declined, and both run at every step
+    /// of a live resize. They queue the check, and the check waits for the
+    /// run loop's default mode — not the main dispatch queue, whose blocks
+    /// run inside event tracking too, so a plugin would be told at every
+    /// step of the drag.
+    #[test]
+    fn geometry_changes_queue_the_placement_check_and_never_notify() {
+        let dock = dock_src();
+        for hook in ["place_children", "on_float_configured"] {
+            let body = fn_body(&dock, hook);
+            assert!(
+                body.contains("schedule_placement_check();"),
+                "{hook} no longer queues the placement check"
+            );
+            for sends in [
+                "notify_plugin_panels",
+                "deliver_dock_notices",
+                "panel_notices",
+            ] {
+                assert!(
+                    !body.contains(sends),
+                    "{hook} tells the plugins itself (`{sends}`)"
+                );
+            }
+        }
+        let schedule = fn_body(&dock, "schedule_placement_check");
+        assert!(
+            schedule.contains("NSDefaultRunLoopMode") && schedule.contains("performInModes_block"),
+            "the placement check no longer waits for the default run-loop mode"
+        );
+        assert!(
+            !schedule.contains("DispatchQueue") && !schedule.contains("exec_async"),
+            "the placement check runs from the main dispatch queue, inside event tracking"
+        );
+        assert!(
+            schedule.contains("notify_plugin_panels"),
+            "the placement check no longer tells the plugins"
+        );
+    }
+
+    /// Code holding the dock borrow never calls `with_state` — the rule
+    /// the dock module's docs give for keeping the two `RefCell`s from
+    /// deadlocking on each other. Checks every argument handed to
+    /// `with_dock`, closure or function name; the body of a function
+    /// passed by name is not followed, so it keeps the same rule by hand.
+    /// The twin of `ui_gtk`'s test of the same name.
+    #[test]
+    fn nothing_under_the_dock_borrow_asks_for_the_state() {
+        let arguments = with_dock_arguments(&dock_src());
+        assert!(
+            arguments.len() > 20,
+            "found only {} `with_dock` calls: the scan is not reading the module",
+            arguments.len()
+        );
+        for argument in &arguments {
+            assert!(
+                !argument.contains("with_state"),
+                "a `with_dock` call asks for the state under the dock borrow: {argument}"
+            );
+        }
+        // The scanner itself: a call whose argument asks for the state is
+        // found, and a character literal does not end the argument early.
+        let sample = code_only("with_dock(|d| { let c = ')'; with_state(|st| st.x) });");
+        let found = with_dock_arguments(&sample);
+        assert_eq!(found.len(), 1);
+        assert!(
+            found[0].contains("with_state"),
+            "the scanner lost the argument: {found:?}"
+        );
+    }
+
+    /// A refused registration logs the plugin's two strings as the chrome
+    /// would draw them — the twin of the Win32 and GTK tests of the same
+    /// name, which say why.
+    #[test]
+    fn a_refused_registration_is_logged_sanitized() {
+        let flat = plugin_src()
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
+        for (field, sanitized) in [
+            (
+                "module",
+                "codepp_shell::sanitize_str_for_display(&params.module_name)",
+            ),
+            (
+                "panel",
+                "codepp_shell::plugin_dock_title(&params.name, &params.module_name)",
+            ),
+        ] {
+            assert!(
+                flat.contains(&format!("{field} = {sanitized}")),
+                "the refusal log's {field} field is not sanitized"
+            );
+        }
+        assert!(
+            !flat.contains("= params.name") && !flat.contains("= params.module_name"),
+            "a log field records the plugin's raw text"
+        );
+    }
+
+    /// The quit's order is the saved session's integrity: the UI state is
+    /// captured and the dock layout pinned *before* the plugins hear they
+    /// are shutting down — so one that hides its panel from
+    /// `NPPN_SHUTDOWN` does not change what the next start restores — and
+    /// the session is written after. `applicationWillTerminate:` runs it
+    /// first, while the state is still installed, and the close button
+    /// reaches it through `terminate:` rather than by closing the window.
+    /// None of it changes a type, so none of it would fail to compile.
+    #[test]
+    fn the_quit_pins_the_layout_before_the_plugins_hear_of_it() {
+        let src = production_src();
+        let quit = fn_body(src, "quit");
+        // Each step's whole call, so two steps merged into one boundary —
+        // where a panic in the first would skip the second — fail here.
+        let steps = [
+            r#"at_callback_boundary("lib:quit:capture", (), capture_ui_state_to_shell);"#,
+            r#"at_callback_boundary("lib:quit:freeze", (), dock::freeze_session);"#,
+            r#"at_callback_boundary("lib:quit:notify", (), plugin::notify_shutdown);"#,
+            r#"at_callback_boundary("lib:quit:save", (), persist_session);"#,
+        ];
+        let at: Vec<usize> = steps
+            .iter()
+            .map(|step| {
+                quit.find(step).unwrap_or_else(|| {
+                    panic!("the quit no longer runs `{step}` at a boundary of its own")
+                })
+            })
+            .collect();
+        assert!(
+            at.windows(2).all(|pair| pair[0] < pair[1]),
+            "the quit's steps are out of order: {steps:?} at {at:?}"
+        );
+        for gated in ["drain_shell", "save_session_now", "pump_dialogs"] {
+            assert!(
+                fn_body(src, gated).contains("QUITTING.with("),
+                "`{gated}` no longer stops once the quit has begun"
+            );
+        }
+        let close = fn_body(src, "main_window_should_close");
+        assert!(
+            close.contains(".terminate(None)"),
+            "the close button no longer quits through `terminate:`"
+        );
+
+        let delegate = code_only(include_str!("delegate.rs"));
+        let terminate = fn_body(&delegate, "will_terminate");
+        let quit_at = terminate
+            .find("crate::quit()")
+            .expect("applicationWillTerminate: no longer runs the quit");
+        let teardown_at = terminate
+            .find("uninstall()")
+            .expect("applicationWillTerminate: no longer tears the state down");
+        assert!(
+            quit_at < teardown_at,
+            "the quit runs after the state it saves from is torn down"
+        );
+    }
+
+    /// A plugin's mark is painted from `validateMenuItem:` and set from
+    /// inside the NPPM dispatch — so both read and write the plugin
+    /// module's own record, never `with_state`, which the dispatch's borrow
+    /// would decline, and which AppKit may be inside when it validates.
+    #[test]
+    fn plugin_marks_are_painted_without_the_state() {
+        let menu_src = include_str!("menu.rs");
+        let menu = code_only(&menu_src[..menu_src.find("#[cfg(test)]").unwrap_or(menu_src.len())]);
+        assert!(
+            fn_body(&menu, "validate").contains("crate::plugin::menu_mark("),
+            "plugin commands' marks are no longer painted from validateMenuItem:"
+        );
+        let plugin = plugin_src();
+        for f in ["menu_mark", "set_menu_check", "live_command_item"] {
+            assert!(
+                !fn_body(&plugin, f).contains("with_state("),
+                "`{f}` reaches for the state"
+            );
+        }
     }
 }

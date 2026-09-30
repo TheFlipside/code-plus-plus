@@ -1,25 +1,25 @@
 //! The Preferences dialog for the Cocoa backend.
 //!
-//! Mirrors `ui_gtk::preferences` and the Win32 `preferences` module. It
-//! edits the one pane this backend has — **Recent Files History**
+//! Mirrors `ui_gtk::preferences` and the Win32 `preferences` module, and
+//! edits the same two categories: **Recent Files History**
 //! ([`codepp_core::preferences::RecentFilesHistoryConfig`]), which shapes
-//! the File menu's recent-files region. The other two backends also have
-//! **Security**, the guard on plugin panels' startup commands; this one
-//! hosts no plugin panels, so it shows no control for that setting and
-//! writes it back as stored. On Close the controls are read back and
+//! the File menu's recent-files region, and **Security**
+//! ([`codepp_core::preferences::SecurityConfig`]), the guard on plugin
+//! panels' startup commands. On Close the controls are read back and
 //! written through `Shell::set_preferences`, which clamps and persists
 //! them; the File menu picks the change up the next time it opens, since
-//! that region is rebuilt on every open.
+//! that region is rebuilt on every open, and the guard is consulted at
+//! the next start.
 //!
-//! **Why an `NSAlert` rather than a window.** The Win32 dialog is a
-//! category-list + panel design; with a single category that is a lot of
-//! chrome around four controls. (`ui_gtk` reached the same conclusion
-//! while it had one category too, and took the category list once
-//! Security gave it a second.) An alert with an accessory view is the
-//! Cocoa shape of the same thing, and it reuses a modal path this
-//! backend already exercises in three places — where a fresh `NSWindow`
-//! would need its own `setReleasedWhenClosed(false)` lifecycle care
-//! (DESIGN.md §7.4 records why).
+//! **Why tabs in an `NSAlert` rather than a window.** Win32 and GTK show
+//! their categories as a list beside the page it picks. With two
+//! categories and a handful of controls each, a tab view is the Mac shape
+//! of the same thing — the one `System Settings`-era apps still use for
+//! a small pane — and it keeps the dialog an alert with an accessory
+//! view, a modal path this backend already exercises in three places,
+//! where a fresh `NSWindow` would need its own `setReleasedWhenClosed(false)`
+//! lifecycle care (DESIGN.md §7.4 records why). Both pages are read back
+//! at Close, the one not showing included.
 //!
 //! It lives in the **application menu** as "Settings…" with ⌘, — the
 //! placement and shortcut macOS mandates — rather than under a Settings
@@ -27,28 +27,76 @@
 
 use objc2::rc::Retained;
 use objc2::{sel, MainThreadOnly};
-use objc2_app_kit::{NSAlert, NSButton, NSButtonType, NSTextField, NSTextFieldBezelStyle, NSView};
+use objc2_app_kit::{
+    NSAlert, NSBox, NSButton, NSButtonType, NSFont, NSTabView, NSTextField, NSTextFieldBezelStyle,
+    NSView,
+};
 use objc2_foundation::{MainThreadMarker, NSPoint, NSRect, NSSize, NSString};
 
 use codepp_core::preferences::{
-    RecentFileDisplayMode, RecentFilesHistoryConfig, CUSTOM_MAX_LENGTH_LIMIT, MAX_ENTRIES_LIMIT,
+    Preferences, RecentFileDisplayMode, RecentFilesHistoryConfig, CUSTOM_MAX_LENGTH_LIMIT,
+    MAX_ENTRIES_LIMIT,
 };
 
 use crate::menu::Actions;
 use crate::state::with_state;
 
-/// Accessory-view geometry. Laid out bottom-up from a fixed height, so
-/// the rows cannot collide — the same discipline m4a's Find panel had to
-/// be corrected to after its Replace field overlapped its buttons.
+/// Page geometry. The Recent Files History rows are laid out top-down
+/// from the page's real height, one row at a time, so they cannot
+/// collide — the same discipline m4a's Find panel had to be corrected to
+/// after its Replace field overlapped its buttons. `HISTORY_HEIGHT` is
+/// what those rows need; the pages are made at least that tall.
 const WIDTH: f64 = 400.0;
-const HEIGHT: f64 = 210.0;
+const HISTORY_HEIGHT: f64 = 210.0;
 const ROW: f64 = 24.0;
 const GAP: f64 = 4.0;
 const INDENT: f64 = 12.0;
+/// What the tab view's own chrome takes around a page: the tab row and
+/// the page inset, measured at 46 pt on macOS 26 for the Find panel's
+/// tab view and rounded up. Only a floor for the tab view's size — every
+/// page is laid out from the tab view's live `contentRect`.
+const TAB_CHROME: f64 = 50.0;
+/// Padding inside the Security page's "Plugin panels" box.
+const BOX_PAD: f64 = 10.0;
+/// What a titled `NSBox` takes around its content — the title row and the
+/// borders: measured at 24 pt on macOS 26, plus 4 pt of margin, the same
+/// margin [`TAB_CHROME`] carries.
+const BOX_CHROME: f64 = 28.0;
+/// How much narrower than [`WIDTH`] the help text is measured before the
+/// page exists, to size the page: more than the tab view's and the box's
+/// insets together, so the real width is never narrower than the one the
+/// height was taken at — and the text, re-fitted to it, only gets shorter.
+const HELP_WIDTH_ALLOWANCE: f64 = 64.0;
 
-/// The controls the read-back needs. Held only for the life of one
-/// modal session.
+/// The Security page's checkbox: what the switch does, in the Win32
+/// pane's words.
+const VERIFY_PANEL_COMMANDS_LABEL: &str = "Run only signed plugin panel commands at startup";
+
+/// What the checkbox means, below it — the Win32 pane's text, with how
+/// this platform keeps the key in place of DPAPI (an owner-only file, as
+/// on Linux; see `codepp_platform::panel_key`), the same words `ui_gtk`
+/// uses.
+const VERIFY_PANEL_COMMANDS_HELP: &str = "\
+Code++ reopens a plugin's panel at startup the way Notepad++ does: \
+by running the plugin's own command for it. It signs each command it \
+records from the panel's own plugin, with a key kept in your Code++ \
+settings folder that no other account can read.\n\n\
+With this on, Code++ neither runs a command it did not sign nor loads \
+its plugin at startup. That covers a command from an edited or copied \
+session file, and one set by a plugin that is not the panel's own. \
+The panel keeps its place until you open it from its plugin's menu.\n\n\
+With this off, every saved command runs, as in Notepad++.";
+
+/// The controls the read-back needs, both pages'. Held only for the
+/// life of one modal session.
 pub(crate) struct Controls {
+    history: HistoryControls,
+    /// The Security page's one switch.
+    verify_panel_commands: Retained<NSButton>,
+}
+
+/// The Recent Files History page's controls.
+struct HistoryControls {
     dont_check: Retained<NSButton>,
     in_submenu: Retained<NSButton>,
     max_entries: Retained<NSTextField>,
@@ -70,11 +118,12 @@ pub(crate) fn show() {
     // takes the same freeze every other modal on this backend does — a
     // worker wake could otherwise drain the shell mid-dialog.
     let _freeze = crate::DrainFreeze::new();
-    let (alert, controls) = build_dialog(&current.recent_files_history, mtm);
+    let (alert, controls) = build_dialog(&current, mtm);
     alert.runModal();
 
     let mut updated = current.clone();
-    updated.recent_files_history = read_back(&controls, &current.recent_files_history);
+    updated.recent_files_history = read_back(&controls.history, &current.recent_files_history);
+    updated.security.verify_panel_commands = controls.verify_panel_commands.state() != 0;
     if updated != current {
         with_state(|st| st.shell.set_preferences(updated));
     }
@@ -88,29 +137,75 @@ pub(crate) fn show() {
 /// modal session — `runModal` cannot return without a human. Same
 /// reasoning, and the same split, as `search::build_goto_alert`.
 pub(crate) fn build_dialog(
-    cfg: &RecentFilesHistoryConfig,
+    prefs: &Preferences,
     mtm: MainThreadMarker,
 ) -> (Retained<NSAlert>, Controls) {
     let alert = NSAlert::new(mtm);
     alert.setMessageText(&NSString::from_str("Preferences"));
-    alert.setInformativeText(&NSString::from_str("Recent Files History"));
     alert.addButtonWithTitle(&NSString::from_str("Close"));
 
-    let view = NSView::initWithFrame(
-        NSView::alloc(mtm),
-        NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(WIDTH, HEIGHT)),
+    // The Security page's help text decides its height, so it is measured
+    // before the tab view is sized: both pages get the taller of the two.
+    let help = help_label(VERIFY_PANEL_COMMANDS_HELP, mtm);
+    let required_security_height =
+        security_page_height(fit_to_width(&help, WIDTH - HELP_WIDTH_ALLOWANCE));
+    let tabs = NSTabView::initWithFrame(
+        NSTabView::alloc(mtm),
+        NSRect::new(
+            NSPoint::new(0.0, 0.0),
+            NSSize::new(
+                WIDTH,
+                HISTORY_HEIGHT.max(required_security_height) + TAB_CHROME,
+            ),
+        ),
     );
 
+    let (history_page, history_height) =
+        crate::search::tab_page("Recent Files History", &tabs, mtm);
+    let history = build_history_page(
+        &history_page,
+        history_height,
+        &prefs.recent_files_history,
+        mtm,
+    );
+    let (security_page, security_height) = crate::search::tab_page("Security", &tabs, mtm);
+    let verify_panel_commands = build_security_page(
+        &security_page,
+        security_height,
+        &help,
+        prefs.security.verify_panel_commands,
+        mtm,
+    );
+
+    alert.setAccessoryView(Some(&tabs));
+    (
+        alert,
+        Controls {
+            history,
+            verify_panel_commands,
+        },
+    )
+}
+
+/// The Recent Files History page's rows, laid out top-down in `page`,
+/// whose height is `height`.
+fn build_history_page(
+    page: &NSView,
+    height: f64,
+    cfg: &RecentFilesHistoryConfig,
+    mtm: MainThreadMarker,
+) -> HistoryControls {
+    let width = page.frame().size.width;
     // Laid out top-down in *description*, bottom-up in coordinates:
     // `y` walks downward from the top edge, one row at a time.
-    let mut y = HEIGHT - ROW;
+    let mut y = height - ROW;
 
     // Negative-sense checkbox: checked means the feature is OFF
     // (`enabled == false`), matching N++'s and Win32's "Don't check at
     // launch time" wording. `read_back` inverts it symmetrically.
-    let dont_check = check_box("Don't check at launch time", 0.0, y, WIDTH, mtm);
+    let dont_check = check_box("Don't check at launch time", 0.0, y, width, mtm);
     dont_check.setState(isize::from(!cfg.enabled));
-    view.addSubview(&dont_check);
+    page.addSubview(&dont_check);
     y -= ROW + GAP;
 
     let max_label = label(
@@ -120,18 +215,18 @@ pub(crate) fn build_dialog(
         240.0,
         mtm,
     );
-    view.addSubview(&max_label);
+    page.addSubview(&max_label);
     let max_entries = number_field(cfg.max_entries, INDENT + 248.0, y, mtm);
-    view.addSubview(&max_entries);
+    page.addSubview(&max_entries);
     y -= ROW + GAP * 3.0;
 
-    let display_label = label("Display:", 0.0, y, WIDTH, mtm);
-    view.addSubview(&display_label);
+    let display_label = label("Display:", 0.0, y, width, mtm);
+    page.addSubview(&display_label);
     y -= ROW;
 
-    let in_submenu = check_box("In Submenu", INDENT, y, WIDTH - INDENT, mtm);
+    let in_submenu = check_box("In Submenu", INDENT, y, width - INDENT, mtm);
     in_submenu.setState(isize::from(cfg.in_submenu));
-    view.addSubview(&in_submenu);
+    page.addSubview(&in_submenu);
     y -= ROW;
 
     // The three modes are radio buttons, and all three carry
@@ -150,15 +245,15 @@ pub(crate) fn build_dialog(
     // once — which `read_back` would then resolve by precedence rather
     // than by what the user sees selected.
     let only_name = radio("Only File Name", INDENT, y, mtm);
-    view.addSubview(&only_name);
+    page.addSubview(&only_name);
     y -= ROW;
     let full_path = radio("Full File Name Path", INDENT, y, mtm);
-    view.addSubview(&full_path);
+    page.addSubview(&full_path);
     y -= ROW;
     let custom = radio("Customize Maximum Length:", INDENT, y, mtm);
-    view.addSubview(&custom);
+    page.addSubview(&custom);
     let custom_length = number_field(cfg.custom_max_length, INDENT + 248.0, y, mtm);
-    view.addSubview(&custom_length);
+    page.addSubview(&custom_length);
     y -= ROW;
     let hint = label(
         &format!("(1 - {CUSTOM_MAX_LENGTH_LIMIT})"),
@@ -167,7 +262,7 @@ pub(crate) fn build_dialog(
         160.0,
         mtm,
     );
-    view.addSubview(&hint);
+    page.addSubview(&hint);
 
     match cfg.display_mode {
         RecentFileDisplayMode::OnlyFileName => only_name.setState(1),
@@ -175,18 +270,87 @@ pub(crate) fn build_dialog(
         RecentFileDisplayMode::CustomMaxLength => custom.setState(1),
     }
 
-    alert.setAccessoryView(Some(&view));
-    (
-        alert,
-        Controls {
-            dont_check,
-            in_submenu,
-            max_entries,
-            custom_length,
-            only_name,
-            custom,
-        },
-    )
+    HistoryControls {
+        dont_check,
+        in_submenu,
+        max_entries,
+        custom_length,
+        only_name,
+        custom,
+    }
+}
+
+/// The Security page: one "Plugin panels" box holding the switch and what
+/// it means — the Win32 pane's frame and wording. Returns the switch.
+fn build_security_page(
+    page: &NSView,
+    height: f64,
+    help: &NSTextField,
+    verify: bool,
+    mtm: MainThreadMarker,
+) -> Retained<NSButton> {
+    let width = page.frame().size.width;
+    let frame = NSBox::initWithFrame(
+        NSBox::alloc(mtm),
+        NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(width, height)),
+    );
+    frame.setTitle(&NSString::from_str("Plugin panels"));
+    page.addSubview(&frame);
+    // A titled box always has a content view; the box itself is the
+    // fallback only so there is no panic path in a dialog.
+    let inside: Retained<NSView> = frame
+        .contentView()
+        .unwrap_or_else(|| Retained::into_super(frame.clone()));
+    let inner = inside.frame().size;
+    let help_height = fit_to_width(help, inner.width - 2.0 * BOX_PAD);
+    let (switch_y, help_y) = security_rows(inner.height, help_height);
+    let switch = check_box(
+        VERIFY_PANEL_COMMANDS_LABEL,
+        BOX_PAD,
+        switch_y,
+        inner.width - 2.0 * BOX_PAD,
+        mtm,
+    );
+    switch.setState(isize::from(verify));
+    inside.addSubview(&switch);
+    help.setFrameOrigin(NSPoint::new(BOX_PAD, help_y));
+    inside.addSubview(help);
+    switch
+}
+
+/// Where the switch and the help text sit in the box's content view,
+/// `inner_height` tall: the switch a padding below the top, the text a
+/// gap below the switch. Each is the bottom edge, in the content view's
+/// unflipped coordinates. A box too short for the text puts it at the
+/// bottom rather than below it — [`security_page_height`] sizes the page
+/// so that does not happen.
+fn security_rows(inner_height: f64, help_height: f64) -> (f64, f64) {
+    let switch_y = inner_height - BOX_PAD - ROW;
+    (switch_y, (switch_y - GAP - help_height).max(0.0))
+}
+
+/// A wrapping label of `text` in the small system font.
+fn help_label(text: &str, mtm: MainThreadMarker) -> Retained<NSTextField> {
+    let help = NSTextField::wrappingLabelWithString(&NSString::from_str(text), mtm);
+    help.setFont(Some(&NSFont::systemFontOfSize(
+        NSFont::smallSystemFontSize(),
+    )));
+    help
+}
+
+/// Wrap `label` at `width` and make it as tall as its text then needs;
+/// returns that height.
+fn fit_to_width(label: &NSTextField, width: f64) -> f64 {
+    label.setPreferredMaxLayoutWidth(width);
+    let height = label.fittingSize().height.ceil();
+    label.setFrameSize(NSSize::new(width, height));
+    height
+}
+
+/// The Security page's height for help text `help_height` tall: the
+/// box's title and borders, its padding, the switch, a gap, the text.
+fn security_page_height(help_height: f64) -> f64 {
+    BOX_CHROME + 2.0 * BOX_PAD + ROW + GAP + help_height
 }
 
 /// Read the controls back into a config.
@@ -196,7 +360,10 @@ pub(crate) fn build_dialog(
 /// Out-of-range and unparseable numbers fall back to the previous value
 /// rather than to a constant: a user who typed nonsense meant to change
 /// nothing, and `Shell::set_preferences` clamps again regardless.
-fn read_back(controls: &Controls, previous: &RecentFilesHistoryConfig) -> RecentFilesHistoryConfig {
+fn read_back(
+    controls: &HistoryControls,
+    previous: &RecentFilesHistoryConfig,
+) -> RecentFilesHistoryConfig {
     let mut out = previous.clone();
     out.enabled = controls.dont_check.state() == 0;
     out.in_submenu = controls.in_submenu.state() != 0;
@@ -301,6 +468,32 @@ const _: fn(MainThreadMarker) -> Retained<Actions> = Actions::new;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A page as tall as [`security_page_height`] asks for keeps the help
+    /// text clear of the switch and inside the box's padding, for any
+    /// height of text rather than only today's — so the two functions
+    /// cannot drift apart. What this cannot check is AppKit's own chrome;
+    /// the box's is [`BOX_CHROME`], and the running dialog's frames were
+    /// read back in-process: the switch and the text inside the box, apart.
+    #[test]
+    fn the_security_rows_fit_the_page_they_size() {
+        for help_height in [0.0, 14.0, 42.0, 120.0] {
+            let inner = security_page_height(help_height) - BOX_CHROME;
+            let (switch_y, help_y) = security_rows(inner, help_height);
+            assert!(
+                help_y >= BOX_PAD,
+                "{help_height} pt of text runs into the box's bottom padding"
+            );
+            assert!(
+                help_y + help_height + GAP <= switch_y + 1e-9,
+                "{help_height} pt of text runs into the switch"
+            );
+            assert!(
+                switch_y + ROW + BOX_PAD <= inner + 1e-9,
+                "the switch runs into the box's title"
+            );
+        }
+    }
 
     #[test]
     fn display_mode_reads_the_implied_third_state() {

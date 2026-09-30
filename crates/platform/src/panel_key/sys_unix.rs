@@ -1,6 +1,8 @@
-//! The Linux half of [`super`]: the key at rest is the file's own bytes,
-//! protected by the file's ownership and permissions; its randomness
-//! comes from the kernel's `getrandom`, and the HMAC-SHA256 from `GLib`.
+//! The Unix half of [`super`] — Linux and macOS: the key at rest is the
+//! file's own bytes, protected by the file's ownership and permissions.
+//! Each platform supplies its own randomness and HMAC-SHA256, in the
+//! submodule beside this file: the kernel's `getrandom` and `GLib` on
+//! Linux, the kernel's `getentropy` and `CommonCrypto` on macOS.
 //!
 //! There is no account-bound encryption to lean on here — no DPAPI, and
 //! a keyring daemon is neither guaranteed to be running nor something an
@@ -12,11 +14,10 @@
 //! key file and its temporary are created readable and writable by the
 //! owner alone, never looser.
 //!
-//! `GLib` rather than a crypto crate because it is the platform's own
-//! primitive in the sense CNG is Windows': it is already mapped into
-//! every process of this backend (GTK is built on it), its HMAC is
-//! RFC 2104 over its SHA-256, and a test pins the result against
-//! RFC 4231's vectors.
+//! macOS's Keychain is the obvious alternative there, and is not used:
+//! an item's access list is bound to the signature of the program that
+//! made it, so every rebuild of an unsigned `cargo run` binary would
+//! prompt to reach the key, and a CI runner has no one to answer.
 
 use std::io::{self, Read};
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
@@ -24,19 +25,30 @@ use std::path::Path;
 
 use super::{Blob, KEY_LEN, MAX_KEY_FILE_BYTES};
 
+#[cfg(target_os = "linux")]
+mod linux;
+#[cfg(target_os = "linux")]
+use linux as os;
+#[cfg(target_os = "macos")]
+mod macos;
+#[cfg(target_os = "macos")]
+use macos as os;
+
+pub(super) use os::{hmac_sha256, make_private, random_key};
+
 /// The permission bits a key file may carry: none for the group or for
 /// other accounts.
 const FOREIGN_ACCESS: u32 = 0o077;
 
-/// Nothing to set up: `GLib` is linked, and `getrandom` is a system
-/// call.
-#[allow(clippy::unnecessary_wraps)] // one signature for both backends
+/// Nothing to set up: the HMAC is in a library every process of the
+/// backend has loaded, and the randomness is a system call.
+#[allow(clippy::unnecessary_wraps)] // one signature for every backend
 pub(super) fn ready() -> io::Result<()> {
     Ok(())
 }
 
 /// The key as its file holds it: the key itself.
-#[allow(clippy::unnecessary_wraps)] // one signature for both backends
+#[allow(clippy::unnecessary_wraps)] // one signature for every backend
 pub(super) fn seal(key: &[u8; KEY_LEN]) -> io::Result<Vec<u8>> {
     Ok(key.to_vec())
 }
@@ -51,57 +63,6 @@ pub(super) fn unseal(blob: &[u8], key: &mut [u8; KEY_LEN]) -> io::Result<()> {
     }
     key.copy_from_slice(blob);
     Ok(())
-}
-
-/// 32 bytes from the kernel's random number generator.
-///
-/// `getrandom` with no flags draws from the same pool as `/dev/urandom`
-/// and blocks only until that pool has been seeded once, early in boot —
-/// never on an editor's timescale.
-pub(super) fn random_key() -> io::Result<[u8; KEY_LEN]> {
-    let mut key = [0u8; KEY_LEN];
-    let mut filled = 0;
-    while filled < KEY_LEN {
-        let rest = &mut key[filled..];
-        // SAFETY: `rest` is a valid, writable buffer of `rest.len()`
-        // bytes, and `getrandom` writes at most that many.
-        let n = unsafe { libc::getrandom(rest.as_mut_ptr().cast(), rest.len(), 0) };
-        if let Ok(written) = usize::try_from(n) {
-            if written == 0 {
-                // Not something the kernel does for a request this
-                // small, but looping on it would spin rather than fail.
-                return Err(io::Error::other("getrandom returned no bytes"));
-            }
-            filled += written;
-        } else {
-            let e = io::Error::last_os_error();
-            if e.kind() != io::ErrorKind::Interrupted {
-                return Err(e);
-            }
-        }
-    }
-    Ok(key)
-}
-
-/// HMAC-SHA256 of `message` under `key`, through `GLib`'s `GHmac`.
-pub(super) fn hmac_sha256(key: &[u8], message: &[u8]) -> Option<[u8; KEY_LEN]> {
-    let message_len = isize::try_from(message.len()).ok()?;
-    // SAFETY: `key` and `message` are valid buffers of the lengths
-    // passed; `GLib` copies what it needs from `key` before `g_hmac_new`
-    // returns. The handle is checked for null, used once, and released
-    // on every path after it is made.
-    unsafe {
-        let hmac = glib_sys::g_hmac_new(glib_sys::G_CHECKSUM_SHA256, key.as_ptr(), key.len());
-        if hmac.is_null() {
-            return None;
-        }
-        glib_sys::g_hmac_update(hmac, message.as_ptr(), message_len);
-        let mut out = [0u8; KEY_LEN];
-        let mut out_len = out.len();
-        glib_sys::g_hmac_get_digest(hmac, out.as_mut_ptr(), &raw mut out_len);
-        glib_sys::g_hmac_unref(hmac);
-        (out_len == KEY_LEN).then_some(out)
-    }
 }
 
 /// The bytes at `path`, at most [`MAX_KEY_FILE_BYTES`] + 1 of them, so
@@ -119,7 +80,9 @@ pub(super) fn hmac_sha256(key: &[u8], message: &[u8]) -> Option<[u8; KEY_LEN]> {
 ///
 /// A regular file is read whatever its permissions, and then judged by
 /// them: another account's file, or one another account could read or
-/// write, cannot hold this account's key.
+/// write, cannot hold this account's key. What "could read or write"
+/// covers beyond the mode bits is the platform's — see its
+/// `foreign_acl`.
 pub(super) fn read_capped(path: &Path) -> io::Result<Option<Blob>> {
     let file = match std::fs::OpenOptions::new()
         .read(true)
@@ -138,21 +101,18 @@ pub(super) fn read_capped(path: &Path) -> io::Result<Option<Blob>> {
         return Ok(Some(Blob::unusable("not a regular file")));
     }
     let mut bytes = Vec::new();
-    file.take(MAX_KEY_FILE_BYTES + 1).read_to_end(&mut bytes)?;
+    // Through `&File`, so the handle stays for the ACL check below.
+    (&file)
+        .take(MAX_KEY_FILE_BYTES + 1)
+        .read_to_end(&mut bytes)?;
     // SAFETY: `geteuid` takes nothing and cannot fail.
     let me = unsafe { libc::geteuid() };
-    // The group and other bits cover POSIX ACLs too: on a file with an
-    // extended ACL the group bits *are* the ACL's mask, which bounds
-    // every named user and group entry, so with them clear no other
-    // account gets anything, whatever the ACL lists. NFSv4 ACLs do not
-    // work that way — a named-user entry need not show in the mode — and
-    // are not read; a key on such a share is only as private as its ACL.
     let unusable = if meta.uid() != me {
         Some("owned by another account")
     } else if meta.mode() & FOREIGN_ACCESS != 0 {
         Some("carries permissions for other accounts")
     } else {
-        None
+        os::foreign_acl(&file)?
     };
     Ok(Some(Blob {
         bytes,
@@ -169,8 +129,12 @@ pub(super) fn read_capped(path: &Path) -> io::Result<Option<Blob>> {
 /// it, and the kernel drops it with the file when a process dies, so
 /// nothing is ever left locked. `O_NOFOLLOW`: a symbolic link planted at
 /// the lock's path fails the attempt rather than being followed, which
-/// is failing closed — the key is then not had for this attempt. Nothing
-/// is ever written to the file.
+/// is failing closed — the key is then not had for this attempt.
+/// `O_NONBLOCK`: whatever is at the path, opening it does not wait. A
+/// read-write open of a FIFO does not wait on Linux or macOS either, but
+/// POSIX leaves that unspecified, and anything but a regular file is
+/// refused once it is open (see [`keep_lock_private`]). Nothing is ever
+/// written to the file.
 pub(super) fn try_lock(lock_path: &Path) -> io::Result<Option<std::fs::File>> {
     use std::os::fd::AsRawFd;
     let file = std::fs::OpenOptions::new()
@@ -178,8 +142,9 @@ pub(super) fn try_lock(lock_path: &Path) -> io::Result<Option<std::fs::File>> {
         .write(true)
         .create(true)
         .mode(0o600)
-        .custom_flags(libc::O_NOFOLLOW)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
         .open(lock_path)?;
+    keep_lock_private(&file)?;
     // SAFETY: `file` owns a valid, open descriptor for the length of the
     // call.
     if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0 {
@@ -190,6 +155,40 @@ pub(super) fn try_lock(lock_path: &Path) -> io::Result<Option<std::fs::File>> {
         Some(code) if code == libc::EWOULDBLOCK || code == libc::EINTR => Ok(None),
         _ => Err(e),
     }
+}
+
+/// Refuse a lock that is not a regular file or that another account owns,
+/// and close this account's own lock file to every other account.
+///
+/// Any account that can open the lock file can hold its `flock`, and while
+/// it does, every attempt here waits out the lock and gives up: new
+/// registrations go unsigned and restored panels are parked. That fails
+/// closed, but it would let another account switch the restore off. The
+/// file is created owner-only; this puts it back that way if it arrived
+/// otherwise — a mode loosened by a copy, or on macOS an ACL inherited
+/// from the folder. A lock file another account owns could only have been
+/// planted by an account that can write the config folder; it is refused
+/// at once, with the reason in the log, rather than waited on.
+fn keep_lock_private(file: &std::fs::File) -> io::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    let meta = file.metadata()?;
+    if !meta.is_file() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "the plugin panel key's lock is not a regular file",
+        ));
+    }
+    // SAFETY: `geteuid` takes nothing and cannot fail.
+    if meta.uid() != unsafe { libc::geteuid() } {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "the plugin panel key's lock file is owned by another account",
+        ));
+    }
+    if meta.mode() & FOREIGN_ACCESS != 0 {
+        file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
+    }
+    make_private(file)
 }
 
 #[cfg(test)]
@@ -213,14 +212,14 @@ pub(super) mod test_support {
 
     /// Make `path` unreadable to this account until the guard drops —
     /// or `None` when this account reads any file regardless (root, or
-    /// a process holding `CAP_DAC_OVERRIDE`), measured rather than
-    /// guessed.
+    /// on Linux a process holding `CAP_DAC_OVERRIDE`), measured rather
+    /// than guessed.
     ///
     /// Locally that skips the test. Under CI it fails instead: `cargo
     /// test` hides a passing test's output, so a skip there would drop
     /// the coverage while the run stays green — the trap DEVELOPMENT.md
     /// §2.6 records for Windows' symlink tests. A CI runner has to run
-    /// the Linux tests as an ordinary account (§3.4).
+    /// the Linux and macOS tests as an ordinary account (§3.4, §4.5).
     pub(in crate::panel_key) fn make_unreadable(path: &Path) -> Option<Unreadable> {
         let mode = std::fs::metadata(path).expect("stat").permissions().mode();
         std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o000)).expect("chmod");
@@ -232,8 +231,8 @@ pub(super) mod test_support {
             assert!(
                 std::env::var_os("CI").is_none(),
                 "this account reads a file it has no permission to read (root?), so the \
-                 unreadable-key tests cannot run: CI must run the Linux tests as an \
-                 ordinary account (DEVELOPMENT.md §3.4)"
+                 unreadable-key tests cannot run: CI must run the Linux and macOS tests \
+                 as an ordinary account (DEVELOPMENT.md §3.4, §4.5)"
             );
             return None;
         }
@@ -298,6 +297,23 @@ mod tests {
         }
     }
 
+    /// A lock file other accounts could open is closed to them before it
+    /// is locked: an account able to open it could hold the lock, and
+    /// every attempt here would then give up. It stays the same file —
+    /// nothing is written to a lock, so there is nothing to replace.
+    #[test]
+    fn a_lock_file_other_accounts_could_open_is_closed_to_them() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let lock = dir.path().join("panel-restore.key.lock");
+        for mode in [0o644, 0o660, 0o606] {
+            std::fs::write(&lock, b"").expect("plant");
+            std::fs::set_permissions(&lock, std::fs::Permissions::from_mode(mode)).expect("chmod");
+            let held = try_lock(&lock).expect("lock").expect("not held elsewhere");
+            assert_eq!(mode_of(&lock), 0o600, "a {mode:o} lock file was left open");
+            drop(held);
+        }
+    }
+
     /// A file of the wrong length is not a key, whatever its
     /// permissions.
     #[test]
@@ -357,6 +373,25 @@ mod tests {
         let key = PanelKey::load_or_create(&path).expect("replaced");
         assert!(started.elapsed() < Duration::from_secs(5), "it blocked");
         assert_eq!(std::fs::read(&path).expect("read"), key.key);
+    }
+
+    /// A FIFO planted at the lock's path is refused, and opening it does
+    /// not wait for a writer on the way.
+    #[test]
+    fn a_fifo_at_the_locks_path_fails_closed_without_blocking() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let lock = dir.path().join("panel-restore.key.lock");
+        let c_path = std::ffi::CString::new(lock.as_os_str().as_encoded_bytes()).expect("path");
+        // SAFETY: `c_path` is a valid NUL-terminated path.
+        assert_eq!(unsafe { libc::mkfifo(c_path.as_ptr(), 0o600) }, 0, "mkfifo");
+        let started = Instant::now();
+        let refused = try_lock(&lock).expect_err("a FIFO was taken as the lock");
+        assert!(started.elapsed() < Duration::from_secs(5), "it blocked");
+        // Refused for what it is, not for whatever a later call happens to
+        // make of a FIFO: macOS's `flock` refuses one too (`ENOTSUP`),
+        // which would hide a missing check here. The check is what refuses
+        // it wherever the lock call would not.
+        assert_eq!(refused.kind(), io::ErrorKind::InvalidInput, "{refused}");
     }
 
     /// A symbolic link planted at the lock's path makes the attempt fail

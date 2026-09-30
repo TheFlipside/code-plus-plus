@@ -42,6 +42,7 @@ use crate::status::StatusBar;
 use crate::tabs::TabStrip;
 use crate::toolbar::Toolbar;
 use crate::workspace::WorkspacePanel;
+use crate::ScrollFloor;
 
 /// Everything the Cocoa backend owns for the lifetime of the window.
 pub struct CocoaUiState {
@@ -86,6 +87,10 @@ pub struct CocoaUiState {
     /// single-view: tabs switch documents under it via
     /// `SCI_SETDOCPOINTER`, exactly as the other two backends do.
     pub editor: EditorHandle,
+    /// The horizontal floor's memory for [`Self::sci_view`]. Kept with the
+    /// view because it is that view's: every view the floor runs on has
+    /// its own. See `crate::clamp_scroll_width_to_viewport`.
+    pub scroll_floor: ScrollFloor,
     /// The 7-part status bar.
     pub status: StatusBar,
     /// The tab strip. Purely a selector — the one Scintilla view is its

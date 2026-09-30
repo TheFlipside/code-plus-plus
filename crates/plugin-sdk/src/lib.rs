@@ -73,6 +73,24 @@ pub use codepp_plugin_host::{
     DWS_DF_FLOATING, DWS_ICONTAB,
 };
 
+/// The messages a plugin sends to have the host make something for it —
+/// a Scintilla view (`NPPM_CREATESCINTILLAHANDLE`), a toolbar button
+/// (`NPPM_ADDTOOLBARICON`, whose payload is a [`ToolbarIcons`]) — or to
+/// register a modeless dialog (`NPPM_MODELESSDIALOG` with
+/// [`MODELESSDIALOGADD`] or [`MODELESSDIALOGREMOVE`]), and the
+/// notification a plugin undoes such registrations on
+/// (`NPPN_SHUTDOWN`). Re-exported from the host's dispatcher rather than
+/// redeclared, for the reason `Hwnd` is: numbers the dispatcher is
+/// checked against upstream for (`tools/npp-abi-check`) cannot drift here.
+///
+/// What each handle is off Windows — an `NSView*`, an `NSImage*`, an
+/// `NSWindow*` on macOS — is in `Notepad_plus_msgs.h`.
+pub use codepp_plugin_host::dispatch::{
+    MODELESSDIALOGADD, MODELESSDIALOGREMOVE, NPPM_ADDTOOLBARICON, NPPM_CREATESCINTILLAHANDLE,
+    NPPM_MODELESSDIALOG, NPPN_SHUTDOWN,
+};
+pub use codepp_plugin_host::ffi::ToolbarIcons;
+
 // ---- SendMessageW transport -------------------------------------
 //
 // On Windows this is the Win32 `#[link(name = "user32")]` import; the
@@ -302,6 +320,24 @@ pub const DMN_DOCK: u32 = 1050 + 2;
 /// [`DMN_DOCK`]; the high word is a floating container number (4 and
 /// up).
 pub const DMN_FLOAT: u32 = 1050 + 3;
+
+/// `DMN_SWITCHIN` — the panel came on screen: its tab is now the one
+/// its group shows, where it had been hidden or behind another tab.
+/// Nothing in the high word — compare the whole code, as Notepad++'s own
+/// panels do. Off Windows it arrives like [`DMN_CLOSE`]; see
+/// `Docking.h` for when each backend sends it.
+pub const DMN_SWITCHIN: u32 = 1050 + 4;
+
+/// `DMN_SWITCHOFF` — another tab of the panel's group was brought in
+/// front of it; the panel is still open behind it. A panel that is
+/// closed gets no `DMN_SWITCHOFF`. Same delivery as [`DMN_SWITCHIN`].
+pub const DMN_SWITCHOFF: u32 = 1050 + 5;
+
+/// `DMN_FLOATDROPPED` — the panel has been laid out somewhere new: its
+/// group was shown, moved, resized, floated or docked, or gained or lost
+/// its tab bar. Docked panels get it too, despite the name, as they do
+/// in Notepad++. Same delivery as [`DMN_SWITCHIN`].
+pub const DMN_FLOATDROPPED: u32 = 1050 + 6;
 
 /// `WM_NOTIFY` — the message every `DMN_*` arrives on: at the panel's
 /// window procedure on Windows, at the plugin's own `messageProc`
@@ -755,13 +791,19 @@ mod abi_lock {
         assert_eq!(super::NPPM_SETMENUITEMCHECK, host::NPPM_SETMENUITEMCHECK);
     }
 
-    /// `DMN_CLOSE` lives in the host's `ffi` module rather than
-    /// `dispatch` (it is a notification code, not a message id), so it
-    /// gets its own line rather than joining the block above.
+    /// The `DMN_*` codes live in the host's `ffi` module rather than
+    /// `dispatch` (they are notification codes, not message ids), so they
+    /// get their own test rather than joining the block above.
     #[test]
-    fn sdk_dmn_close_matches_the_host() {
+    fn sdk_dmn_notifications_match_the_host() {
         assert_eq!(super::DMN_CLOSE, codepp_plugin_host::DMN_CLOSE);
         assert_eq!(super::DMN_DOCK, codepp_plugin_host::DMN_DOCK);
         assert_eq!(super::DMN_FLOAT, codepp_plugin_host::DMN_FLOAT);
+        assert_eq!(super::DMN_SWITCHIN, codepp_plugin_host::DMN_SWITCHIN);
+        assert_eq!(super::DMN_SWITCHOFF, codepp_plugin_host::DMN_SWITCHOFF);
+        assert_eq!(
+            super::DMN_FLOATDROPPED,
+            codepp_plugin_host::DMN_FLOATDROPPED
+        );
     }
 }

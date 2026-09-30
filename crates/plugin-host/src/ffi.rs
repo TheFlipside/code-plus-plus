@@ -358,8 +358,11 @@ pub struct TbData {
     /// `HWND`, which the host restyles as a child window and parents
     /// into its dock; on Linux a `GtkWidget*` the plugin created and
     /// has not put in a container, which the host takes a reference
-    /// to and puts in a scrolled container of its own. Either way the
-    /// plugin owns its lifetime: the host never destroys it.
+    /// to and puts in a scrolled container of its own; on macOS an
+    /// `NSView*` the plugin created and has not put in a view, which
+    /// the host retains and puts in a clipping container of its own.
+    /// Either way the plugin owns its lifetime: the host never
+    /// destroys it.
     pub h_client: *mut c_void,
     /// Wide-char display title. Used for the panel's caption and
     /// as the lookup key for `NPPM_DMMGETPLUGINHWNDBYNAME` and
@@ -374,9 +377,9 @@ pub struct TbData {
     /// Bit-mask of `DWS_*` flags.
     pub u_mask: u32,
     /// Optional tab icon, drawn when `u_mask` carries `DWS_ICONTAB`:
-    /// an `HICON` on Windows, a `GdkPixbuf*` on Linux. NULL — or, on
-    /// Linux, anything that is not a pixbuf — gets the generic
-    /// plugin glyph.
+    /// an `HICON` on Windows, a `GdkPixbuf*` on Linux, an `NSImage*`
+    /// on macOS. NULL — or, off Windows, anything that is not a pixbuf
+    /// or an image — gets the generic plugin glyph.
     pub h_icon_tab: *mut c_void,
     /// Optional extra-info wide string shown alongside the title.
     /// NULL skips. Plugin owns the buffer.
@@ -392,9 +395,9 @@ pub struct TbData {
     /// user last put it.
     pub i_prev_cont: i32,
     /// The plugin's library file name, extension included
-    /// (`"MyPlugin.dll"`, or `"MyPlugin.so"` on Linux) — upstream's
-    /// contract, since Notepad++
-    /// persists the string and finds the plugin again by it. Used by
+    /// (`"MyPlugin.dll"`, `"MyPlugin.so"` on Linux, `"MyPlugin.dylib"`
+    /// on macOS) — upstream's contract, since Notepad++ persists the
+    /// string and finds the plugin again by it. Used by
     /// `GETPLUGINHWNDBYNAME`'s second argument (the optional
     /// module-name disambiguator). Plugin owns the buffer.
     pub psz_module_name: *const u16,
@@ -461,13 +464,19 @@ pub const DOCKCONT_MAX: u32 = 4;
 ///
 /// On Windows it is the ordinary Win32 message, sent to the plugin's own
 /// `h_client` window: `wParam` 0, `lParam` the `NMHDR`. Off Windows a
-/// panel's `h_client` is a toolkit widget, which has no window procedure
-/// to receive a message — so the host calls the plugin's own
+/// panel's `h_client` is a toolkit widget or view, which has no window
+/// procedure to receive a message — so the host calls the plugin's own
 /// `messageProc` export with this message instead, `lParam` the same
 /// `NMHDR` (`hwnd_from` the npp handle, `id_from` 0), and `wParam` the
 /// panel's `h_client`, since that is the only way left to say which of
 /// the plugin's panels the notification is about. See
 /// `plugins/nppcompat-headers/Docking.h`.
+///
+/// On macOS the same route carries the notifications of a Scintilla view
+/// the host made for the plugin (`NPPM_CREATESCINTILLAHANDLE`), which a
+/// Win32 Scintilla child sends to its parent window: there `lParam` is an
+/// `SCNotification` whose `hwnd_from` is the view, and `wParam` the
+/// view's control identifier, as Win32's `WM_NOTIFY` carries.
 pub const WM_NOTIFY: u32 = 0x004E;
 
 /// First DMN_* code: 1050, as upstream defines it. It was `0x1000`
@@ -484,13 +493,22 @@ pub const DMN_DOCK: u32 = DMN_FIRST + 2;
 /// The panel is floating. Low word of `code`, with a floating
 /// container number (4 and up) in the high word. See [`DMN_DOCK`].
 pub const DMN_FLOAT: u32 = DMN_FIRST + 3;
-/// A panel's tab became the active one. Not sent by this host yet;
-/// Notepad++ sends it from the panel's container window.
+/// The panel came on screen: its tab is now the one its group shows,
+/// where it had been hidden or behind another tab. The bare code, with
+/// nothing in the high word, as upstream sends it. Notepad++ sends it
+/// from the panel's container window; so far only the Cocoa backend
+/// sends it here, with the npp handle as `hwnd_from` as for every
+/// `DMN_*` off Windows. When it is owed is `docking::PanelTold`'s
+/// decision.
 pub const DMN_SWITCHIN: u32 = DMN_FIRST + 4;
-/// A panel's tab stopped being the active one. Not sent yet; see
+/// Another tab of the panel's group came in front of it, and the panel
+/// is still open behind it — never sent for a panel being closed. See
 /// [`DMN_SWITCHIN`].
 pub const DMN_SWITCHOFF: u32 = DMN_FIRST + 5;
-/// Not sent yet; see [`DMN_SWITCHIN`].
+/// The panel was laid out somewhere new: shown, or its group moved,
+/// resized, floated or docked, or its tab bar came or went. Docked
+/// panels get it too, despite the name, as in Notepad++. See
+/// [`DMN_SWITCHIN`].
 pub const DMN_FLOATDROPPED: u32 = DMN_FIRST + 6;
 
 #[cfg(test)]

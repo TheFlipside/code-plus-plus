@@ -11,39 +11,40 @@
 //!     directory, it does not decrypt, a fresh key replaces it, and
 //!     nothing the old one signed checks out. The randomness and the
 //!     HMAC-SHA256 come from CNG.
-//!   * **Linux** (`sys_linux`) has no DPAPI, so the file holds the key
-//!     itself and the protection is the file's: it must be a regular file
-//!     owned by the user's account, carrying no permissions for any other.
-//!     One that is not — copied in with lax permissions, left by another
-//!     account — is not trusted, and is replaced. The randomness comes
-//!     from the kernel's `getrandom` and the HMAC-SHA256 from `GLib`,
-//!     which the GTK backend has loaded anyway. What this cannot match is
-//!     DPAPI's refusal to travel: a whole config directory copied *with*
-//!     the key file carries the key along, so the session file it signed
-//!     checks out on the other side. A session file edited, or handed
-//!     over, on its own still cannot choose what runs.
+//!   * **Linux and macOS** (`sys_unix`) have no DPAPI, so the file holds
+//!     the key itself and the protection is the file's: it must be a
+//!     regular file owned by the user's account, carrying no permissions
+//!     for any other — on macOS none granted by an extended ACL either,
+//!     since those do not show in the mode bits. One that is not — copied
+//!     in with lax permissions, left by another account — is not trusted,
+//!     and is replaced. The randomness comes from the kernel (`getrandom`,
+//!     `getentropy`) and the HMAC-SHA256 from a library the backend has
+//!     loaded anyway (`GLib` under GTK, `CommonCrypto` in `libSystem`).
+//!     What this cannot match is DPAPI's refusal to travel: a whole
+//!     config directory copied *with* the key file carries the key along,
+//!     so the session file it signed checks out on the other side. A
+//!     session file edited, or handed over, on its own still cannot
+//!     choose what runs.
 //!
-//! What the key does not stop, on either platform, is code already
-//! running as the user, which can get the key exactly as Code++ does.
-//! Such code could as easily drop a plugin into the plugins directory
-//! (DESIGN.md §6.5), so the line is drawn where a line can be drawn: an
-//! edited or copied file cannot choose what runs; a program running as
-//! you still can, as it always could.
+//! What the key does not stop, on any platform, is code already running
+//! as the user, which can get the key exactly as Code++ does. Such code
+//! could as easily drop a plugin into the plugins directory (DESIGN.md
+//! §6.5), so the line is drawn where a line can be drawn: an edited or
+//! copied file cannot choose what runs; a program running as you still
+//! can, as it always could.
 //!
 //! Nothing here is hand-rolled cryptography, and no crate is added for
 //! it: each platform's own primitives do the work.
-//!
-//! Windows and Linux only: the macOS backend hosts no plugin panels.
 
 use std::cell::{Cell, OnceCell};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-#[cfg(target_os = "linux")]
-mod sys_linux;
-#[cfg(target_os = "linux")]
-use sys_linux as sys;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+mod sys_unix;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+use sys_unix as sys;
 #[cfg(target_os = "windows")]
 mod sys_windows;
 #[cfg(target_os = "windows")]
@@ -53,7 +54,7 @@ use sys_windows as sys;
 const KEY_LEN: usize = 32;
 
 /// Largest key file read. A DPAPI blob around a 32-byte secret is a few
-/// hundred bytes, and a Linux key file is the 32 bytes themselves;
+/// hundred bytes, and a Unix key file is the 32 bytes themselves;
 /// anything past this is not one of ours, and is not read into memory to
 /// find that out.
 const MAX_KEY_FILE_BYTES: u64 = 16 * 1024;
@@ -81,7 +82,7 @@ const LOCK_WAIT: Duration = Duration::from_millis(500);
 /// `codepp_core::dock::MAX_RESTORED_PLUGIN_PANELS` of them. The security
 /// audit showed what that costs when the key's lock is held for good:
 /// any process running as the user can keep the lock file open (Windows)
-/// or locked (Linux), and each attempt then waits out [`LOCK_WAIT`] on
+/// or locked (Linux, macOS), and each attempt then waits out [`LOCK_WAIT`] on
 /// the UI thread, once per panel, a minute of frozen window at startup.
 /// With it a held lock costs one wait per interval; a key that could not
 /// be had for a moment is still tried again later, rather than never this
@@ -100,7 +101,7 @@ struct Blob {
     /// read.
     bytes: Vec<u8>,
     /// Why the file cannot be the key whatever it holds — it is not a
-    /// regular file, or (Linux) another account owns it or could read it
+    /// regular file, or (Unix) another account owns it or could read it
     /// — or `None` when only its contents decide.
     unusable: Option<io::Error>,
 }
@@ -124,10 +125,11 @@ enum KeyFile {
     /// A file this account read but cannot use: its contents are not a
     /// key for this account, it is too large to be a key, it is not a
     /// regular file at all — a link, which is never followed — or
-    /// (Linux) its ownership or permissions let another account read or
-    /// change it. Carries what was read, so a replacement can check
-    /// nothing changed it since.
-    NotOurs { blob: Vec<u8>, why: io::Error },
+    /// (Unix) its ownership, its permissions or (macOS) its ACL let
+    /// another account read or change it. Carries what was read, so a replacement can check
+    /// nothing changed it since — as a [`Sealed`], wiped when dropped,
+    /// because a file this account cannot use may still hold a real key.
+    NotOurs { blob: Sealed, why: io::Error },
 }
 
 impl PanelKey {
@@ -223,8 +225,10 @@ impl Drop for PanelKey {
 }
 
 /// A key in the form its file holds it — a DPAPI blob on Windows, the
-/// key itself on Linux — wiped when dropped, since on Linux it *is* the
-/// key.
+/// key itself on Linux and macOS — wiped when dropped, since there it
+/// *is* the key. Also what a key file held that this account could not
+/// use ([`KeyFile::NotOurs`]): its permissions or its owner can be wrong
+/// while its bytes are still a key.
 struct Sealed(Vec<u8>);
 
 impl Sealed {
@@ -347,28 +351,34 @@ fn read_key_file(path: &Path) -> io::Result<KeyFile> {
         return Ok(KeyFile::Missing);
     };
     if let Some(why) = unusable {
-        return Ok(KeyFile::NotOurs { blob: bytes, why });
+        return Ok(KeyFile::NotOurs {
+            blob: Sealed(bytes),
+            why,
+        });
     }
     if bytes.is_empty() {
         return Ok(KeyFile::NotOurs {
-            blob: bytes,
+            blob: Sealed(bytes),
             why: io::Error::new(io::ErrorKind::InvalidData, "empty"),
         });
     }
     if bytes.len() as u64 > MAX_KEY_FILE_BYTES {
         return Ok(KeyFile::NotOurs {
-            blob: bytes,
+            blob: Sealed(bytes),
             why: io::Error::new(io::ErrorKind::InvalidData, "larger than any key file"),
         });
     }
     let mut key = [0u8; KEY_LEN];
     match sys::unseal(&bytes, &mut key) {
         Ok(()) => {
-            // On Linux the file's bytes are the key itself.
+            // On Linux and macOS the file's bytes are the key itself.
             wipe(&mut bytes);
             Ok(KeyFile::Key(PanelKey { key }))
         }
-        Err(why) => Ok(KeyFile::NotOurs { blob: bytes, why }),
+        Err(why) => Ok(KeyFile::NotOurs {
+            blob: Sealed(bytes),
+            why,
+        }),
     }
 }
 
@@ -377,8 +387,10 @@ fn read_key_file(path: &Path) -> io::Result<KeyFile> {
 /// On Unix the temporary file is created readable and writable by its
 /// owner alone, so the key is never on disk with looser permissions.
 /// That is `tempfile`'s default rather than something set here; the
-/// Linux tests check the mode the key file ends up with, so a change in
-/// that default fails them instead of loosening the key.
+/// Unix tests check the mode the key file ends up with, so a change in
+/// that default fails them instead of loosening the key. What a mode
+/// cannot express is the platform's to remove — see `make_private` —
+/// before a byte of the key is written.
 fn staged(path: &Path, blob: &[u8]) -> io::Result<tempfile::NamedTempFile> {
     let dir = path
         .parent()
@@ -389,6 +401,7 @@ fn staged(path: &Path, blob: &[u8]) -> io::Result<tempfile::NamedTempFile> {
         .prefix(".panel-key-")
         .suffix(".tmp")
         .tempfile_in(dir)?;
+    sys::make_private(tmp.as_file())?;
     tmp.write_all(blob)?;
     tmp.as_file().sync_all()?;
     Ok(tmp)
@@ -418,7 +431,9 @@ fn create_key_file(path: &Path, blob: &[u8]) -> io::Result<bool> {
 /// it replaces rather than writing through.
 fn replace_key_file(path: &Path, seen: &[u8], blob: &[u8]) -> io::Result<bool> {
     let tmp = staged(path, blob)?;
-    let now = sys::read_capped(path)?.map(|b| b.bytes);
+    // A [`Sealed`], for the reason [`KeyFile::NotOurs`] carries one: what
+    // is there now may be a key — another instance's replacement, say.
+    let now = sys::read_capped(path)?.map(|b| Sealed(b.bytes));
     if now.as_deref() != Some(seen) {
         return Ok(false);
     }
