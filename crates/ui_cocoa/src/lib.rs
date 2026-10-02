@@ -6239,6 +6239,46 @@ let msg = \"found scintilla_cocoa_new() calls\";
         );
     }
 
+    /// One delivery applies both shared rules for a notice queue:
+    /// `codepp_plugin_host::docking::MAX_NOTICES_PER_DELIVERY` stops
+    /// plugins whose handlers keep changing the layout from holding the
+    /// UI thread, and a notice that waited behind a handler is checked
+    /// again before it goes out, by the shared `still_applies`. The rules
+    /// are unit-tested where they live; what only a scan can see here is
+    /// that this backend still calls them, and in the order that makes
+    /// them work — the smoke scenarios that would notice otherwise are
+    /// display-gated. Matched as squashed whole conditions, not names,
+    /// so a copy of the rule or of the number, a condition weakened
+    /// around the call, or the check moved after the send all fail; the
+    /// rule's call is matched without its closing parenthesis, so a
+    /// rustfmt reflow that adds a trailing comma does not.
+    #[test]
+    fn the_delivery_applies_the_shared_cap_and_staleness_rule() {
+        let deliver: String = fn_body(&plugin_src(), "deliver_dock_notices")
+            .split_whitespace()
+            .collect();
+        assert!(
+            deliver.contains("iftaken>codepp_plugin_host::docking::MAX_NOTICES_PER_DELIVERY{"),
+            "one delivery no longer stops at the shared cap"
+        );
+        let checked = deliver
+            .find("if!crate::dock::notice_still_applies(&notice){continue;}")
+            .expect("a notice that waited behind a handler is no longer checked before it is sent");
+        let sent = deliver
+            .find("send_dock_notification(")
+            .expect("the delivery no longer sends the notices");
+        assert!(checked < sent, "a notice is sent before it is checked");
+        let applies: String = fn_body(&dock_src(), "notice_still_applies")
+            .split_whitespace()
+            .collect();
+        assert!(
+            applies.contains(
+                "live&&codepp_plugin_host::docking::still_applies(&d.layout,notice.panel,notice.code"
+            ),
+            "the staleness check no longer applies the shared rule to a registration that stands"
+        );
+    }
+
     /// A group moved or resized outside the model's arrangement — the
     /// window, a chrome band or a splitter resized, a float moved by
     /// AppKit — owes its plugin panels a `DMN_FLOATDROPPED`, and the two

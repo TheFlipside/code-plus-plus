@@ -16,11 +16,16 @@
 //! notifications here too: [`PanelTold`] decides, from the model alone,
 //! which of `DMN_DOCK` / `DMN_FLOAT`, `DMN_SWITCHIN` / `DMN_SWITCHOFF`
 //! and `DMN_FLOATDROPPED` a reconcile owes a plugin, and
-//! [`delivery_order`] the order they go out in. A backend supplies only
-//! the mechanism — whom to send them to and when it is safe to.
+//! [`delivery_order`] the order they go out in. So do two rules for a
+//! backend's delivery queue: [`still_applies`], whether a notice that
+//! waited behind a plugin's handler is still worth sending, and
+//! [`MAX_NOTICES_PER_DELIVERY`], how many one delivery may send. A
+//! backend supplies only the mechanism — whom to send them to and when
+//! it is safe to.
 
 use codepp_core::dock::{
     DockContainer, DockFrame, DockLayout, DockLocation, DockPanel, DockRect, DockSide,
+    MAX_PLUGIN_PANELS,
 };
 
 use crate::ffi::{
@@ -301,6 +306,54 @@ pub fn delivery_order<K: Copy>(owed: &[(K, Owed)]) -> Vec<(K, u32)> {
         .chain(relaid)
         .collect()
 }
+
+/// Whether a notice about `panel` — `code` as [`delivery_order`] gave it —
+/// still says something true when its turn to be sent comes, as far as
+/// the model can tell.
+///
+/// A notice can wait: one raised while another is being delivered is
+/// queued behind it, and the plugin's handler for the earlier one may
+/// change the layout first. A `DMN_SWITCHIN` must still find the panel in
+/// front: one closed meanwhile is owed nothing for having left, so if the
+/// switch-in went out anyway, nothing would ever correct it. A
+/// `DMN_FLOATDROPPED` must still find the panel in a group. Everything
+/// else goes out as queued: a switch-off or a container notice said
+/// something true when it was raised, and whatever has changed since is
+/// recorded and owed a notice of its own, queued behind this one.
+///
+/// The rule decides on the code's low word, as a plugin reading
+/// `LOWORD(code)` does and as [`dmn_name`] does: a container number in
+/// the high word does not hide which notification it is.
+///
+/// The other half of the question — whether the registration the notice
+/// is addressed to still stands — is the backend's, since only it knows
+/// how a plugin takes its panel's content back.
+#[must_use]
+pub fn still_applies(layout: &DockLayout, panel: DockPanel, code: u32) -> bool {
+    match code & 0xFFFF {
+        DMN_SWITCHIN => layout.is_active(panel),
+        DMN_FLOATDROPPED => layout.is_visible(panel),
+        _ => true,
+    }
+}
+
+/// The most notices one outermost delivery works through before it gives
+/// up on the rest: three a panel — a container, a switch and a relayout,
+/// the most one reconcile owes — for every registration the panel table
+/// allows, four reconciles deep.
+///
+/// A backend's delivery queue keeps a plugin re-entering from its handler
+/// one level deep; this keeps it from running forever. Plugins whose
+/// handlers keep reversing the layout — two of them each bringing its own
+/// panel back to the front whenever told it went behind, say — would
+/// otherwise hold the loop, and the UI thread with it, for as long as they
+/// kept at it, every handler's reconcile queuing more. Past the cap the
+/// rest of the queue is dropped with a warning. That loses notices, since
+/// their records are already written — but only in a cascade no plugin
+/// could have kept up with, and the widget tree, which never waits on a
+/// notice, is right throughout. `Docking.h` gives plugin authors the
+/// number.
+pub const MAX_NOTICES_PER_DELIVERY: usize = 4 * 3 * MAX_PLUGIN_PANELS;
 
 /// A `DMN_*` code's name, from its low word — for logs, where the number
 /// alone says little.
@@ -775,6 +828,98 @@ mod tests {
             .map(|((), code)| code)
             .collect();
         assert_eq!(codes, [1054, 1055, 1056]);
+    }
+
+    /// A switch-in that waited behind a handler still goes out only to a
+    /// panel in front — not to one behind another tab, or closed since —
+    /// and the panel a close brought in front qualifies at once.
+    #[test]
+    fn a_queued_switch_in_needs_the_panel_in_front() {
+        let (mut l, _, _) = two_tabs();
+        assert!(still_applies(&l, DocMap, DMN_SWITCHIN), "in front");
+        assert!(
+            !still_applies(&l, Workspace, DMN_SWITCHIN),
+            "behind another tab"
+        );
+        assert!(
+            !still_applies(&l, Workspace, (CONT_BOTTOM << 16) | DMN_SWITCHIN),
+            "a high word hid which notification it is"
+        );
+        l.hide(DocMap);
+        assert!(!still_applies(&l, DocMap, DMN_SWITCHIN), "closed since");
+        assert!(
+            still_applies(&l, Workspace, DMN_SWITCHIN),
+            "brought in front by the close"
+        );
+    }
+
+    /// A relayout that waited still goes out to any panel in a group, in
+    /// front or not — every tab of a group is laid out in its one slot —
+    /// and not to one closed or parked since.
+    #[test]
+    fn a_queued_relayout_needs_the_panel_in_a_group() {
+        let (mut l, _, _) = two_tabs();
+        assert!(
+            still_applies(&l, Workspace, DMN_FLOATDROPPED),
+            "behind another tab, but laid out"
+        );
+        l.hide(Workspace);
+        assert!(
+            !still_applies(&l, Workspace, DMN_FLOATDROPPED),
+            "closed since"
+        );
+        assert!(
+            !still_applies(&l, Workspace, ((DOCKCONT_MAX + 3) << 16) | DMN_FLOATDROPPED),
+            "a high word hid which notification it is"
+        );
+        // Parking takes plugin panels only, so this one is interned.
+        let p = codepp_core::dock::intern_plugin_panel("dmn-stale.dll", "Stale P").expect("intern");
+        l.show(p);
+        assert!(still_applies(&l, p, DMN_FLOATDROPPED));
+        assert!(l.park(&[p]));
+        assert!(!still_applies(&l, p, DMN_FLOATDROPPED), "parked since");
+        assert!(!still_applies(&l, p, DMN_SWITCHIN), "parked since");
+    }
+
+    /// A switch-off and the container notices go out as queued, whatever
+    /// the model says by then: what has changed since is owed its own.
+    #[test]
+    fn switch_offs_and_container_notices_go_out_as_queued() {
+        let l = DockLayout::new();
+        for code in [
+            DMN_SWITCHOFF,
+            DMN_DOCK,
+            (CONT_BOTTOM << 16) | DMN_DOCK,
+            (DOCKCONT_MAX << 16) | DMN_FLOAT,
+        ] {
+            assert!(
+                still_applies(&l, Workspace, code),
+                "{} was held back for a hidden panel",
+                dmn_name(code)
+            );
+        }
+    }
+
+    /// Against the number `Docking.h` gives plugin authors, read from the
+    /// header itself: a change to the panel table that moves the cap has
+    /// to move the header with it. `docs/nppm-coverage.md` and DESIGN.md
+    /// §7.4 state the same number.
+    #[test]
+    fn the_delivery_cap_is_the_number_docking_h_gives() {
+        let header = include_str!("../../../plugins/nppcompat-headers/Docking.h");
+        let promised = format!("past {MAX_NOTICES_PER_DELIVERY}");
+        // The number itself, not the start of a longer one — and with no
+        // line ending assumed, since a Windows checkout may give the
+        // header CRLFs.
+        let stated = header.match_indices(&promised).any(|(at, _)| {
+            !header[at + promised.len()..].starts_with(|c: char| c.is_ascii_digit())
+        });
+        assert!(
+            stated,
+            "Docking.h no longer says plugins are cut off past {MAX_NOTICES_PER_DELIVERY} \
+             notifications in one delivery — move the header, and nppm-coverage.md and \
+             DESIGN.md §7.4 with it, or the cap back"
+        );
     }
 
     #[test]

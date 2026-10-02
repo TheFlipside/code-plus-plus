@@ -1735,24 +1735,18 @@ fn schedule_placement_check() {
 ///
 /// The registration must still stand, under the view the notice names —
 /// a handler may have taken the view back, and its address may even have
-/// been reused by a view registered since, so both halves are checked. A
-/// `DMN_SWITCHIN` must still find the panel in front: one closed
-/// meanwhile is owed nothing for having left — so if it went out now,
-/// nothing would ever correct it. A `DMN_FLOATDROPPED` must still find
-/// the panel in a group. A switch-off and a container notice go out as
-/// queued: whatever changed since is recorded, and owed a notice of its
-/// own, queued behind this one.
+/// been reused by a view registered since, so both halves are checked.
+/// And what the notice says must still hold of the model, by the shared
+/// rule in `codepp_plugin_host::docking::still_applies`: a
+/// `DMN_SWITCHIN` only for a panel still in front, a `DMN_FLOATDROPPED`
+/// only for one still in a group, anything else as queued.
 pub(crate) fn notice_still_applies(notice: &DockNotice) -> bool {
     with_dock(|d| {
         let live = d
             .plugin_panels
             .iter()
             .any(|p| p.live() && p.panel == notice.panel && std::ptr::eq(p.handle, notice.handle));
-        live && match notice.code {
-            codepp_plugin_host::DMN_SWITCHIN => d.layout.is_active(notice.panel),
-            codepp_plugin_host::DMN_FLOATDROPPED => d.layout.is_visible(notice.panel),
-            _ => true,
-        }
+        live && codepp_plugin_host::docking::still_applies(&d.layout, notice.panel, notice.code)
     })
     .unwrap_or(false)
 }

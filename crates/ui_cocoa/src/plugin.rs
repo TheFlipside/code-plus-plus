@@ -697,23 +697,6 @@ pub(crate) fn close_plugin_panel(panel: DockPanel) {
     crate::dock::set_panel_visible(panel, false);
 }
 
-/// The most notices one outermost [`deliver_dock_notices`] works through
-/// before it gives up on the rest: three a panel — a container, a switch
-/// and a relayout, the most one reconcile owes — for every registration
-/// the panel table allows, four reconciles deep.
-///
-/// The queue keeps a plugin re-entering from its handler one level deep;
-/// this keeps it from running forever. Plugins whose handlers keep
-/// reversing the layout — two of them each bringing its own panel back to
-/// the front whenever told it went behind, say — would otherwise hold
-/// the loop, and the UI thread with it, for as long as they kept at it,
-/// every handler's reconcile queuing more. Past the cap the rest of the
-/// queue is dropped with a warning. That loses notices, since their
-/// records are already written — but only in a cascade no plugin could
-/// have kept up with, and the view tree, which never waits on a notice,
-/// is right throughout.
-const MAX_DOCK_NOTICES_PER_DELIVERY: usize = 4 * 3 * codepp_core::dock::MAX_PLUGIN_PANELS;
-
 /// Send each notice a dock reconcile owes: `DMN_DOCK` / `DMN_FLOAT`,
 /// `DMN_SWITCHIN` / `DMN_SWITCHOFF` and `DMN_FLOATDROPPED`, in the order
 /// `crate::dock::panel_notices` queued them.
@@ -728,8 +711,7 @@ const MAX_DOCK_NOTICES_PER_DELIVERY: usize = 4 * 3 * codepp_core::dock::MAX_PLUG
 /// is running only appends to the queue and returns, and the outermost
 /// call drains it in order: nothing is dropped that is still true, and
 /// the nesting stays one level deep whatever the plugin does. The same
-/// queue Win32's `deliver_container_notices` and GTK's keep; the cap
-/// below is this backend's alone so far (DESIGN.md §7.4).
+/// queue Win32's `deliver_container_notices` and GTK's keep.
 ///
 /// Queued behind a handler that may change the layout, a notice is
 /// checked again when its turn comes (`crate::dock::notice_still_applies`)
@@ -738,8 +720,9 @@ const MAX_DOCK_NOTICES_PER_DELIVERY: usize = 4 * 3 * codepp_core::dock::MAX_PLUG
 /// is already written, so a skipped notice loses nothing that could
 /// still be delivered.
 ///
-/// The queue bounds depth, and [`MAX_DOCK_NOTICES_PER_DELIVERY`] bounds
-/// time: past it, the rest of the queue is dropped.
+/// The queue bounds depth, and the shared cap,
+/// `codepp_plugin_host::docking::MAX_NOTICES_PER_DELIVERY`, bounds time:
+/// past it, the rest of the queue is dropped.
 pub(crate) fn deliver_dock_notices(notices: Vec<crate::dock::DockNotice>) {
     DOCK_NOTICES.with(|q| q.borrow_mut().extend(notices));
     if DOCK_NOTICES_DELIVERING.with(Cell::get) {
@@ -749,7 +732,7 @@ pub(crate) fn deliver_dock_notices(notices: Vec<crate::dock::DockNotice>) {
     let mut taken = 0usize;
     while let Some(notice) = DOCK_NOTICES.with(|q| q.borrow_mut().pop_front()) {
         taken += 1;
-        if taken > MAX_DOCK_NOTICES_PER_DELIVERY {
+        if taken > codepp_plugin_host::docking::MAX_NOTICES_PER_DELIVERY {
             let dropped = 1 + DOCK_NOTICES.with(|q| {
                 let mut q = q.borrow_mut();
                 let left = q.len();
@@ -2496,7 +2479,7 @@ pub mod smoke_support {
         /// delivery starts from nothing. `a` must be on screen, so each
         /// notice is still true when its turn comes.
         pub(super) fn a_runaway_delivery_is_cut_off(first: &NSView, a: DockPanel) {
-            let cap = super::super::MAX_DOCK_NOTICES_PER_DELIVERY;
+            let cap = codepp_plugin_host::docking::MAX_NOTICES_PER_DELIVERY;
             let relaid = crate::dock::DockNotice {
                 panel: a,
                 handle: handle_of(first),
