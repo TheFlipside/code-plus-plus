@@ -34,17 +34,17 @@ pub const MAX_PLUGIN_SCINTILLAS: usize = 64;
 /// a view per file it processes runs out of views of its own rather than
 /// of everyone's — the same reasoning as the per-plugin quota on dock
 /// panels ([`codepp_core::dock::MAX_PLUGIN_PANELS_PER_MODULE`]). Views
-/// asked for from outside any host call, where the host cannot tell which
-/// plugin asked, share one allowance of this size.
+/// the host cannot charge to a plugin — asked for by one beyond the routed
+/// plugins ([`crate::plugin_route`]), from outside any call the host made
+/// into it — share one allowance of this size.
 pub const MAX_PLUGIN_SCINTILLAS_PER_PLUGIN: usize = 16;
 
 // A per-plugin allowance as large as the whole table would cap nothing.
 const _: () = assert!(MAX_PLUGIN_SCINTILLAS_PER_PLUGIN < MAX_PLUGIN_SCINTILLAS);
 
 /// Whether one more view may be made for `owner`, given the owners of
-/// every view made so far. `owner` is the plugin the host was calling when
-/// the view was asked for (`crate::calling_plugin`), or `None` when it was
-/// asked for from outside any host call.
+/// every view made so far. `owner` is the plugin that asked for the view
+/// (`crate::calling_plugin`), or `None` when the host cannot name it.
 ///
 /// # Errors
 ///
@@ -133,13 +133,13 @@ mod tests {
         }
         assert!(may_make_plugin_scintilla(&made, Some(3)).is_err());
         assert!(may_make_plugin_scintilla(&made, Some(4)).is_ok());
-        // Views asked for from outside any host call share an allowance
-        // of their own, apart from every plugin's.
+        // Views the host cannot charge to a plugin share an allowance of
+        // their own, apart from every plugin's.
         assert!(may_make_plugin_scintilla(&made, None).is_ok());
     }
 
-    /// Views asked for from outside any host call are one allowance
-    /// between them.
+    /// Views the host cannot charge to a plugin are one allowance between
+    /// them.
     #[test]
     fn views_nobody_can_be_charged_for_share_one_allowance() {
         let made = vec![None; MAX_PLUGIN_SCINTILLAS_PER_PLUGIN];

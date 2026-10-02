@@ -10,7 +10,10 @@
 //!    message pump for free — the handle *is* the Scintilla window. A
 //!    macOS plugin `.dylib` has no Scintilla linked and there is no OS
 //!    pump, so `codepp-plugin-sdk` forwards every `SendMessageW` to a
-//!    host callback instead. [`plugin_dispatch`] is that callback.
+//!    host callback instead: a route of the plugin's own
+//!    (`codepp_plugin_host::plugin_route`, for the first 128 plugins
+//!    found), which marks the plugin as the one whose message it is and
+//!    hands it to [`plugin_dispatch`].
 //! 2. **The Plugins menu** — lazy-load on first open, then a submenu per
 //!    plugin built from its `FuncItem`s, plus the two admin entries. The
 //!    plugins' own check marks (`NPPM_SETMENUITEMCHECK`, `_init2Check`)
@@ -66,9 +69,9 @@
 //! On Windows a plugin calling `SendMessage` from its own worker thread
 //! is marshaled by the OS onto the thread that owns the window, so a
 //! plugin written against that semantics is safe by construction. Off
-//! Windows the SDK forwards straight to [`plugin_dispatch`] on whatever
-//! thread called it, and this module restores the affinity the missing
-//! pump would have provided:
+//! Windows the SDK forwards, through the plugin's route, to
+//! [`plugin_dispatch`] on whatever thread called it, and this module
+//! restores the affinity the missing pump would have provided:
 //!
 //!   * `NPPM_*` off-thread degrades safely on its own — the state lives
 //!     in a `thread_local`, so [`dispatch_nppm`] finds nothing and
@@ -327,7 +330,9 @@ fn send_sci_on_main(hwnd: *mut c_void, msg: u32, wparam: usize, lparam: isize) -
     })
 }
 
-/// The routing callback the SDK forwards a plugin's `SendMessageW` to.
+/// The router a plugin's `SendMessageW` reaches, through the route of its
+/// own the host gave it as it loaded (`codepp_plugin_host::plugin_route`),
+/// which marks the plugin first.
 ///
 /// Wrapped in `catch_unwind`: it is entered from plugin code across an
 /// `extern "C"` frame, where a Rust panic unwinding out is undefined
@@ -842,8 +847,9 @@ struct PluginScintilla {
     /// borrow of the table held.
     scroll_floor: Rc<crate::ScrollFloor>,
     /// The plugin that asked for it — the one whose `messageProc` hears
-    /// its notifications — or `None` when it was asked for from outside
-    /// any host call, where the host cannot tell which plugin asked.
+    /// its notifications — or `None` when the host cannot name it: a
+    /// plugin beyond the routed ones (`codepp_plugin_host::plugin_route`),
+    /// asking from outside any call the host made into it.
     owner: Option<usize>,
     /// Who hears its notifications.
     target: NotifyTarget,
@@ -861,8 +867,8 @@ enum NotifyTarget {
     Unresolved,
     /// The `messageProc` of the plugin that asked for the view.
     Plugin(PluginMessageProc),
-    /// No one: the view was asked for from outside any host call, where
-    /// the host cannot tell which plugin asked.
+    /// No one: the host cannot name the plugin that asked — see
+    /// [`PluginScintilla::owner`].
     Nobody,
 }
 
@@ -906,7 +912,12 @@ thread_local! {
 /// floating dock window that is not inside a plugin's docked panel.
 ///
 /// Its notifications go to the plugin's `messageProc` — see
-/// [`on_plugin_sci_notify`]. Its scrollers are permanent, as the host's
+/// [`on_plugin_sci_notify`]. The view is charged to the plugin that asked,
+/// wherever it asked from — an action or timer of its own included, since
+/// its message comes in by its own route
+/// ([`codepp_plugin_host::calling_plugin`]); only one the host cannot name,
+/// beyond the routed plugins and asking from outside any call the host
+/// made, is charged to no plugin. Its scrollers are permanent, as the host's
 /// own view's are and a Win32 plugin Scintilla's are, and the blank area
 /// right of its text is the mouse's, as it is in the host's own view —
 /// see [`floor_plugin_scintilla`].
@@ -1362,7 +1373,7 @@ pub mod smoke_support {
         super::VALID_SCI.store(sci, Ordering::Release);
     }
 
-    /// The routing callback itself, exactly as the SDK would call it.
+    /// The router itself, as a plugin's route hands a message to it.
     pub fn dispatch(hwnd: *mut c_void, msg: u32, wparam: usize, lparam: isize) -> isize {
         super::plugin_dispatch(hwnd, msg, wparam, lparam)
     }
@@ -1628,7 +1639,7 @@ pub mod smoke_support {
         }
 
         /// `text` into the view at `handle`, then its length back — both
-        /// through the plugin routing callback, as a plugin would send them.
+        /// through the router, as a plugin's route would hand them on.
         fn round_trip(handle: *mut c_void, text: &str) -> isize {
             let text = CString::new(text).expect("no interior NUL");
             super::dispatch(handle, SCI_SETTEXT, 0, text.as_ptr() as isize);

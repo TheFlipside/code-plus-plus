@@ -43,7 +43,10 @@ pub mod host;
 pub mod menu_checks;
 pub mod plugin_limits;
 
-pub use caller::{calling_plugin, CallingPlugin, PluginCommand, PluginMessageProc};
+pub use caller::{
+    calling_plugin, plugin_route, CallingPlugin, PluginCommand, PluginMessageProc,
+    MAX_ROUTED_PLUGINS,
+};
 pub use codepp_ext::{
     ClipEntry, ClipboardSetRequest, ExportSaveRequest, CLIP_FORMAT_HTML, CLIP_FORMAT_PLAIN,
     CLIP_FORMAT_RTF, CODEPPMSG, CODEPPMSG_RANGE, CODEPPM_EXPORTSAVEDIALOG, CODEPPM_GETZOOMLEVEL,

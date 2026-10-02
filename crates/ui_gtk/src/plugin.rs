@@ -8,8 +8,11 @@
 //!    `SendMessage(scintillaHandle, SCI_*, …)` is routed by the OS
 //!    message pump for free — the handle *is* the Scintilla window. A
 //!    Linux plugin `.so` has no Scintilla linked and there is no OS
-//!    pump, so the SDK forwards every `SendMessage` to a host callback.
-//!    [`plugin_dispatch`] is that callback: it routes **by handle
+//!    pump, so the SDK forwards every `SendMessage` to a host callback:
+//!    a route of the plugin's own (`codepp_plugin_host::plugin_route`,
+//!    for the first 128 plugins found), which marks the plugin as the
+//!    one whose message it is and hands it
+//!    to [`plugin_dispatch`]. [`plugin_dispatch`] routes **by handle
 //!    identity** (`SCI` and `NPPM` message numbers overlap, so routing
 //!    by range is impossible) — the [`NPP_SENTINEL`] address goes to the
 //!    host dispatcher, a Scintilla widget of the host's making (its own,
@@ -198,10 +201,11 @@ static HOPS_QUEUED: AtomicUsize = AtomicUsize::new(0);
 ///
 /// # Why marshal rather than refuse
 ///
-/// Off Windows the SDK forwards a plugin's `SendMessage` straight to
-/// this host callback on whatever thread called it, where Win32 would
-/// have had the OS marshal it onto the thread owning the window. Both
-/// available answers were considered and this one is deliberate:
+/// Off Windows the SDK forwards a plugin's `SendMessage`, through the
+/// plugin's route, to this host callback on whatever thread called it,
+/// where Win32 would have had the OS marshal it onto the thread owning
+/// the window. Both available answers were considered and this one is
+/// deliberate:
 ///
 ///   * **Refusing** (returning 0, as the unknown-handle branch does) is
 ///     three lines and trivially safe, but it is the worse failure. A
@@ -301,7 +305,9 @@ fn send_sci_on_main(hwnd: *mut c_void, msg: u32, wparam: usize, lparam: isize) -
     })
 }
 
-/// The routing callback the SDK forwards a plugin's `SendMessage` to.
+/// The router a plugin's `SendMessage` reaches, through the route of its
+/// own the host gave it as it loaded (`codepp_plugin_host::plugin_route`),
+/// which marks the plugin first.
 ///
 /// `hwnd == npp_sentinel()` → an `NPPM_*` message for the host
 /// dispatcher; a Scintilla widget of the host's making → an `SCI_*`
@@ -853,8 +859,9 @@ struct PluginScintilla {
     /// object it calls into is never finalized.
     editor: Option<EditorHandle>,
     /// The plugin that asked for it — the one whose `messageProc` hears
-    /// its notifications — or `None` when it was asked for from outside
-    /// any host call, where the host cannot tell which plugin asked.
+    /// its notifications — or `None` when the host cannot name it: a
+    /// plugin beyond the routed ones (`codepp_plugin_host::plugin_route`),
+    /// asking from outside any call the host made into it.
     owner: Option<usize>,
     /// Who hears its notifications.
     target: NotifyTarget,
@@ -872,8 +879,8 @@ enum NotifyTarget {
     Unresolved,
     /// The `messageProc` of the plugin that asked for the widget.
     Plugin(PluginMessageProc),
-    /// No one: the widget was asked for from outside any host call, where
-    /// the host cannot tell which plugin asked.
+    /// No one: the host cannot name the plugin that asked — see
+    /// [`PluginScintilla::owner`].
     Nobody,
 }
 
@@ -929,10 +936,13 @@ thread_local! {
 ///
 /// Its notifications go to the plugin's `messageProc` — see
 /// [`forward_plugin_sci_notify`] — after the host's own housekeeping for
-/// it: the wheel-overscroll clamp the host's own view gets. A widget
-/// asked for from outside the host's calls into a plugin — from a GTK
-/// signal handler of the plugin's own — is charged to no plugin, and its
-/// notifications reach none: nothing says which plugin asked.
+/// it: the wheel-overscroll clamp the host's own view gets. The widget is
+/// charged to the plugin that asked, wherever it asked from — a GTK
+/// signal handler of its own included, since its message comes in by its
+/// own route ([`codepp_plugin_host::calling_plugin`]). Only one the host
+/// cannot name — beyond the routed plugins, asking from outside any call
+/// the host made — is charged to no plugin, and its notifications reach
+/// none.
 pub(crate) fn create_plugin_scintilla(parent: *mut c_void) -> *mut c_void {
     let owner = codepp_plugin_host::calling_plugin();
     let into = match plugin_scintilla_parent(parent) {
@@ -1038,7 +1048,7 @@ pub(crate) fn create_plugin_scintilla(parent: *mut c_void) -> *mut c_void {
     if owner.is_none() {
         tracing::warn!(
             index,
-            "NPPM_CREATESCINTILLAHANDLE: asked for outside any call into a plugin; \
+            "NPPM_CREATESCINTILLAHANDLE: asked for by no plugin the host can name; \
              its notifications reach no plugin"
         );
     }
@@ -3098,7 +3108,9 @@ pub(crate) mod host_made_tests {
     use gtk::glib::translate::{from_glib_borrow, from_glib_none, Borrowed};
     use gtk::prelude::*;
 
-    use codepp_plugin_host::{CallingPlugin, FuncItem, MENU_TITLE_LENGTH};
+    use codepp_plugin_host::{
+        calling_plugin, plugin_route, CallingPlugin, FuncItem, MENU_TITLE_LENGTH,
+    };
     use codepp_scintilla_sys::{
         scintilla_new, SCI_GETCODEPAGE, SCI_GETLENGTH, SCI_SETTEXT, SC_CP_UTF8,
     };
@@ -3166,13 +3178,26 @@ pub(crate) mod host_made_tests {
         }
     }
 
+    /// The router a plugin's route hands to in the scenario: what the
+    /// host's dispatch does with `NPPM_CREATESCINTILLAHANDLE` — make a
+    /// widget with `lparam` as its parent — and nothing else. Nothing in
+    /// here may panic: it is `extern "C"`.
+    unsafe extern "C" fn make_through_a_route(
+        _hwnd: *mut c_void,
+        _msg: u32,
+        _wparam: usize,
+        lparam: isize,
+    ) -> isize {
+        create_plugin_scintilla(lparam as *mut c_void) as isize
+    }
+
     /// A plugin's handle for `object`: its address.
     fn handle_of(object: &impl IsA<glib::Object>) -> *mut c_void {
         object.upcast_ref::<glib::Object>().as_ptr().cast()
     }
 
     /// `text` into the widget at `handle`, then its length back — both
-    /// through the plugin routing callback, as a plugin would send them.
+    /// through the router, as a plugin's route would hand them on.
     fn round_trip(handle: *mut c_void, text: &str) -> isize {
         let text = CString::new(text).expect("no interior NUL");
         plugin_dispatch(handle, SCI_SETTEXT, 0, text.as_ptr() as isize);
@@ -3206,6 +3231,7 @@ pub(crate) mod host_made_tests {
         let _ = MAIN_THREAD.set(std::thread::current().id());
 
         scintilla_parents_are_checked(&main, host_sci);
+        widgets_are_charged_to_the_plugin_that_asked();
         a_container_that_turns_the_widget_away_leaves_it_routed();
         a_refused_dock_registration_leaves_a_floating_parent_alone();
         a_plugin_panel_is_a_parent_and_its_wrapping_is_not(&main);
@@ -3322,17 +3348,42 @@ pub(crate) mod host_made_tests {
             !ask(handle_of(&plugins_own)).is_null(),
             "the same parent was refused once the dock was free"
         );
+    }
 
+    /// Which plugin a widget is charged to: the one that asked, whether
+    /// the host was calling it at the time or it asked through its own
+    /// route with no call of the host's under way.
+    fn widgets_are_charged_to_the_plugin_that_asked() {
         // Made inside a call to a plugin, a widget is charged to it.
         let owned = {
             let _calling = CallingPlugin::enter(7);
-            ask(npp_sentinel())
+            create_plugin_scintilla(npp_sentinel())
         };
         assert!(!owned.is_null());
         assert_eq!(
             PLUGIN_SCINTILLAS.with(|made| made.borrow().last().map(|s| s.owner)),
             Some(Some(7)),
             "the widget is not charged to the plugin that asked for it"
+        );
+
+        // Asked for through a plugin's own route, with no call of the
+        // host's under way — as from a signal handler or timer of the
+        // plugin's own — a widget is charged to that plugin all the same:
+        // the route marks it.
+        assert_eq!(
+            calling_plugin(),
+            None,
+            "the scenario must ask with no host call marking a plugin"
+        );
+        let route = plugin_route(9, make_through_a_route);
+        // SAFETY: a route to `make_through_a_route`, which reads no
+        // pointer: the npp handle goes on as the parent, by identity.
+        let routed = unsafe { route(npp_sentinel(), 0, 0, npp_sentinel() as isize) };
+        assert_ne!(routed, 0, "no widget was made through the route");
+        assert_eq!(
+            PLUGIN_SCINTILLAS.with(|made| made.borrow().last().map(|s| s.owner)),
+            Some(Some(9)),
+            "a widget asked for through a plugin's route is not charged to that plugin"
         );
     }
 

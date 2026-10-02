@@ -14,6 +14,14 @@
 //! host answered. It is unregistered at `NPPN_SHUTDOWN`, as the ABI asks:
 //! removal comes before a dialog is released.
 //!
+//! On Linux the dialog also has an "Add a Note" button, whose GTK
+//! `clicked` handler asks the host for a Scintilla widget in the dialog
+//! (`NPPM_CREATESCINTILLAHANDLE`). Nothing of the host's is calling the
+//! plugin when a button is clicked, and the widget is still the plugin's:
+//! the request reached the host by the plugin's own route, so every edit
+//! in the note arrives at `messageProc` as `SCN_MODIFIED`, and the status
+//! bar reports the note's length.
+//!
 //! Linux and macOS. On Windows the command says so on the status bar.
 
 #[cfg(target_os = "macos")]
@@ -21,7 +29,7 @@ pub use appkit::{show, shutdown};
 #[cfg(target_os = "windows")]
 pub use elsewhere::{show, shutdown};
 #[cfg(target_os = "linux")]
-pub use gtk_window::{show, shutdown};
+pub use gtk_window::{note_notification, show, shutdown};
 
 /// The dialog on Linux: a `GtkWindow` with two entries, made on first use
 /// and kept for the process — closing it hides it, so the pointer stays
@@ -36,8 +44,9 @@ mod gtk_window {
     use core::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
 
     use crate::gtk::{
-        g_signal_connect_data, gtk_box_new, gtk_container_add, gtk_container_set_border_width,
-        gtk_entry_new, gtk_entry_set_placeholder_text, gtk_widget_hide_on_delete,
+        g_signal_connect_data, gtk_box_new, gtk_button_new_with_label, gtk_container_add,
+        gtk_container_set_border_width, gtk_entry_new, gtk_entry_set_placeholder_text,
+        gtk_widget_hide_on_delete, gtk_widget_set_sensitive, gtk_widget_set_size_request,
         gtk_widget_show_all, gtk_window_new, gtk_window_present, gtk_window_set_default_size,
         gtk_window_set_position, gtk_window_set_title, ready, VERTICAL, WINDOW_TOPLEVEL,
         WIN_POS_CENTER_ON_PARENT,
@@ -48,6 +57,13 @@ mod gtk_window {
     const WIDTH: c_int = 300;
     const INSET: u32 = 16;
     const GAP: c_int = 8;
+    /// The note's height, in pixels: the dialog has no height of its own
+    /// to share out, so the note asks for one.
+    const NOTE_HEIGHT: c_int = 120;
+    /// What the note starts out saying.
+    const NOTE_TEXT: &CStr = c"A note, made by a click on the dialog's own button. Each edit \
+reaches the plugin as SCN_MODIFIED, though no call of the host's was under way when it was asked \
+for.";
 
     /// The dialog once made. GTK holds a toplevel window's reference
     /// itself, and closing only hides this one, so the pointer stays
@@ -56,6 +72,11 @@ mod gtk_window {
     static DIALOG: AtomicPtr<c_void> = AtomicPtr::new(core::ptr::null_mut());
     /// Whether the host accepted the dialog's registration.
     static REGISTERED: AtomicBool = AtomicBool::new(false);
+    /// The note once made: the Scintilla widget the "Add a Note" button
+    /// asked the host for, which names itself in its notifications'
+    /// `nmhdr.hwndFrom`. Null until then, and for good where the host
+    /// makes none. The host keeps the widget for the process.
+    static NOTE: AtomicPtr<c_void> = AtomicPtr::new(core::ptr::null_mut());
 
     /// Open the dialog, registering it with the host the first time.
     pub fn show() {
@@ -153,10 +174,73 @@ mod gtk_window {
             if !column.is_null() {
                 add_entry(column, c"Type here, then press Tab");
                 add_entry(column, c"Tab brings you here");
+                add_note_button(column);
                 gtk_container_add(window, column);
             }
             window
         }
+    }
+
+    /// An "Add a Note" button in `column`, whose `clicked` handler makes
+    /// the note there ([`add_note`]).
+    fn add_note_button(column: *mut c_void) {
+        // SAFETY: a live box and a NUL-terminated static string; the
+        // handler has the `clicked` signal's C signature, and the box it
+        // is given lives as long as the window it is in, which is never
+        // destroyed.
+        unsafe {
+            let button = gtk_button_new_with_label(c"Add a Note".as_ptr());
+            if button.is_null() {
+                return;
+            }
+            g_signal_connect_data(
+                button,
+                c"clicked".as_ptr(),
+                add_note as *const c_void,
+                column,
+                core::ptr::null(),
+                0,
+            );
+            gtk_container_add(column, button);
+        }
+    }
+
+    /// The button's `clicked` handler: ask the host for a Scintilla widget
+    /// in `column`, the dialog's box. GTK calls this from its main loop,
+    /// with no call of the host's into the plugin under way — and the host
+    /// still knows the widget is this plugin's, because the request reaches
+    /// it by the plugin's own route, so its notifications arrive at
+    /// `messageProc` ([`note_notification`]). One note, kept: every widget
+    /// the host makes counts against the plugin's allowance for the rest of
+    /// the process, so the button goes insensitive once it has made it.
+    extern "C" fn add_note(button: *mut c_void, column: *mut c_void) {
+        if !NOTE.load(Ordering::Acquire).is_null() {
+            return;
+        }
+        let note = crate::dock::scintilla_in(column, NOTE_TEXT);
+        if note.is_null() {
+            sdk::set_status("Example Hello: the host made no note");
+            return;
+        }
+        NOTE.store(note, Ordering::Release);
+        // SAFETY: the widget the host just made and the button clicked,
+        // both live, on the UI thread.
+        unsafe {
+            gtk_widget_set_size_request(note, -1, NOTE_HEIGHT);
+            gtk_widget_set_sensitive(button, 0);
+        }
+        sdk::set_status("Example Hello: a note from the dialog's own button — type in it");
+    }
+
+    /// Whether `lparam` is a notification from the note, reporting its
+    /// length on the status bar after each edit.
+    pub fn note_notification(lparam: isize) -> bool {
+        crate::dock::scintilla_notification(lparam, NOTE.load(Ordering::Acquire), |length| {
+            sdk::set_status(&format!(
+                "Example Hello: the dialog's note is {length} bytes (SCN_MODIFIED from a widget \
+                 its own button asked for)"
+            ));
+        })
     }
 
     /// An entry with `placeholder` in it, in `column`.

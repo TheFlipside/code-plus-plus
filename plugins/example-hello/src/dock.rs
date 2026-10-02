@@ -72,6 +72,11 @@ pub use hosted::{
     view_other_tab,
 };
 
+/// What the modeless dialog's note shares with the Notes panel: making
+/// the widget, and hearing it.
+#[cfg(target_os = "linux")]
+pub(crate) use {gtk_view::scintilla_in, hosted::scintilla_notification};
+
 /// Linux and macOS: the panels are toolkit objects — a `GtkWidget*` or
 /// an `NSView*` — which the host adopts as a panel's content where a
 /// Windows host adopts a window, taking its own reference and moving the
@@ -382,9 +387,10 @@ Drag my tab onto the other panel.";
 
     /// What arrives at `messageProc` on these platforms, where a widget
     /// or a view has no window procedure for it to go to: `WM_NOTIFY`
-    /// from the Notes panel's Scintilla view, and the host's `DMN_*`
-    /// about this plugin's panels. `lParam` is the same `NMHDR` — or
-    /// `SCNotification` — a Windows plugin gets.
+    /// from the Scintilla widgets or views the host made for this plugin —
+    /// the Notes panel's, and on Linux the modeless dialog's note — and
+    /// the host's `DMN_*` about this plugin's panels. `lParam` is the same
+    /// `NMHDR` — or `SCNotification` — a Windows plugin gets.
     pub fn message(msg: u32, wparam: usize, lparam: isize) -> isize {
         if msg != sdk::WM_NOTIFY || lparam == 0 {
             return 0;
@@ -392,38 +398,55 @@ Drag my tab onto the other panel.";
         if notes_notification(lparam) {
             return 0;
         }
+        #[cfg(target_os = "linux")]
+        if crate::dialog::note_notification(lparam) {
+            return 0;
+        }
         dock_notification(wparam, lparam)
     }
 
-    /// Whether `lparam` is a notification from the Notes view — which
-    /// names itself in `nmhdr.hwndFrom`, as a Win32 Scintilla child does —
-    /// reporting its length on the status bar after each edit.
+    /// Whether `lparam` is a notification from the Notes view, reporting
+    /// its length on the status bar after each edit.
+    fn notes_notification(lparam: isize) -> bool {
+        scintilla_notification(lparam, NOTES_SCI.load(Ordering::Acquire), |length| {
+            sdk::set_status(&format!(
+                "Example Hello: notes are {length} bytes (SCN_MODIFIED from the plugin's own \
+                 Scintilla)"
+            ));
+        })
+    }
+
+    /// Whether `lparam` is a notification from `sci`, a Scintilla widget
+    /// or view the host made for this plugin — which names itself in
+    /// `nmhdr.hwndFrom`, as a Win32 Scintilla child does — handing
+    /// `report` its length after each edit. A null `sci`, one not made
+    /// yet, matches nothing.
     ///
     /// Only the `NMHDR` is read until `hwndFrom` has said so: a `DMN_*`
     /// from the host is an `NMHDR` and nothing more, so the wider
     /// `SCNotification` may be read only once the sender is known to be
-    /// the Scintilla view, which sends the whole structure.
-    fn notes_notification(lparam: isize) -> bool {
-        let notes = NOTES_SCI.load(Ordering::Acquire);
-        if notes.is_null() {
+    /// the Scintilla, which sends the whole structure.
+    pub(crate) fn scintilla_notification(
+        lparam: isize,
+        sci: Hwnd,
+        report: impl FnOnce(isize),
+    ) -> bool {
+        if sci.is_null() {
             return false;
         }
         // SAFETY: by the host's contract every `WM_NOTIFY` `lParam` points
         // at an `NMHDR`, live for this call.
         let from = unsafe { (*(lparam as *const SciNotifyHeader)).hwnd_from };
-        if from != notes {
+        if from != sci {
             return false;
         }
-        // SAFETY: the sender is the Notes view, whose notifications carry a
+        // SAFETY: the sender is the Scintilla, whose notifications carry a
         // whole `SCNotification`, live for this call.
         let scn = unsafe { &*(lparam as *const SCNotification) };
         if scn.nmhdr.code == SCN_MODIFIED && scn.modification_type & SC_MOD_TEXT != 0 {
-            // SAFETY: the view the host made, which it keeps for the
+            // SAFETY: a Scintilla the host made, which it keeps for the
             // process; `SCI_GETLENGTH` takes nothing.
-            let length = unsafe { sdk::SendMessageW(notes, SCI_GETLENGTH, 0, 0) };
-            sdk::set_status(&format!(
-                "Example Hello: notes are {length} bytes (SCN_MODIFIED from the plugin's own Scintilla)"
-            ));
+            report(unsafe { sdk::SendMessageW(sci, SCI_GETLENGTH, 0, 0) });
         }
         true
     }
@@ -522,8 +545,8 @@ mod gtk_view {
     /// goes edge to edge, as the macOS view does.
     const LABEL_INSET: c_uint = 8;
 
-    /// `SCI_SETTEXT` and `SCI_SETWRAPMODE` / `SC_WRAP_WORD`: the Notes
-    /// widget's starting text, wrapped to the panel's width.
+    /// `SCI_SETTEXT` and `SCI_SETWRAPMODE` / `SC_WRAP_WORD`: a widget's
+    /// starting text, wrapped to its width ([`scintilla_in`]).
     const SCI_SETTEXT: u32 = 2181;
     const SCI_SETWRAPMODE: u32 = 2268;
     const SC_WRAP_WORD: usize = 1;
@@ -601,6 +624,21 @@ mod gtk_view {
         if panel.is_null() {
             return (panel, core::ptr::null_mut());
         }
+        let sci = scintilla_in(panel, notes);
+        if sci.is_null() {
+            add_label(panel, text);
+        }
+        // SAFETY: a live box of the plugin's own.
+        unsafe { gtk_widget_show_all(panel) };
+        (panel, sci)
+    }
+
+    /// Ask the host for a Scintilla widget in `parent`, a box of the
+    /// plugin's own — `NPPM_CREATESCINTILLAHANDLE` — and set it up to fill
+    /// it, word-wrapped, reading `text`. Returns the widget, whose
+    /// notifications then reach this plugin's `messageProc`, or null when
+    /// the host makes none.
+    pub(crate) fn scintilla_in(parent: Hwnd, text: &CStr) -> Hwnd {
         // SAFETY: the npp handle and a live box of the plugin's own; the
         // host keeps its answer for the process.
         let sci = unsafe {
@@ -608,30 +646,26 @@ mod gtk_view {
                 sdk::npp_handle(),
                 sdk::NPPM_CREATESCINTILLAHANDLE,
                 0,
-                panel as isize,
+                parent as isize,
             )
         } as Hwnd;
-        if sci.is_null() {
-            add_label(panel, text);
-        } else {
-            // SAFETY: the widget the host just made, in the panel: GTK
-            // calls on the UI thread, and two `SCI_*` to it through the
-            // SDK's routing like any other — `notes` is NUL-terminated and
-            // read during the call.
+        if !sci.is_null() {
+            // SAFETY: the widget the host just made, in the box: GTK calls
+            // on the UI thread, and two `SCI_*` to it through the SDK's
+            // routing like any other — `text` is NUL-terminated and read
+            // during the call.
             unsafe {
-                // The host put it in the panel hidden, and a box packs a
+                // The host put it in the box hidden, and a box packs a
                 // widget at its natural size unless it asks to expand —
-                // so it asks for the panel's whole space, then shows.
+                // so it asks for the box's whole space, then shows.
                 gtk_widget_set_hexpand(sci, 1);
                 gtk_widget_set_vexpand(sci, 1);
                 gtk_widget_show(sci);
                 sdk::SendMessageW(sci, SCI_SETWRAPMODE, SC_WRAP_WORD, 0);
-                sdk::SendMessageW(sci, SCI_SETTEXT, 0, notes.as_ptr() as isize);
+                sdk::SendMessageW(sci, SCI_SETTEXT, 0, text.as_ptr() as isize);
             }
         }
-        // SAFETY: a live box of the plugin's own.
-        unsafe { gtk_widget_show_all(panel) };
-        (panel, sci)
+        sci
     }
 
     /// Ask the host for a toolbar button that runs command `cmd_id` —

@@ -8,6 +8,10 @@
 //! transport and the host's routing are correct — invoking the plugin's
 //! menu command and observing that its `SendMessage` calls
 //! (`NPPM_GETCURRENTSCINTILLA` then `SCI_INSERTTEXT`) reach the host.
+//! The command runs with no host call marking the plugin, as it would
+//! from a signal handler of its own, and its messages still arrive
+//! marked as its own: the load gave it a route of its own
+//! (`codepp_plugin_host::plugin_route`) in place of the router passed in.
 //!
 //! A recording mock stands in for the GTK routing function and the real
 //! Scintilla widget: it answers `NPPM_GETCURRENTSCINTILLA` and records
@@ -31,7 +35,7 @@ use std::ffi::c_void;
 use std::path::PathBuf;
 use std::sync::Mutex;
 
-use codepp_plugin_host::{notify_all, Notification, NppData, PluginHost, NPPMSG};
+use codepp_plugin_host::{calling_plugin, notify_all, Notification, NppData, PluginHost, NPPMSG};
 
 /// `NPPM_GETCURRENTSCINTILLA` — writes the active view index (0/1)
 /// through its `lparam` `int*` and returns 0.
@@ -62,6 +66,7 @@ static SCI_SENTINEL: u8 = 0;
 static RECORDED: Mutex<Recorded> = Mutex::new(Recorded {
     got_getcurrentscintilla: false,
     inserted: None,
+    inserted_by: None,
     path_queried_for: None,
     status: None,
 });
@@ -69,6 +74,9 @@ static RECORDED: Mutex<Recorded> = Mutex::new(Recorded {
 struct Recorded {
     got_getcurrentscintilla: bool,
     inserted: Option<String>,
+    /// The plugin the host's mark named while the `SCI_INSERTTEXT` was
+    /// handled; `None` if none did, or none arrived — `inserted` says which.
+    inserted_by: Option<usize>,
     /// The buffer id of the last `NPPM_GETFULLPATHFROMBUFFERID`.
     path_queried_for: Option<usize>,
     /// The text of the last `NPPM_SETSTATUSBAR`.
@@ -148,7 +156,9 @@ extern "C" fn mock_dispatch(hwnd: *mut c_void, msg: u32, wparam: usize, lparam: 
         let text = unsafe { std::ffi::CStr::from_ptr(lparam as *const std::os::raw::c_char) }
             .to_string_lossy()
             .into_owned();
-        RECORDED.lock().unwrap().inserted = Some(text);
+        let mut recorded = RECORDED.lock().unwrap();
+        recorded.inserted = Some(text);
+        recorded.inserted_by = calling_plugin();
     }
     0
 }
@@ -207,7 +217,15 @@ fn example_hello_inserts_via_the_dispatch_pipeline() {
         .map(|f| f.cmd_id)
         .expect("example-hello should contribute one FuncItem");
 
+    // The raw function, not `lookup_command`'s marked one: run this way,
+    // the plugin runs as it does from a signal handler or timer of its
+    // own, with no call of the host's marking it.
     let cmd = host.lookup_cmd(cmd_id).expect("cmd id should resolve");
+    assert_eq!(
+        calling_plugin(),
+        None,
+        "the command must run with no host call marking the plugin"
+    );
     // Invoke the plugin's "Insert Hello" callback. It calls
     // `active_scintilla()` (→ NPPM_GETCURRENTSCINTILLA) then
     // `SendMessageW(sci, SCI_INSERTTEXT, …)`, both of which route through
@@ -216,15 +234,33 @@ fn example_hello_inserts_via_the_dispatch_pipeline() {
     // the ABI, on this (single) thread.
     unsafe { cmd() };
 
-    let recorded = RECORDED.lock().unwrap();
+    // Read out and released before asserting: a failed assertion while
+    // the lock is held would poison it, and the other test's
+    // `mock_dispatch`, which cannot unwind, would then abort the binary.
+    let (queried, inserted, inserted_by) = {
+        let recorded = RECORDED.lock().unwrap();
+        (
+            recorded.got_getcurrentscintilla,
+            recorded.inserted.clone(),
+            recorded.inserted_by,
+        )
+    };
     assert!(
-        recorded.got_getcurrentscintilla,
+        queried,
         "plugin should have queried NPPM_GETCURRENTSCINTILLA"
     );
     assert_eq!(
-        recorded.inserted.as_deref(),
+        inserted.as_deref(),
         Some("Hello from plugin"),
         "plugin should have inserted its text via SCI_INSERTTEXT"
+    );
+    // The plugin's own route marked it: the load installed a route of
+    // its own in place of `mock_dispatch`, so what it sends names it
+    // even with no host call under way.
+    assert_eq!(
+        inserted_by,
+        Some(0),
+        "the plugin's message did not arrive marked as its own"
     );
 }
 
@@ -270,14 +306,18 @@ fn example_hello_resolves_the_closing_path_from_inside_file_before_close() {
         npp_ptr(),
     );
 
-    let recorded = RECORDED.lock().unwrap();
+    // Released before asserting, as in the test above.
+    let (path_queried_for, status) = {
+        let recorded = RECORDED.lock().unwrap();
+        (recorded.path_queried_for, recorded.status.clone())
+    };
     assert_eq!(
-        recorded.path_queried_for,
+        path_queried_for,
         Some(CLOSING_ID),
         "the plugin should resolve the closing buffer's path from inside beNotified"
     );
     assert_eq!(
-        recorded.status.as_deref(),
+        status.as_deref(),
         Some("Closing: /tmp/closing.txt"),
         "the plugin should report the resolved path on the status bar"
     );

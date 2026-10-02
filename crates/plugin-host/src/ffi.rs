@@ -194,14 +194,18 @@ pub type IsUnicodeFn = unsafe extern "C" fn() -> i32;
 /// The host's message-routing callback, installed into a plugin on
 /// non-Windows via its `codepp_plugin_set_dispatch` export so the
 /// plugin's `SendMessage(handle, msg, w, l)` reaches the host (the SDK
-/// forwards to this). The host routes `NPPM_*` (handle == npp) to the
-/// dispatcher and `SCI_*` (handle == a Scintilla widget) to that widget.
-/// Not used on Windows, where the OS message pump does the routing.
+/// forwards to this). Each of the first [`crate::MAX_ROUTED_PLUGINS`]
+/// plugins found is given one of its own, a route
+/// ([`crate::plugin_route`]) that marks the plugin and hands the message
+/// on to the backend's router, which routes `NPPM_*` (handle == npp) to
+/// the dispatcher and `SCI_*` (handle == a Scintilla widget) to that
+/// widget. Not used on Windows, where the OS message pump does the
+/// routing.
 pub type HostDispatchFn = unsafe extern "C" fn(Hwnd, u32, usize, isize) -> isize;
 
 /// Signature of the SDK's `codepp_plugin_set_dispatch(f)` export, which
 /// the host resolves and calls once per loaded plugin (non-Windows) to
-/// install [`HostDispatchFn`].
+/// install that plugin's [`HostDispatchFn`].
 pub type SetDispatchFn = unsafe extern "C" fn(Option<HostDispatchFn>);
 
 /// Mirror of Notepad++'s `toolbarIcons` struct used by

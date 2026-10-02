@@ -30,8 +30,11 @@
 //! host resolves [`codepp_plugin_set_dispatch`] in the loaded library
 //! right after `dlopen` and hands the plugin a routing function that
 //! sends `NPPM_*` to the host dispatcher and `SCI_*` to the Scintilla
-//! widget or view it names. Every SDK helper (and every plugin) goes
-//! through the one
+//! widget or view it names. Each plugin is handed a function of its
+//! own — each of the first 128 the host finds — so every message it
+//! sends on the main thread tells the host which plugin sent it, from a
+//! host call or from a signal handler, timer or action of the plugin's
+//! own alike. Every SDK helper (and every plugin) goes through the one
 //! `SendMessageW` alias, so the transport swap is invisible above it.
 
 use core::cell::UnsafeCell;
@@ -122,8 +125,10 @@ static HOST_DISPATCH: AtomicPtr<c_void> = AtomicPtr::new(core::ptr::null_mut());
 ///
 /// The host resolves this symbol in each freshly-loaded plugin (via
 /// `dlsym`) and calls it once, before `setInfo`, passing the routing
-/// function. It replaces the Win32 OS message pump the Windows build
-/// gets for free. A null argument clears the callback.
+/// function — one of the plugin's own, so that what the plugin sends
+/// through it says which plugin sent it. It replaces the Win32 OS message
+/// pump the Windows build gets for free. A null argument clears the
+/// callback.
 ///
 /// # Safety
 ///

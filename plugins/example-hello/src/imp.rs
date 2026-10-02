@@ -201,9 +201,10 @@ pub extern "C" fn beNotified(notification: *const SCNotification) {
 /// `messageProc`: example-hello has no host-to-plugin custom messages of
 /// its own, but off Windows this is where the host delivers the `DMN_*`
 /// notifications about its dock panels — `WM_NOTIFY`, `wParam` naming
-/// the panel — and the notifications of the Scintilla widget or view the
-/// host made for the Notes panel, since a GTK widget or an `NSView` has
-/// no window procedure to receive them at. The docking module decides; on
+/// the panel — and the notifications of the Scintilla widgets or views
+/// the host made for it — the Notes panel's, and on Linux the modeless
+/// dialog's note — since a GTK widget or an `NSView` has no window
+/// procedure to receive them at. The docking module decides; on
 /// Windows it answers 0, the notifications arriving at the panel's own
 /// window procedure instead.
 #[no_mangle]

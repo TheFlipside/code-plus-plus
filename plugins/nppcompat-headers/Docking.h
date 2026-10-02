@@ -82,13 +82,22 @@ extern "C" {
  * Code++ also checks who registered a panel before restoring it that
  * way (Preferences > Security, on by default): it runs the saved
  * command only if the registration came from the plugin pszModuleName
- * names, while Code++ was calling that plugin — its setInfo, a
- * notification, one of its own menu commands, or an NPPM_MSGTOPLUGIN
- * delivered to it. Register your panel from one of those, as nearly
- * every plugin does. A registration sent from a window procedure, a
- * timer or another thread, or one naming another plugin's module,
- * still gets its panel; but at the next start that panel waits, where
- * it was, until the user opens it again.
+ * names. On Linux and macOS the host knows which plugin sent any
+ * message, because each plugin's messages reach it by a route of its
+ * own, so a registration from any of the plugin's own code on the main
+ * thread counts — past the first 128 plugins the host finds, only as
+ * on Windows. On Windows SendMessage does not say who sent it, and a
+ * registration counts only while Code++ was calling that plugin — its
+ * setInfo, a notification, one of its own menu commands, or an
+ * NPPM_MSGTOPLUGIN delivered to it. Register your panel from one of
+ * those, as nearly every plugin does, and it counts everywhere. A
+ * registration that does not count — on Windows one sent from a window
+ * procedure, a timer or another thread; on Linux and macOS one from a
+ * plugin past the first 128 found, sent outside a call Code++ made into
+ * it; anywhere one naming another plugin's module — still gets its
+ * panel; but at the next start that panel waits, where it was, until
+ * the user opens it again. (On Linux and macOS an NPPM_* sent from any
+ * thread but the main thread is declined outright.)
  *
  * Code++ field support: hClient, pszName, dlgID, uMask,
  * pszModuleName are honoured. A registered panel is an ordinary

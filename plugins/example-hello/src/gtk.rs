@@ -37,7 +37,7 @@ extern "C" {
     pub(crate) fn gdk_pixbuf_get_rowstride(pixbuf: *mut c_void) -> c_int;
 }
 
-// GObject: references, and the one signal connected.
+// GObject: references, and the signals connected.
 #[link(name = "gobject-2.0")]
 extern "C" {
     pub(crate) fn g_object_ref_sink(object: *mut c_void) -> *mut c_void;
@@ -56,6 +56,7 @@ extern "C" {
 #[link(name = "gtk-3")]
 extern "C" {
     pub(crate) fn gtk_box_new(orientation: c_int, spacing: c_int) -> *mut c_void;
+    pub(crate) fn gtk_button_new_with_label(label: *const c_char) -> *mut c_void;
     pub(crate) fn gtk_container_add(container: *mut c_void, widget: *mut c_void);
     pub(crate) fn gtk_container_set_border_width(container: *mut c_void, width: c_uint);
     pub(crate) fn gtk_entry_new() -> *mut c_void;
@@ -65,6 +66,8 @@ extern "C" {
     pub(crate) fn gtk_label_set_xalign(label: *mut c_void, xalign: f32);
     pub(crate) fn gtk_widget_hide_on_delete(widget: *mut c_void) -> c_int;
     pub(crate) fn gtk_widget_set_hexpand(widget: *mut c_void, expand: c_int);
+    pub(crate) fn gtk_widget_set_sensitive(widget: *mut c_void, sensitive: c_int);
+    pub(crate) fn gtk_widget_set_size_request(widget: *mut c_void, width: c_int, height: c_int);
     pub(crate) fn gtk_widget_set_vexpand(widget: *mut c_void, expand: c_int);
     pub(crate) fn gtk_widget_show(widget: *mut c_void);
     pub(crate) fn gtk_widget_show_all(widget: *mut c_void);

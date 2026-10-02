@@ -1085,6 +1085,12 @@ impl LoadNotifications {
 /// plugin's own library, so a re-entrant `NPPM_*` from inside
 /// `setInfo` finds the host unborrowed and gets a real answer.
 ///
+/// `dispatch` is the backend's router, off Windows. The plugin is not
+/// given it as it is but through a route of its own
+/// ([`crate::plugin_route`]), so every message it ever sends is marked as
+/// its own — for the first [`crate::MAX_ROUTED_PLUGINS`] plugins found;
+/// past those, through the callback they share, which marks none.
+///
 /// # Errors
 ///
 /// The library failed to map, an entry point was missing, or the
@@ -1098,6 +1104,10 @@ pub fn execute_load(
     // Whatever `setInfo` or `getFuncsArray` sends the host was sent by
     // this plugin — a panel registered from `setInfo` among it.
     let _calling = crate::caller::CallingPlugin::enter(pending.idx);
+    // And whatever it sends later, from wherever it runs — a signal
+    // handler or timer of its own, which no call of the host's marks —
+    // for the first `MAX_ROUTED_PLUGINS` plugins found.
+    let dispatch = dispatch.map(|router| crate::caller::plugin_route(pending.idx, router));
     load_inner(&pending.path, npp_data, pending.cmd_id_base, dispatch)
 }
 
@@ -1141,22 +1151,17 @@ fn filenames_eq(a: &str, b: &str) -> bool {
     a.eq_ignore_ascii_case(b)
 }
 
-/// Resolve the six entry points and run the initial setInfo +
-/// getFuncsArray dance. Returns a fully-populated `LoadedPlugin` on
-/// success. `cmd_id_base` is the first menu-command id assigned to
-/// the plugin's `FuncItems` — incremented by one per item, written
-/// back through the plugin's pointer so the plugin's own copy of
-/// `_cmdID` matches the value the host installs in the menu.
 /// Install the host's message-routing callback into a freshly-loaded
 /// plugin, so its `SendMessage` transport reaches the host.
 ///
 /// Only meaningful off Windows: there the plugin exports
 /// `codepp_plugin_set_dispatch` (from `codepp-plugin-sdk`) and has no OS
-/// message pump. On Windows `dispatch` is `None` and the symbol is
-/// absent (the SDK's export is `#[cfg(not(windows))]`), so this is a
-/// no-op. A plugin that doesn't use our SDK simply won't have the symbol
-/// and can't talk back to the host — acceptable, since Linux only ever
-/// loads SDK-built cdylibs.
+/// message pump, and `dispatch` is the plugin's own route to the
+/// backend's router, which [`execute_load`] chose. On Windows `dispatch`
+/// is `None` and the symbol is absent (the SDK's export is
+/// `#[cfg(not(windows))]`), so this is a no-op. A plugin that doesn't use
+/// our SDK simply won't have the symbol and can't talk back to the host —
+/// acceptable, since Linux only ever loads SDK-built cdylibs.
 fn install_dispatch(lib: &DynLib, dispatch: Option<crate::ffi::HostDispatchFn>, path: &Path) {
     let Some(dispatch) = dispatch else {
         return;
@@ -1262,6 +1267,12 @@ fn run_init_entry_points(
     Ok((name, raw, count))
 }
 
+/// Resolve the six entry points and run the initial setInfo +
+/// getFuncsArray dance. Returns a fully-populated `LoadedPlugin` on
+/// success. `cmd_id_base` is the first menu-command id assigned to
+/// the plugin's `FuncItems` — incremented by one per item, written
+/// back through the plugin's pointer so the plugin's own copy of
+/// `_cmdID` matches the value the host installs in the menu.
 fn load_inner(
     path: &Path,
     npp_data: NppData,
@@ -2209,8 +2220,11 @@ mod load_order_tests {
 
     /// A plugin's `setInfo` and `getFuncsArray` run marked as the plugin
     /// being loaded, so a dock panel registered from `setInfo` is known
-    /// to be its own. A source check, because observing the mark needs
-    /// a real DLL that reports it.
+    /// to be its own, and the plugin is given its own route rather than
+    /// the backend's router, so everything it sends later is too. A
+    /// source check, because observing either needs a real DLL that
+    /// reports it — `tests/example_hello_e2e.rs` does, for the route, on
+    /// Linux.
     #[test]
     fn a_plugin_loads_as_itself() {
         // LF only, because the end of the body is found by `"\n}\n"`.
@@ -2220,6 +2234,13 @@ mod load_order_tests {
         let src = include_str!("host.rs").replace("\r\n", "\n");
         let body = &src[src.find("pub fn execute_load(").expect("execute_load")..];
         let body = &body[..body.find("\n}\n").expect("end of execute_load")];
+        // Code only, so a line commented out — or a call named in a
+        // comment — cannot stand in for the call itself.
+        let body = body
+            .lines()
+            .map(|l| l.split("//").next().unwrap_or(""))
+            .collect::<Vec<_>>()
+            .join("\n");
         let mark = body
             .find("CallingPlugin::enter(pending.idx)")
             .expect("the load no longer runs marked as the plugin being loaded");
@@ -2227,6 +2248,25 @@ mod load_order_tests {
         assert!(
             mark < load,
             "the mark must be set before the plugin's code runs"
+        );
+        // Whitespace dropped, so rustfmt's layout of the line does not
+        // matter.
+        let compact: String = body.split_whitespace().collect();
+        let routed = compact
+            .find(concat!(
+                "letdispatch=dispatch.map(",
+                "|router|crate::caller::plugin_route(pending.idx,router));",
+            ))
+            .expect("the plugin is no longer given a route of its own");
+        let compact_load = compact.find("load_inner(").expect("the load itself");
+        assert!(
+            routed < compact_load,
+            "the plugin must be given its route before its code runs"
+        );
+        assert!(
+            compact[compact_load..]
+                .starts_with("load_inner(&pending.path,npp_data,pending.cmd_id_base,dispatch)"),
+            "the load no longer installs the dispatch the route was chosen for"
         );
     }
 

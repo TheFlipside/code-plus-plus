@@ -254,9 +254,10 @@ struct PluginPanel {
     /// `pszModuleName`, raw — the optional disambiguator for
     /// `NPPM_DMMGETPLUGINHWNDBYNAME`.
     module_name: String,
-    /// Registry index of the plugin that registered the panel, if the
-    /// registration arrived while the host was calling a plugin — where
-    /// its `DMN_*` go first (`Shell::plugin_panel_message_target`).
+    /// Registry index of the plugin that registered the panel — the one
+    /// whose route the registration came in by, or that the host was
+    /// calling — if the host can name it: where its `DMN_*` go first
+    /// (`Shell::plugin_panel_message_target`).
     caller: Option<usize>,
     /// The plugin's own tab icon (`tTbData.hIconTab`, an `NSImage` here,
     /// with `DWS_ICONTAB`), or `None` for the generic plugin glyph.

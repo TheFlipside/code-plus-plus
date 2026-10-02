@@ -234,7 +234,14 @@ typedef struct sessionInfo_ {
  *     notifications reach the plugin's messageProc as
  *     WM_NOTIFY: wParam the view's control id
  *     (SCI_SETIDENTIFIER, 0 by default), lParam an
- *     SCNotification whose nmhdr.hwndFrom is the view. After
+ *     SCNotification whose nmhdr.hwndFrom is the view. The
+ *     plugin told is the one that asked for the view,
+ *     wherever on the main thread it asked from — an action,
+ *     a timer or another handler of its own counts as much as
+ *     a command — since a plugin's messages reach the host by
+ *     a route of its own (for the first 128 plugins the host
+ *     finds; past those, only while Code++ is calling the
+ *     plugin). After
  *     each of a view's paints, a scroll width narrower than its
  *     text area is widened to it, so the blank area right of a
  *     short line takes the mouse as it does on Windows; that
@@ -270,11 +277,9 @@ typedef struct sessionInfo_ {
  *     handle never comes to name another object, and a destroyed
  *     widget still counts against the caps: make one and reuse
  *     it. The caps and the notifications are as on macOS,
- *     nmhdr.hwndFrom being the widget; a widget asked for from
- *     outside the host's calls into the plugin — from a GTK
- *     signal handler of the plugin's own — is charged to no
- *     plugin, and its notifications reach none, so ask for it
- *     from a command, a notification or setInfo. Use a widget's
+ *     nmhdr.hwndFrom being the widget; the plugin told is the
+ *     one that asked for it, a GTK signal handler of its own
+ *     included. Use a widget's
  *     direct-call pair on the UI thread only: Scintilla raises
  *     its notifications on the calling thread, and one raised on
  *     another thread ends the process. The scroll-width floor is

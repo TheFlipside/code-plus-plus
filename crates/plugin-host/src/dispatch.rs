@@ -463,11 +463,12 @@ pub struct DockDialogParams {
     /// Never null: the dispatcher rejects a null / negative
     /// `lparam` before building this struct.
     pub tb_data: *const crate::ffi::TbData,
-    /// Registry index of the plugin the host was calling when the
-    /// registration arrived — see [`crate::caller`] — or `None` when it
-    /// arrived from outside any such call. What decides whether the
-    /// panel's startup command is signed: only when this is the plugin
-    /// [`Self::module_name`] names.
+    /// Registry index of the plugin whose code sent the registration — see
+    /// [`crate::caller`]: the one the host was calling, or, off Windows,
+    /// the one whose route the message came in by — or `None` when the
+    /// host cannot tell. What decides whether the panel's startup command
+    /// is signed: only when this is the plugin [`Self::module_name`]
+    /// names.
     pub caller: Option<usize>,
 }
 
@@ -6412,9 +6413,9 @@ mod tests {
         assert!(!s.dock_dialogs[0].3); // not visible until SHOW
     }
 
-    /// A registration carries the plugin the host was calling when it
-    /// arrived — what the panel's startup command is signed on — and
-    /// none when it arrived from outside every such call.
+    /// A registration carries the plugin marked when it arrived — what
+    /// the panel's startup command is signed on — and none when it
+    /// arrived with no mark set.
     #[test]
     fn dmm_register_carries_the_calling_plugin() {
         let mut s = MockServices {

@@ -3288,12 +3288,15 @@ impl Shell {
     /// Where the `DMN_*` notifications about plugin `panel` go on a
     /// backend that has no window procedure to send them to — GTK and
     /// Cocoa, where a panel's content is a widget or a view: the
-    /// `messageProc` of
-    /// the plugin that registered the panel, `caller`
-    /// (`codepp_plugin_host::DockDialogParams::caller`), or, when the
-    /// registration arrived from outside any call the host made into a
-    /// plugin, the plugin the panel's module name identifies. `None`
-    /// when neither is loaded, or `panel` is one of the host's own.
+    /// `messageProc` of the plugin that registered the panel, `caller`
+    /// (`codepp_plugin_host::DockDialogParams::caller`). Failing that,
+    /// the plugin the panel's module name identifies, in two cases: the
+    /// registrant is not loaded yet, having registered from its own
+    /// `setInfo`; or the host could not name it, which on these backends
+    /// means a plugin beyond the routed ones
+    /// (`codepp_plugin_host::plugin_route`) asking from outside any call
+    /// the host made into it. `None` when neither is loaded, or `panel`
+    /// is one of the host's own.
     ///
     /// The registrant comes first because the content is its widget. On
     /// Win32 the notification goes to the window, and so to whoever made
@@ -3428,14 +3431,14 @@ impl Shell {
     }
 
     /// The signature on a startup command a plugin has just registered
-    /// for `panel`, made only when `caller` — the plugin the host was
-    /// calling when the registration arrived,
-    /// `codepp_plugin_host::DockDialogParams::caller` — is the plugin
-    /// the panel is named for. Otherwise the command is recorded
-    /// unsigned, and with Preferences → Security's guard on it does not
-    /// run at the next start: a panel registered under another plugin's
-    /// name, one from outside any call the host made, and one naming no
-    /// installed plugin at all.
+    /// for `panel`, made only when `caller` — the plugin whose code sent
+    /// the registration, `codepp_plugin_host::DockDialogParams::caller` —
+    /// is the plugin the panel is named for. Otherwise the command is
+    /// recorded unsigned, and with Preferences → Security's guard on it
+    /// does not run at the next start: a panel registered under another
+    /// plugin's name, one the host cannot attribute (on Windows, one from
+    /// outside any call the host made), and one naming no installed
+    /// plugin at all.
     ///
     /// Signed whether or not the guard is on, so turning it on later
     /// does not cost the panels Code++ has already seen registered.
@@ -12727,9 +12730,9 @@ mod tests {
     }
 
     /// A registration's startup command is signed only when the plugin
-    /// the host was calling is the plugin the panel is named for, and
-    /// only when there is a signer: never for a panel named for another
-    /// plugin, never from outside any call, never naming no installed
+    /// that sent it is the plugin the panel is named for, and only when
+    /// there is a signer: never for a panel named for another plugin,
+    /// never for one the host cannot attribute, never naming no installed
     /// plugin — whatever the guard's setting, so turning it on later
     /// does not cost a panel Code++ saw registered.
     #[test]
@@ -12880,9 +12883,9 @@ mod tests {
     }
 
     /// End to end through the dispatcher: `NPPM_DMMREGASDCKDLG` sent
-    /// while the host is calling the named plugin records its command
-    /// signed; the same registration under another plugin's name, or
-    /// from outside any call, records it unsigned.
+    /// while the named plugin is marked records its command signed; the
+    /// same registration under another plugin's name, or with no mark
+    /// set, records it unsigned.
     #[test]
     fn a_registration_through_the_dispatcher_records_its_signed_command() {
         let (mut shell, _dir) = shell_with_fake_plugins(&["cpdisp_own", "cpdisp_other"]);
