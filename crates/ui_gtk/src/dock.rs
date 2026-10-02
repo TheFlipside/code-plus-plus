@@ -961,8 +961,7 @@ fn panel_icon(panel: DockPanel, own: Option<&Pixbuf>, scale: i32) -> Option<gtk:
         }
     };
     let scaled = source.scale_simple(px, px, gtk::gdk_pixbuf::InterpType::Bilinear)?;
-    let surface = scaled.create_surface(scale.max(1), None::<&gdk::Window>)?;
-    Some(gtk::Image::from_surface(Some(&surface)))
+    crate::image_at_scale(&scaled, scale)
 }
 
 /// A floating toplevel for a group. Undecorated — the caption is the
@@ -1888,6 +1887,60 @@ pub(crate) fn is_plugin_panel_registered(panel: DockPanel) -> bool {
     with_dock(|d| d.plugin_panels.iter().any(|p| p.live() && p.panel == panel)).unwrap_or(false)
 }
 
+/// Whether `widget` is the host's, for a plugin naming it as the parent
+/// of a Scintilla widget it asks the host to make
+/// (`crate::plugin::create_plugin_scintilla`): in the main window or one
+/// of the dock's windows, and not inside a plugin panel's container while
+/// that panel's own widget is there. `None` when the dock cannot be asked:
+/// not installed, or asked from inside its own borrow.
+///
+/// A plugin panel's widget and anything inside it are the plugin's,
+/// wherever the panel is docked or parked. So, by this test, is the
+/// viewport the host may have put around the panel's widget, which is
+/// inside the host's container too — the caller refuses that one as a
+/// `GtkBin` holding a widget. Once the plugin has taken its widget out,
+/// what is left in the container is the host's.
+///
+/// Reads the widget tree without taking a reference to anything in it —
+/// equality and `is_ancestor` only — because a container a plugin made
+/// and has not sunk is floating, and a wrapper adopting that reference
+/// would finalize it when dropped. Called from inside the NPPM dispatch's
+/// state borrow; asks nothing of the state.
+pub(crate) fn is_host_widget(widget: &gtk::Widget) -> Option<bool> {
+    with_dock(|d| {
+        // `is_ancestor` is false for the widget itself, so "inside the
+        // host's container" is what covers the panel's own widget too.
+        let in_a_panel = d
+            .plugin_panels
+            .iter()
+            .any(|p| p.live() && widget.is_ancestor(&p.content));
+        !in_a_panel
+            && host_windows(d)
+                .iter()
+                .any(|w| widget == w.upcast_ref::<gtk::Widget>() || widget.is_ancestor(w))
+    })
+}
+
+/// Whether `widget` is one of the windows the dock owns — the main
+/// window, a floating group's window, a pooled one, or the drop hint —
+/// for `NPPM_MODELESSDIALOG`, which must not take one of them for a
+/// plugin's dialog. `None` when the dock cannot be asked.
+pub(crate) fn is_host_window(widget: &gtk::Widget) -> Option<bool> {
+    with_dock(|d| {
+        host_windows(d)
+            .iter()
+            .any(|w| widget == w.upcast_ref::<gtk::Widget>())
+    })
+}
+
+/// Every toplevel the dock owns.
+fn host_windows(d: &Ui) -> Vec<gtk::Window> {
+    let mut windows = vec![d.main_window.clone(), d.hint.clone()];
+    windows.extend(d.groups.iter().filter_map(|g| g.float.clone()));
+    windows.extend(d.float_pool.iter().cloned());
+    windows
+}
+
 /// Drop the registrations whose widgets have left the host's container —
 /// the plugin moved the widget elsewhere or destroyed it — and close
 /// their panels. Runs only from the idle [`schedule_retirement`] adds;
@@ -2534,7 +2587,7 @@ pub(crate) mod departure_tests {
     use std::rc::Rc;
 
     use codepp_core::dock::{
-        DockGroup, DockLocation, DockPanel, DockSide, DragSubject, DropTarget,
+        DockGroup, DockLocation, DockPanel, DockRect, DockSide, DragSubject, DropTarget,
     };
     use gtk::prelude::*;
 
@@ -2547,7 +2600,7 @@ pub(crate) mod departure_tests {
     /// A dock with no application around it, installed once on this
     /// thread. Nothing more is needed: the shell-side steps of
     /// `apply_layout` find no state and do nothing.
-    fn install_bare_dock() {
+    pub(crate) fn install_bare_dock() {
         gtk::init().expect("gtk::init failed — no display?");
         if DOCK.with(|d| d.borrow().is_some()) {
             return;
@@ -2563,9 +2616,26 @@ pub(crate) mod departure_tests {
         install(&window, &area, &editor_cell, &workspace, &docmap);
     }
 
+    /// The rig's window, standing in for the main window.
+    pub(crate) fn rig_window() -> gtk::Window {
+        with_dock(|d| d.main_window.clone()).expect("the rig is installed")
+    }
+
+    /// The rig's editor cell: a widget of the host's own, in the main
+    /// window.
+    pub(crate) fn rig_editor_cell() -> gtk::Widget {
+        with_dock(|d| d.editor_cell.clone()).expect("the rig is installed")
+    }
+
+    /// The dock's drop-hint window: a toplevel of the host's own other
+    /// than the main window, as a floating group's window is.
+    pub(crate) fn rig_hint_window() -> gtk::Window {
+        with_dock(|d| d.hint.clone()).expect("the rig is installed")
+    }
+
     /// Run the main loop until nothing is pending — the retirement idle
     /// included.
-    fn pump() {
+    pub(crate) fn pump() {
         for _ in 0..10_000 {
             if !gtk::events_pending() {
                 return;
@@ -2576,7 +2646,7 @@ pub(crate) mod departure_tests {
     }
 
     /// A panel widget as a plugin builds one: a box with a label, shown.
-    fn plugin_widget() -> gtk::Widget {
+    pub(crate) fn plugin_widget() -> gtk::Widget {
         let widget = gtk::Box::new(gtk::Orientation::Vertical, 0);
         widget.add(&gtk::Label::new(Some("probe")));
         widget.show_all();
@@ -2589,7 +2659,7 @@ pub(crate) mod departure_tests {
 
     /// `NPPM_DMMREGASDCKDLG` for `widget`, then the reconcile the NPPM
     /// dispatch runs once its borrow has ended.
-    fn register(widget: &gtk::Widget, module: &str, name: &str) -> Option<DockPanel> {
+    pub(crate) fn register(widget: &gtk::Widget, module: &str, name: &str) -> Option<DockPanel> {
         // A plugin keeps its `tTbData` alive for as long as the panel is
         // registered; a test simply never frees it.
         let tb_data: &'static codepp_plugin_host::TbData =
@@ -2621,6 +2691,49 @@ pub(crate) mod departure_tests {
         panel
     }
 
+    /// Run `f` while the dock is borrowed, as a plugin's handler for a
+    /// signal the dock's own layout pass emits would run.
+    pub(crate) fn with_the_dock_busy<R>(f: impl FnOnce() -> R) -> R {
+        with_dock(|_| f()).expect("the dock is installed and free")
+    }
+
+    /// Float `panel` in a window of its own, and return that window.
+    pub(crate) fn float_panel(panel: DockPanel) -> gtk::Window {
+        update_layout(|l| {
+            l.move_panel(
+                panel,
+                DropTarget::Floating(DockRect {
+                    x: 40,
+                    y: 40,
+                    w: 240,
+                    h: 160,
+                }),
+            );
+            true
+        });
+        apply_layout();
+        let id = group_of(panel);
+        with_dock(|d| {
+            d.groups
+                .iter()
+                .find(|g| g.id == id)
+                .and_then(|g| g.float.clone())
+        })
+        .flatten()
+        .expect("a floating group has a window")
+    }
+
+    /// Dock `panel` again, which puts the window it floated in into the
+    /// pool; returns the pooled windows.
+    pub(crate) fn dock_panel_back(panel: DockPanel) -> Vec<gtk::Window> {
+        update_layout(|l| {
+            l.move_panel(panel, DropTarget::Side(DockSide::Bottom));
+            true
+        });
+        apply_layout();
+        with_dock(|d| d.float_pool.clone()).expect("the rig is installed")
+    }
+
     /// What the NPPM dispatch does once its borrow has ended.
     fn settle_dispatch() {
         if take_dirty() {
@@ -2637,7 +2750,7 @@ pub(crate) mod departure_tests {
     }
 
     /// Register `widget` as `name` and open its panel.
-    fn open(widget: &gtk::Widget, module: &str, name: &str) -> DockPanel {
+    pub(crate) fn open(widget: &gtk::Widget, module: &str, name: &str) -> DockPanel {
         let panel = register(widget, module, name).expect("the registration was refused");
         set_panel_visible(panel, true);
         pump();
@@ -2647,7 +2760,7 @@ pub(crate) mod departure_tests {
 
     /// End a scenario with nothing of it registered: the plugin takes its
     /// widget out for good, and the host retires the registration.
-    fn finish(widget: &gtk::Widget) {
+    pub(crate) fn finish(widget: &gtk::Widget) {
         if let Some(holder) = widget
             .parent()
             .and_then(|p| p.downcast::<gtk::Container>().ok())

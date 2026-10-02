@@ -2,7 +2,7 @@
 //!
 //! The plugin host, discovery, lifecycle, and NPPM/NPPN dispatcher are
 //! all cross-platform (`codepp-plugin-host` + `codepp-shell`). This
-//! module supplies the four GTK-specific pieces:
+//! module supplies the GTK-specific pieces:
 //!
 //! 1. **The message-routing bridge.** On Windows a plugin's
 //!    `SendMessage(scintillaHandle, SCI_*, …)` is routed by the OS
@@ -12,8 +12,9 @@
 //!    [`plugin_dispatch`] is that callback: it routes **by handle
 //!    identity** (`SCI` and `NPPM` message numbers overlap, so routing
 //!    by range is impossible) — the [`NPP_SENTINEL`] address goes to the
-//!    host dispatcher, everything else is a Scintilla `GtkWidget*` and
-//!    goes to `scintilla_send_message`. It also restores the **thread
+//!    host dispatcher, a Scintilla widget of the host's making (its own,
+//!    or one it made for a plugin) goes to `scintilla_send_message`, and
+//!    any other pointer is refused. It also restores the **thread
 //!    affinity** the missing OS pump would otherwise have provided — see
 //!    [`send_sci_on_main`].
 //! 2. **The Plugins menu** — lazy-load on first open, then a submenu per
@@ -26,6 +27,11 @@
 //!    ([`rebuild_plugin_accel_group`]), whose chords fire through
 //!    [`fire_plugin_chord`] — DESIGN.md §6.4's hotkey lazy-load trigger,
 //!    re-resolved against the live cache at press time.
+//! 5. **What a plugin asks the host to make** — a Scintilla widget of
+//!    its own ([`create_plugin_scintilla`]), a toolbar button for one of
+//!    its commands ([`add_toolbar_icon`]) — and the modeless-dialog
+//!    registration, which on this platform only makes the dialog
+//!    transient for the main window ([`register_modeless_dialog`]).
 //!
 //! # Re-entrancy
 //!
@@ -36,40 +42,55 @@
 //! memory-safe GTK equivalent of Win32's `PLUGIN_CALL_ACTIVE` guard;
 //! `with_state`'s `try_borrow_mut` already declines true re-entry.
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::ffi::c_void;
-use std::sync::atomic::{AtomicPtr, Ordering};
+use std::sync::atomic::{AtomicPtr, AtomicUsize, Ordering};
 use std::sync::OnceLock;
 use std::thread::ThreadId;
 
 use gtk::gdk_pixbuf::Pixbuf;
 use gtk::glib;
+use gtk::glib::translate::{from_glib_borrow, from_glib_none, Borrowed};
 use gtk::prelude::*;
 
-use codepp_plugin_host::{HostDispatchFn, NppData};
-use codepp_scintilla_sys::{scintilla_send_message, SCI_GETMODIFY};
+use codepp_editor::EditorHandle;
+use codepp_plugin_host::{
+    may_make_plugin_scintilla, HostDispatchFn, NppData, PluginMessageProc, SCNotification,
+    MAX_PLUGIN_SCINTILLAS, WM_NOTIFY,
+};
+use codepp_scintilla_sys::{
+    scintilla_new, scintilla_send_message, SCI_GETMODIFY, SCI_SETCODEPAGE, SCN_UPDATEUI, SC_CP_UTF8,
+};
 use codepp_shell::HostHandles;
 
 use crate::state::with_state;
 
-/// The one legitimate Scintilla widget pointer, cached so
-/// [`plugin_dispatch`] can identity-check the handle a plugin routes an
-/// `SCI_*` message to and **refuse any other pointer** — matching Win32's
-/// `SendMessage` to an unknown `HWND`, which returns 0 without
-/// dereferencing. Without this, a plugin passing a garbage pointer would
-/// fault inside `scintilla_send_message` (a raw dereference), where Win32
-/// fails soft. Read as an atomic rather than through `with_state`, so the
-/// check still works when a plugin sends `SCI_*` from inside a
-/// `beNotified` that holds the borrow. Set once at startup by [`discover`].
+/// The host's own Scintilla widget pointer, cached so [`plugin_dispatch`]
+/// can identity-check the handle a plugin routes an `SCI_*` message to
+/// and **refuse any pointer that is not a Scintilla of the host's
+/// making** — matching Win32's `SendMessage` to an unknown `HWND`, which
+/// returns 0 without dereferencing. Without this, a plugin passing a
+/// garbage pointer would fault inside `scintilla_send_message` (a raw
+/// dereference), where Win32 fails soft. Read as an atomic rather than
+/// through `with_state`, so the check still works when a plugin sends
+/// `SCI_*` from inside a `beNotified` that holds the borrow. Set once at
+/// startup by [`discover`].
+///
+/// The Document Map's miniature is deliberately **not** here, nor in
+/// [`PLUGIN_SCIS`]: a plugin is only ever handed
+/// `NppData._scintillaMainHandle` and the widgets it asked the host to
+/// make, so a message addressed to the miniature did not come from
+/// anywhere legitimate.
 static VALID_SCI: AtomicPtr<c_void> = AtomicPtr::new(std::ptr::null_mut());
 
 /// A dedicated sentinel whose *address* is the GTK backend's "npp
 /// handle". A plugin sends `NPPM_*` to this pointer; [`plugin_dispatch`]
-/// recognises it by identity and routes to the host dispatcher, while
-/// any other pointer is treated as a Scintilla widget. The **same**
-/// address fills `NppData.npp_handle`, `HostHandles.npp_hwnd`, and every
-/// outbound `nmhdr.hwndFrom`, so a plugin that caches the host handle
+/// recognises it by identity and routes to the host dispatcher, while a
+/// Scintilla widget of the host's making routes to Scintilla and any
+/// other pointer is refused. The **same** address fills
+/// `NppData.npp_handle`, `HostHandles.npp_hwnd`, and every outbound
+/// `DMN_*` `nmhdr.hwndFrom`, so a plugin that caches the host handle
 /// routes back here rather than into `scintilla_send_message`.
 static NPP_SENTINEL: u8 = 0;
 
@@ -78,11 +99,53 @@ fn npp_sentinel() -> *mut c_void {
     std::ptr::addr_of!(NPP_SENTINEL).cast_mut().cast::<c_void>()
 }
 
-/// Whether `hwnd` is the host's own Scintilla widget (the only pointer
-/// [`plugin_dispatch`] will forward an `SCI_*` message to).
+/// Whether `hwnd` is the host's own Scintilla widget.
 fn is_valid_scintilla(hwnd: *mut c_void) -> bool {
     let valid = VALID_SCI.load(Ordering::Acquire);
     !valid.is_null() && std::ptr::eq(hwnd, valid)
+}
+
+/// Every Scintilla widget made for a plugin, in the order made: the
+/// handles besides the host's own that [`plugin_dispatch`] forwards
+/// `SCI_*` to. One slot per widget the host will ever make for plugins
+/// ([`MAX_PLUGIN_SCINTILLAS`], from `codepp_plugin_host`).
+///
+/// Never reused, which is what makes reading it from any thread sound. A
+/// slot is written with its widget once, on the main thread, before
+/// [`PLUGIN_SCI_COUNT`] publishes it with release ordering, and cleared,
+/// also on the main thread, as the widget's dispose begins
+/// ([`retire_plugin_scintilla`]) — never given another widget. The widget
+/// a slot named is never finalized (the host's reference), so a stale read
+/// on another thread still names that widget and no other object; what
+/// keeps a destroyed one from being sent anything is the re-check on the
+/// main thread before every send ([`send_sci_on_main`]). Atomics rather
+/// than a `with_state` read for the reason [`VALID_SCI`] is one.
+static PLUGIN_SCIS: [AtomicPtr<c_void>; MAX_PLUGIN_SCINTILLAS] =
+    [const { AtomicPtr::new(std::ptr::null_mut()) }; MAX_PLUGIN_SCINTILLAS];
+
+/// How many slots of [`PLUGIN_SCIS`] are filled.
+static PLUGIN_SCI_COUNT: AtomicUsize = AtomicUsize::new(0);
+
+/// Whether `hwnd` is a Scintilla widget the host made for a plugin, and
+/// not since destroyed. Exact on the main thread, which writes every slot;
+/// another thread can see a destroyed widget a moment longer, which the
+/// marshal's re-check on the main thread catches.
+fn is_plugin_scintilla(hwnd: *mut c_void) -> bool {
+    if hwnd.is_null() {
+        return false;
+    }
+    let made = PLUGIN_SCI_COUNT.load(Ordering::Acquire);
+    PLUGIN_SCIS
+        .iter()
+        .take(made)
+        .any(|slot| std::ptr::eq(slot.load(Ordering::Relaxed), hwnd))
+}
+
+/// Whether `hwnd` is a Scintilla widget this host made — its own, or one
+/// it made for a plugin. These are the only pointers [`plugin_dispatch`]
+/// forwards an `SCI_*` message to.
+fn is_known_scintilla(hwnd: *mut c_void) -> bool {
+    is_valid_scintilla(hwnd) || is_plugin_scintilla(hwnd)
 }
 
 /// The UI thread's id, recorded at startup by [`discover`].
@@ -110,14 +173,25 @@ fn on_main_thread() -> bool {
 struct MainThreadPtr(*mut c_void);
 
 // SAFETY: the only pointer ever wrapped is one that has already passed
-// [`is_valid_scintilla`], i.e. the host's own `ScintillaObject*`. That
-// widget is created once at startup and never destroyed, removed from
-// its container or reassigned (the discipline `GtkUiState::sci_widget`
-// documents and a source-scan guard enforces), so the address stays live
-// for the whole process. It is *dereferenced only on the main thread*,
-// which is the entire point of the marshal — the value crosses threads,
-// the dereference does not.
+// [`is_known_scintilla`]: the host's own `ScintillaObject*`, or one it
+// made for a plugin. Neither is ever finalized. The host's is created
+// once at startup and never destroyed, removed from its container or
+// reassigned (the discipline `GtkUiState::sci_widget` documents and a
+// source-scan guard enforces); a plugin's keeps the reference the host
+// took when it made it for the rest of the process (see
+// [`create_plugin_scintilla`]). So the address names the same object for
+// the whole process. A plugin's widget may be *destroyed* meanwhile, which
+// this cannot rule out: the hop checks again, on the main thread, before
+// it sends anything. It is *dereferenced only on the main thread*, which
+// is the entire point of the marshal — the value crosses threads, the
+// dereference does not.
 unsafe impl Send for MainThreadPtr {}
+
+/// How many messages a worker thread has handed to the main loop — what
+/// the display scenario waits on, so a destroy it stages is known to come
+/// after the worker's own check.
+#[cfg(test)]
+static HOPS_QUEUED: AtomicUsize = AtomicUsize::new(0);
 
 /// Run one `SCI_*` message against Scintilla on the UI thread and block
 /// until it returns, for a plugin that called from its own thread.
@@ -195,18 +269,28 @@ fn send_sci_on_main(hwnd: *mut c_void, msg: u32, wparam: usize, lparam: isize) -
             // compile. Naming the whole `MainThreadPtr` captures the
             // wrapper that carries the `unsafe impl Send`.
             let ptr = ptr;
-            // SAFETY: `ptr.0` passed `is_valid_scintilla` on the calling
-            // thread and addresses the host's own permanently-live
-            // `ScintillaObject*` (see `MainThreadPtr`). This closure runs
-            // on the UI thread, which is the affinity GTK requires and
-            // the reason the message was marshaled here at all.
-            let result = unsafe { scintilla_send_message(ptr.0, msg, wparam, lparam) };
+            // Checked again here, on the thread that destroys widgets: a
+            // plugin's widget can have been destroyed since the calling
+            // thread checked it, and a destroyed one is sent nothing — the
+            // 0 a destroyed window answers on Windows.
+            let result = if is_known_scintilla(ptr.0) {
+                // SAFETY: `ptr.0` is a live `ScintillaObject*` of the host's
+                // making, checked on this thread, which is the one that
+                // marks a destroyed widget (see `MainThreadPtr`), and the
+                // affinity GTK requires — the reason the message was
+                // marshaled here at all.
+                unsafe { scintilla_send_message(ptr.0, msg, wparam, lparam) }
+            } else {
+                0
+            };
             // The receiver is alive by construction — the calling thread
             // is parked in `recv` — unless it panicked, in which case
             // dropping the result is correct.
             let _ = tx.send(result);
         });
     });
+    #[cfg(test)]
+    HOPS_QUEUED.fetch_add(1, Ordering::SeqCst);
     rx.recv().unwrap_or_else(|_| {
         tracing::warn!(
             msg,
@@ -220,10 +304,11 @@ fn send_sci_on_main(hwnd: *mut c_void, msg: u32, wparam: usize, lparam: isize) -
 /// The routing callback the SDK forwards a plugin's `SendMessage` to.
 ///
 /// `hwnd == npp_sentinel()` → an `NPPM_*` message for the host
-/// dispatcher; anything else → an `SCI_*` message for that Scintilla
-/// widget. Runs at a [`crate::at_callback_boundary`]: it is entered from
-/// plugin C code, and a Rust panic unwinding across that frame is UB (dev
-/// builds default to unwind).
+/// dispatcher; a Scintilla widget of the host's making → an `SCI_*`
+/// message for it; anything else → refused. Runs at a
+/// [`crate::at_callback_boundary`]: it is entered from plugin C code, and
+/// a Rust panic unwinding across that frame is UB (dev builds default to
+/// unwind).
 extern "C" fn plugin_dispatch(hwnd: *mut c_void, msg: u32, wparam: usize, lparam: isize) -> isize {
     // Nothing may reach here before `discover` armed the affinity check:
     // an unset `MAIN_THREAD` makes `on_main_thread` answer `false` for
@@ -246,19 +331,23 @@ extern "C" fn plugin_dispatch(hwnd: *mut c_void, msg: u32, wparam: usize, lparam
     crate::at_callback_boundary("plugin:dispatch", 0, || {
         if std::ptr::eq(hwnd, npp_sentinel()) {
             dispatch_nppm(msg, wparam, lparam)
-        } else if is_valid_scintilla(hwnd) {
-            // SCI_* addressed to *our* Scintilla widget: send it straight
-            // to Scintilla's GTK message entry point — the analogue of
-            // Win32 routing SendMessage to the Scintilla HWND. `with_state`
-            // is deliberately not taken (this is a direct Scintilla call,
+        } else if is_known_scintilla(hwnd) {
+            // SCI_* addressed to a Scintilla widget of ours — the host's
+            // own, or one made for a plugin: send it straight to
+            // Scintilla's GTK message entry point — the analogue of Win32
+            // routing SendMessage to the Scintilla HWND. `with_state` is
+            // deliberately not taken (this is a direct Scintilla call,
             // and the plugin may issue it from inside an NPPM dispatch that
             // already holds the borrow); the identity check is an atomic
-            // read for the same reason.
+            // read for the same reason, and runs *before* the affinity
+            // check so an unknown handle is refused rather than marshaled.
             if on_main_thread() {
-                // SAFETY: `hwnd` is identity-checked to be the host's own
-                // live `ScintillaObject*` and this is the thread that owns
-                // it; `scintilla_send_message` is its documented entry
-                // point. The message-argument contract is the plugin's
+                // SAFETY: `hwnd` is identity-checked, on this thread — the
+                // one that marks a destroyed widget — to be a live
+                // `ScintillaObject*` of the host's making (see
+                // `MainThreadPtr`), and this is the thread that owns it;
+                // `scintilla_send_message` is its documented entry point.
+                // The message-argument contract is the plugin's
                 // responsibility, exactly as on Win32.
                 unsafe { scintilla_send_message(hwnd, msg, wparam, lparam) }
             } else {
@@ -438,8 +527,6 @@ thread_local! {
 pub(crate) fn register_dock_dialog(
     params: codepp_plugin_host::DockDialogParams,
 ) -> Option<codepp_core::dock::DockPanel> {
-    use gtk::glib::translate::{from_glib_borrow, from_glib_none, Borrowed};
-
     let handle = params.h_client;
     if let Err(why) = refuse_host_handle(handle) {
         tracing::warn!(why, "NPPM_DMMREGASDCKDLG: refused");
@@ -462,7 +549,15 @@ pub(crate) fn register_dock_dialog(
         tracing::warn!("NPPM_DMMREGASDCKDLG: refused: hClient is a toplevel window");
         return None;
     }
-    if widget.parent().is_some() {
+    // The raw getter, not `parent()`: gtk-rs wraps a getter's result with
+    // `from_glib_none`, which takes over a *floating* reference — and a
+    // container the plugin made and has not sunk is floating, so the
+    // wrapper dropping at the end of this statement would finalize it,
+    // while refusing a mistake the plugin made.
+    //
+    // SAFETY: a live `GtkWidget`, per the check above; the getter only
+    // reads a field.
+    if !unsafe { gtk::ffi::gtk_widget_get_parent(handle.cast()) }.is_null() {
         tracing::warn!(
             "NPPM_DMMREGASDCKDLG: refused: hClient is already inside a container — \
              register a free-standing widget"
@@ -515,6 +610,9 @@ pub(crate) fn register_dock_dialog(
 /// without dereferencing them: the npp handle — a sentinel address, not
 /// an object at all — and the main Scintilla view. The Document Map's
 /// view is a widget with a parent and is refused by that check instead.
+/// Refused too, by address: a Scintilla widget the host made for a plugin
+/// that the plugin has destroyed, which GTK must not be asked to show
+/// again — see [`is_destroyed_plugin_scintilla`].
 fn refuse_host_handle(handle: *mut c_void) -> Result<(), &'static str> {
     if handle.is_null() {
         return Err("hClient is null");
@@ -525,7 +623,29 @@ fn refuse_host_handle(handle: *mut c_void) -> Result<(), &'static str> {
     if is_valid_scintilla(handle) {
         return Err("hClient is the host's own Scintilla view");
     }
+    if is_destroyed_plugin_scintilla(handle) {
+        return Err("hClient is a Scintilla widget its plugin has destroyed");
+    }
     Ok(())
+}
+
+/// Whether `handle` is a Scintilla widget the host made for a plugin that
+/// has since been destroyed. Still allocated — the host keeps its
+/// reference — but no longer something to show: Scintilla would lay it
+/// out from the scrollbars its dispose took away, and trips its own
+/// assertions doing so. Compares addresses only. Main thread only, like
+/// every caller.
+fn is_destroyed_plugin_scintilla(handle: *mut c_void) -> bool {
+    PLUGIN_SCINTILLAS.with(|made| {
+        made.try_borrow().is_ok_and(|made| {
+            made.iter().enumerate().any(|(index, made)| {
+                std::ptr::eq(made.view, handle)
+                    && PLUGIN_SCIS
+                        .get(index)
+                        .is_some_and(|slot| slot.load(Ordering::Relaxed).is_null())
+            })
+        })
+    })
 }
 
 /// Whether `ptr` is an instance of `gtype` or of a type derived from it.
@@ -552,8 +672,6 @@ unsafe fn is_instance_of(ptr: *mut c_void, gtype: glib::Type) -> bool {
 /// host takes its own reference. `None` — the generic plugin glyph — for
 /// no icon, or for something that is not a pixbuf.
 fn tab_icon(params: &codepp_plugin_host::DockDialogParams) -> Option<Pixbuf> {
-    use gtk::glib::translate::from_glib_none;
-
     let icon = params.h_icon_tab;
     if params.u_mask & codepp_plugin_host::DWS_ICONTAB == 0 || icon.is_null() {
         return None;
@@ -690,6 +808,589 @@ fn send_dock_notification(
             &raw const nmhdr as isize,
         )
     };
+}
+
+// --- what a plugin asks the host to make --------------------------------------------
+//
+// `NPPM_CREATESCINTILLAHANDLE`, `NPPM_MODELESSDIALOG` and
+// `NPPM_ADDTOOLBARICON`, on this backend. Each takes an `HWND` or an
+// `HICON` on Windows; here the same argument is the GTK object that
+// plays the part — a `GtkWidget*`, a `GtkWindow*`, a `GdkPixbuf*` — as a
+// dock panel's `hClient` is a `GtkWidget*`. The checks on those pointers
+// are bug containment, not a boundary (DESIGN.md §6.5): the handles the
+// host can recognise without trusting the pointer come first, then what
+// the GObject type system can tell about the object, and a pointer to
+// something that is not an object at all faults in the type check rather
+// than being declined, as it does for a dock panel.
+//
+// Nothing in a plugin's widget tree is ever wrapped as an owned gtk-rs
+// object here — only borrowed, compared, or asked `is_ancestor`. gtk-rs
+// wraps a getter's result with `from_glib_none`, which takes over a
+// floating reference, so a temporary wrapper around a container the
+// plugin made and has not sunk would finalize it when dropped. The one
+// owned read is a dialog's `transient_for()`, which names a toplevel
+// window, and GTK holds every toplevel by a reference of its own from
+// creation, so that one is never floating.
+
+/// What the host knows about one Scintilla widget it made for a plugin.
+/// Its index in [`PLUGIN_SCINTILLAS`] is its slot in [`PLUGIN_SCIS`].
+struct PluginScintilla {
+    /// The widget, holding the reference the host took when it made it.
+    /// Nothing ever gives that reference up: a raw pointer rather than a
+    /// `gtk::Widget`, so no destructor can — see
+    /// [`create_plugin_scintilla`].
+    view: *mut c_void,
+    /// Scintilla's own children — its scrollbars and its text area —
+    /// held by the host as well, for as long as the UI thread lives. The
+    /// widget's dispose
+    /// unparents its scrollbars, which would free them, and the
+    /// adjustments Scintilla keeps raw pointers to with them, while the
+    /// object itself lives on; see [`create_plugin_scintilla`].
+    _internals: Vec<gtk::Widget>,
+    /// The host's direct-call handle for it, for what the host does to the
+    /// widget itself — `None` if Scintilla would not give one, when the
+    /// widget goes without that. Used only while the widget is live; the
+    /// object it calls into is never finalized.
+    editor: Option<EditorHandle>,
+    /// The plugin that asked for it — the one whose `messageProc` hears
+    /// its notifications — or `None` when it was asked for from outside
+    /// any host call, where the host cannot tell which plugin asked.
+    owner: Option<usize>,
+    /// Who hears its notifications.
+    target: NotifyTarget,
+}
+
+/// Who hears the notifications of a widget made for a plugin.
+#[derive(Clone, Copy)]
+enum NotifyTarget {
+    /// Not looked up yet. It is looked up at a notification rather than
+    /// when the widget is made, because [`create_plugin_scintilla`] runs
+    /// inside the NPPM dispatch's state borrow, where the plugin registry
+    /// cannot be read — and it stays unresolved until the lookup finds the
+    /// plugin loaded, since a plugin may make a widget from its own
+    /// `setInfo`, before it is.
+    Unresolved,
+    /// The `messageProc` of the plugin that asked for the widget.
+    Plugin(PluginMessageProc),
+    /// No one: the widget was asked for from outside any host call, where
+    /// the host cannot tell which plugin asked.
+    Nobody,
+}
+
+thread_local! {
+    /// The widgets [`create_plugin_scintilla`] made, in the order made.
+    /// Append-only, like [`PLUGIN_SCIS`], and main-thread only.
+    static PLUGIN_SCINTILLAS: RefCell<Vec<PluginScintilla>> =
+        const { RefCell::new(Vec::new()) };
+    /// The label of every command the loaded plugins publish, by command
+    /// id — the tooltip of a toolbar button for one of them, and its
+    /// name in the toolbar's overflow menu. Filled with the menu-check
+    /// record and for the same reason: a toolbar button is added from
+    /// inside the NPPM dispatch's borrow, where the plugins' `FuncItem`s
+    /// cannot be read.
+    static COMMAND_LABELS: RefCell<HashMap<i32, String>> = RefCell::new(HashMap::new());
+}
+
+/// `NPPM_CREATESCINTILLAHANDLE` on this backend: make a Scintilla widget
+/// for the plugin that asked, and return its handle, or null.
+///
+/// `parent` is the `GtkContainer*` to put it in; it goes in with the
+/// container's plain `add`, so in a `GtkBox` it does not expand unless the
+/// plugin sets `hexpand` / `vexpand` on it or repacks it. It goes in
+/// **hidden**, for the plugin to show — the Win32 host creates its control
+/// without `WS_VISIBLE` for the same reason. (Win32 also makes it zero
+/// sized; here the container decides the size, and Scintilla asks for
+/// next to nothing.) The npp handle as `parent` makes a widget in no
+/// container, which a plugin can drive through `SCI_*` alone — a text
+/// buffer with Scintilla's search and styling — or add to a container of
+/// its own later.
+///
+/// The widget is the plugin's, to destroy with its container or on its
+/// own, as a Win32 plugin destroys its control. Once it is destroyed the
+/// host routes nothing to it: `SCI_*` to its handle answers 0, as
+/// `SendMessage` to a destroyed window does, and its notifications stop
+/// ([`retire_plugin_scintilla`]). Its direct-call pair
+/// (`SCI_GETDIRECTFUNCTION`) is not to be used after that, as on Windows.
+///
+/// The host keeps a reference to the widget that it never gives up, and
+/// to Scintilla's own children, so a destroyed widget frees nothing
+/// Scintilla still points at. Its dispose unparents its scrollbars, whose
+/// adjustments it keeps raw pointers to, and work it has already queued —
+/// the scrollbar update after an edit — runs after the dispose. Without
+/// the references that writes into whatever the host's heap has put in
+/// the freed memory; with them the object stays whole, if defunct, and
+/// its handle never comes to name another object. That bounded leak is
+/// why the number is capped ([`may_make_plugin_scintilla`], from
+/// `codepp_plugin_host`): a destroyed widget still counts, so a plugin
+/// that makes one per dialog it opens runs out, and reusing one is the
+/// way.
+///
+/// Refused, besides null: see [`plugin_scintilla_parent`].
+///
+/// Its notifications go to the plugin's `messageProc` — see
+/// [`forward_plugin_sci_notify`] — after the host's own housekeeping for
+/// it: the wheel-overscroll clamp the host's own view gets. A widget
+/// asked for from outside the host's calls into a plugin — from a GTK
+/// signal handler of the plugin's own — is charged to no plugin, and its
+/// notifications reach none: nothing says which plugin asked.
+pub(crate) fn create_plugin_scintilla(parent: *mut c_void) -> *mut c_void {
+    let owner = codepp_plugin_host::calling_plugin();
+    let into = match plugin_scintilla_parent(parent) {
+        Ok(into) => into,
+        Err(why) => {
+            tracing::warn!(why, "NPPM_CREATESCINTILLAHANDLE: refused");
+            return std::ptr::null_mut();
+        }
+    };
+    let Some(made) = PLUGIN_SCINTILLAS.with(|made| {
+        made.try_borrow()
+            .ok()
+            .map(|made| made.iter().map(|s| s.owner).collect::<Vec<_>>())
+    }) else {
+        tracing::warn!("NPPM_CREATESCINTILLAHANDLE: refused: the host is already making one");
+        return std::ptr::null_mut();
+    };
+    if let Err(why) = may_make_plugin_scintilla(&made, owner) {
+        tracing::warn!(why, plugin = owner, "NPPM_CREATESCINTILLAHANDLE: refused");
+        return std::ptr::null_mut();
+    }
+    // SAFETY: the NPPM dispatch runs only on the UI thread, after
+    // `gtk::init` — `scintilla_new`'s preconditions.
+    let ptr = unsafe { scintilla_new() };
+    if ptr.is_null() {
+        tracing::warn!("NPPM_CREATESCINTILLAHANDLE: scintilla_new() returned null");
+        return std::ptr::null_mut();
+    }
+    // The host's own reference, never given up: `scintilla_new` hands back
+    // a floating one, and sinking it makes it the host's, so neither the
+    // plugin nor any container can drop the last one.
+    //
+    // SAFETY: a live `GObject` just made.
+    unsafe { glib::gobject_ffi::g_object_ref_sink(ptr.cast()) };
+    // Scintilla's own children too — see the doc above. A
+    // `ScintillaObject` is a `GtkContainer` whose children are all
+    // internal, so `forall` (internals included) is what reaches them.
+    //
+    // SAFETY: the live widget just made; borrowed.
+    let parts: Borrowed<gtk::Container> =
+        unsafe { from_glib_borrow(ptr.cast::<gtk::ffi::GtkContainer>()) };
+    let mut internals = Vec::new();
+    // No callback boundary: `forall` runs the closure inside this call,
+    // and a push cannot unwind.
+    parts.forall(|child| internals.push(child.clone()));
+    // Its scrollbars, watched for the start of its dispose, below.
+    let scrollbars: Vec<gtk::Widget> = internals
+        .iter()
+        .filter(|part| part.is::<gtk::Scrollbar>())
+        .cloned()
+        .collect();
+    // Scintilla 5 is UTF-8 by default, but the host's text is UTF-8
+    // throughout and the Win32 host sets it explicitly for the same
+    // reason — so a future default cannot change what a plugin gets. The
+    // host's own sends go through `EditorHandle` like every other message
+    // the host sends a widget it made; the sends in this module are the
+    // plugins' traffic.
+    //
+    // SAFETY: `ptr` is the live widget just made, never finalized — which
+    // is also what keeps the handle sound for as long as the table below
+    // holds it.
+    let editor = unsafe { EditorHandle::from_gtk_widget(ptr) };
+    if let Some(editor) = editor {
+        editor.send(SCI_SETCODEPAGE, SC_CP_UTF8 as usize, 0);
+    }
+    // Recorded and made routable before it goes anywhere, so a widget the
+    // host failed to record is never left in a plugin's container. Nothing
+    // between the check above and this push can make another widget —
+    // making one takes a plugin's call, and none runs in between — so
+    // neither the borrow nor the routing slot can fail; were either ever
+    // to, the plugin is told it got no widget.
+    let Some(index) = PLUGIN_SCINTILLAS.with(|made| {
+        let mut made = made.try_borrow_mut().ok()?;
+        made.push(PluginScintilla {
+            view: ptr,
+            _internals: internals,
+            editor,
+            owner,
+            target: if owner.is_some() {
+                NotifyTarget::Unresolved
+            } else {
+                NotifyTarget::Nobody
+            },
+        });
+        Some(made.len() - 1)
+    }) else {
+        tracing::error!("NPPM_CREATESCINTILLAHANDLE: the widget could not be recorded");
+        return std::ptr::null_mut();
+    };
+    let Some(slot) = PLUGIN_SCIS.get(index) else {
+        tracing::error!(
+            index,
+            "NPPM_CREATESCINTILLAHANDLE: no routing slot for the widget"
+        );
+        return std::ptr::null_mut();
+    };
+    slot.store(ptr, Ordering::Relaxed);
+    PLUGIN_SCI_COUNT.store(index + 1, Ordering::Release);
+    // SAFETY: the live widget just made, borrowed: no reference changes.
+    let view: Borrowed<gtk::Widget> =
+        unsafe { from_glib_borrow(ptr.cast::<gtk::ffi::GtkWidget>()) };
+    connect_plugin_scintilla(index, &view, &scrollbars);
+    if owner.is_none() {
+        tracing::warn!(
+            index,
+            "NPPM_CREATESCINTILLAHANDLE: asked for outside any call into a plugin; \
+             its notifications reach no plugin"
+        );
+    }
+    if let Some(container) = into {
+        container.add(&*view);
+        if !view.is_ancestor(&*container) {
+            // A container that takes children its own way (a `GtkPaned`
+            // already full, say) declined it. The widget is made, recorded
+            // and routable, so the plugin gets it and can place it itself.
+            tracing::warn!(
+                index,
+                "NPPM_CREATESCINTILLAHANDLE: the parent declined the widget; it is in no container"
+            );
+        }
+    }
+    tracing::debug!(
+        plugin = owner,
+        index,
+        "NPPM_CREATESCINTILLAHANDLE: made a widget"
+    );
+    ptr
+}
+
+/// Connect what the widget at `index` in [`PLUGIN_SCINTILLAS`] needs
+/// from its signals: its notifications on to its plugin, and out of
+/// routing as its dispose begins — see [`create_plugin_scintilla`].
+/// `scrollbars` are its own, held by the host.
+fn connect_plugin_scintilla(index: usize, view: &gtk::Widget, scrollbars: &[gtk::Widget]) {
+    view.connect_local("sci-notify", false, move |values| {
+        crate::at_callback_boundary("plugin:sci_notify", None, || {
+            forward_plugin_sci_notify(index, values)
+        })
+    });
+    // Out of routing as soon as the widget's dispose begins. Scintilla
+    // unparents its scrollbars first, before GTK runs the container's
+    // `remove` or emits the widget's `destroy`, and plugin code that runs
+    // in between must find the widget gone. The scrollbars are parented
+    // once, inside `scintilla_new`, so a scrollbar losing its parent is
+    // that dispose; `destroy` is the fallback, should a later Scintilla
+    // take itself apart in another order.
+    for scrollbar in scrollbars {
+        scrollbar.connect_parent_set(move |scrollbar, _| {
+            crate::at_callback_boundary("plugin:sci_dispose", (), || {
+                if scrollbar.parent().is_none() {
+                    retire_plugin_scintilla(index);
+                }
+            });
+        });
+    }
+    view.connect_destroy(move |_| {
+        crate::at_callback_boundary("plugin:sci_destroy", (), || {
+            retire_plugin_scintilla(index);
+        });
+    });
+}
+
+/// Where a widget made for a plugin goes: `Ok(None)` for the npp handle —
+/// no container at all — or the container to add it to, or why `parent`
+/// is refused.
+///
+/// Refused, besides null: anything `GObject` says is not a
+/// `GtkContainer`; any Scintilla widget, the host's or a plugin's, live or
+/// destroyed — a Scintilla has no room for anyone else's child; a widget
+/// of the host's own,
+/// which is anything in the main window or a floating dock window that
+/// is not inside a plugin's docked panel; and a `GtkBin` that already
+/// holds a child, which would turn the widget away. Between them the last
+/// two refuse the host's wrapping around a plugin panel: the panel's own
+/// widget is what to pass. When the dock cannot be asked — only from
+/// inside its own layout pass — the parent is refused rather than guessed
+/// at.
+fn plugin_scintilla_parent(
+    parent: *mut c_void,
+) -> Result<Option<Borrowed<gtk::Container>>, &'static str> {
+    if parent.is_null() {
+        return Err("the parent is null");
+    }
+    if std::ptr::eq(parent, npp_sentinel()) {
+        return Ok(None);
+    }
+    // SAFETY: not one of the host's non-object handles; by the ABI's
+    // contract on this backend a parent is a live `GtkContainer`. What
+    // happens when it is not is the limit in the section notes above.
+    if !unsafe { is_instance_of(parent, gtk::Container::static_type()) } {
+        return Err("the parent is not a GtkContainer");
+    }
+    // By type rather than through the routing table, which no longer
+    // names a Scintilla widget once it is destroyed.
+    //
+    // SAFETY: as above.
+    if unsafe { is_instance_of(parent, scintilla_type()) } {
+        return Err("the parent is a Scintilla widget");
+    }
+    // SAFETY: a live `GtkContainer`, per the check above; borrowed, so a
+    // floating container keeps its floating reference.
+    let container: Borrowed<gtk::Container> =
+        unsafe { from_glib_borrow(parent.cast::<gtk::ffi::GtkContainer>()) };
+    match crate::dock::is_host_widget(container.upcast_ref()) {
+        None => return Err("the dock could not be asked whether the parent is the host's"),
+        Some(true) => return Err("the parent is one of the host's own widgets"),
+        Some(false) => {}
+    }
+    if let Some(bin) = container.downcast_ref::<gtk::Bin>() {
+        // SAFETY: a plain field read on the live container; the child,
+        // if any, is not wrapped.
+        if !unsafe { gtk::ffi::gtk_bin_get_child(bin.as_ptr()) }.is_null() {
+            return Err("the parent is a GtkBin that already holds a widget");
+        }
+    }
+    Ok(Some(container))
+}
+
+/// The `GType` of a Scintilla widget, for refusing one as a parent by
+/// type.
+fn scintilla_type() -> glib::Type {
+    // SAFETY: registers the type on first use, and takes nothing.
+    unsafe { glib::translate::from_glib(codepp_scintilla_sys::scintilla_object_get_type()) }
+}
+
+/// Scintilla's notifications from a widget made for a plugin, on to the
+/// plugin that asked for it, at its `messageProc`, as `WM_NOTIFY` — where
+/// a Win32 plugin's Scintilla child sends it to the plugin's dialog
+/// procedure, which a widget does not have. The same generalisation the
+/// `DMN_*` take. `lParam` is a copy of the `SCNotification` with
+/// `nmhdr.hwndFrom` the widget's handle, which is how a plugin tells its
+/// widgets apart; Scintilla's GTK backend already puts the widget there,
+/// and it is set anyway, so the contract does not rest on that detail of
+/// the vendored source. `wParam` is the widget's control identifier
+/// (`SCI_SETIDENTIFIER`, 0 unless the plugin sets one), as a Win32
+/// `WM_NOTIFY` carries.
+///
+/// `SCN_UPDATEUI` first gets the housekeeping the host's own view gets
+/// on it, before the plugin hears of it: the wheel-overscroll clamp —
+/// see `crate::clamp_horizontal_overscroll_of`.
+fn forward_plugin_sci_notify(index: usize, values: &[glib::Value]) -> Option<glib::Value> {
+    let payload = values.last()?;
+    // SAFETY: the value belongs to a `sci-notify` emission, whose payload
+    // Scintilla declares as a boxed `SCNotification*`; `g_value_get_boxed`
+    // returns that pointer or null.
+    let notification = unsafe { glib::gobject_ffi::g_value_get_boxed(payload.as_ptr()) }
+        .cast::<SCNotification>()
+        .cast_const();
+    if notification.is_null() {
+        return None;
+    }
+    let (view, editor) = plugin_scintilla_view(index)?;
+    // SAFETY: a live `SCNotification` for this emission, which
+    // `codepp_plugin_host::SCNotification` mirrors field for field. Copied,
+    // so the host never writes into the emission's own.
+    let mut scn = unsafe { notification.read() };
+    if scn.nmhdr.code == SCN_UPDATEUI {
+        if let Some(editor) = editor {
+            // SAFETY: a widget made for a plugin, never finalized; borrowed.
+            let widget: Borrowed<gtk::Widget> =
+                unsafe { from_glib_borrow(view.cast::<gtk::ffi::GtkWidget>()) };
+            crate::clamp_horizontal_overscroll_of(editor, &widget);
+        }
+    }
+    let target = plugin_scintilla_target(index)?;
+    scn.nmhdr.hwnd_from = view;
+    // SAFETY: a loaded plugin's `messageProc` — plugins are never
+    // unloaded — run as that plugin, on the UI thread. `scn` outlives the
+    // call.
+    let _ = unsafe { target.send(WM_NOTIFY, scn.nmhdr.id_from, &raw const scn as isize) };
+    None
+}
+
+/// A widget made for a plugin is being destroyed: take it out of the
+/// routing table, so `SCI_*` to its handle answers 0 from here on and its
+/// notifications stop. Runs on the main thread as the widget's dispose
+/// begins — when Scintilla unparents its first scrollbar — and again for
+/// the second and from its `destroy`, later in the same dispose, which
+/// then change nothing.
+fn retire_plugin_scintilla(index: usize) {
+    if let Some(slot) = PLUGIN_SCIS.get(index) {
+        // Relaxed: a reader on another thread that misses this re-checks
+        // on this thread, which wrote it, before it sends anything.
+        let was = slot.swap(std::ptr::null_mut(), Ordering::Relaxed);
+        if !was.is_null() {
+            tracing::debug!(
+                index,
+                "a plugin's Scintilla widget is being destroyed; no longer routed"
+            );
+        }
+    }
+}
+
+/// The widget at `index` in [`PLUGIN_SCINTILLAS`], with its handle —
+/// `None` once it has been destroyed.
+fn plugin_scintilla_view(index: usize) -> Option<(*mut c_void, Option<EditorHandle>)> {
+    if PLUGIN_SCIS.get(index)?.load(Ordering::Relaxed).is_null() {
+        return None;
+    }
+    PLUGIN_SCINTILLAS.with(|made| {
+        let made = made.try_borrow().ok()?;
+        let entry = made.get(index)?;
+        Some((entry.view, entry.editor))
+    })
+}
+
+/// The `messageProc` that hears the notifications of the widget at
+/// `index`, looked up on first use and kept once found.
+///
+/// The borrow of [`PLUGIN_SCINTILLAS`] is never held across the lookup or
+/// the plugin call, so a plugin that makes another widget from inside its
+/// handler finds the registry free. A lookup that finds nothing is tried
+/// again at the next notification: `with_state` declines one made from
+/// inside a host borrow, and a plugin not yet loaded — one that made the
+/// widget from its `setInfo` — has no `messageProc` to find until it is.
+/// Every loaded plugin exports one; the loader refuses a plugin without.
+fn plugin_scintilla_target(index: usize) -> Option<PluginMessageProc> {
+    let (owner, known) = PLUGIN_SCINTILLAS.with(|made| {
+        let made = made.try_borrow().ok()?;
+        let entry = made.get(index)?;
+        Some((entry.owner, entry.target))
+    })?;
+    match known {
+        NotifyTarget::Plugin(target) => return Some(target),
+        NotifyTarget::Nobody => return None,
+        NotifyTarget::Unresolved => {}
+    }
+    let target =
+        with_state(|st| owner.and_then(|owner| st.shell.plugin_message_target(owner))).flatten()?;
+    PLUGIN_SCINTILLAS.with(|made| {
+        if let Ok(mut made) = made.try_borrow_mut() {
+            if let Some(entry) = made.get_mut(index) {
+                entry.target = NotifyTarget::Plugin(target);
+            }
+        }
+    });
+    Some(target)
+}
+
+/// `NPPM_MODELESSDIALOG` on this backend: `true` — which the dispatcher
+/// answers with the handle, as Notepad++ does — for a window a plugin
+/// could have made, `false` for the handles that plainly are not one.
+///
+/// **What registering does here is make the dialog transient for the main
+/// window, if it has no transient parent of its own.** What the Win32
+/// registration buys a dialog is the host's message pump calling
+/// `IsDialogMessage` for it — Tab moving between its controls, Enter
+/// pressing its default button — and so keeping the host's accelerators
+/// out of it. GTK does the first in every window, and the second has
+/// nothing to keep out: the host's accelerators, its own and the plugins'
+/// shortcuts, belong to the main window and fire only there. But a Win32
+/// plugin makes its dialog with the npp handle as its owner, so it stays
+/// above the editor and goes with it; a GTK plugin cannot do the same,
+/// because there the npp handle is not a window. (It could find the main
+/// window as the toplevel of its Scintilla handle, but that is GTK code a
+/// ported plugin does not have.) Registration is where a Notepad++
+/// plugin says it has a dialog, so it is where the host supplies that. A
+/// dialog that already has a transient parent keeps it, and one that
+/// wants none can unset it after registering.
+///
+/// A dialog is checked on the way in only. Its removal is answered
+/// without looking at what the pointer points at: a plugin removes its
+/// dialog on the way to destroying it, when the pointer is least
+/// trustworthy, and there is nothing to undo — GTK drops the transient
+/// link itself when either window is destroyed.
+pub(crate) fn register_modeless_dialog(
+    dlg: *mut c_void,
+    register: bool,
+    main_window: &gtk::Window,
+) -> bool {
+    if dlg.is_null() || std::ptr::eq(dlg, npp_sentinel()) || is_known_scintilla(dlg) {
+        tracing::warn!(
+            register,
+            "NPPM_MODELESSDIALOG: refused: not a window's handle"
+        );
+        return false;
+    }
+    if !register {
+        tracing::debug!("NPPM_MODELESSDIALOG: removed (nothing was routed on this backend)");
+        return true;
+    }
+    // SAFETY: not one of the host's non-object handles; by the ABI's
+    // contract on this backend the dialog is a live `GtkWindow`.
+    if !unsafe { is_instance_of(dlg, gtk::Window::static_type()) } {
+        tracing::warn!("NPPM_MODELESSDIALOG: refused: not a GtkWindow");
+        return false;
+    }
+    // SAFETY: a live `GtkWindow`, per the check above; borrowed.
+    let window: Borrowed<gtk::Window> =
+        unsafe { from_glib_borrow(dlg.cast::<gtk::ffi::GtkWindow>()) };
+    match crate::dock::is_host_window(window.upcast_ref()) {
+        Some(false) => {}
+        Some(true) => {
+            tracing::warn!("NPPM_MODELESSDIALOG: refused: one of the host's own windows");
+            return false;
+        }
+        None => {
+            tracing::warn!(
+                "NPPM_MODELESSDIALOG: refused: the dock could not be asked whether it is the host's"
+            );
+            return false;
+        }
+    }
+    if window.transient_for().is_none() {
+        window.set_transient_for(Some(main_window));
+    }
+    tracing::debug!("NPPM_MODELESSDIALOG: registered");
+    true
+}
+
+/// `NPPM_ADDTOOLBARICON` on this backend: a toolbar button that runs the
+/// plugin command `cmd_id`, showing `icon` — a `GdkPixbuf*`, of which the
+/// host draws a copy, so the plugin may drop its reference once this
+/// returns. The button's tooltip is the command's menu label, and it shows
+/// the command's check mark (`NPPM_SETMENUITEMCHECK`) as pressed, as
+/// Notepad++'s toolbar does.
+///
+/// Refused for an id that is not a command a loaded plugin published: the
+/// button runs its command through the plugin commands' own path, which
+/// knows no other. Asking again for the same command replaces the image
+/// rather than adding a second button.
+pub(crate) fn add_toolbar_icon(toolbar: &gtk::Toolbar, cmd_id: i32, icon: *mut c_void) -> bool {
+    if icon.is_null() || std::ptr::eq(icon, npp_sentinel()) || is_known_scintilla(icon) {
+        tracing::warn!(
+            cmd_id,
+            "NPPM_ADDTOOLBARICON: refused: not an image's handle"
+        );
+        return false;
+    }
+    let label = COMMAND_LABELS.with(|labels| {
+        labels
+            .try_borrow()
+            .ok()
+            .and_then(|labels| labels.get(&cmd_id).cloned())
+    });
+    let Some(label) = label else {
+        tracing::warn!(
+            cmd_id,
+            "NPPM_ADDTOOLBARICON: refused: no loaded plugin publishes that command"
+        );
+        return false;
+    };
+    // SAFETY: not one of the host's non-object handles; by the ABI's
+    // contract on this backend the icon is a live `GdkPixbuf`.
+    if !unsafe { is_instance_of(icon, Pixbuf::static_type()) } {
+        tracing::warn!(cmd_id, "NPPM_ADDTOOLBARICON: refused: not a GdkPixbuf");
+        return false;
+    }
+    // SAFETY: a live `GdkPixbuf`, per the check above, which is never
+    // floating; `from_glib_none` takes the host's own reference.
+    let pixbuf: Pixbuf = unsafe { from_glib_none(icon.cast::<gtk::gdk_pixbuf::ffi::GdkPixbuf>()) };
+    match crate::toolbar::add_plugin_button(toolbar, cmd_id, &pixbuf, &label, menu_mark(cmd_id)) {
+        Ok(()) => true,
+        Err(why) => {
+            tracing::warn!(cmd_id, why, "NPPM_ADDTOOLBARICON: refused");
+            false
+        }
+    }
 }
 
 /// The `NppData` handed to each plugin's `setInfo`: the npp sentinel plus
@@ -1228,12 +1929,14 @@ thread_local! {
 }
 
 /// Record the mark a plugin set on one of its items through
-/// `NPPM_SETMENUITEMCHECK`, and show it on the item if the menu is up.
+/// `NPPM_SETMENUITEMCHECK`, and show it on the item if the menu is up and
+/// on the command's toolbar button if it has one — Notepad++ marks both.
 /// `false` when `cmd_id` is none of the loaded plugins' commands.
 ///
 /// Called from inside the dispatch's state borrow, so it touches only
-/// this module's own state and the item's widget; the item's `activate`
-/// handler returns at once while [`SYNCING_CHECKS`] is set.
+/// this module's own state, the toolbar's, and their widgets; the item's
+/// `activate` handler returns at once while [`SYNCING_CHECKS`] is set,
+/// and the button's `toggled` while the toolbar's own flag is.
 pub(crate) fn set_menu_check(cmd_id: i32, checked: bool) -> bool {
     if !PLUGIN_CHECKS.with(|c| c.borrow_mut().set(cmd_id, checked)) {
         tracing::trace!(
@@ -1243,21 +1946,42 @@ pub(crate) fn set_menu_check(cmd_id: i32, checked: bool) -> bool {
         return false;
     }
     show_recorded_mark(cmd_id);
+    crate::toolbar::set_plugin_button_state(cmd_id, checked);
     true
 }
 
 /// Take in the commands every loaded plugin publishes — see
-/// [`codepp_plugin_host::PluginMenuChecks::absorb`]. Run after each load
-/// pass and **before** its notifications, so a plugin ticking an item from
-/// `NPPN_TBMODIFICATION` or `NPPN_READY` finds its commands known, as
-/// Notepad++ has them installed by then.
+/// [`codepp_plugin_host::PluginMenuChecks::absorb`] — and their labels,
+/// which a toolbar button for one of them shows ([`add_toolbar_icon`]).
+/// Run after each load pass and **before** its notifications, so a plugin
+/// ticking an item or adding a toolbar button from `NPPN_TBMODIFICATION`
+/// or `NPPN_READY` finds its commands known, as Notepad++ has them
+/// installed by then.
 fn absorb_loaded_commands() {
-    // The record is its own thread-local and calls into nothing, so it is
-    // filled from under the state borrow rather than from a copy.
+    // Both records are thread-locals of their own and call into nothing,
+    // so they are filled from under the state borrow rather than from a
+    // copy.
     with_state(|st| {
         let funcs = st.shell.loaded_plugin_funcs().flat_map(|(_, funcs)| funcs);
         PLUGIN_CHECKS.with(|c| c.borrow_mut().absorb(funcs));
+        COMMAND_LABELS.with(|labels| {
+            let mut labels = labels.borrow_mut();
+            for f in st.shell.loaded_plugin_funcs().flat_map(|(_, funcs)| funcs) {
+                if f.is_command() {
+                    labels.insert(f.cmd_id, funcitem_label(f));
+                }
+            }
+        });
     });
+}
+
+/// The mark recorded for plugin command `cmd_id` — what its toolbar
+/// button shows as pressed. `false` for a command the plugin has never
+/// ticked, and when the record is being written.
+pub(crate) fn menu_mark(cmd_id: i32) -> bool {
+    PLUGIN_CHECKS
+        .with(|c| c.try_borrow().ok().and_then(|c| c.get(cmd_id)))
+        .unwrap_or(false)
 }
 
 /// Make the live item for `cmd_id`, if the menu holds one, show the mark
@@ -1391,7 +2115,7 @@ fn rebuild_menu(menu: &gtk::Menu) {
                         (
                             funcitem_label(f),
                             f.cmd_id,
-                            f.p_func.is_some(),
+                            f.is_command(),
                             st.shell.plugin_shortcut_chord_for_cmd_id(f.cmd_id),
                         )
                     })
@@ -1627,12 +2351,13 @@ fn funcitem_label(f: &codepp_plugin_host::FuncItem) -> String {
     codepp_shell::sanitize_str_for_display(&raw)
 }
 
-/// Invoke a plugin's menu command. Looks the function pointer up (a short
+/// Invoke a plugin's menu command — from its menu item, its shortcut or
+/// its toolbar button. Looks the function pointer up (a short
 /// `with_state` borrow), drops the borrow, then calls the plugin outside
 /// it — so the plugin's re-entrant `NPPM_*` calls get a fresh borrow —
 /// at a [`crate::at_callback_boundary`] (a panic must not cross the C
 /// frame).
-fn on_plugin_command(cmd_id: i32) {
+pub(crate) fn on_plugin_command(cmd_id: i32) {
     let cmd = with_state(|st| st.shell.lookup_plugin_command(cmd_id)).flatten();
     let Some(cmd) = cmd else {
         return;
@@ -2061,4 +2786,1112 @@ mod registration_log_tests {
             "a log field records the plugin's raw text"
         );
     }
+}
+
+/// Source guards for what a plugin can make the host make. Each pins a
+/// property whose failure has no symptom a runtime test here could see:
+/// a plugin's widget routed without the identity check faults inside
+/// vendored C++ on a bad pointer rather than failing an assertion, and a
+/// cap applied in the wrong place is a leak that grows only as a plugin
+/// keeps asking.
+#[cfg(test)]
+mod made_for_plugins_guards {
+    use crate::source_scan::{
+        block_after, code_only, fn_body, occurs_at_depth_one, strip_test_modules,
+    };
+
+    fn plugin_src() -> String {
+        strip_test_modules(&code_only(include_str!("plugin.rs")))
+    }
+
+    /// A plugin's `SendMessageW` reaches Scintilla only for a widget the
+    /// host made — its own, or one made for a plugin — and only from the
+    /// two places that check: `plugin_dispatch` and the marshal it hands a
+    /// worker thread's message to. `scintilla_send_message` dereferences
+    /// its first argument, so an unchecked send would turn a plugin's bad
+    /// pointer into a fault where Win32 answers 0.
+    #[test]
+    fn scintilla_is_reached_only_through_the_identity_check() {
+        let src = plugin_src();
+        let dispatch = fn_body(&src, "plugin_dispatch");
+        let marshal = fn_body(&src, "send_sci_on_main");
+        assert_eq!(
+            src.matches("scintilla_send_message(").count(),
+            2,
+            "plugin.rs sends to Scintilla from somewhere other than `plugin_dispatch` \
+             and `send_sci_on_main`; every send must sit behind the identity check"
+        );
+        assert_eq!(dispatch.matches("scintilla_send_message(").count(), 1);
+        assert_eq!(marshal.matches("scintilla_send_message(").count(), 1);
+        assert_eq!(
+            src.matches("send_sci_on_main(").count(),
+            2,
+            "`send_sci_on_main` is called from somewhere other than `plugin_dispatch`"
+        );
+        let check = dispatch
+            .find("} else if is_known_scintilla(hwnd) {")
+            .expect("`plugin_dispatch` no longer identity-checks the handle it was given");
+        let send = dispatch
+            .find("scintilla_send_message(")
+            .expect("`plugin_dispatch` no longer forwards to Scintilla at all");
+        assert!(check < send, "the identity check must come before the send");
+        // And again on the main thread, inside the hop: a plugin's widget
+        // can be destroyed between the calling thread's check and the
+        // send.
+        let recheck = marshal
+            .find("let result = if is_known_scintilla(ptr.0) {")
+            .expect("the marshal no longer re-checks the handle on the main thread");
+        let hop_send = marshal
+            .find("scintilla_send_message(")
+            .expect("the marshal no longer sends to Scintilla");
+        assert!(
+            recheck < hop_send,
+            "the main-thread re-check must come before the send"
+        );
+        let known = fn_body(&src, "is_known_scintilla");
+        assert!(
+            known.contains("is_valid_scintilla(hwnd) || is_plugin_scintilla(hwnd)")
+                && known.matches("||").count() == 1,
+            "`is_known_scintilla` must be exactly the host's widget or a plugin's"
+        );
+        let plugin_widgets = fn_body(&src, "is_plugin_scintilla");
+        assert!(
+            plugin_widgets.contains(".take(made)")
+                && plugin_widgets.contains("PLUGIN_SCI_COUNT.load(Ordering::Acquire)"),
+            "`is_plugin_scintilla` must read only the slots the count has published"
+        );
+    }
+
+    /// The quota on plugin Scintilla widgets is applied in
+    /// `create_plugin_scintilla`, unconditionally, before a widget is
+    /// made — the twin of `ui_cocoa`'s guard of the same name, whose
+    /// comment gives the reason: the rule lives in `codepp_plugin_host`,
+    /// where nothing warns if its use is neutered, and each widget is kept
+    /// for the rest of the process.
+    #[test]
+    fn the_plugin_view_quota_is_applied_before_a_view_is_made() {
+        let src = plugin_src();
+        let create = fn_body(&src, "create_plugin_scintilla");
+        let refusal = "if let Err(why) = may_make_plugin_scintilla(&made, owner) {";
+        // Every widget's owner, collected whole: nothing chained after the
+        // `collect` may shorten the list. Checked as "no `.` next" rather
+        // than by the closing parentheses, so rustfmt's layout of the
+        // closure does not matter.
+        let counted = "made.iter().map(|s| s.owner).collect::<Vec<_>>()";
+        let snapshot = create
+            .find(counted)
+            .expect("the quota no longer counts every widget made so far");
+        assert!(
+            !create[snapshot + counted.len()..]
+                .trim_start()
+                .starts_with('.'),
+            "the list of widgets the quota counts is cut short after it is collected"
+        );
+        let check = create
+            .find(refusal)
+            .expect("`create_plugin_scintilla` no longer refuses on the quota");
+        let make = create
+            .find("scintilla_new()")
+            .expect("`create_plugin_scintilla` no longer makes a widget");
+        assert!(
+            snapshot < check && check < make,
+            "the quota must count every widget and refuse before a widget is made"
+        );
+        assert!(
+            !create[snapshot..check].contains("let "),
+            "something is rebound between counting the widgets and consulting the quota"
+        );
+        assert!(
+            create.matches("let owner").count() == 1
+                && create.contains("let owner = codepp_plugin_host::calling_plugin();"),
+            "`owner` is no longer the calling plugin, bound once"
+        );
+        assert!(
+            occurs_at_depth_one(&create, refusal),
+            "the quota is applied only under a condition, so some widgets go unchecked"
+        );
+        assert!(
+            occurs_at_depth_one(
+                &block_after(&create, refusal),
+                "return std::ptr::null_mut();"
+            ),
+            "a refusal by the quota no longer stops the widget being made"
+        );
+        // Recorded under the plugin that asked: the shorthand `owner`, not
+        // an `owner: …` of anything else. Whitespace dropped, so rustfmt's
+        // layout of the literal does not matter.
+        let recorded = block_after(&create, "made.push(PluginScintilla {")
+            .split_whitespace()
+            .collect::<String>();
+        assert!(
+            recorded.contains("owner,") && !recorded.contains("owner:"),
+            "a widget is no longer recorded under the plugin that asked for it, so \
+             the per-plugin allowance counts nobody"
+        );
+    }
+
+    /// A plugin's widget gets the host view's wheel-overscroll clamp on
+    /// each `SCN_UPDATEUI`, before the plugin hears of it, so the plugin
+    /// reads the offset settled — the order the host's own view keeps its
+    /// housekeeping in.
+    #[test]
+    fn a_plugin_widget_is_clamped_before_its_plugin_is_told() {
+        let src = plugin_src();
+        let forward = fn_body(&src, "forward_plugin_sci_notify");
+        let update = forward
+            .find("if scn.nmhdr.code == SCN_UPDATEUI {")
+            .expect("a plugin widget's SCN_UPDATEUI is no longer recognised");
+        let clamp = forward
+            .find("crate::clamp_horizontal_overscroll_of(")
+            .expect("a plugin widget no longer gets the overscroll clamp");
+        let tell = forward
+            .find("target.send(WM_NOTIFY,")
+            .expect("a plugin widget's notifications no longer reach its plugin");
+        assert!(
+            update < clamp && clamp < tell,
+            "the clamp must run on SCN_UPDATEUI, before the plugin is told"
+        );
+    }
+
+    /// A destroyed widget frees nothing Scintilla still points at, and is
+    /// out of routing as its dispose begins — what keeps a plugin's
+    /// destroyed widget from being a use-after-free in the host's heap.
+    /// The display scenario shows it; this pins it where CI runs, which
+    /// has no display.
+    #[test]
+    fn a_destroyed_widget_is_held_whole_and_taken_out_of_routing() {
+        let src = plugin_src();
+        let create = fn_body(&src, "create_plugin_scintilla");
+        assert!(
+            occurs_at_depth_one(
+                &create,
+                "parts.forall(|child| internals.push(child.clone()));"
+            ),
+            "Scintilla's own children are no longer held, or only under a condition"
+        );
+        let recorded = block_after(&create, "made.push(PluginScintilla {")
+            .split_whitespace()
+            .collect::<String>();
+        assert!(
+            recorded.contains("_internals:internals,"),
+            "the held children are not kept with the widget"
+        );
+        assert!(
+            occurs_at_depth_one(
+                &create,
+                "connect_plugin_scintilla(index, &view, &scrollbars);"
+            ),
+            "a widget's signals are no longer connected, or only under a condition"
+        );
+        let connect = fn_body(&src, "connect_plugin_scintilla");
+        assert!(
+            occurs_at_depth_one(&connect, "for scrollbar in scrollbars {"),
+            "the scrollbars are no longer watched for the dispose"
+        );
+        for (what, hook) in [
+            (
+                "the start of its dispose",
+                "scrollbar.connect_parent_set(move |scrollbar, _| {",
+            ),
+            ("its destroy", "view.connect_destroy(move |_| {"),
+        ] {
+            assert!(
+                block_after(&connect, hook).contains("retire_plugin_scintilla(index)"),
+                "the widget is no longer taken out of routing at {what}"
+            );
+        }
+        assert!(
+            block_after(
+                &connect,
+                "scrollbar.connect_parent_set(move |scrollbar, _| {"
+            )
+            .contains("if scrollbar.parent().is_none() {"),
+            "the widget is taken out of routing whenever a scrollbar's parent changes, \
+             not when its dispose takes the scrollbar away"
+        );
+        let retire = fn_body(&src, "retire_plugin_scintilla");
+        assert!(
+            retire.contains("slot.swap(std::ptr::null_mut(),")
+                && retire.matches(".swap(").count() == 1
+                && !retire.contains(".store("),
+            "`retire_plugin_scintilla` does something besides clear the slot"
+        );
+        assert!(
+            src.matches("slot.store(").count() == 1 && src.matches("slot.swap(").count() == 1,
+            "a routing slot is written somewhere besides where a widget is made and where \
+             it is cleared"
+        );
+    }
+
+    /// Nothing that handles a widget a plugin passed in reads it through
+    /// a gtk-rs getter that returns an owned wrapper — `parent()`,
+    /// `toplevel()`. Those wrap the result with `from_glib_none`, which
+    /// takes over a floating reference, so a container the plugin made and
+    /// has not sunk would be finalized when the wrapper dropped: a
+    /// use-after-free in the plugin, caused by a check meant to protect it.
+    #[test]
+    fn plugin_widgets_are_never_read_through_owning_getters() {
+        let src = plugin_src();
+        for name in ["register_dock_dialog", "plugin_scintilla_parent"] {
+            let body = fn_body(&src, name);
+            for getter in [
+                ".parent()",
+                ".toplevel()",
+                ".transient_for()",
+                ".children()",
+                ".child()",
+                ".ancestor(",
+            ] {
+                assert!(
+                    !body.contains(getter),
+                    "`{name}` reads a plugin's widget through `{getter}`, whose owned \
+                     result can finalize a floating container"
+                );
+            }
+        }
+        let dock = strip_test_modules(&code_only(include_str!("dock.rs")));
+        for name in ["is_host_widget", "is_host_window"] {
+            let body = fn_body(&dock, name);
+            for getter in [
+                ".parent()",
+                ".toplevel()",
+                ".children()",
+                ".child()",
+                ".ancestor(",
+            ] {
+                assert!(
+                    !body.contains(getter),
+                    "`{name}` reads a plugin's widget through `{getter}`"
+                );
+            }
+        }
+    }
+}
+
+/// What a plugin asks the host to make — `NPPM_CREATESCINTILLAHANDLE`,
+/// `NPPM_MODELESSDIALOG`, `NPPM_ADDTOOLBARICON` — driven against real GTK
+/// objects, with a bare dock standing in for the main window's.
+///
+/// What it pins is what a source scan cannot see: a widget made for a
+/// plugin lands where the plugin asked, hidden, and answers `SCI_*`
+/// routed to it from any thread; once the plugin destroys it, nothing of
+/// the host's is written to and it answers 0; the parents, windows and
+/// images the host must not take are refused, and a floating container
+/// the plugin has not sunk survives being checked; a registered dialog
+/// becomes transient for the main window unless it has a transient parent
+/// of its own; and a plugin's toolbar button runs its command once a
+/// click and comes back showing the plugin's mark rather than GTK's
+/// toggle. Delivery of a plugin widget's
+/// notifications needs a loaded plugin to deliver to, so the real app is
+/// where that is shown (DESIGN.md §7.4).
+///
+/// Display-gated, driven by `crate::display_tests`, which owns the
+/// invocation and explains why these cannot be `#[test]`s of their own.
+#[cfg(test)]
+pub(crate) mod host_made_tests {
+    use std::cell::Cell;
+    use std::ffi::{c_void, CString};
+    use std::time::Duration;
+
+    use gtk::gdk_pixbuf::{Colorspace, Pixbuf};
+    use gtk::glib;
+    use gtk::glib::translate::{from_glib_borrow, from_glib_none, Borrowed};
+    use gtk::prelude::*;
+
+    use codepp_plugin_host::{CallingPlugin, FuncItem, MENU_TITLE_LENGTH};
+    use codepp_scintilla_sys::{
+        scintilla_new, SCI_GETCODEPAGE, SCI_GETLENGTH, SCI_SETTEXT, SC_CP_UTF8,
+    };
+
+    use std::sync::atomic::Ordering;
+
+    use super::{
+        add_toolbar_icon, create_plugin_scintilla, npp_sentinel, plugin_dispatch,
+        register_modeless_dialog, set_menu_check, COMMAND_LABELS, HOPS_QUEUED, MAIN_THREAD,
+        PLUGIN_CHECKS, PLUGIN_SCINTILLAS, VALID_SCI,
+    };
+    use crate::dock::departure_tests::{
+        dock_panel_back, finish, float_panel, install_bare_dock, open, plugin_widget, pump,
+        register, rig_editor_cell, rig_hint_window, rig_window, with_the_dock_busy,
+    };
+    use crate::toolbar::{plugin_icon_image, COMMANDS_RUN};
+
+    /// Stand-ins for the plugin commands toolbar buttons run.
+    const SMOKE_CMD: i32 = 52_001;
+    const SMOKE_CMD_2: i32 = 52_002;
+
+    /// A widget's handle carried to a worker thread.
+    struct WorkerPtr(*mut c_void);
+    // SAFETY: a widget the host never finalizes; the worker hands it only
+    // to `plugin_dispatch`, the code under test.
+    unsafe impl Send for WorkerPtr {}
+
+    /// `SCI_GETLENGTH` sent to `made` from a thread of its own, the
+    /// thread handed back while its message waits for the main loop.
+    fn length_from_a_worker(made: *mut c_void) -> std::thread::JoinHandle<isize> {
+        let queued = HOPS_QUEUED.load(Ordering::SeqCst);
+        let handle = WorkerPtr(made);
+        let worker = std::thread::spawn(move || {
+            let handle = handle;
+            plugin_dispatch(handle.0, SCI_GETLENGTH, 0, 0)
+        });
+        // Until the worker has passed its own check and handed its message
+        // to the main loop, which runs only when the test turns it. A
+        // regressed direct call never gets here, and the wait fails.
+        let mut waits = 0;
+        while HOPS_QUEUED.load(Ordering::SeqCst) == queued {
+            std::thread::sleep(Duration::from_millis(1));
+            waits += 1;
+            assert!(
+                waits < 5_000,
+                "the worker's SCI_* never reached the main loop: was it sent off the main thread?"
+            );
+        }
+        assert!(
+            !worker.is_finished(),
+            "a cross-thread SCI_* to a plugin's widget ran off the main thread"
+        );
+        worker
+    }
+
+    /// Run the main loop until `worker` is done.
+    fn until_finished(worker: &std::thread::JoinHandle<isize>) {
+        let mut spins = 0;
+        while !worker.is_finished() {
+            if !gtk::main_iteration_do(false) {
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            spins += 1;
+            assert!(spins < 10_000, "the marshaled SCI_* never completed");
+        }
+    }
+
+    /// A plugin's handle for `object`: its address.
+    fn handle_of(object: &impl IsA<glib::Object>) -> *mut c_void {
+        object.upcast_ref::<glib::Object>().as_ptr().cast()
+    }
+
+    /// `text` into the widget at `handle`, then its length back — both
+    /// through the plugin routing callback, as a plugin would send them.
+    fn round_trip(handle: *mut c_void, text: &str) -> isize {
+        let text = CString::new(text).expect("no interior NUL");
+        plugin_dispatch(handle, SCI_SETTEXT, 0, text.as_ptr() as isize);
+        plugin_dispatch(handle, SCI_GETLENGTH, 0, 0)
+    }
+
+    /// The container a widget the host made sits in, as a raw pointer.
+    fn parent_of(handle: *mut c_void) -> *mut c_void {
+        // SAFETY: a widget the host made, never finalized; a field read.
+        unsafe { gtk::ffi::gtk_widget_get_parent(handle.cast()) }.cast()
+    }
+
+    /// A widget the host made, borrowed.
+    fn widget_at(handle: *mut c_void) -> Borrowed<gtk::Widget> {
+        // SAFETY: a widget the host made, never finalized; borrowed.
+        unsafe { from_glib_borrow(handle.cast::<gtk::ffi::GtkWidget>()) }
+    }
+
+    pub(crate) fn what_plugins_ask_the_host_to_make() {
+        install_bare_dock();
+        let main = rig_window();
+        // SAFETY: GTK is initialised — `scintilla_new`'s precondition.
+        let host_sci = unsafe { scintilla_new() };
+        assert!(!host_sci.is_null(), "scintilla_new returned null");
+        // The host's stand-in view, kept for the process like the app's.
+        //
+        // SAFETY: a live, floating `GObject` just made.
+        unsafe { glib::gobject_ffi::g_object_ref_sink(host_sci.cast()) };
+        // Stand in for `discover`, which arms both of these at startup.
+        VALID_SCI.store(host_sci, std::sync::atomic::Ordering::Release);
+        let _ = MAIN_THREAD.set(std::thread::current().id());
+
+        scintilla_parents_are_checked(&main, host_sci);
+        a_container_that_turns_the_widget_away_leaves_it_routed();
+        a_refused_dock_registration_leaves_a_floating_parent_alone();
+        a_plugin_panel_is_a_parent_and_its_wrapping_is_not(&main);
+        a_plugin_widget_is_routed_from_any_thread();
+        a_widget_moved_about_stays_routed();
+        a_destroyed_widget_is_routed_nothing();
+        modeless_dialogs_are_checked_and_made_transient(&main, host_sci);
+        plugin_toolbar_buttons();
+        plugin_icons_are_drawn_at_the_screens_pixels();
+    }
+
+    /// Where a widget may go, and where it may not.
+    fn scintilla_parents_are_checked(main: &gtk::Window, host_sci: *mut c_void) {
+        let ask = create_plugin_scintilla;
+        let not_a_widget = gtk::Adjustment::new(0.0, 0.0, 1.0, 0.1, 0.1, 0.1);
+        let not_a_container = gtk::Label::new(None);
+        let full_bin = gtk::Frame::new(None);
+        full_bin.add(&gtk::Label::new(None));
+        for (what, parent) in [
+            ("null", std::ptr::null_mut()),
+            ("the host's own Scintilla widget", host_sci),
+            ("a GObject that is no widget", handle_of(&not_a_widget)),
+            ("a widget that is no container", handle_of(&not_a_container)),
+            ("the main window", handle_of(main)),
+            (
+                "a widget of the host's, in the main window",
+                handle_of(&rig_editor_cell()),
+            ),
+            (
+                "another window of the host's",
+                handle_of(&rig_hint_window()),
+            ),
+            ("a GtkBin that holds a widget already", handle_of(&full_bin)),
+        ] {
+            assert!(ask(parent).is_null(), "{what} was accepted as a parent");
+        }
+
+        // The npp handle: a widget in no container at all.
+        let detached = ask(npp_sentinel());
+        assert!(
+            !detached.is_null(),
+            "the npp handle as parent made no widget"
+        );
+        assert!(
+            parent_of(detached).is_null(),
+            "a detached widget was put somewhere"
+        );
+        assert_eq!(
+            round_trip(detached, "abc"),
+            3,
+            "the detached widget is not routed"
+        );
+        assert!(
+            ask(detached).is_null(),
+            "a plugin's own Scintilla widget was accepted as a parent"
+        );
+
+        // A container the plugin made and never sank, as a C plugin makes
+        // one: the widget goes in, hidden and UTF-8 — and checking the
+        // parent took nothing from the plugin: the container is still
+        // floating, and still alive.
+        //
+        // SAFETY: GTK is initialised; this is the plugin's own box.
+        let raw_box = unsafe { gtk::ffi::gtk_box_new(gtk::ffi::GTK_ORIENTATION_VERTICAL, 0) };
+        let mut alive: glib::ffi::gpointer = raw_box.cast();
+        // SAFETY: a live object; GLib nulls `alive` if it is finalized.
+        unsafe { glib::gobject_ffi::g_object_add_weak_pointer(raw_box.cast(), &raw mut alive) };
+        let made = ask(raw_box.cast());
+        assert!(
+            !made.is_null(),
+            "a plugin's free-standing container was refused"
+        );
+        assert!(
+            !alive.is_null(),
+            "checking the parent finalized the plugin's container"
+        );
+        assert_ne!(
+            // SAFETY: still alive, per the weak pointer.
+            unsafe { glib::gobject_ffi::g_object_is_floating(raw_box.cast()) },
+            glib::ffi::GFALSE,
+            "checking the parent took the plugin's floating reference"
+        );
+        assert_eq!(
+            parent_of(made),
+            raw_box.cast::<c_void>(),
+            "the widget is not in the parent"
+        );
+        assert!(
+            !widget_at(made).is_visible(),
+            "a new widget is shown before the plugin shows it"
+        );
+        assert_eq!(
+            plugin_dispatch(made, SCI_GETCODEPAGE, 0, 0),
+            SC_CP_UTF8 as isize,
+            "a new widget is not UTF-8"
+        );
+        // From here the plugin keeps its container, as a plugin would.
+        //
+        // SAFETY: alive and floating; sinking makes the reference the
+        // test's, which it never gives up.
+        unsafe {
+            glib::gobject_ffi::g_object_remove_weak_pointer(raw_box.cast(), &raw mut alive);
+            glib::gobject_ffi::g_object_ref_sink(raw_box.cast());
+        }
+
+        // While the dock cannot be asked whether a parent is the host's —
+        // from inside its own layout pass — none is taken.
+        let plugins_own = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        assert!(
+            with_the_dock_busy(|| ask(handle_of(&plugins_own))).is_null(),
+            "a parent was taken while the dock could not be asked about it"
+        );
+        assert!(
+            !ask(handle_of(&plugins_own)).is_null(),
+            "the same parent was refused once the dock was free"
+        );
+
+        // Made inside a call to a plugin, a widget is charged to it.
+        let owned = {
+            let _calling = CallingPlugin::enter(7);
+            ask(npp_sentinel())
+        };
+        assert!(!owned.is_null());
+        assert_eq!(
+            PLUGIN_SCINTILLAS.with(|made| made.borrow().last().map(|s| s.owner)),
+            Some(Some(7)),
+            "the widget is not charged to the plugin that asked for it"
+        );
+    }
+
+    /// A plugin registering as its dock panel a widget already inside a
+    /// container it made and never sank is refused — and the refusal takes
+    /// nothing from the plugin: the container is still floating, and alive.
+    /// Reading the widget's parent through gtk-rs would have finalized it.
+    fn a_refused_dock_registration_leaves_a_floating_parent_alone() {
+        // SAFETY: GTK is initialised; a box and a label of the plugin's
+        // own, the label sunk by the box it goes into.
+        let (raw_box, raw_label) = unsafe {
+            let raw_box = gtk::ffi::gtk_box_new(gtk::ffi::GTK_ORIENTATION_VERTICAL, 0);
+            let raw_label = gtk::ffi::gtk_label_new(std::ptr::null());
+            gtk::ffi::gtk_container_add(raw_box.cast(), raw_label);
+            (raw_box, raw_label)
+        };
+        let mut alive: glib::ffi::gpointer = raw_box.cast();
+        // SAFETY: a live object; GLib nulls `alive` if it is finalized.
+        unsafe { glib::gobject_ffi::g_object_add_weak_pointer(raw_box.cast(), &raw mut alive) };
+        // SAFETY: a live widget the box holds, so not floating; a
+        // reference of the test's own.
+        let client: gtk::Widget = unsafe { from_glib_none(raw_label) };
+        assert!(
+            register(&client, "made.so", "Made Floating Parent").is_none(),
+            "a widget already inside a container was registered"
+        );
+        assert!(
+            !alive.is_null(),
+            "refusing the registration finalized the plugin's container"
+        );
+        assert_ne!(
+            // SAFETY: still alive, per the weak pointer.
+            unsafe { glib::gobject_ffi::g_object_is_floating(raw_box.cast()) },
+            glib::ffi::GFALSE,
+            "refusing the registration took the plugin's floating reference"
+        );
+        // From here the plugin keeps its container.
+        //
+        // SAFETY: alive and floating; sinking makes the reference the
+        // test's, which it never gives up.
+        unsafe {
+            glib::gobject_ffi::g_object_remove_weak_pointer(raw_box.cast(), &raw mut alive);
+            glib::gobject_ffi::g_object_ref_sink(raw_box.cast());
+        }
+    }
+
+    /// A plugin panel docked in the main window is still the plugin's, so
+    /// still a parent — and so is a widget inside it. The host's wrapping
+    /// around it is not, shown or not. And a widget made into a realized
+    /// parent works.
+    fn a_plugin_panel_is_a_parent_and_its_wrapping_is_not(main: &gtk::Window) {
+        let ask = create_plugin_scintilla;
+        let panel = plugin_widget();
+        open(&panel, "made.so", "Made Sci Host");
+        assert!(
+            panel.is_ancestor(main),
+            "the panel is not docked in the main window"
+        );
+        let made = ask(handle_of(&panel));
+        assert!(!made.is_null(), "a docked plugin panel was refused");
+        assert_eq!(parent_of(made), handle_of(&panel));
+        let inner = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        panel
+            .downcast_ref::<gtk::Container>()
+            .expect("the panel is a box")
+            .add(&inner);
+        assert!(
+            !ask(handle_of(&inner)).is_null(),
+            "a widget inside a plugin panel was refused"
+        );
+        let viewport = panel.parent().expect("the host's viewport");
+        let scrolled = viewport.parent().expect("the host's scrolled container");
+        for (what, wrapping) in [("viewport", &viewport), ("scrolled container", &scrolled)] {
+            assert!(
+                ask(handle_of(wrapping)).is_null(),
+                "the host's {what} around a plugin panel was accepted as a parent"
+            );
+        }
+        // A panel registered but not shown: its wrapping is parked, and is
+        // the host's all the same.
+        let unshown = plugin_widget();
+        assert!(register(&unshown, "made.so", "Made Sci Unshown").is_some());
+        let unshown_wrapping = unshown.parent().expect("adopted at registration");
+        assert!(
+            ask(handle_of(&unshown_wrapping)).is_null(),
+            "the host's wrapping around an unshown plugin panel was accepted as a parent"
+        );
+        // Its plugin takes the widget back out. The host retires the
+        // registration at the next main-loop turn, but it stops counting
+        // at once — whether a registration stands is read from GTK — so
+        // the viewport it leaves, empty now and no longer refused as a
+        // full `GtkBin`, is the host's.
+        unshown_wrapping
+            .downcast_ref::<gtk::Container>()
+            .expect("the host's viewport is a container")
+            .remove(&unshown);
+        assert!(
+            ask(handle_of(&unshown_wrapping)).is_null(),
+            "the host's emptied wrapping around a plugin panel was accepted as a parent"
+        );
+
+        // Into a parent already on screen: the widget is realized as it
+        // goes in, inside the dispatch, and is still the plugin's to show.
+        main.show_all();
+        pump();
+        assert!(panel.is_realized(), "the panel is not on screen");
+        let late = ask(handle_of(&panel));
+        assert!(!late.is_null());
+        let widget = widget_at(late);
+        assert!(
+            widget.is_realized(),
+            "a widget put into a realized parent was not realized as it went in"
+        );
+        assert!(
+            !widget.is_visible(),
+            "a new widget is shown before the plugin shows it"
+        );
+        widget.show();
+        pump();
+        assert!(
+            widget.is_mapped(),
+            "a shown widget in a shown panel is not on screen"
+        );
+        assert_eq!(round_trip(late, "hello"), 5);
+        finish(&panel);
+    }
+
+    /// A container that turns the widget away — a `GtkPaned` already
+    /// holding two, which also prints GTK's own warning — leaves it in no
+    /// container, still answered and routed.
+    fn a_container_that_turns_the_widget_away_leaves_it_routed() {
+        let full_paned = gtk::Paned::new(gtk::Orientation::Horizontal);
+        full_paned.pack1(&gtk::Label::new(None), true, true);
+        full_paned.pack2(&gtk::Label::new(None), true, true);
+        let turned_away = create_plugin_scintilla(handle_of(&full_paned));
+        assert!(
+            !turned_away.is_null(),
+            "a container that turned the widget away left the plugin without one"
+        );
+        assert!(
+            parent_of(turned_away).is_null(),
+            "the widget a container turned away is in a container"
+        );
+        assert_eq!(
+            round_trip(turned_away, "ab"),
+            2,
+            "the widget a container turned away is not routed"
+        );
+    }
+
+    /// A plugin's widget answers `SCI_*` from the plugin's own thread the
+    /// way the host's does: parked until the main loop runs.
+    fn a_plugin_widget_is_routed_from_any_thread() {
+        let made = create_plugin_scintilla(npp_sentinel());
+        assert_eq!(round_trip(made, "hello"), 5);
+        let worker = length_from_a_worker(made);
+        until_finished(&worker);
+        assert_eq!(worker.join().expect("worker panicked"), 5);
+    }
+
+    /// A live widget the plugin moves about — between windows, hidden,
+    /// unrealized, taken out and put back — stays routed: only its
+    /// destruction takes it out, and nothing on the way looks like that to
+    /// its scrollbars.
+    fn a_widget_moved_about_stays_routed() {
+        let first = gtk::Window::new(gtk::WindowType::Toplevel);
+        let second = gtk::Window::new(gtk::WindowType::Toplevel);
+        let made = create_plugin_scintilla(handle_of(&first));
+        assert!(!made.is_null());
+        let widget = widget_at(made);
+        first.show_all();
+        pump();
+        first.remove(&*widget);
+        second.add(&*widget);
+        second.show_all();
+        pump();
+        widget.hide();
+        widget.unrealize();
+        second.remove(&*widget);
+        first.add(&*widget);
+        widget.show();
+        pump();
+        assert_eq!(
+            round_trip(made, "still here"),
+            10,
+            "a widget the plugin moved about was taken out of routing"
+        );
+        // SAFETY: the test's own windows, which nothing else holds.
+        unsafe {
+            first.destroy();
+            second.destroy();
+        }
+    }
+
+    /// The plugin destroys its widget, as a Win32 plugin destroys its
+    /// control: closing the dialog it sits in, right after editing it.
+    /// Scintilla still runs the work the edit queued, after the dispose,
+    /// and writes nothing of the host's; and the handle answers 0 from
+    /// then on — from a worker thread too, when the widget is destroyed
+    /// while the worker's message waits for the main loop.
+    fn a_destroyed_widget_is_routed_nothing() {
+        let dialog = gtk::Window::new(gtk::WindowType::Toplevel);
+        let column = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        dialog.add(&column);
+        let made = create_plugin_scintilla(handle_of(&column));
+        assert!(!made.is_null());
+        widget_at(made).set_vexpand(true);
+        dialog.show_all();
+        pump();
+        // Enough text that Scintilla queues a scrollbar update for it,
+        // and the dialog closed before the main loop gets to that.
+        let text = "a line long enough to scroll sideways a little way at least\n".repeat(400);
+        assert!(round_trip(made, &text) > 0);
+        // Scintilla's own children are held by the host too: three of
+        // them, each with the host's reference besides Scintilla's. A
+        // Scintilla whose dispose frees something else needs re-reading.
+        // Collected first and asserted after: a panic inside `forall`
+        // would abort in GTK's trampoline rather than fail the test.
+        let mut refs = Vec::new();
+        widget_at(made)
+            .downcast_ref::<gtk::Container>()
+            .expect("a Scintilla widget is a container")
+            .forall(|part| {
+                // SAFETY: a live object, the widget's own; a field read.
+                refs.push(unsafe {
+                    (*part.as_ptr().cast::<glib::gobject_ffi::GObject>()).ref_count
+                });
+            });
+        assert_eq!(
+            refs.len(),
+            3,
+            "Scintilla's own children changed: re-check what its dispose frees"
+        );
+        assert!(
+            refs.iter().all(|&refs| refs >= 2),
+            "a part of a plugin's widget is not held by the host"
+        );
+        // SAFETY: the test's own window, which nothing else holds.
+        unsafe { dialog.destroy() };
+        // Objects of the host's, made where the freed memory would be.
+        let unrelated: Vec<gtk::Adjustment> = (0..3000)
+            .map(|_| gtk::Adjustment::new(0.0, 0.0, 12_345.0, 1.0, 10.0, 7.0))
+            .collect();
+        pump();
+        assert!(
+            unrelated
+                .iter()
+                .all(|a| a.upper().to_bits() == 12_345.0_f64.to_bits()
+                    && a.page_size().to_bits() == 7.0_f64.to_bits()),
+            "Scintilla wrote into memory the host had reused after the widget was destroyed"
+        );
+        assert_eq!(
+            plugin_dispatch(made, SCI_GETLENGTH, 0, 0),
+            0,
+            "a destroyed widget was sent a message"
+        );
+        // A null handle matches no slot, the cleared ones included.
+        assert_eq!(
+            plugin_dispatch(std::ptr::null_mut(), SCI_GETLENGTH, 0, 0),
+            0,
+            "a null handle was sent a message"
+        );
+        assert!(
+            create_plugin_scintilla(made).is_null(),
+            "a destroyed Scintilla widget was accepted as a parent"
+        );
+        assert!(
+            register(&widget_at(made), "made.so", "Made Destroyed").is_none(),
+            "a destroyed Scintilla widget was registered as a dock panel"
+        );
+
+        // Plugin code that runs while the widget is being taken apart — a
+        // handler on its container's `remove` here — finds it gone: its
+        // scrollbars went first, before that handler runs. The code page
+        // is asked because the answer differs: a routed message reads
+        // UTF-8, a refused one 0.
+        let its_dialog = gtk::Window::new(gtk::WindowType::Toplevel);
+        let its_column = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        its_dialog.add(&its_column);
+        let doomed = create_plugin_scintilla(handle_of(&its_column));
+        assert!(!doomed.is_null());
+        let answered = std::rc::Rc::new(Cell::new(-1_isize));
+        let seen = answered.clone();
+        its_column.connect_remove(move |_, _| {
+            seen.set(plugin_dispatch(doomed, SCI_GETCODEPAGE, 0, 0));
+        });
+        // SAFETY: the test's own window, which nothing else holds.
+        unsafe { its_dialog.destroy() };
+        assert_eq!(
+            answered.get(),
+            0,
+            "a widget being destroyed was sent a message from its container's `remove`"
+        );
+
+        let other = create_plugin_scintilla(npp_sentinel());
+        assert_eq!(round_trip(other, "abc"), 3);
+        let worker = length_from_a_worker(other);
+        // SAFETY: a widget the host made, which the test destroys as its
+        // plugin would.
+        unsafe { gtk::ffi::gtk_widget_destroy(other.cast()) };
+        until_finished(&worker);
+        assert_eq!(
+            worker.join().expect("worker panicked"),
+            0,
+            "a widget destroyed while its message waited for the main loop was sent it"
+        );
+    }
+
+    /// A plugin's window is registered and made transient for the main
+    /// window — unless it has a transient parent of its own — and the
+    /// handles that are no window of a plugin's are not. Removal refuses
+    /// only what it can tell without reading the pointer.
+    fn modeless_dialogs_are_checked_and_made_transient(main: &gtk::Window, host_sci: *mut c_void) {
+        let register = |handle: *mut c_void, add: bool| register_modeless_dialog(handle, add, main);
+        let dialog = gtk::Window::new(gtk::WindowType::Toplevel);
+        assert!(
+            register(handle_of(&dialog), true),
+            "a plugin's window was refused"
+        );
+        assert_eq!(
+            dialog.transient_for().as_ref(),
+            Some(main),
+            "a registered dialog is not transient for the main window"
+        );
+        let its_parent = gtk::Window::new(gtk::WindowType::Toplevel);
+        let parented = gtk::Window::new(gtk::WindowType::Toplevel);
+        parented.set_transient_for(Some(&its_parent));
+        assert!(register(handle_of(&parented), true));
+        assert_eq!(
+            parented.transient_for().as_ref(),
+            Some(&its_parent),
+            "a dialog's own transient parent was replaced"
+        );
+        assert!(
+            register(handle_of(&dialog), false),
+            "its removal was refused"
+        );
+        // A floating dock window is the host's, and so is one the dock
+        // has pooled since.
+        let floated = plugin_widget();
+        let panel = open(&floated, "made.so", "Made Dialog Float");
+        let floating = float_panel(panel);
+        assert!(
+            !register(handle_of(&floating), true),
+            "a floating dock window was registered"
+        );
+        assert!(
+            dock_panel_back(panel).contains(&floating),
+            "the dock did not pool the window it no longer floats a group in"
+        );
+        assert!(
+            !register(handle_of(&floating), true),
+            "a pooled dock window was registered"
+        );
+        finish(&floated);
+        // Nor is a window registered while the dock cannot say which
+        // windows are the host's.
+        let busy = gtk::Window::new(gtk::WindowType::Toplevel);
+        assert!(
+            !with_the_dock_busy(|| register(handle_of(&busy), true)),
+            "a dialog was registered while the dock could not be asked about it"
+        );
+        assert!(busy.transient_for().is_none());
+        let not_a_window = gtk::Label::new(None);
+        for (what, handle) in [
+            ("null", std::ptr::null_mut()),
+            ("the npp handle", npp_sentinel()),
+            ("the host's Scintilla widget", host_sci),
+            ("a widget that is no window", handle_of(&not_a_window)),
+            ("the main window", handle_of(main)),
+            (
+                "another window of the host's",
+                handle_of(&rig_hint_window()),
+            ),
+        ] {
+            assert!(!register(handle, true), "{what} was registered");
+        }
+        for (what, handle) in [
+            ("null", std::ptr::null_mut()),
+            ("the npp handle", npp_sentinel()),
+            ("the host's Scintilla widget", host_sci),
+        ] {
+            assert!(!register(handle, false), "{what}'s removal was answered");
+        }
+    }
+
+    /// A plugin's toolbar button: added once per command, the first after
+    /// a separator, its icon replaced on a second request, refused for an
+    /// unknown command or a non-image — and a click runs the command once
+    /// and leaves the plugin's mark showing, not GTK's toggle, where the
+    /// host's own changes to the mark run nothing.
+    fn plugin_toolbar_buttons() {
+        let toolbar = gtk::Toolbar::new();
+        toolbar.insert(
+            &gtk::ToolButton::new(None::<&gtk::Widget>, Some("built-in")),
+            -1,
+        );
+        let before_items = toolbar.n_items();
+        let small = Pixbuf::new(Colorspace::Rgb, true, 8, 16, 16).expect("a 16 px pixbuf");
+        let large = Pixbuf::new(Colorspace::Rgb, true, 8, 48, 48).expect("a 48 px pixbuf");
+        let add = |icon: *mut c_void| add_toolbar_icon(&toolbar, SMOKE_CMD, icon);
+        assert!(
+            !add(handle_of(&small)),
+            "a button for an unknown command was added"
+        );
+
+        // Make the command known, as a load pass does, and give it a mark
+        // to show.
+        COMMAND_LABELS.with(|labels| {
+            labels
+                .borrow_mut()
+                .insert(SMOKE_CMD, "Smoke Command".to_owned())
+        });
+        let func = FuncItem {
+            item_name: [0; MENU_TITLE_LENGTH],
+            p_func: Some(smoke_command),
+            cmd_id: SMOKE_CMD,
+            init2_check: 0,
+            p_sh_key: std::ptr::null_mut(),
+        };
+        PLUGIN_CHECKS.with(|c| c.borrow_mut().absorb([&func]));
+        assert!(set_menu_check(SMOKE_CMD, true));
+
+        let not_an_image = gtk::Label::new(None);
+        assert!(
+            !add(handle_of(&not_an_image)),
+            "a label was taken as an image"
+        );
+        assert!(
+            add(handle_of(&small)),
+            "a known command's button was refused"
+        );
+        assert_eq!(
+            toolbar.n_items(),
+            before_items + 2,
+            "not one separator and one button"
+        );
+        assert!(toolbar
+            .nth_item(before_items)
+            .is_some_and(|item| item.is::<gtk::SeparatorToolItem>()));
+        let button = toolbar
+            .nth_item(before_items + 1)
+            .and_then(|item| item.downcast::<gtk::ToggleToolButton>().ok())
+            .expect("the last item is the button");
+        assert!(
+            button.is_active(),
+            "the button does not show the command's mark"
+        );
+        assert_eq!(button.tooltip_text().as_deref(), Some("Smoke Command"));
+        assert_eq!(
+            ToolButtonExt::label(&button).as_deref(),
+            Some("Smoke Command"),
+            "the button has no name for the overflow menu"
+        );
+        let icon_width = |button: &gtk::ToggleToolButton| {
+            ToolButtonExt::icon_widget(button)
+                .expect("an icon")
+                .preferred_width()
+                .1
+        };
+        assert_eq!(
+            icon_width(&button),
+            16,
+            "a small icon is not drawn at its own size"
+        );
+
+        // A second request replaces the icon and adds nothing.
+        assert!(add(handle_of(&large)));
+        assert_eq!(toolbar.n_items(), before_items + 2);
+        assert_eq!(
+            icon_width(&button),
+            24,
+            "a large icon is not scaled down to the cell"
+        );
+        assert!(button.is_active(), "replacing the icon changed the mark");
+
+        clicks_show_the_plugins_mark(&button, &add, &small);
+
+        // A second command's button goes after the first, with no
+        // separator of its own.
+        COMMAND_LABELS.with(|labels| {
+            labels
+                .borrow_mut()
+                .insert(SMOKE_CMD_2, "Smoke Command 2".to_owned())
+        });
+        assert!(add_toolbar_icon(&toolbar, SMOKE_CMD_2, handle_of(&small)));
+        assert_eq!(toolbar.n_items(), before_items + 3);
+        assert!(toolbar
+            .nth_item(before_items + 2)
+            .is_some_and(|item| item.is::<gtk::ToggleToolButton>()));
+    }
+
+    /// A click on `button` runs its command once and leaves the plugin's
+    /// mark showing; the host's own changes to the mark run nothing.
+    /// `add` asks for the button again, as `NPPM_ADDTOOLBARICON`.
+    fn clicks_show_the_plugins_mark(
+        button: &gtk::ToggleToolButton,
+        add: &dyn Fn(*mut c_void) -> bool,
+        small: &Pixbuf,
+    ) {
+        // A click — on the button inside the tool item, which is what the
+        // pointer clicks — flips its state; the handler puts the plugin's
+        // mark back and runs the command (no plugin is loaded here, so the
+        // command finds nothing to run, and the count is what shows it).
+        let click = || {
+            button
+                .child()
+                .and_then(|inner| inner.downcast::<gtk::Button>().ok())
+                .expect("a tool button holds a button")
+                .clicked();
+        };
+        let runs = || COMMANDS_RUN.with(Cell::get);
+        let before = runs();
+        click();
+        assert_eq!(runs(), before + 1, "a click did not run the command once");
+        assert!(button.is_active(), "the click's toggle was left showing");
+        // A mark set through `NPPM_SETMENUITEMCHECK` reaches the button
+        // without running anything, and the next click keeps it.
+        assert!(set_menu_check(SMOKE_CMD, false));
+        assert_eq!(runs(), before + 1, "a mark the plugin set ran its command");
+        assert!(
+            !button.is_active(),
+            "a mark the plugin cleared still shows on its button"
+        );
+        click();
+        assert_eq!(runs(), before + 2, "a click did not run the command once");
+        assert!(!button.is_active(), "the click's toggle was left showing");
+        // A second request for the button brings the recorded mark to it
+        // quietly too.
+        PLUGIN_CHECKS.with(|c| c.borrow_mut().set(SMOKE_CMD, true));
+        assert!(add(handle_of(small)));
+        assert!(button.is_active(), "a second request did not show the mark");
+        assert_eq!(runs(), before + 2, "a second request ran the command");
+    }
+
+    /// At twice the scale, a plugin's icon is drawn at twice the pixels
+    /// in the same 24-pixel cell, so it stays sharp on a high-DPI screen.
+    fn plugin_icons_are_drawn_at_the_screens_pixels() {
+        let large = Pixbuf::new(Colorspace::Rgb, true, 8, 48, 48).expect("a 48 px pixbuf");
+        let sharp = plugin_icon_image(&large, 2).expect("an icon drawn at scale 2");
+        let surface = sharp
+            .property::<Option<gtk::cairo::Surface>>("surface")
+            .expect("drawn as a surface");
+        let pixels = gtk::cairo::ImageSurface::try_from(surface).expect("an image surface");
+        assert_eq!(
+            (pixels.width(), pixels.device_scale()),
+            (48, (2.0, 2.0)),
+            "a scale-2 icon is not drawn at the screen's pixels"
+        );
+        // GTK 3 sizes a shown widget only.
+        sharp.show();
+        assert_eq!(
+            sharp.preferred_width().1,
+            24,
+            "a scale-2 icon left its cell"
+        );
+    }
+
+    /// A plugin command that is never run: the scenario loads no plugin,
+    /// so `on_plugin_command` resolves nothing.
+    extern "C" fn smoke_command() {}
 }

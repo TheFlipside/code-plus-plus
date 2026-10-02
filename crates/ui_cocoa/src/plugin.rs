@@ -3143,7 +3143,7 @@ fn absorb_loaded_commands() {
         COMMAND_LABELS.with(|labels| {
             let mut labels = labels.borrow_mut();
             for f in st.shell.loaded_plugin_funcs().flat_map(|(_, funcs)| funcs) {
-                if f.p_func.is_some() {
+                if f.is_command() {
                     labels.insert(f.cmd_id, funcitem_label(f));
                 }
             }
@@ -3174,7 +3174,7 @@ fn rebuild_menu(menu: &NSMenu, actions: &Actions, mtm: MainThreadMarker) {
                         (
                             funcitem_label(f),
                             f.cmd_id,
-                            f.p_func.is_some(),
+                            f.is_command(),
                             st.shell.plugin_shortcut_chord_for_cmd_id(f.cmd_id),
                         )
                     })

@@ -1,11 +1,14 @@
 //! Limits on what a plugin can ask the host to make for it and keep.
 //!
 //! On the backends that make these things for a plugin and hold them —
-//! Cocoa today — `NPPM_CREATESCINTILLAHANDLE` makes a Scintilla view the
-//! host then keeps for the rest of the process: a plugin may hold the
-//! view's direct-call pair (`SCI_GETDIRECTFUNCTION`), which nothing could
-//! invalidate safely, and Notepad++ keeps every Scintilla it makes for
-//! plugins until it exits too. `NPPM_ADDTOOLBARICON` adds a toolbar button
+//! GTK and Cocoa — `NPPM_CREATESCINTILLAHANDLE` makes a Scintilla view the
+//! host then keeps a reference to for the rest of the process, as
+//! Notepad++ keeps every Scintilla it makes for plugins until it exits.
+//! On Cocoa that is because a plugin may hold the view's direct-call pair
+//! (`SCI_GETDIRECTFUNCTION`), which nothing could invalidate safely; on
+//! GTK, where the plugin may destroy its widget, because Scintilla still
+//! points into it afterwards and its handle must never come to name
+//! another object. `NPPM_ADDTOOLBARICON` adds a toolbar button
 //! that stays for the session. What is kept needs a cap, or a plugin that
 //! asks once per file it processes grows it without end. Win32 caps
 //! neither: its Scintillas are the plugin's to destroy, so nothing is kept

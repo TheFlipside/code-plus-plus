@@ -415,14 +415,10 @@ pub trait UiPlatform {
     /// exists; `None` for unbound cmd ids. Drives
     /// `NPPM_GETSHORTCUTBYCMDID`.
     ///
-    /// `cfg(target_os = "windows")`-gated because the
-    /// `ShortcutKey` type comes from `codepp_plugin_host`'s
-    /// FFI surface, which is itself Windows-only until Phase 5
-    /// brings up GTK / Cocoa plugin loaders. The Phase 5
-    /// backends will gain their own `cfg`-gated impls of this
-    /// method against their native shortcut systems
-    /// (`gtk_application_set_accels_for_action` /
-    /// `NSMenuItem.keyEquivalent`).
+    /// Win32 answers from its accelerator table. The default,
+    /// `None`, is what a backend without one answers. A plugin
+    /// command's shortcut is answered from the shell's shortcut
+    /// cache before this is asked, on every backend.
     fn shortcut_for_cmd_id(&self, _cmd_id: i32) -> Option<codepp_plugin_host::ShortcutKey> {
         None
     }
@@ -431,9 +427,10 @@ pub trait UiPlatform {
     /// Returns `true` if at least one binding was removed,
     /// `false` if the cmd id had no binding (table left
     /// unchanged in that case). Drives
-    /// `NPPM_REMOVESHORTCUTBYCMDID`. Same `cfg(windows)` gate
-    /// rationale as `shortcut_for_cmd_id` — the dispatcher
-    /// lives in `plugin-host`, which is Windows-only.
+    /// `NPPM_REMOVESHORTCUTBYCMDID`. Win32 strips the binding from
+    /// its accelerator table; the default, `false`, is what a backend
+    /// without one answers. A plugin command's cached shortcut is
+    /// removed by the shell as well, on every backend.
     fn remove_shortcut_for_cmd_id(&mut self, _cmd_id: i32) -> bool {
         false
     }
@@ -445,8 +442,12 @@ pub trait UiPlatform {
     /// `register == false` removes it. On Cocoa the handle is an
     /// `NSWindow*`, and registering changes nothing: AppKit moves focus
     /// within a window itself, and plugin shortcuts fire only in the
-    /// main window. The backend checks the handle is a window of the
-    /// plugin's and answers it, as Notepad++ does. The default,
+    /// main window. The backend checks the handle is a window that is
+    /// not one of its own and answers it, as Notepad++ does. On GTK the
+    /// handle is a `GtkWindow*`, checked the same way, and registering
+    /// makes it transient for the main window if it has no transient
+    /// parent — the owner a Win32 plugin gives its dialog with the npp
+    /// handle, which on GTK is not a window. The default,
     /// `false`, is what a backend that has no such dialogs answers.
     fn register_modeless_dialog(
         &mut self,
@@ -458,9 +459,9 @@ pub trait UiPlatform {
 
     /// Add a toolbar button for the plugin command `cmd_id`, showing
     /// the plugin's image. Drives `NPPM_ADDTOOLBARICON`. The image is
-    /// an `HICON` on Win32 and an `NSImage*` on Cocoa. The default,
-    /// `false`, is what a backend without plugin toolbar buttons
-    /// answers.
+    /// an `HICON` on Win32, an `NSImage*` on Cocoa and a `GdkPixbuf*`
+    /// on GTK. The default, `false`, is what a backend without plugin
+    /// toolbar buttons answers.
     fn add_toolbar_icon(&mut self, _cmd_id: i32, _hicon: codepp_plugin_host::Hwnd) -> bool {
         false
     }
@@ -489,9 +490,12 @@ pub trait UiPlatform {
     /// `NPPM_CREATESCINTILLAHANDLE`. Returns the new handle, or NULL
     /// on failure. On Win32 it is a child window of `parent`, which
     /// the plugin destroys before the parent goes. On Cocoa `parent`
-    /// is an `NSView*`, or the npp handle for a view in no window, and
-    /// the host keeps the view for the rest of the process. The
-    /// default, NULL, is what a backend without the feature answers.
+    /// is an `NSView*`, and on GTK a `GtkContainer*`, or the npp handle
+    /// for a view in no window or a widget in no container. The host
+    /// keeps a reference to what it makes for the rest of the
+    /// process; on GTK the widget is still the plugin's to destroy,
+    /// after which the host routes nothing to it. The default, NULL,
+    /// is what a backend without the feature answers.
     fn create_plugin_scintilla(
         &mut self,
         _parent: codepp_plugin_host::Hwnd,
@@ -699,10 +703,9 @@ pub trait UiPlatform {
     /// (from `NPPM_ALLOCATECMDID` or the plugin's own `FuncItem`
     /// entries) fall through untouched. Returns `true` if a
     /// dispatch was attempted, `false` for command ids the
-    /// backend has no target for (unmapped built-in ids). Same
-    /// `cfg(windows)` gate rationale as the other plugin-host-
-    /// dispatched methods — `NPPM_MENUCOMMAND` lives in
-    /// `plugin-host`, which is Windows-only until Phase 5.
+    /// backend has no target for (unmapped built-in ids). The
+    /// default, `false`, is what a backend that maps no built-in id
+    /// answers — GTK and Cocoa today.
     fn dispatch_npp_menu_command(&mut self, _idm: i32) -> bool {
         false
     }
@@ -713,8 +716,9 @@ pub trait UiPlatform {
     /// table as [`Self::dispatch_npp_menu_command`], falls through
     /// for plugin-allocated cmd ids, and issues the native
     /// "check menu item by command" call. The GTK and Cocoa ones take
-    /// plugin cmd ids only, and record the mark for the Plugins menu to
-    /// paint whenever it is built or shown. Returns `true` if the state was
+    /// plugin cmd ids only, record the mark for the Plugins menu to
+    /// paint whenever it is built or shown, and show it on the command's
+    /// toolbar button, if it has one. Returns `true` if the state was
     /// applied, `false` if the id has no menu item (unmapped
     /// built-in id, or a plugin cmd id whose owning plugin didn't
     /// publish a menu entry).
@@ -10396,9 +10400,8 @@ mod tests {
         /// `dispatch_npp_menu_command` — one entry per call, in
         /// order. Lets `NPPM_MENUCOMMAND` tests assert the
         /// dispatcher forwarded the exact id. `cfg(windows)`-gated
-        /// because both the impl method and the tests that read
-        /// the vec are Windows-only (`NPPM_*` dispatch lives in
-        /// `plugin-host`, which is Windows-only until Phase 5).
+        /// with the tests that read it, since Win32 is the backend
+        /// that maps built-in ids for `NPPM_MENUCOMMAND`.
         #[cfg(target_os = "windows")]
         npp_menu_commands: Vec<i32>,
         /// Recorded `(cmd_id, checked)` pairs from

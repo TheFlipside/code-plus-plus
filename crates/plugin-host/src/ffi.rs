@@ -67,6 +67,16 @@ pub struct FuncItem {
     pub p_sh_key: *mut ShortcutKey,
 }
 
+impl FuncItem {
+    /// Whether the entry is a command: one that runs something. A null
+    /// `pFunc` is a separator, which every backend draws as one and
+    /// nothing runs.
+    #[must_use]
+    pub fn is_command(&self) -> bool {
+        self.p_func.is_some()
+    }
+}
+
 /// Plugin's per-menu-item callback. Plain `extern "C"` no-arg, no-return.
 pub type PluginCmd = unsafe extern "C" fn();
 
@@ -472,11 +482,12 @@ pub const DOCKCONT_MAX: u32 = 4;
 /// the plugin's panels the notification is about. See
 /// `plugins/nppcompat-headers/Docking.h`.
 ///
-/// On macOS the same route carries the notifications of a Scintilla view
-/// the host made for the plugin (`NPPM_CREATESCINTILLAHANDLE`), which a
-/// Win32 Scintilla child sends to its parent window: there `lParam` is an
-/// `SCNotification` whose `hwnd_from` is the view, and `wParam` the
-/// view's control identifier, as Win32's `WM_NOTIFY` carries.
+/// Off Windows the same route carries the notifications of a Scintilla
+/// view or widget the host made for the plugin
+/// (`NPPM_CREATESCINTILLAHANDLE`), which a Win32 Scintilla child sends to
+/// its parent window: there `lParam` is an `SCNotification` whose
+/// `hwnd_from` is the view or widget, and `wParam` its control
+/// identifier, as Win32's `WM_NOTIFY` carries.
 pub const WM_NOTIFY: u32 = 0x004E;
 
 /// First DMN_* code: 1050, as upstream defines it. It was `0x1000`

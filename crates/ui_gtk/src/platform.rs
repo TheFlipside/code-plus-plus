@@ -830,12 +830,35 @@ impl UiPlatform for GtkUi {
         // A plugin's own commands only: the built-in `IDM_*` ids are not
         // mapped on this backend, as `NPPM_MENUCOMMAND` is not, and the
         // View menu's own toggles repaint from live state on every open
-        // anyway. Unlike the dock overrides above, this one touches a
-        // widget from inside the dispatch's borrow — the menu item, if
-        // the menu is up — which is safe because the item's own handler
-        // returns at once while the mark is set. See
-        // `crate::plugin::set_menu_check`.
+        // anyway. Unlike the dock overrides above, this one touches
+        // widgets from inside the dispatch's borrow — the menu item, if
+        // the menu is up, and the command's toolbar button, if it has one
+        // — which is safe because each one's own handler returns at once
+        // while the mark is being set. See `crate::plugin::set_menu_check`.
         crate::plugin::set_menu_check(idm, checked)
+    }
+
+    fn register_modeless_dialog(&mut self, dlg: codepp_plugin_host::Hwnd, register: bool) -> bool {
+        // `dlg` is a `GtkWindow*` on this backend, and registering makes it
+        // transient for the main window; see
+        // `crate::plugin::register_modeless_dialog`.
+        crate::plugin::register_modeless_dialog(dlg, register, &self.window)
+    }
+
+    fn add_toolbar_icon(&mut self, cmd_id: i32, hicon: codepp_plugin_host::Hwnd) -> bool {
+        // `hicon` is a `GdkPixbuf*` on this backend. Adding the button
+        // touches the toolbar from inside the dispatch's borrow, which is
+        // safe for the reason `set_npp_menu_item_check` gives.
+        crate::plugin::add_toolbar_icon(&self.toolbar, cmd_id, hicon)
+    }
+
+    fn create_plugin_scintilla(
+        &mut self,
+        parent: codepp_plugin_host::Hwnd,
+    ) -> codepp_plugin_host::Hwnd {
+        // `parent` is a `GtkContainer*`, or the npp handle for a widget in
+        // no container; see `crate::plugin::create_plugin_scintilla`.
+        crate::plugin::create_plugin_scintilla(parent)
     }
 }
 

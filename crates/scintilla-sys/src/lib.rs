@@ -106,6 +106,12 @@ extern "C" {
     /// `Scintilla_ReleaseResources`; note the different return type —
     /// the GTK entry point returns void.
     pub fn scintilla_release_resources();
+
+    /// The `GType` of a Scintilla widget, `ScintillaObject`: for telling
+    /// one apart from other `GObject`s by type rather than by address.
+    /// Registers the type on first use, so it may be called before any
+    /// widget is made. A `GType` is a `gsize`.
+    pub fn scintilla_object_get_type() -> usize;
 }
 
 // Cocoa entry points, supplied by our own `cxx/ScintillaCocoaShim.mm`
@@ -854,13 +860,13 @@ pub const SCN_UPDATEUI: u32 = 2007;
 /// `ui_win32` can read the same bytes through the `windows` crate's
 /// `NMHDR`.
 ///
-/// Declared here rather than in `plugin-host` because that crate's
-/// `ffi` module is `#![cfg(target_os = "windows")]` — it exists to
-/// mirror the plugin ABI — whereas this is a Scintilla type both
-/// backends need. GTK reaches it by pulling the boxed `SCNotification`
-/// out of the `sci-notify` signal's third `GValue` with
-/// `g_value_get_boxed`; the payload is the same struct Win32 receives
-/// through `WM_NOTIFY`.
+/// Declared here, beside the rest of Scintilla's surface, so a backend
+/// reading its own view's notifications needs Scintilla alone and not
+/// the plugin ABI — `plugin-host`'s `ffi::SCNotification` is the whole
+/// structure as a plugin receives it. GTK reaches it by pulling the
+/// boxed `SCNotification` out of the `sci-notify` signal's third
+/// `GValue` with `g_value_get_boxed`; the payload is the same struct
+/// Win32 receives through `WM_NOTIFY`.
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
 pub struct Sci_NotifyHeader {
@@ -877,8 +883,8 @@ pub const SCN_URIDROPPED: u32 = 2015;
 
 /// The prefix of `SCNotification` up to its `text` pointer — enough to
 /// read the URI list for [`SCN_URIDROPPED`] without redeclaring the whole
-/// ~24-field struct (the full form lives in `plugin-host`'s Windows-only
-/// `ffi` module).
+/// ~24-field struct (the full form, as a plugin receives it, is
+/// `plugin-host`'s `ffi::SCNotification`).
 ///
 /// `#[repr(C)]` lays these fields out in declaration order, matching
 /// `Scintilla.h`, so each field's offset here equals its offset in the

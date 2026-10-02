@@ -106,7 +106,23 @@
  *     does not look at what the pointer points at: it refuses
  *     only the handles the host knows without doing so — null,
  *     the npp handle, a Scintilla view it made — and answers any
- *     other. The GTK host answers 0. */
+ *     other.
+ *     On Linux (GTK) lParam is a GtkWindow*. GTK, too, moves
+ *     focus within every window itself, and the host's
+ *     accelerators belong to its main window, so nothing is
+ *     routed. Instead registering makes the dialog transient for
+ *     the host's main window when it has no transient parent of
+ *     its own, so the window manager keeps it above the editor:
+ *     what a Windows plugin gets by creating its dialog with the
+ *     npp handle as owner, which on GTK is not a window. Register
+ *     before the dialog is first shown, so the link is in place
+ *     when it maps — a dialog positioned with
+ *     GTK_WIN_POS_CENTER_ON_PARENT then opens centred on the main
+ *     window — and unset it after registering to keep the dialog
+ *     independent. The host refuses its own windows (the main
+ *     window, its floating dock windows, the dock's drop hint).
+ *     REMOVE is answered as on macOS, and leaves the transient
+ *     link as it is. */
 #define NPPM_MODELESSDIALOG               (NPPMSG + 12)
 /* Selectors for NPPM_MODELESSDIALOG's wParam. */
 #ifndef MODELESSDIALOGADD
@@ -226,7 +242,52 @@ typedef struct sessionInfo_ {
  *     changed it, and SCI_GETSCROLLWIDTH reads it. A width set
  *     at least as wide is left as set, unless it equals the
  *     width the host last installed, which the host cannot tell
- *     from its own. The GTK host answers 0. */
+ *     from its own.
+ *     On Linux (GTK) lParam is a GtkContainer*, and the answer
+ *     is a Scintilla GtkWidget* added to it with the container's
+ *     plain add, hidden, for the plugin to show
+ *     (gtk_widget_show). Scintilla asks for next to no room, so
+ *     a GtkBox packs it all but invisible unless the plugin sets
+ *     hexpand / vexpand on it. A container that turns the widget
+ *     away (a GtkPaned already full) leaves it in no container,
+ *     still answered and routed; the npp handle as lParam makes
+ *     a widget in no container too. The parent must be the
+ *     plugin's own, as on macOS: a widget in the host's main
+ *     window or a floating dock window is refused unless it is
+ *     inside a plugin's dock panel, wherever that panel is, and
+ *     so are the host's container around such a panel, a
+ *     Scintilla widget, and a GtkBin that already holds a child.
+ *     The widget is the plugin's to destroy, with its container
+ *     or on its own, as a Windows plugin destroys its control.
+ *     Once it is destroyed, SCI_* sent to it answers 0, as
+ *     SendMessage to a destroyed window does, its notifications
+ *     stop, and its direct-call pair must not be used again. Nor
+ *     may it be added to a container again, registered as a dock
+ *     panel or shown: Scintilla would lay it out from parts its
+ *     destruction took away, and the host refuses it wherever it
+ *     is asked to take it. The
+ *     host keeps a reference to it for the process, so its
+ *     handle never comes to name another object, and a destroyed
+ *     widget still counts against the caps: make one and reuse
+ *     it. The caps and the notifications are as on macOS,
+ *     nmhdr.hwndFrom being the widget; a widget asked for from
+ *     outside the host's calls into the plugin — from a GTK
+ *     signal handler of the plugin's own — is charged to no
+ *     plugin, and its notifications reach none, so ask for it
+ *     from a command, a notification or setInfo. Use a widget's
+ *     direct-call pair on the UI thread only: Scintilla raises
+ *     its notifications on the calling thread, and one raised on
+ *     another thread ends the process. The scroll-width floor is
+ *     not needed on GTK, but on each SCN_UPDATEUI the host holds
+ *     the horizontal scroll offset within the scroll width — the
+ *     widest line seen, once the plugin turns
+ *     SCI_SETSCROLLWIDTHTRACKING on — as it does in its own view,
+ *     which the mouse wheel could otherwise scroll past. The
+ *     host adds the widget inside its own dispatch, so a handler
+ *     that addition sets off, the container's add for one, runs
+ *     where every NPPM_* is declined (answered 0); and a parent
+ *     named while the host is laying out its dock panels is
+ *     refused. */
 #define NPPM_CREATESCINTILLAHANDLE        (NPPMSG + 20)
 #define NPPM_DESTROYSCINTILLAHANDLE       (NPPMSG + 21)  /* deprecated upstream */
 /* v3: number of user-defined languages (UDL) currently
@@ -401,7 +462,13 @@ typedef struct sessionInfo_ {
  *     shows the item's label as its tooltip and its check mark
  *     (NPPM_SETMENUITEMCHECK) as pressed, and a second call for
  *     the same command replaces the image. Plugins may add 64
- *     buttons in all. The GTK host answers FALSE. */
+ *     buttons in all.
+ *     On Linux (GTK) hToolbarIcon is a GdkPixbuf*, which the host
+ *     draws a copy of, so the plugin may drop its reference once
+ *     this returns. It is drawn at its own size, scaled down to
+ *     the toolbar's 24-pixel cell if larger. The rest is as on
+ *     macOS, and the command's label also names the button in
+ *     the toolbar's overflow menu. */
 #define NPPM_ADDTOOLBARICON               (NPPMSG + 41)
 /* Plugin-supplied icon payload for `NPPM_ADDTOOLBARICON`. */
 #ifndef NPP_TOOLBAR_ICONS_DEFINED

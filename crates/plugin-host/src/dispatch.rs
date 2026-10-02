@@ -1347,7 +1347,10 @@ pub trait HostServices {
     /// On macOS the handle is an `NSWindow*` and registering changes
     /// nothing — AppKit moves focus within a window itself, and plugin
     /// shortcuts fire only in the main window — so the host checks the
-    /// handle and answers it, as Notepad++ does.
+    /// handle and answers it, as Notepad++ does. On GTK it is a
+    /// `GtkWindow*`, checked the same way; nothing is routed there
+    /// either, but registering makes the dialog transient for the main
+    /// window when it has no transient parent of its own.
     fn register_modeless_dialog(&mut self, dlg: crate::ffi::Hwnd, register: bool) -> bool;
 
     /// Create a fresh Scintilla control as a child of the
@@ -1371,11 +1374,15 @@ pub trait HostServices {
     /// for the hot-path direct-call API).
     ///
     /// On macOS `parent` is an `NSView*`: the new view goes into it,
-    /// hidden and zero-sized, for the plugin to size and show. The npp
-    /// handle as `parent` makes a view in no window. Either way the
-    /// host keeps the view for the rest of the process, as Notepad++
-    /// keeps the Scintillas it makes for plugins, and its notifications
-    /// go to the plugin's `messageProc`.
+    /// hidden and zero-sized, for the plugin to size and show. On GTK
+    /// it is a `GtkContainer*`, and the new widget goes in hidden
+    /// through the container's own `add`. The npp handle as `parent`
+    /// makes one in no window or container. Either way the host keeps
+    /// a reference to it for the rest of the process, as Notepad++
+    /// keeps the Scintillas it makes for plugins, and its
+    /// notifications go to the plugin's `messageProc`. On GTK the
+    /// widget is still the plugin's to destroy, after which the host
+    /// routes nothing to it.
     fn create_plugin_scintilla(&mut self, parent: crate::ffi::Hwnd) -> crate::ffi::Hwnd;
 
     /// Register a plugin's HWND as a dockable dialog. Drives
@@ -1477,7 +1484,8 @@ pub trait HostServices {
     /// Returns `true` on success; `false` for null `hicon`,
     /// imagelist-add failure, or `TB_ADDBUTTONS` failure.
     ///
-    /// On macOS `hicon` is an `NSImage*`, which the host retains; the
+    /// On macOS `hicon` is an `NSImage*`, which the host retains, and
+    /// on GTK a `GdkPixbuf*`, which it draws a copy of; there the
     /// button is added only for a command a loaded plugin published.
     fn add_toolbar_icon(&mut self, cmd_id: i32, hicon: crate::ffi::Hwnd) -> bool;
 

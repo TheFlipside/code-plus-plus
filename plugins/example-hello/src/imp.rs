@@ -159,8 +159,8 @@ pub extern "C" fn getFuncsArray(nb: *mut i32) -> *mut FuncItem {
 ///
 /// `NPPN_TBMODIFICATION` is where the first dock panel is registered
 /// — see [`crate::dock::register_panels`], which also says why the
-/// second one deliberately is not — and, on macOS, where "Show Dock
-/// Panel" gets its toolbar button. `NPPN_SHUTDOWN` unregisters the
+/// second one deliberately is not — and, on Linux and macOS, where "Show
+/// Dock Panel" gets its toolbar button. `NPPN_SHUTDOWN` unregisters the
 /// modeless dialog ([`crate::dialog`]).
 ///
 /// The other event example-hello handles is `NPPN_FILEBEFORECLOSE`,
@@ -201,7 +201,7 @@ pub extern "C" fn beNotified(notification: *const SCNotification) {
 /// `messageProc`: example-hello has no host-to-plugin custom messages of
 /// its own, but off Windows this is where the host delivers the `DMN_*`
 /// notifications about its dock panels — `WM_NOTIFY`, `wParam` naming
-/// the panel — and, on macOS, the notifications of the Scintilla view the
+/// the panel — and the notifications of the Scintilla widget or view the
 /// host made for the Notes panel, since a GTK widget or an `NSView` has
 /// no window procedure to receive them at. The docking module decides; on
 /// Windows it answers 0, the notifications arriving at the panel's own

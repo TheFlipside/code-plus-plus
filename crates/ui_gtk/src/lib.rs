@@ -552,31 +552,54 @@ fn connect_sci_notify(sci_widget: &gtk::Widget) {
 /// `xOffset > 0`; once snapped to a fitting view it early-returns on the
 /// `xOffset <= 0` guard, so the steady-state cost is one direct call.
 fn clamp_horizontal_overscroll(st: &GtkUiState) {
+    clamp_horizontal_overscroll_of(st.editor, &st.sci_widget);
+}
+
+/// [`clamp_horizontal_overscroll`] for any Scintilla widget the host made:
+/// `editor` is its direct-call handle and `widget` the widget, whose
+/// allocation is the page. Also what a Scintilla widget made for a plugin
+/// gets on each of its `SCN_UPDATEUI` (`crate::plugin`), since the wheel
+/// path is Scintilla's own and runs past its content in any view.
+///
+/// Stateless, so one view's clamp cannot disturb another's. With
+/// `scrollWidth` tracking off — a plugin's view, unless the plugin turns it
+/// on — `scrollWidth` is a fixed width rather than the content's, and the
+/// clamp then holds the wheel to the range the scrollbar itself offers.
+pub(crate) fn clamp_horizontal_overscroll_of(editor: EditorHandle, widget: &gtk::Widget) {
     use codepp_scintilla_sys::{
         sptr_t, uptr_t, SCI_GETMARGINWIDTHN, SCI_GETSCROLLWIDTH, SCI_GETWRAPMODE, SCI_GETXOFFSET,
         SCI_SETXOFFSET,
     };
     // Word wrap pins xOffset at 0 (HorizontalScrollTo early-returns while
     // wrapping), so there is nothing to clamp.
-    if st.editor.send(SCI_GETWRAPMODE, 0, 0) != 0 {
+    if editor.send(SCI_GETWRAPMODE, 0, 0) != 0 {
         return;
     }
-    let xoffset = st.editor.send(SCI_GETXOFFSET, 0, 0);
+    let xoffset = editor.send(SCI_GETXOFFSET, 0, 0);
     if xoffset <= 0 {
         return;
     }
-    let scroll_width = st.editor.send(SCI_GETSCROLLWIDTH, 0, 0);
+    let scroll_width = editor.send(SCI_GETSCROLLWIDTH, 0, 0);
     // Visible text-area width = widget allocation minus every left margin
     // (line numbers, symbols, fold) and a small slop for the vertical
     // scrollbar. Scintilla supports at most 5 margins by default.
     let margins: sptr_t = (0..5)
-        .map(|m| st.editor.send(SCI_GETMARGINWIDTHN, m as uptr_t, 0))
+        .map(|m| editor.send(SCI_GETMARGINWIDTHN, m as uptr_t, 0))
         .sum();
-    let page_width = (st.sci_widget.allocated_width() as sptr_t - margins - 16).max(1);
+    let page_width = (widget.allocated_width() as sptr_t - margins - 16).max(1);
     let max_x = (scroll_width - page_width).max(0);
     if xoffset > max_x {
-        st.editor.send(SCI_SETXOFFSET, max_x as uptr_t, 0);
+        editor.send(SCI_SETXOFFSET, max_x as uptr_t, 0);
     }
+}
+
+/// `pixbuf` as an image whose logical size is its pixel size over
+/// `scale`: the way to size an image in GTK 3, where one made from a
+/// pixbuf ignores `set_pixel_size` and shows one pixel per logical pixel.
+/// `None` if cairo cannot make the surface, which costs only the icon.
+pub(crate) fn image_at_scale(pixbuf: &gtk::gdk_pixbuf::Pixbuf, scale: i32) -> Option<gtk::Image> {
+    let surface = pixbuf.create_surface(scale.max(1), None::<&gtk::gdk::Window>)?;
+    Some(gtk::Image::from_surface(Some(&surface)))
 }
 
 /// Create the Document Map's miniature Scintilla widget, adopt it into
@@ -2472,7 +2495,6 @@ mod source_scan {
     /// code from every scan — `menu.rs` lost half of itself.
     pub(crate) fn strip_test_modules(text: &str) -> String {
         const ATTR: &str = "#[cfg(test)]";
-        let bytes = text.as_bytes();
         let mut out = String::with_capacity(text.len());
         let mut pos = 0;
         while let Some(rel) = text[pos..].find(ATTR) {
@@ -2493,30 +2515,113 @@ mod source_scan {
                 continue;
             };
             let open = text.len() - module.len() + brace_rel;
-            let mut depth = 0usize;
-            let mut i = open;
-            while i < bytes.len() {
-                match bytes[i] {
-                    b'\'' => {
-                        i = skip_char_literal(bytes, i).max(i + 1);
-                        continue;
-                    }
-                    b'{' => depth += 1,
-                    b'}' => {
-                        depth -= 1;
-                        if depth == 0 {
-                            break;
-                        }
-                    }
-                    _ => {}
-                }
-                i += 1;
-            }
+            // An unterminated module runs to the end of the text.
+            let end = block_from(text, open).map_or(text.len(), |block| open + block.len());
             out.push_str(&text[pos..attr_at]);
-            pos = (i + 1).min(text.len());
+            pos = end;
         }
         out.push_str(&text[pos..]);
         out
+    }
+
+    /// The `{ … }` block opening at `open`, braces included, by brace
+    /// matching on already-stripped source ([`code_only`]); char literals
+    /// are skipped so a `'{'` cannot unbalance it. `None` if unterminated.
+    fn block_from(src: &str, open: usize) -> Option<String> {
+        let bytes = src.as_bytes();
+        let mut depth = 0usize;
+        let mut i = open;
+        while i < bytes.len() {
+            match bytes[i] {
+                b'\'' => {
+                    i = skip_char_literal(bytes, i).max(i + 1);
+                    continue;
+                }
+                b'{' => depth += 1,
+                b'}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return Some(src[open..=i].to_string());
+                    }
+                }
+                _ => {}
+            }
+            i += 1;
+        }
+        None
+    }
+
+    /// The body of the first `fn name(` in `src`, braces included.
+    pub(crate) fn fn_body(src: &str, name: &str) -> String {
+        let sig = format!("fn {name}(");
+        let start = src.find(&sig).unwrap_or_else(|| panic!("no fn {name}"));
+        let open = src[start..].find('{').expect("no body") + start;
+        block_from(src, open).unwrap_or_else(|| panic!("unterminated body for {name}"))
+    }
+
+    /// The `{ … }` block that `marker` introduces, braces included.
+    /// `marker` must end in the `{` that opens the block. For asking what
+    /// a block does *unconditionally* — pair it with
+    /// [`occurs_at_depth_one`] — where a bare `contains` is satisfied by a
+    /// `return` that sits under `if false` or in a closure.
+    pub(crate) fn block_after(src: &str, marker: &str) -> String {
+        assert!(
+            marker.ends_with('{'),
+            "`{marker}` must end at the block's opening brace"
+        );
+        let start = src.find(marker).unwrap_or_else(|| panic!("no `{marker}`"));
+        block_from(src, start + marker.len() - 1)
+            .unwrap_or_else(|| panic!("unterminated block after `{marker}`"))
+    }
+
+    /// Whether `needle` occurs in `block` at brace depth 1 — as a
+    /// statement of the block itself rather than inside a nested block or
+    /// a braced closure. Both placements compile and both look right in a
+    /// diff, which is why the depth is measured rather than the text
+    /// searched. Only braces count, so a closure without them (`|| f()`)
+    /// reads as the block's own depth.
+    pub(crate) fn occurs_at_depth_one(block: &str, needle: &str) -> bool {
+        let bytes = block.as_bytes();
+        let mut depth = 0usize;
+        let mut i = 0;
+        while i < bytes.len() {
+            match bytes[i] {
+                b'\'' => {
+                    i = skip_char_literal(bytes, i).max(i + 1);
+                    continue;
+                }
+                b'{' => depth += 1,
+                b'}' => depth = depth.saturating_sub(1),
+                _ => {}
+            }
+            if depth == 1 && bytes[i..].starts_with(needle.as_bytes()) {
+                return true;
+            }
+            i += 1;
+        }
+        false
+    }
+
+    #[test]
+    fn the_block_helpers_measure_structure() {
+        let src = code_only(
+            "fn f(a: u8) { let c = '{'; if a > 0 { return 1; } g(|| { h(); }); x(); }\n\
+             fn g() {}",
+        );
+        let body = fn_body(&src, "f");
+        assert!(body.starts_with('{') && body.ends_with('}'));
+        assert!(!body.contains("fn g"), "the body ran past its end: {body}");
+        assert!(occurs_at_depth_one(&body, "x();"));
+        assert!(
+            !occurs_at_depth_one(&body, "return 1;"),
+            "a nested return counted"
+        );
+        assert!(
+            !occurs_at_depth_one(&body, "h();"),
+            "a closure's call counted"
+        );
+        let then = block_after(&body, "if a > 0 {");
+        assert!(occurs_at_depth_one(&then, "return 1;"));
     }
 
     /// This backend's own source, comments and string literals
@@ -2575,13 +2680,18 @@ fn test_only_helper() {}
 /// each created once and never destroyed, and gives tabs their own
 /// buffers through `SCI_SETDOCPOINTER` instead of their own views.
 ///
-/// There are exactly **two** such views, and the safety argument is the
-/// same for both: the main editor (`sci_widget`) and the Document Map's
-/// miniature (`docmap_widget`). The count is two rather than one because
-/// a second *permanent* view does not reintroduce the hazard — that
-/// hazard is a view created *per tab* and destroyed when the tab closes,
-/// which would dangle every `EditorHandle` copy. Neither of these two is
-/// per-tab; both live for the whole process, so every copy stays valid.
+/// There are exactly **two** such permanent views, and the safety
+/// argument is the same for both: the main editor (`sci_widget`) and the
+/// Document Map's miniature (`docmap_widget`). The count is two rather
+/// than one because a second *permanent* view does not reintroduce the
+/// hazard — that hazard is a view created *per tab* and destroyed when
+/// the tab closes, which would dangle every `EditorHandle` copy. Neither
+/// of these two is per-tab; both live for the whole process, so every
+/// copy stays valid. The third place Scintilla widgets are made is
+/// `crate::plugin::create_plugin_scintilla`, and its widgets are never
+/// finalized either, for the same reason from the other side: a plugin
+/// that captured a widget's direct-call pair holds pointers the host
+/// cannot invalidate.
 ///
 /// That invariant is a property of the source, so a source check is
 /// what can hold it. A runtime test cannot: destroying a view would
@@ -2609,7 +2719,7 @@ fn test_only_helper() {}
 /// docking subsystem added the reparenting carve-out.
 #[cfg(test)]
 mod single_view_source_invariant {
-    use super::source_scan::{code_only, production_code};
+    use super::source_scan::{code_only, fn_body, production_code, strip_test_modules};
 
     #[test]
     fn the_scanner_ignores_comments_and_strings() {
@@ -2628,7 +2738,7 @@ let msg = \"found scintilla_new() calls\";
     }
 
     #[test]
-    fn exactly_two_scintilla_widgets_are_ever_created() {
+    fn scintilla_widgets_are_made_in_three_places_and_never_finalized() {
         let src = production_code();
         assert!(
             src.len() > 5_000,
@@ -2637,12 +2747,62 @@ let msg = \"found scintilla_new() calls\";
         );
         let calls = src.matches("scintilla_new()").count();
         assert_eq!(
-            calls, 2,
-            "this backend must build exactly two permanent Scintilla views — the main \
-             editor and the Document Map miniature — found {calls}. Each is created once \
-             and shares tab documents via SCI_SETDOCPOINTER; a *per-tab* view would leave \
-             every copied `EditorHandle` dangling when a tab closes, which is the hazard \
-             this count guards. Adding a third permanent view is fine, but update this."
+            calls, 3,
+            "this backend makes Scintilla widgets in exactly three places — the main \
+             editor and the Document Map miniature, once each, and the widgets made for \
+             plugins — found {calls}. The two permanent ones share tab documents via \
+             SCI_SETDOCPOINTER; a *per-tab* view would leave every copied `EditorHandle` \
+             dangling when a tab closes, which is the hazard this count guards. Adding \
+             another permanent view is fine, but update this."
+        );
+        // The plugins' widgets: made in `create_plugin_scintilla`, where
+        // the host takes its own reference by sinking the floating one, and
+        // held by a raw pointer — no gtk-rs wrapper owns one, so no
+        // destructor can drop that reference; and published to the routing
+        // table once, there; a slot is otherwise only ever cleared, when
+        // the widget is destroyed, and never reused.
+        let plugin = strip_test_modules(&code_only(include_str!("plugin.rs")));
+        let create = fn_body(&plugin, "create_plugin_scintilla");
+        assert_eq!(
+            create.matches("scintilla_new()").count(),
+            1,
+            "the widgets made for plugins are no longer made in `create_plugin_scintilla`"
+        );
+        assert!(
+            create.contains("g_object_ref_sink(ptr.cast())"),
+            "`create_plugin_scintilla` no longer takes the host's own reference to the \
+             widget it makes, so the plugin or a container could finalize it"
+        );
+        assert!(
+            !create.contains("from_glib_none(") && !create.contains("from_glib_full("),
+            "`create_plugin_scintilla` adopts something into an owning gtk-rs wrapper, \
+             which gives a reference up when dropped — and a plugin may hold the \
+             widget's direct-call pair"
+        );
+        assert!(
+            plugin.contains("    view: *mut c_void,"),
+            "`PluginScintilla::view` is no longer a raw pointer; an owning field would \
+             give the widget's reference up when its entry is dropped"
+        );
+        for (what, publish) in [
+            ("a routing slot", ".store(ptr, Ordering::Relaxed)"),
+            ("the routing count", "PLUGIN_SCI_COUNT.store("),
+        ] {
+            assert_eq!(
+                plugin.matches(publish).count(),
+                1,
+                "{what} is written somewhere besides `create_plugin_scintilla`; the table \
+                 is read from any thread on the promise that a slot is never reused"
+            );
+            assert!(
+                create.contains(publish),
+                "{what} is not published where it is made"
+            );
+        }
+        assert!(
+            !plugin.contains("PLUGIN_SCI_COUNT.fetch_sub(")
+                && !plugin.contains("PLUGIN_SCI_COUNT.swap("),
+            "the routing count is decreased somewhere; slots are never reused"
         );
     }
 
@@ -3354,5 +3514,8 @@ mod display_tests {
         crate::dock::departure_tests::a_live_drag_holds_retirement_until_it_ends();
         crate::dock::departure_tests::a_gesture_on_what_went_mid_drag_does_nothing();
         crate::dock::departure_tests::registrations_awaiting_retirement_are_bounded();
+        crate::plugin::host_made_tests::what_plugins_ask_the_host_to_make();
+        crate::toolbar::icon_display_tests::built_in_icons_keep_their_cell();
+        crate::tabs::icon_display_tests::tab_icons_keep_their_square();
     }
 }

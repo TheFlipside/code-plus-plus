@@ -30,7 +30,8 @@
 //! host resolves [`codepp_plugin_set_dispatch`] in the loaded library
 //! right after `dlopen` and hands the plugin a routing function that
 //! sends `NPPM_*` to the host dispatcher and `SCI_*` to the Scintilla
-//! widget. Every SDK helper (and every plugin) goes through the one
+//! widget or view it names. Every SDK helper (and every plugin) goes
+//! through the one
 //! `SendMessageW` alias, so the transport swap is invisible above it.
 
 use core::cell::UnsafeCell;
@@ -84,7 +85,8 @@ pub use codepp_plugin_host::{
 /// checked against upstream for (`tools/npp-abi-check`) cannot drift here.
 ///
 /// What each handle is off Windows — an `NSView*`, an `NSImage*`, an
-/// `NSWindow*` on macOS — is in `Notepad_plus_msgs.h`.
+/// `NSWindow*` on macOS; a `GtkContainer*`, a `GdkPixbuf*`, a
+/// `GtkWindow*` on GTK — is in `Notepad_plus_msgs.h`.
 pub use codepp_plugin_host::dispatch::{
     MODELESSDIALOGADD, MODELESSDIALOGREMOVE, NPPM_ADDTOOLBARICON, NPPM_CREATESCINTILLAHANDLE,
     NPPM_MODELESSDIALOG, NPPN_SHUTDOWN,
@@ -442,8 +444,10 @@ pub fn npp_handle() -> Hwnd {
 //     transport fails soft on both platforms: Win32's
 //     `SendMessageW` returns 0 without dereferencing (documented
 //     behaviour), and the non-Windows host routing identity-checks
-//     the handle (npp sentinel vs. its own Scintilla widget) and
-//     returns 0 for anything else rather than dereferencing it. So
+//     the handle (the npp sentinel, or a live Scintilla widget or view
+//     of the host's making — its own, or one it made for a plugin and
+//     the plugin has not destroyed) and returns 0 for anything else
+//     rather than dereferencing it. So
 //     plugins can't corrupt memory through these APIs on either
 //     backend; the worst case is "nothing happens".
 //   * Plugins always source HWNDs through `active_scintilla()`

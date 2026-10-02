@@ -180,10 +180,12 @@ typedef struct FuncItem_ {
  *      that aren't NPPN/SCN notifications. On Linux and macOS it also
  *      receives the DMN_* notifications about the plugin's dock panels,
  *      which Windows sends to the panel's own window instead
- *      (Docking.h). On macOS it receives, as WM_NOTIFY, the
- *      notifications of the Scintilla views the host made for the
- *      plugin (NPPM_CREATESCINTILLAHANDLE), which Windows sends to the
- *      view's parent window.
+ *      (Docking.h). There it also receives, as WM_NOTIFY, the
+ *      notifications of the Scintilla widgets and views the host made
+ *      for the plugin (NPPM_CREATESCINTILLAHANDLE), which Windows sends
+ *      to the control's parent window. The NMHDR's hwndFrom tells the
+ *      two apart: the npp handle for a DMN_*, the widget or view for a
+ *      Scintilla notification.
  *   6. NPPN_SHUTDOWN fires at exit. The DLL is not unloaded.
  *
  * Plugins must not perform expensive work in setInfo or getName —

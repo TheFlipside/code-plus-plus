@@ -194,10 +194,17 @@ cargo test -p codepp-scintilla-sys -p codepp-ui-gtk -- --ignored
 xvfb-run cargo test -p codepp-scintilla-sys -p codepp-ui-gtk -- --ignored
 ```
 
+Add `G_DEBUG=fatal-criticals` to either: a GTK critical is otherwise one
+printed line in a run that passes, and the scenarios are written to pass
+with it.
+
 `ui_gtk` carries display-gated scenarios for the same reason: they drive
-a real Scintilla widget to pin the doc-pointer discipline that lets one
-view serve many tabs, the print-export path, and the cross-thread
-`SCI_*` marshal. They all run from **one** `#[test]`,
+real GTK widgets, a real Scintilla among them, to pin the doc-pointer
+discipline that lets one view serve many tabs, the print-export path,
+the cross-thread `SCI_*` marshal, plugin dock panels, the Preferences
+dialog, and what a plugin asks the host to make (a Scintilla widget of
+its own, a toolbar button, a modeless-dialog registration). They all run
+from **one** `#[test]`,
 `display_tests::gtk_display_scenarios`, and a new scenario must be added
 to it rather than given a `#[test]` of its own.
 

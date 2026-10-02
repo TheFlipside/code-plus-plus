@@ -36,13 +36,13 @@ pub struct PluginMenuChecks {
 }
 
 impl PluginMenuChecks {
-    /// Take in the commands a load pass's plugins publish: every
-    /// `FuncItem` that runs something — a null `pFunc` is a separator,
-    /// not a command. `_init2Check` ticks a command that has no mark yet;
-    /// a mark already recorded is the plugin's later word and is kept.
+    /// Take in the commands a load pass's plugins publish
+    /// ([`FuncItem::is_command`]). `_init2Check` ticks a command that has
+    /// no mark yet; a mark already recorded is the plugin's later word and
+    /// is kept.
     pub fn absorb<'a>(&mut self, funcs: impl IntoIterator<Item = &'a FuncItem>) {
         for f in funcs {
-            if f.p_func.is_none() {
+            if !f.is_command() {
                 continue;
             }
             self.commands.insert(f.cmd_id);

@@ -38,13 +38,13 @@
 //!    console is — and it still comes back, because the host runs
 //!    that command at startup: `tTbData.dlgID` names it, and
 //!    Notepad++ restores every panel that way.
-//! 5. **On macOS, the second panel — "Example Hello Notes" — is filled by
-//!    a Scintilla view the host made for the plugin**
+//! 5. **On Linux and macOS, the second panel — "Example Hello Notes" — is
+//!    filled by a Scintilla widget the host made for the plugin**
 //!    (`NPPM_CREATESCINTILLAHANDLE`, with the panel as its parent). Typing
 //!    in it reaches the plugin as `SCN_MODIFIED` at `messageProc`, and the
-//!    status bar reports the notes' length. Where the host makes no view,
-//!    the panel carries a label instead.
-//! 6. **On macOS, "Show Dock Panel" has a toolbar button**
+//!    status bar reports the notes' length. Where the host makes none, the
+//!    panel carries a label instead.
+//! 6. **On Linux and macOS, "Show Dock Panel" has a toolbar button**
 //!    (`NPPM_ADDTOOLBARICON`), added at `NPPN_TBMODIFICATION`. It runs
 //!    the command and shows its check mark as pressed.
 //! 7. **On macOS, switching between the two panels' tabs**, dragging a
@@ -281,7 +281,7 @@ Drag my tab onto the other panel.";
 
     /// Give "Show Dock Panel" a toolbar button — `NPPM_ADDTOOLBARICON`.
     /// Called from `NPPN_TBMODIFICATION`, the moment the ABI sets aside for
-    /// it. On macOS; the GTK host takes no plugin toolbar buttons yet.
+    /// it.
     pub fn add_toolbar_button() {
         if !view::ready() {
             return;
@@ -494,50 +494,43 @@ Drag my tab onto the other panel.";
     }
 }
 
-/// The Linux content: a GTK widget.
+/// The Linux content: a GTK widget — a box holding a wrapping label, or,
+/// for the Notes panel, a Scintilla widget the host made for the plugin.
 ///
 /// A recompiled plugin hands the GTK host a `GtkWidget*` as `hClient`
 /// where a Windows one hands it a dialog `HWND` — unparented, and not a
 /// window of its own. The widget's children are shown here
 /// (`gtk_widget_show_all`); the widget itself is the host's to show and
-/// hide.
-///
-/// The few GTK calls are declared here rather than taken from a binding
-/// crate, as the Windows arm does for `user32`: a demo panel is a
-/// handful of functions, and a plugin that a third party might copy as
-/// a starting point is better off showing the dependency-free shape.
-/// `libgtk-3` is the library the host has already loaded, so linking it
-/// adds nothing to the process.
+/// hide. The GTK calls come from [`crate::gtk`].
 #[cfg(target_os = "linux")]
 mod gtk_view {
-    use codepp_plugin_sdk::{self as sdk, Hwnd};
-    use core::ffi::{c_char, c_int, c_uint, c_void, CStr};
+    use codepp_plugin_sdk::{self as sdk, Hwnd, ToolbarIcons};
+    use core::ffi::{c_uint, CStr};
 
-    #[link(name = "gdk-3")]
-    extern "C" {
-        fn gdk_display_get_default() -> *mut c_void;
-    }
+    use crate::gtk::{
+        g_object_ref_sink, g_object_unref, gdk_pixbuf_fill, gdk_pixbuf_get_byte_length,
+        gdk_pixbuf_get_pixels, gdk_pixbuf_get_rowstride, gdk_pixbuf_new, gtk_box_new,
+        gtk_container_add, gtk_container_set_border_width, gtk_label_new, gtk_label_set_line_wrap,
+        gtk_label_set_xalign, gtk_widget_set_hexpand, gtk_widget_set_vexpand, gtk_widget_show,
+        gtk_widget_show_all, COLORSPACE_RGB, VERTICAL,
+    };
 
-    #[link(name = "gobject-2.0")]
-    extern "C" {
-        fn g_object_ref_sink(object: *mut c_void) -> *mut c_void;
-    }
+    pub(super) use crate::gtk::ready;
 
-    #[link(name = "gtk-3")]
-    extern "C" {
-        fn gtk_box_new(orientation: c_int, spacing: c_int) -> *mut c_void;
-        fn gtk_container_add(container: *mut c_void, widget: *mut c_void);
-        fn gtk_container_set_border_width(container: *mut c_void, width: c_uint);
-        fn gtk_label_new(text: *const c_char) -> *mut c_void;
-        fn gtk_label_set_line_wrap(label: *mut c_void, wrap: c_int);
-        fn gtk_label_set_xalign(label: *mut c_void, xalign: f32);
-        fn gtk_widget_show_all(widget: *mut c_void);
-    }
-
-    /// `GTK_ORIENTATION_VERTICAL`.
-    const VERTICAL: c_int = 1;
-    /// Inner margin around the label, in pixels.
+    /// The margin a panel keeps around its label, in pixels. The Notes
+    /// panel's Scintilla widget, when the host makes one, has none: it
+    /// goes edge to edge, as the macOS view does.
     const LABEL_INSET: c_uint = 8;
+
+    /// `SCI_SETTEXT` and `SCI_SETWRAPMODE` / `SC_WRAP_WORD`: the Notes
+    /// widget's starting text, wrapped to the panel's width.
+    const SCI_SETTEXT: u32 = 2181;
+    const SCI_SETWRAPMODE: u32 = 2268;
+    const SC_WRAP_WORD: usize = 1;
+
+    /// The toolbar icon's edge, in pixels — the host's own icons' cell,
+    /// so it is drawn as made rather than scaled.
+    const ICON_PX: i32 = 24;
 
     /// `tTbData.pszModuleName`: the plugin's own file name, extension
     /// included — the convention Notepad++ keeps with `.dll`, and what
@@ -550,22 +543,12 @@ mod gtk_view {
     pub(super) const MODULE_NAME: [u16; sdk::MENU_TITLE_LENGTH] =
         sdk::menu_label(b"example_hello.so");
 
-    /// Whether GTK is up to build widgets with: a default display is
-    /// open. Always so inside the GTK host; a host that loads plugins
-    /// without a display — a headless test harness — would otherwise
-    /// have GTK abort the process at the first widget.
-    pub(super) fn ready() -> bool {
-        // SAFETY: takes nothing; answers null until a display is open.
-        !unsafe { gdk_display_get_default() }.is_null()
-    }
-
-    /// A box with a label in it, held by a reference of the plugin's own
-    /// — never released. Null if GTK could not make it.
-    pub(super) fn build(text: &CStr) -> Hwnd {
-        // SAFETY: plain GTK calls on the UI thread — a plugin menu
-        // command or notification runs there by the ABI's contract, and
-        // the host has initialised GTK. `text` is a NUL-terminated
-        // static string; every widget passed on is one just created.
+    /// An empty panel box, held by a reference of the plugin's own —
+    /// never released. Null if GTK could not make it.
+    fn panel() -> Hwnd {
+        // SAFETY: plain GTK calls on the UI thread — a plugin menu command
+        // or notification runs there by the ABI's contract, and the host
+        // has initialised GTK.
         unsafe {
             let panel = gtk_box_new(VERTICAL, 0);
             if panel.is_null() {
@@ -575,6 +558,15 @@ mod gtk_view {
             // never released. The host takes a reference of its own when
             // it adopts the widget.
             g_object_ref_sink(panel);
+            panel
+        }
+    }
+
+    /// A wrapping label reading `text`, in `panel`, inset from its edges.
+    fn add_label(panel: Hwnd, text: &CStr) {
+        // SAFETY: `panel` is a live box of the plugin's own; `text` is a
+        // NUL-terminated static string.
+        unsafe {
             gtk_container_set_border_width(panel, LABEL_INSET);
             let label = gtk_label_new(text.as_ptr());
             if !label.is_null() {
@@ -582,22 +574,224 @@ mod gtk_view {
                 gtk_label_set_line_wrap(label, 1);
                 gtk_container_add(panel, label);
             }
-            // Shown, children and all: the host shows and hides the
-            // container it puts the panel in, never the panel.
-            gtk_widget_show_all(panel);
-            panel
         }
     }
 
-    /// The Notes panel: the same label panel as [`build`]. The GTK host
-    /// makes no Scintilla views for plugins yet — `NPPM_CREATESCINTILLAHANDLE`
-    /// answers null there (DESIGN.md §7.4) — so there is none to ask for.
-    pub(super) fn build_notes(text: &CStr, _notes: &CStr) -> (Hwnd, Hwnd) {
-        (build(text), core::ptr::null_mut())
+    /// A box with a label in it. Null if GTK could not make it.
+    pub(super) fn build(text: &CStr) -> Hwnd {
+        let panel = panel();
+        if !panel.is_null() {
+            add_label(panel, text);
+            // Shown, children and all: the host shows and hides the
+            // container it puts the panel in, never the panel.
+            // SAFETY: a live box of the plugin's own.
+            unsafe { gtk_widget_show_all(panel) };
+        }
+        panel
     }
 
-    /// Nothing: the GTK host takes no plugin toolbar buttons yet.
-    pub(super) fn add_toolbar_button(_cmd_id: i32) {}
+    /// The Notes panel: a panel box filled by a Scintilla widget the host
+    /// makes for the plugin — `NPPM_CREATESCINTILLAHANDLE`, with the panel
+    /// as its parent — reading `notes`. Returns the panel and the
+    /// Scintilla widget, whose notifications then reach this plugin's
+    /// `messageProc`. A host that makes no widget answers null, and the
+    /// panel carries the label `text` instead, as on Windows.
+    pub(super) fn build_notes(text: &CStr, notes: &CStr) -> (Hwnd, Hwnd) {
+        let panel = panel();
+        if panel.is_null() {
+            return (panel, core::ptr::null_mut());
+        }
+        // SAFETY: the npp handle and a live box of the plugin's own; the
+        // host keeps its answer for the process.
+        let sci = unsafe {
+            sdk::SendMessageW(
+                sdk::npp_handle(),
+                sdk::NPPM_CREATESCINTILLAHANDLE,
+                0,
+                panel as isize,
+            )
+        } as Hwnd;
+        if sci.is_null() {
+            add_label(panel, text);
+        } else {
+            // SAFETY: the widget the host just made, in the panel: GTK
+            // calls on the UI thread, and two `SCI_*` to it through the
+            // SDK's routing like any other — `notes` is NUL-terminated and
+            // read during the call.
+            unsafe {
+                // The host put it in the panel hidden, and a box packs a
+                // widget at its natural size unless it asks to expand —
+                // so it asks for the panel's whole space, then shows.
+                gtk_widget_set_hexpand(sci, 1);
+                gtk_widget_set_vexpand(sci, 1);
+                gtk_widget_show(sci);
+                sdk::SendMessageW(sci, SCI_SETWRAPMODE, SC_WRAP_WORD, 0);
+                sdk::SendMessageW(sci, SCI_SETTEXT, 0, notes.as_ptr() as isize);
+            }
+        }
+        // SAFETY: a live box of the plugin's own.
+        unsafe { gtk_widget_show_all(panel) };
+        (panel, sci)
+    }
+
+    /// Ask the host for a toolbar button that runs command `cmd_id` —
+    /// `NPPM_ADDTOOLBARICON` — showing an icon drawn here
+    /// ([`toolbar_icon`]). The host takes a reference of its own, so this
+    /// one is dropped once the host has answered.
+    pub(super) fn add_toolbar_button(cmd_id: i32) {
+        let icon = toolbar_icon();
+        if icon.is_null() {
+            sdk::set_status("Example Hello: could not make the toolbar icon");
+            return;
+        }
+        let icons = ToolbarIcons {
+            h_toolbar_bmp: core::ptr::null_mut(),
+            h_toolbar_icon: icon,
+        };
+        // SAFETY: `icons` outlives the call, which reads it and takes a
+        // reference to the pixbuf.
+        let added = unsafe {
+            sdk::SendMessageW(
+                sdk::npp_handle(),
+                sdk::NPPM_ADDTOOLBARICON,
+                cmd_id as usize,
+                (&raw const icons) as isize,
+            ) != 0
+        };
+        // SAFETY: the pixbuf made above, whose own reference this was.
+        unsafe { g_object_unref(icon) };
+        if !added {
+            sdk::set_status("Example Hello: the host added no toolbar button");
+        }
+    }
+
+    /// A [`ICON_PX`]-square pixbuf drawing [`icon_pixel`]: a window with a
+    /// panel along its bottom, which is where "Show Dock Panel" puts the
+    /// panel — the picture the macOS side takes from an SF Symbol. Drawn
+    /// rather than looked up, so it does not depend on the icon theme.
+    /// Null if GDK could not make it.
+    fn toolbar_icon() -> Hwnd {
+        // SAFETY: a plain GDK call; a new pixbuf, owned here.
+        let pixbuf = unsafe { gdk_pixbuf_new(COLORSPACE_RGB, 1, 8, ICON_PX, ICON_PX) };
+        if pixbuf.is_null() {
+            return pixbuf;
+        }
+        // SAFETY: the pixbuf just made, which nothing else holds.
+        let (data, length, stride) = unsafe {
+            (
+                gdk_pixbuf_get_pixels(pixbuf),
+                gdk_pixbuf_get_byte_length(pixbuf),
+                usize::try_from(gdk_pixbuf_get_rowstride(pixbuf)),
+            )
+        };
+        let Ok(stride) = stride else {
+            // SAFETY: the reference made above, which is this function's.
+            unsafe { g_object_unref(pixbuf) };
+            return core::ptr::null_mut();
+        };
+        if data.is_null() {
+            // SAFETY: as above.
+            unsafe { g_object_unref(pixbuf) };
+            return core::ptr::null_mut();
+        }
+        // SAFETY: the pixbuf's pixel data, `length` bytes as GDK reports
+        // it — the last row is not padded to the stride — owned here
+        // alone. GDK leaves a new pixbuf's pixels uninitialised, so they
+        // are cleared before a slice is formed over them.
+        let pixels = unsafe {
+            gdk_pixbuf_fill(pixbuf, 0);
+            core::slice::from_raw_parts_mut(data, length)
+        };
+        // Four bytes a pixel, RGBA as made above, rows `stride` apart. A
+        // pixel outside the data GDK reported is skipped rather than
+        // written, which would only miss part of the picture.
+        for y in 0..ICON_PX {
+            for x in 0..ICON_PX {
+                let at = y as usize * stride + x as usize * 4;
+                if let Some(pixel) = pixels.get_mut(at..at + 4) {
+                    pixel.copy_from_slice(&icon_pixel(x, y));
+                }
+            }
+        }
+        pixbuf
+    }
+
+    /// The toolbar icon's pixel at (`x`, `y`), as RGBA: a 2-pixel
+    /// outline of a window, its bottom half filled; transparent
+    /// elsewhere.
+    fn icon_pixel(x: i32, y: i32) -> [u8; 4] {
+        const INK: [u8; 4] = [0x40, 0x40, 0x40, 0xFF];
+        const CLEAR: [u8; 4] = [0, 0, 0, 0];
+        let inside_frame = (2..=21).contains(&x) && (4..=19).contains(&y);
+        let on_outline =
+            inside_frame && (matches!(x, 2 | 3 | 20 | 21) || matches!(y, 4 | 5 | 18 | 19));
+        let in_panel = (5..=18).contains(&x) && (12..=16).contains(&y);
+        if on_outline || in_panel {
+            INK
+        } else {
+            CLEAR
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::{icon_pixel, toolbar_icon, ICON_PX};
+        use crate::gtk::{
+            g_object_unref, gdk_pixbuf_get_byte_length, gdk_pixbuf_get_pixels,
+            gdk_pixbuf_get_rowstride,
+        };
+
+        /// The icon is drawn into a pixbuf GDK made — every pixel of it,
+        /// within the pixel data GDK reports. A pixbuf needs no display,
+        /// so this runs headless.
+        #[test]
+        fn the_icon_is_drawn_into_the_whole_pixbuf() {
+            let icon = toolbar_icon();
+            assert!(!icon.is_null(), "GDK made no pixbuf");
+            // SAFETY: the pixbuf just made and owned here, every byte of
+            // it written by `toolbar_icon`; read only, as long as GDK
+            // says its pixel data is.
+            let (pixels, stride) = unsafe {
+                (
+                    core::slice::from_raw_parts(
+                        gdk_pixbuf_get_pixels(icon),
+                        gdk_pixbuf_get_byte_length(icon),
+                    ),
+                    gdk_pixbuf_get_rowstride(icon) as usize,
+                )
+            };
+            for y in 0..ICON_PX {
+                for x in 0..ICON_PX {
+                    let at = y as usize * stride + x as usize * 4;
+                    assert_eq!(
+                        pixels[at..at + 4],
+                        icon_pixel(x, y),
+                        "the pixel at ({x}, {y}) is not the picture's"
+                    );
+                }
+            }
+            // SAFETY: the reference `toolbar_icon` handed over.
+            unsafe { g_object_unref(icon) };
+        }
+
+        /// The picture: an outline with its bottom half filled, and the
+        /// space around and above the panel left clear.
+        #[test]
+        fn the_icon_is_a_window_with_a_bottom_panel() {
+            let ink = |x, y| icon_pixel(x, y)[3] == 0xFF;
+            assert!(
+                !ink(0, 0) && !ink(ICON_PX - 1, ICON_PX - 1),
+                "a corner is drawn"
+            );
+            assert!(
+                ink(2, 4) && ink(21, 19),
+                "the outline's corners are not drawn"
+            );
+            assert!(ink(11, 4), "the outline's top edge is not drawn");
+            assert!(!ink(11, 8), "the space above the panel is filled");
+            assert!(ink(11, 14), "the panel is not filled");
+        }
+    }
 }
 
 /// The macOS content: an `NSView` holding a wrapping label — or, for the
@@ -1369,9 +1563,9 @@ mod win {
         0
     }
 
-    /// Nothing: the toolbar button is demonstrated on macOS, where it is
-    /// an `NSImage`. The Win32 host takes one too, as an `HICON`; this
-    /// plugin does not ask for it there.
+    /// Nothing: the toolbar button is demonstrated on Linux and macOS,
+    /// where it is a `GdkPixbuf` or an `NSImage`. The Win32 host takes one
+    /// too, as an `HICON`; this plugin does not ask for it there.
     pub fn add_toolbar_button() {}
 
     /// Re-point `psz_name` at the other title and ask the host to

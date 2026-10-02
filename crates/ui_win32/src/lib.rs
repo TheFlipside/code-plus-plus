@@ -7868,7 +7868,7 @@ unsafe fn build_plugin_submenu(
         // placeholder the plugin does not expect to see rendered
         // (mimeTools, for example, writes a sentinel string there);
         // dispatching MF_STRING with that label is the visible bug.
-        if func.p_func.is_none() {
+        if !func.is_command() {
             if let Err(e) = unsafe { AppendMenuW(submenu, MF_SEPARATOR, 0, PCWSTR::null()) } {
                 tracing::warn!(error = ?e, "AppendMenuW (separator) failed");
             }

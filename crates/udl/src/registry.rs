@@ -18,7 +18,7 @@ use crate::UdlDefinition;
 ///
 /// The built-in language constant range tops out at
 /// `L_EXTERNAL = 93` per the N++ public plugin ABI
-/// (`plugins/nppcompat-headers/Notepad_plus_msgs.h:846`). Starting
+/// (see `plugins/nppcompat-headers/Notepad_plus_msgs.h`). Starting
 /// UDL ids at `1024` leaves ~930 slots for future N++ additions
 /// (well past N++'s ~1-per-year growth rate) before any
 /// collision.

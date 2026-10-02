@@ -5,10 +5,10 @@
 //! identification, a menu command that inserts "Hello from plugin"
 //! at the editor's current caret, and a real docking panel that
 //! exercises the host's `NPPM_DMM*` / `DMN_*` surface (see
-//! [`dock`]). On macOS it also asks the host for a Scintilla view of
-//! its own, a toolbar button and a modeless-dialog registration (see
-//! [`dock`] and [`dialog`]). The insertion path exercises both the
-//! inbound NPPM dispatcher (the plugin queries
+//! [`dock`]). On Linux and macOS it also asks the host for a Scintilla
+//! widget of its own, a toolbar button and a modeless-dialog
+//! registration (see [`dock`] and [`dialog`]). The insertion path
+//! exercises both the inbound NPPM dispatcher (the plugin queries
 //! `NPPM_GETCURRENTSCINTILLA` to learn which view is active) and direct
 //! Scintilla messaging (`SCI_INSERTTEXT` against the returned view's
 //! HWND).
@@ -33,6 +33,8 @@
 mod dialog;
 #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
 mod dock;
+#[cfg(target_os = "linux")]
+mod gtk;
 #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
 mod imp;
 #[cfg(target_os = "macos")]

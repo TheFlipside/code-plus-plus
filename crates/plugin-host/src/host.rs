@@ -864,8 +864,8 @@ impl Drop for PluginHost {
     /// moment later. The process is exiting; every mapping goes with
     /// it. `NPPN_SHUTDOWN` still fires while everything is still
     /// mapped — from `WM_CLOSE` on Win32 and from the quit path on
-    /// GTK — so a plugin still gets its documented chance to save
-    /// state. The Cocoa backend does not send it yet (DESIGN.md §7.4).
+    /// GTK and Cocoa — so a plugin still gets its documented chance to
+    /// save state.
     ///
     /// This is the one place the host deviates from DESIGN.md §6.4's
     /// "on exit: `NPPN_SHUTDOWN` → unload", and §6.4 records why.

@@ -81,10 +81,6 @@ const PNG_TAB_SAVE_2X: &[u8] = include_bytes!("../../../assets/icons/tab-save@2x
 const PNG_TAB_SAVE_DIRTY: &[u8] = include_bytes!("../../../assets/icons/tab-save-dirty.png");
 const PNG_TAB_SAVE_DIRTY_2X: &[u8] = include_bytes!("../../../assets/icons/tab-save-dirty@2x.png");
 
-/// Logical size the tab icon renders at: the 16 px asset at scale 1,
-/// the 32 px asset at scale 2, both occupying the same logical square.
-const ICON_LOGICAL_PX: i32 = 16;
-
 /// Width bounds for a tab label, in characters.
 ///
 /// Both are load-bearing — see the comment at the call site. The
@@ -374,6 +370,14 @@ fn tab_icon(dirty: bool, scale: i32) -> Option<Pixbuf> {
     }
 }
 
+/// The tab's glyph as an image: the 16 px asset at scale 1 and the 32 px
+/// one at scale 2, drawn at that scale ([`crate::image_at_scale`]) so both
+/// fill the same 16-pixel square.
+fn tab_icon_image(dirty: bool, scale: i32) -> Option<gtk::Image> {
+    let asset_scale = if scale >= 2 { 2 } else { 1 };
+    crate::image_at_scale(&tab_icon(dirty, scale)?, asset_scale)
+}
+
 /// Build the widget shown on one tab.
 ///
 /// Wrapped in a `gtk::EventBox` because a plain `gtk::Label` has no
@@ -388,11 +392,7 @@ fn build_tab_label(tab: &Tab, scale: i32) -> gtk::Widget {
 
     let row = gtk::Box::new(gtk::Orientation::Horizontal, 4);
 
-    if let Some(pixbuf) = tab_icon(tab.dirty, scale) {
-        let image = gtk::Image::from_pixbuf(Some(&pixbuf));
-        // The @2x asset is twice the logical size; pin the logical
-        // square so both scales occupy the same space in the strip.
-        image.set_pixel_size(ICON_LOGICAL_PX);
+    if let Some(image) = tab_icon_image(tab.dirty, scale) {
         row.pack_start(&image, false, false, 0);
     }
 
@@ -486,4 +486,38 @@ fn build_tab_label(tab: &Tab, scale: i32) -> gtk::Widget {
     ebox.add(&row);
     ebox.show_all();
     ebox.upcast()
+}
+
+/// The tab glyph drawn for real, at both scales. Display-gated, driven
+/// by `crate::display_tests`.
+#[cfg(test)]
+pub(crate) mod icon_display_tests {
+    use gtk::prelude::*;
+
+    use super::tab_icon_image;
+
+    /// The glyph fills its 16-pixel square at either scale, with twice the
+    /// pixels at scale 2.
+    pub(crate) fn tab_icons_keep_their_square() {
+        gtk::init().expect("gtk::init failed — no display?");
+        for (scale, pixels) in [(1, 16), (2, 32)] {
+            let image = tab_icon_image(false, scale).expect("the glyph decodes");
+            // GTK 3 sizes a shown widget only.
+            image.show();
+            assert_eq!(
+                image.preferred_width().1,
+                16,
+                "the tab glyph left its square at scale {scale}"
+            );
+            let surface = image
+                .property::<Option<gtk::cairo::Surface>>("surface")
+                .expect("drawn as a surface");
+            let surface = gtk::cairo::ImageSurface::try_from(surface).expect("an image surface");
+            assert_eq!(
+                surface.width(),
+                pixels,
+                "the tab glyph is not drawn at the screen's pixels at scale {scale}"
+            );
+        }
+    }
 }

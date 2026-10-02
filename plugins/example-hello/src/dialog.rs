@@ -3,19 +3,174 @@
 //!
 //! On Windows a plugin registers its modeless dialog so the host's message
 //! pump calls `IsDialogMessage` for it; without that, Tab does not move
-//! between the dialog's controls. AppKit does that for every window, so on
-//! macOS the host checks the handle and answers it, and registering
-//! changes nothing — which this dialog shows: "Show Modeless Dialog"
-//! opens it, Tab moves between its two fields, and the status bar reports
-//! what the host answered. It is unregistered at `NPPN_SHUTDOWN`, as the
-//! ABI asks: removal comes before a dialog is released.
+//! between the dialog's controls. AppKit and GTK do that for every window,
+//! so the hosts there check the handle and answer it. On macOS registering
+//! changes nothing else; on Linux it makes the dialog transient for the
+//! host's main window — what a Windows plugin gets by creating its dialog
+//! with the npp handle as owner, which a GTK plugin cannot, since it is
+//! never given the main window. This dialog shows that: "Show Modeless
+//! Dialog" opens it, Tab moves between its two fields, on Linux it stays
+//! above the editor, centred on it, and the status bar reports what the
+//! host answered. It is unregistered at `NPPN_SHUTDOWN`, as the ABI asks:
+//! removal comes before a dialog is released.
 //!
-//! macOS only. Elsewhere the command says so on the status bar.
+//! Linux and macOS. On Windows the command says so on the status bar.
 
 #[cfg(target_os = "macos")]
 pub use appkit::{show, shutdown};
-#[cfg(not(target_os = "macos"))]
+#[cfg(target_os = "windows")]
 pub use elsewhere::{show, shutdown};
+#[cfg(target_os = "linux")]
+pub use gtk_window::{show, shutdown};
+
+/// The dialog on Linux: a `GtkWindow` with two entries, made on first use
+/// and kept for the process — closing it hides it, so the pointer stays
+/// valid for the next "Show Modeless Dialog" and for the removal at
+/// `NPPN_SHUTDOWN`. Registered before it is first shown, so the host's
+/// transient-for is in place when the window maps and it opens centred on
+/// the editor. The GTK calls come from [`crate::gtk`].
+#[cfg(target_os = "linux")]
+mod gtk_window {
+    use codepp_plugin_sdk as sdk;
+    use core::ffi::{c_int, c_void, CStr};
+    use core::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
+
+    use crate::gtk::{
+        g_signal_connect_data, gtk_box_new, gtk_container_add, gtk_container_set_border_width,
+        gtk_entry_new, gtk_entry_set_placeholder_text, gtk_widget_hide_on_delete,
+        gtk_widget_show_all, gtk_window_new, gtk_window_present, gtk_window_set_default_size,
+        gtk_window_set_position, gtk_window_set_title, ready, VERTICAL, WINDOW_TOPLEVEL,
+        WIN_POS_CENTER_ON_PARENT,
+    };
+
+    /// The dialog's width and its border, in pixels — the macOS dialog's
+    /// measures — and the gap between its fields.
+    const WIDTH: c_int = 300;
+    const INSET: u32 = 16;
+    const GAP: c_int = 8;
+
+    /// The dialog once made. GTK holds a toplevel window's reference
+    /// itself, and closing only hides this one, so the pointer stays
+    /// valid for the process. Nothing destroys the window; code that
+    /// did would have to clear this first.
+    static DIALOG: AtomicPtr<c_void> = AtomicPtr::new(core::ptr::null_mut());
+    /// Whether the host accepted the dialog's registration.
+    static REGISTERED: AtomicBool = AtomicBool::new(false);
+
+    /// Open the dialog, registering it with the host the first time.
+    pub fn show() {
+        if !ready() {
+            return;
+        }
+        let dialog = dialog();
+        if dialog.is_null() {
+            sdk::set_status("Example Hello: could not make the modeless dialog");
+            return;
+        }
+        if !REGISTERED.load(Ordering::Acquire) {
+            // SAFETY: the npp handle and a live window of the plugin's
+            // own; the host reads the pointer during the call.
+            let answer = unsafe {
+                sdk::SendMessageW(
+                    sdk::npp_handle(),
+                    sdk::NPPM_MODELESSDIALOG,
+                    sdk::MODELESSDIALOGADD,
+                    dialog as isize,
+                )
+            };
+            if answer == dialog as isize {
+                REGISTERED.store(true, Ordering::Release);
+                sdk::set_status(
+                    "Example Hello: modeless dialog registered (the host answered its handle)",
+                );
+            } else {
+                sdk::set_status("Example Hello: the host refused the modeless dialog");
+            }
+        }
+        // SAFETY: the live window, on the UI thread.
+        unsafe {
+            gtk_widget_show_all(dialog);
+            gtk_window_present(dialog);
+        }
+    }
+
+    /// Unregister the dialog, before the process lets it go —
+    /// `NPPN_SHUTDOWN`.
+    pub fn shutdown() {
+        if REGISTERED.swap(false, Ordering::AcqRel) {
+            // SAFETY: the npp handle and the window registered above,
+            // still live.
+            unsafe {
+                sdk::SendMessageW(
+                    sdk::npp_handle(),
+                    sdk::NPPM_MODELESSDIALOG,
+                    sdk::MODELESSDIALOGREMOVE,
+                    DIALOG.load(Ordering::Acquire) as isize,
+                );
+            }
+        }
+    }
+
+    /// The dialog, made on first use. Null if GTK could not make it.
+    fn dialog() -> *mut c_void {
+        let existing = DIALOG.load(Ordering::Acquire);
+        if !existing.is_null() {
+            return existing;
+        }
+        let made = build();
+        DIALOG.store(made, Ordering::Release);
+        made
+    }
+
+    /// A window titled "Example Hello Dialog" with two entries, which
+    /// closing hides rather than destroys.
+    fn build() -> *mut c_void {
+        // SAFETY: plain GTK calls on the UI thread, with widgets just made
+        // and NUL-terminated static strings. `gtk_widget_hide_on_delete`
+        // is GTK's own handler for `delete-event`, documented for exactly
+        // this connection: it takes the window and ignores the event and
+        // data the signal also passes.
+        unsafe {
+            let window = gtk_window_new(WINDOW_TOPLEVEL);
+            if window.is_null() {
+                return window;
+            }
+            gtk_window_set_title(window, c"Example Hello Dialog".as_ptr());
+            gtk_window_set_default_size(window, WIDTH, -1);
+            gtk_window_set_position(window, WIN_POS_CENTER_ON_PARENT);
+            gtk_container_set_border_width(window, INSET);
+            // Closing hides the window rather than destroying it, so the
+            // pointer kept above stays good.
+            g_signal_connect_data(
+                window,
+                c"delete-event".as_ptr(),
+                gtk_widget_hide_on_delete as *const c_void,
+                core::ptr::null_mut(),
+                core::ptr::null(),
+                0,
+            );
+            let column = gtk_box_new(VERTICAL, GAP);
+            if !column.is_null() {
+                add_entry(column, c"Type here, then press Tab");
+                add_entry(column, c"Tab brings you here");
+                gtk_container_add(window, column);
+            }
+            window
+        }
+    }
+
+    /// An entry with `placeholder` in it, in `column`.
+    fn add_entry(column: *mut c_void, placeholder: &CStr) {
+        // SAFETY: a live box; a NUL-terminated static string.
+        unsafe {
+            let entry = gtk_entry_new();
+            if !entry.is_null() {
+                gtk_entry_set_placeholder_text(entry, placeholder.as_ptr());
+                gtk_container_add(column, entry);
+            }
+        }
+    }
+}
 
 /// The dialog: an `NSPanel` with two text fields, made on first use and
 /// kept for the process. Built on the Objective-C runtime directly — see
@@ -208,13 +363,13 @@ mod appkit {
     }
 }
 
-/// Everywhere but macOS: the command says where the demo is.
-#[cfg(not(target_os = "macos"))]
+/// Windows: the command says where the demo is.
+#[cfg(target_os = "windows")]
 mod elsewhere {
     use codepp_plugin_sdk as sdk;
 
     pub fn show() {
-        sdk::set_status("Example Hello: the modeless dialog is demonstrated on macOS");
+        sdk::set_status("Example Hello: the modeless dialog is demonstrated on Linux and macOS");
     }
 
     /// Nothing was registered.
