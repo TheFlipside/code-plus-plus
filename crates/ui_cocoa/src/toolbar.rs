@@ -67,6 +67,8 @@ use objc2_app_kit::{
 };
 use objc2_foundation::{MainThreadMarker, NSData, NSPoint, NSRect, NSSize, NSString};
 
+use codepp_plugin_host::{plugin_toolbar_button_slot, PluginToolbarButtonSlot};
+
 use crate::menu::Actions;
 
 /// Height of the bar in points.
@@ -84,11 +86,6 @@ const SEPARATOR_WIDTH: f64 = 9.0;
 const SEPARATOR_LINE_WIDTH: f64 = 1.0;
 /// Inset from the bar's left edge, and between buttons.
 const BUTTON_GAP: f64 = 2.0;
-/// The most buttons plugins may add. The bar does not scroll, so what
-/// lies past the window's edge cannot be clicked anyway; the cap bounds
-/// what a plugin adding a button per call could otherwise grow without
-/// end — asking again for the same command only replaces its image.
-const MAX_PLUGIN_BUTTONS: usize = 64;
 
 /// `(png_1x, png_2x)` for one icon, embedded from `assets/icons/`.
 macro_rules! icon {
@@ -279,8 +276,11 @@ impl Toolbar {
     /// Add a button that runs plugin command `cmd_id`, showing `image` —
     /// `NPPM_ADDTOOLBARICON` — or give the button that command already
     /// has this image. `tip` is its tooltip and `checked` whether it
-    /// starts pressed. Refused once [`MAX_PLUGIN_BUTTONS`] are in place;
-    /// see [`plugin_button_slot`].
+    /// starts pressed. Refused once
+    /// [`MAX_PLUGIN_TOOLBAR_BUTTONS`](codepp_plugin_host::MAX_PLUGIN_TOOLBAR_BUTTONS)
+    /// are in place — see [`plugin_toolbar_button_slot`]; the bar does not
+    /// scroll, so what lies past the window's edge could not be clicked
+    /// anyway.
     ///
     /// The image is drawn at its own size, scaled down if it is larger
     /// than a button: a plugin's icon is whatever size the plugin made it,
@@ -297,18 +297,18 @@ impl Toolbar {
             return Err("the toolbar's plugin buttons are being changed already");
         };
         let commands: Vec<i32> = plugin.buttons.iter().map(|(id, _)| *id).collect();
-        match plugin_button_slot(&commands, cmd_id) {
-            PluginButtonSlot::Existing(index) => {
+        match plugin_toolbar_button_slot(&commands, cmd_id) {
+            PluginToolbarButtonSlot::Existing(index) => {
                 let button = &plugin.buttons[index].1;
                 button.setImage(Some(image));
                 button.setToolTip(Some(&NSString::from_str(tip)));
                 button.setState(isize::from(checked));
                 return Ok(());
             }
-            PluginButtonSlot::Full => {
+            PluginToolbarButtonSlot::Full => {
                 return Err("the toolbar has as many plugin buttons as it takes");
             }
-            PluginButtonSlot::New { first } => {
+            PluginToolbarButtonSlot::New { first } => {
                 if first {
                     add_separator(&self.container, plugin.next_x, mtm);
                     plugin.next_x += SEPARATOR_WIDTH;
@@ -409,35 +409,6 @@ impl Toolbar {
 
     pub fn is_hidden(&self) -> bool {
         self.container.isHidden()
-    }
-}
-
-/// Where a plugin button for a command goes, given the commands that
-/// already have one.
-#[derive(Debug, PartialEq, Eq)]
-enum PluginButtonSlot {
-    /// The command's own button, at this index: its image is replaced.
-    Existing(usize),
-    /// A new button — the first plugin button of all when `first`, which
-    /// a separator then precedes.
-    New { first: bool },
-    /// None: the bar has [`MAX_PLUGIN_BUTTONS`] already.
-    Full,
-}
-
-/// Where a plugin button for `cmd_id` goes, given `commands`, the
-/// commands with a button, in order. A command keeps its one button
-/// however often it asks, so asking again is never refused, not even at
-/// the cap.
-fn plugin_button_slot(commands: &[i32], cmd_id: i32) -> PluginButtonSlot {
-    if let Some(index) = commands.iter().position(|&id| id == cmd_id) {
-        PluginButtonSlot::Existing(index)
-    } else if commands.len() >= MAX_PLUGIN_BUTTONS {
-        PluginButtonSlot::Full
-    } else {
-        PluginButtonSlot::New {
-            first: commands.is_empty(),
-        }
     }
 }
 
@@ -611,46 +582,4 @@ fn decode_icon(icons: IconPair) -> Option<Retained<NSImage>> {
         return None;
     }
     Some(image)
-}
-
-#[cfg(test)]
-mod plugin_button_tests {
-    use super::{plugin_button_slot, PluginButtonSlot, MAX_PLUGIN_BUTTONS};
-
-    /// The first plugin button is the one a separator precedes; later
-    /// ones are not.
-    #[test]
-    fn the_first_plugin_button_comes_after_a_separator() {
-        assert_eq!(
-            plugin_button_slot(&[], 7),
-            PluginButtonSlot::New { first: true }
-        );
-        assert_eq!(
-            plugin_button_slot(&[7], 8),
-            PluginButtonSlot::New { first: false }
-        );
-    }
-
-    /// A command that has a button keeps it: asking again replaces the
-    /// image, even once the bar is full.
-    #[test]
-    fn a_command_keeps_its_one_button() {
-        assert_eq!(
-            plugin_button_slot(&[5, 7, 9], 7),
-            PluginButtonSlot::Existing(1)
-        );
-        let full: Vec<i32> = (0..).take(MAX_PLUGIN_BUTTONS).collect();
-        assert_eq!(plugin_button_slot(&full, 3), PluginButtonSlot::Existing(3));
-    }
-
-    /// Past the cap a new command gets no button.
-    #[test]
-    fn the_bar_takes_no_more_than_the_cap() {
-        let full: Vec<i32> = (0..).take(MAX_PLUGIN_BUTTONS).collect();
-        assert_eq!(plugin_button_slot(&full, -1), PluginButtonSlot::Full);
-        assert_eq!(
-            plugin_button_slot(&full[1..], -1),
-            PluginButtonSlot::New { first: false }
-        );
-    }
 }

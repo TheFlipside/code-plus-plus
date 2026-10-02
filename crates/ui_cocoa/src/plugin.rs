@@ -109,7 +109,8 @@ use objc2_foundation::{NSPoint, NSRect, NSSize, NSString, NSURL};
 use codepp_core::dock::DockPanel;
 use codepp_editor::EditorHandle;
 use codepp_plugin_host::{
-    HostDispatchFn, NppData, PluginMenuChecks, PluginMessageProc, SCNotification, WM_NOTIFY,
+    may_make_plugin_scintilla, HostDispatchFn, NppData, PluginMenuChecks, PluginMessageProc,
+    SCNotification, MAX_PLUGIN_SCINTILLAS, WM_NOTIFY,
 };
 use codepp_scintilla_sys::{
     scintilla_cocoa_new, scintilla_cocoa_send_message, scintilla_cocoa_set_notify_callback,
@@ -156,21 +157,10 @@ fn is_valid_scintilla(hwnd: *mut c_void) -> bool {
     !valid.is_null() && std::ptr::eq(hwnd, valid)
 }
 
-/// The most Scintilla views the host makes for plugins, all told. Each
-/// is kept for the rest of the process (see [`create_plugin_scintilla`]),
-/// so an unbounded number would be an unbounded leak — and a fixed number
-/// is what lets [`PLUGIN_SCIS`] be read from any thread without a lock.
-const MAX_PLUGIN_SCINTILLAS: usize = 64;
-
-/// The most the host makes for any one plugin, so a plugin that asks for
-/// a view per file it processes runs out of views of its own rather than
-/// of everyone's — the same reasoning as the per-plugin quota on dock
-/// panels. Views asked for from outside any host call, where the host
-/// cannot tell which plugin asked, share one allowance of this size.
-const MAX_PLUGIN_SCINTILLAS_PER_PLUGIN: usize = 16;
-
 /// Every Scintilla view made for a plugin, in the order made: the handles
 /// besides the host's own that [`plugin_dispatch`] forwards `SCI_*` to.
+/// One slot per view the host will ever make for plugins
+/// ([`MAX_PLUGIN_SCINTILLAS`], from `codepp_plugin_host`).
 ///
 /// Append-only, which is what makes reading it from any thread sound. A
 /// slot is written once, on the main thread, before [`PLUGIN_SCI_COUNT`]
@@ -904,9 +894,9 @@ thread_local! {
 /// into it that nothing could invalidate safely, and Notepad++ keeps every
 /// Scintilla it makes for plugins until it exits too. That is what makes
 /// the routing check sound from any thread, and it is why the number is
-/// capped ([`MAX_PLUGIN_SCINTILLAS`], [`MAX_PLUGIN_SCINTILLAS_PER_PLUGIN`]):
-/// a plugin that asks for a view per file it processes would otherwise
-/// leak without end.
+/// capped ([`may_make_plugin_scintilla`], from `codepp_plugin_host`): a
+/// plugin that asks for a view per file it processes would otherwise leak
+/// without end.
 ///
 /// Refused, besides null: a Scintilla view as the parent, the host's own
 /// or a plugin's — a Scintilla has no room for a subview of anyone
@@ -1086,24 +1076,6 @@ fn inside_plugin_panel(view: &NSView) -> bool {
         above = unsafe { ancestor.superview() };
     }
     false
-}
-
-/// Whether one more view may be made for `owner`, given the owners of
-/// every view made so far. See [`MAX_PLUGIN_SCINTILLAS`] and
-/// [`MAX_PLUGIN_SCINTILLAS_PER_PLUGIN`].
-fn may_make_plugin_scintilla(
-    made: &[Option<usize>],
-    owner: Option<usize>,
-) -> Result<(), &'static str> {
-    if made.len() >= MAX_PLUGIN_SCINTILLAS {
-        return Err("the host has made as many Scintilla views for plugins as it makes");
-    }
-    if made.iter().filter(|&&by| by == owner).count() >= MAX_PLUGIN_SCINTILLAS_PER_PLUGIN {
-        return Err(
-            "the host has made as many Scintilla views for this plugin as it makes for one",
-        );
-    }
-    Ok(())
 }
 
 /// Scintilla's notification callback for the views made for plugins.
@@ -3752,46 +3724,5 @@ mod shortcut_tests {
         // Plain ⌘ and a named key.
         assert_eq!(chord_menu_suffix(true, false, false, 0x31), "\u{2318}1");
         assert_eq!(chord_menu_suffix(true, false, false, 0x2E), "\u{2318}Del");
-    }
-}
-
-#[cfg(test)]
-mod plugin_scintilla_tests {
-    use super::{
-        may_make_plugin_scintilla, MAX_PLUGIN_SCINTILLAS, MAX_PLUGIN_SCINTILLAS_PER_PLUGIN,
-    };
-
-    /// A plugin that has had its allowance is refused, and that costs
-    /// every other plugin nothing — the reason there is a per-plugin cap
-    /// at all.
-    #[test]
-    fn one_plugin_spends_its_own_allowance_and_nobody_elses() {
-        let mut made = Vec::new();
-        for _ in 0..MAX_PLUGIN_SCINTILLAS_PER_PLUGIN {
-            assert!(may_make_plugin_scintilla(&made, Some(3)).is_ok());
-            made.push(Some(3));
-        }
-        assert!(may_make_plugin_scintilla(&made, Some(3)).is_err());
-        assert!(may_make_plugin_scintilla(&made, Some(4)).is_ok());
-        // Views asked for from outside any host call share an allowance
-        // of their own, apart from every plugin's.
-        assert!(may_make_plugin_scintilla(&made, None).is_ok());
-    }
-
-    /// Views asked for from outside any host call are one allowance
-    /// between them.
-    #[test]
-    fn views_nobody_can_be_charged_for_share_one_allowance() {
-        let made = vec![None; MAX_PLUGIN_SCINTILLAS_PER_PLUGIN];
-        assert!(may_make_plugin_scintilla(&made, None).is_err());
-        assert!(may_make_plugin_scintilla(&made, Some(0)).is_ok());
-    }
-
-    /// The table is full once every slot is taken, whoever took them.
-    #[test]
-    fn the_table_holds_no_more_than_its_slots() {
-        let made: Vec<Option<usize>> = (0..MAX_PLUGIN_SCINTILLAS).map(Some).collect();
-        assert!(may_make_plugin_scintilla(&made, Some(MAX_PLUGIN_SCINTILLAS)).is_err());
-        assert!(may_make_plugin_scintilla(&made[1..], Some(MAX_PLUGIN_SCINTILLAS)).is_ok());
     }
 }

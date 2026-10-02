@@ -41,6 +41,7 @@ pub mod docking;
 pub mod ffi;
 pub mod host;
 pub mod menu_checks;
+pub mod plugin_limits;
 
 pub use caller::{calling_plugin, CallingPlugin, PluginCommand, PluginMessageProc};
 pub use codepp_ext::{
@@ -75,3 +76,8 @@ pub use host::{
 };
 
 pub use menu_checks::PluginMenuChecks;
+
+pub use plugin_limits::{
+    may_make_plugin_scintilla, plugin_toolbar_button_slot, PluginToolbarButtonSlot,
+    MAX_PLUGIN_SCINTILLAS, MAX_PLUGIN_SCINTILLAS_PER_PLUGIN, MAX_PLUGIN_TOOLBAR_BUTTONS,
+};

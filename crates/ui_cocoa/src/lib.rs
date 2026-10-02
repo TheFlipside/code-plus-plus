@@ -4838,6 +4838,153 @@ let msg = \"found scintilla_cocoa_new() calls\";
         }
     }
 
+    /// The quota on plugin Scintilla views is applied in
+    /// `create_plugin_scintilla`, unconditionally, before a view is made.
+    ///
+    /// The rule lives in `codepp_plugin_host` as a public function of
+    /// another crate, so it lost the `dead_code` tripwire it had as a
+    /// private helper here. Deleting just the call still warns (an unused
+    /// import, an unused `made`), but deleting the snapshot and the import
+    /// with it — or keeping the call and neutering it in place, as
+    /// `let _ = …` — compiles cleanly and passes every unit test, which
+    /// test the rule rather than its use. Each view is kept for the rest of
+    /// the process, so a neutered quota is an unbounded leak with no other
+    /// symptom. Pinned: the quota is given every view made so far and asked
+    /// about the plugin that is calling, at the function's top level, before
+    /// the view is made, and its refusal returns; the view is then recorded
+    /// under that same plugin.
+    #[test]
+    fn the_plugin_view_quota_is_applied_before_a_view_is_made() {
+        let plugin = plugin_src();
+        let create = fn_body(&plugin, "create_plugin_scintilla");
+        let refusal = "if let Err(why) = may_make_plugin_scintilla(&made, owner) {";
+        // Every view's owner, collected whole: nothing chained after the
+        // `collect` (an `.into_iter().take(n)…`, say) may shorten the list. Checked as "no
+        // `.` next" rather than by the closing parentheses that follow, so
+        // that rustfmt laying the closure out differently does not matter.
+        let counted = "made.iter().map(|s| s.owner).collect::<Vec<_>>()";
+        let snapshot = create
+            .find(counted)
+            .expect("the quota no longer counts every view made so far");
+        assert!(
+            !create[snapshot + counted.len()..]
+                .trim_start()
+                .starts_with('.'),
+            "the list of views the quota counts is cut short after it is collected"
+        );
+        let check = create
+            .find(refusal)
+            .expect("`create_plugin_scintilla` no longer refuses on the quota");
+        let make = create
+            .find("scintilla_cocoa_new()")
+            .expect("`create_plugin_scintilla` no longer makes a view");
+        assert!(
+            snapshot < check && check < make,
+            "the quota must count every view and refuse before a view is made"
+        );
+        assert!(
+            !create[snapshot..check].contains("let "),
+            "something is rebound between counting the views and consulting the quota"
+        );
+        // `owner` is bound once, to the plugin being called: a second `let
+        // owner` anywhere would change whom the quota is asked about or whom
+        // the view is recorded under.
+        assert!(
+            create.matches("let owner").count() == 1
+                && create.contains("let owner = codepp_plugin_host::calling_plugin();"),
+            "`owner` is no longer the calling plugin, bound once"
+        );
+        assert!(
+            occurs_at_depth_one(&create, refusal),
+            "the quota is applied only under a condition, so some views go unchecked"
+        );
+        assert!(
+            occurs_at_depth_one(
+                &block_after(&create, refusal),
+                "return std::ptr::null_mut();"
+            ),
+            "a refusal by the quota no longer stops the view being made"
+        );
+        // Recorded under the plugin that asked: the shorthand `owner`, not an
+        // `owner: …` of anything else, which would leave the per-plugin
+        // allowance counting nobody. Whitespace is dropped so the check does
+        // not depend on how rustfmt lays the literal out.
+        let recorded = block_after(&create, "made.push(PluginScintilla {")
+            .split_whitespace()
+            .collect::<String>();
+        assert!(
+            recorded.contains("owner,") && !recorded.contains("owner:"),
+            "a view is no longer recorded under the plugin that asked for it, so the \
+             per-plugin allowance counts nobody"
+        );
+    }
+
+    /// The cap on plugin toolbar buttons is applied in
+    /// `Toolbar::add_plugin_button`, unconditionally, before a button is
+    /// made — the toolbar's counterpart of
+    /// [`the_plugin_view_quota_is_applied_before_a_view_is_made`], whose
+    /// comment gives the reason. Pinned: the rule is given every plugin
+    /// button, at the function's top level, before a button is made; both
+    /// of its stopping answers stop — a full bar refuses, and a command
+    /// that has a button returns after replacing its image (falling through
+    /// would add a button per request, out of the cap's reach, since the
+    /// rule never refuses a command that has one); and nothing else adds a
+    /// plugin button.
+    #[test]
+    fn the_plugin_toolbar_cap_is_applied_before_a_button_is_made() {
+        let toolbar = toolbar_src();
+        let add = fn_body(&toolbar, "add_plugin_button");
+        let counted =
+            "let commands: Vec<i32> = plugin.buttons.iter().map(|(id, _)| *id).collect();";
+        let asked = "match plugin_toolbar_button_slot(&commands, cmd_id) {";
+        let commands = add
+            .find(counted)
+            .expect("the cap no longer counts every plugin button")
+            + counted.len();
+        let slot = add
+            .find(asked)
+            .expect("`add_plugin_button` no longer asks the cap where a button goes");
+        let make = add
+            .find("new_button(")
+            .expect("`add_plugin_button` no longer makes a button");
+        assert!(
+            commands <= slot && slot < make,
+            "the cap must count every button and decide before a button is made"
+        );
+        assert!(
+            !add[commands..slot].contains("let "),
+            "something is rebound between counting the buttons and consulting the cap"
+        );
+        assert!(
+            occurs_at_depth_one(&add, asked),
+            "the cap is asked only under a condition, so some buttons go uncounted"
+        );
+        assert!(
+            occurs_at_depth_one(
+                &block_after(&add, "PluginToolbarButtonSlot::Existing(index) => {"),
+                "return Ok("
+            ),
+            "a command that has a button no longer stops after replacing its image"
+        );
+        assert!(
+            occurs_at_depth_one(
+                &block_after(&add, "PluginToolbarButtonSlot::Full => {"),
+                "return Err("
+            ),
+            "a full bar no longer refuses the button"
+        );
+        assert_eq!(
+            toolbar.matches("buttons.push(").count(),
+            1,
+            "plugin buttons are recorded in some other number of places than one; the \
+             cap counts the one list `add_plugin_button` pushes to"
+        );
+        assert!(
+            add.contains("buttons.push("),
+            "a plugin button is recorded somewhere besides `add_plugin_button`, past the cap"
+        );
+    }
+
     /// The Document Map's miniature must stay unfocusable, and the guard
     /// that keeps it so must not depend on a `with_state` borrow.
     ///
@@ -5598,11 +5745,50 @@ let msg = \"found scintilla_cocoa_new() calls\";
         );
     }
 
-    /// `crates/ui_cocoa/src/plugin.rs`, cut at its own test module.
+    /// `crates/ui_cocoa/src/plugin.rs`, cut at its own test module, with
+    /// comments and string literals stripped ([`code_only`]).
     fn plugin_src() -> String {
         let src = include_str!("plugin.rs");
         let cut = src.find("#[cfg(test)]").unwrap_or(src.len());
         code_only(&src[..cut])
+    }
+
+    /// `crates/ui_cocoa/src/toolbar.rs`, cut at its first test module if
+    /// it has one, with comments and string literals stripped
+    /// ([`code_only`]).
+    fn toolbar_src() -> String {
+        let src = include_str!("toolbar.rs");
+        let cut = src.find("#[cfg(test)]").unwrap_or(src.len());
+        code_only(&src[..cut])
+    }
+
+    /// The `{ … }` block that `marker` introduces, braces included, by
+    /// brace matching. `marker` must end in the `{` that opens the block.
+    ///
+    /// For asking what a block does *unconditionally* — pair it with
+    /// [`occurs_at_depth_one`] — where a bare `contains` is satisfied by a
+    /// `return` that sits under `if false` or in a closure.
+    fn block_after(src: &str, marker: &str) -> String {
+        assert!(
+            marker.ends_with('{'),
+            "`{marker}` must end at the block's opening brace"
+        );
+        let start = src.find(marker).unwrap_or_else(|| panic!("no `{marker}`"));
+        let open = start + marker.len() - 1;
+        let mut depth = 0usize;
+        for (i, c) in src[open..].char_indices() {
+            match c {
+                '{' => depth += 1,
+                '}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return src[open..=open + i].to_string();
+                    }
+                }
+                _ => {}
+            }
+        }
+        panic!("unterminated block after `{marker}`");
     }
 
     /// Whether `needle` occurs in `body` at brace depth 1 — i.e. as a
