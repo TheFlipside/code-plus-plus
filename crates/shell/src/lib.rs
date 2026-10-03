@@ -6106,29 +6106,50 @@ impl Shell {
     }
 
     /// Set the **active** tab's syntax-highlighting language from a
-    /// Language menu. The GTK and Cocoa menus call this. Win32's menu
-    /// sends `NPPM_SETBUFFERLANGTYPE` through
-    /// [`Self::dispatch_plugin_message`] instead, which reaches the id-keyed
-    /// [`HostServices::set_buffer_lang_type`], the route plugins use.
+    /// Language menu. The GTK and Cocoa menus call this; Win32's sends
+    /// `NPPM_SETBUFFERLANGTYPE` through [`Self::dispatch_plugin_message`]
+    /// instead. Both routes end in [`Self::set_tab_lang`], so on every
+    /// backend a menu pick re-lexes the editor, repaints the status bar
+    /// and queues `NPPN_LANGCHANGED`, as a plugin's change does.
     ///
-    /// Metadata-only, matching [`Self::set_buffer_encoding`]: it flips
-    /// `tab.lang` and returns `true` on a real change so the caller re-lexes
-    /// via [`UiPlatform::apply_lang`] and repaints the status bar; `false`
-    /// on a same-value no-op or with no active tab (so a re-click of the
-    /// already-active language neither re-styles nor flickers the chrome).
-    /// The new language persists to `session.xml` on the next save — the
-    /// tab's `lang` is written whenever it differs from the extension
-    /// default.
-    ///
-    /// Unlike that route, this does **not** queue an `NPPN_LANGCHANGED`
-    /// plugin notification. Both backends host plugins, so a language
-    /// picked from the GTK or Cocoa menu is not announced to the plugins
-    /// loaded there. Closing that means queueing the notification here, or
-    /// routing those menus the way Win32's goes.
-    pub fn set_active_lang(&mut self, lang: codepp_core::LangType) -> bool {
+    /// Returns `true` on a real change. The caller must then deliver the
+    /// queued notification once its borrow on the state has ended, so a
+    /// plugin's `beNotified` can call back into `NPPM_*`. Returns `false`,
+    /// having done nothing, on a same-value no-op (so a re-click of the
+    /// active language neither re-styles nor flickers the chrome) or with
+    /// no active tab. The new language persists to `session.xml` on the
+    /// next save — the tab's `lang` is written whenever it differs from
+    /// the extension default.
+    #[must_use = "true means NPPN_LANGCHANGED is queued; deliver it with no state borrow held"]
+    pub fn set_active_lang<U: UiPlatform>(&mut self, ui: &mut U, lang: LangType) -> bool {
         let Some(idx) = self.active_tab else {
             return false;
         };
+        self.set_tab_lang(ui, idx, lang)
+    }
+
+    /// Change the language of the tab at `idx` because someone asked: the
+    /// one place a requested language change is made. Both routes come
+    /// here — [`Self::set_active_lang`] from the GTK and Cocoa Language
+    /// menus, and [`HostServices::set_buffer_lang_type`] from plugins'
+    /// `NPPM_SETBUFFERLANGTYPE` / `NPPM_SETCURRENTLANGTYPE` and from
+    /// Win32's Language menu. The GTK and Cocoa menus once did this with
+    /// a copy of their own, and theirs never told the plugins. A load, a
+    /// reload and a Save As set the language from the file instead, and
+    /// announce no language change (DESIGN.md §7.4).
+    ///
+    /// On a real change it records the language and, if the tab is the
+    /// active one, re-lexes the editor and repaints the status bar. The
+    /// lexer lives on the view, not the document, so a background tab
+    /// gets its lexer when [`Self::bind_active_view`] next shows it. It
+    /// then queues `NPPN_LANGCHANGED`, which the caller delivers once its
+    /// borrow on the state has ended. Returns whether anything changed.
+    ///
+    /// A same-language set does nothing: re-applying the lexer flickers
+    /// the visible buffer, and a notification for a change that did not
+    /// happen would mislead a plugin that logs them. An index with no tab
+    /// does nothing either.
+    fn set_tab_lang<U: UiPlatform>(&mut self, ui: &mut U, idx: usize, lang: LangType) -> bool {
         let Some(tab) = self.tabs.get_mut(idx) else {
             return false;
         };
@@ -6136,6 +6157,18 @@ impl Shell {
             return false;
         }
         tab.lang = lang;
+        let buffer_id = tab.id as isize;
+        if self.active_tab == Some(idx) {
+            // The status bar shows the language too, and nothing else
+            // would repaint it until the next tab switch. The rest of the
+            // metadata is read back from the tab, so the bar keeps the
+            // encoding, EOL and length it already showed.
+            let tab = &self.tabs[idx];
+            ui.apply_lang(lang);
+            ui.update_status(lang, &tab.encoding, tab.eol, tab.byte_len);
+        }
+        self.pending_notifications
+            .push(Notification::LangChanged { buffer_id });
         true
     }
 
@@ -8471,54 +8504,18 @@ impl<U: UiPlatform> HostServices for HostBridge<'_, U> {
     }
 
     fn set_buffer_lang_type(&mut self, id: isize, lang: i32) -> bool {
-        // Phase 4 m2: real per-buffer lang switch.
-        //
-        //   1. Find the tab. Unknown id → FALSE (matches N++'s
-        //      "no such buffer, nothing changed" return).
-        //   2. No-op same-lang sets — re-applying the same lexer
-        //      flickers the visible buffer and a NPPN_LANGCHANGED
-        //      fired for an unchanged lang would be a false
-        //      positive that breaks plugins audit-logging language
-        //      changes.
-        //   3. Mutate the data model first; if this is the active
-        //      tab, re-apply the lexer through the UI (the lexer
-        //      lives on the *view*, not the document, so the
-        //      apply_lang call has to land on the active editor
-        //      regardless of which tab the plugin targeted).
-        //   4. Queue NPPN_LANGCHANGED. Drain happens after the
-        //      &mut Shell borrow drops, same as the other
-        //      lifecycle notifications.
-        let new_lang = LangType(lang);
+        // FALSE only for an unknown id, Notepad++'s "no such buffer,
+        // nothing changed". Otherwise TRUE: the buffer is now in the
+        // requested language, whether or not it already was. The change
+        // itself — re-lexing the active tab, queueing NPPN_LANGCHANGED,
+        // nothing at all for a same-language set — is
+        // `Shell::set_tab_lang`'s, which the GTK and Cocoa Language menus
+        // reach too. The notification is delivered later, with no borrow
+        // held, like the other lifecycle ones.
         let Some(idx) = self.shell.tabs.iter().position(|t| t.id as isize == id) else {
             return false;
         };
-        if self.shell.tabs[idx].lang == new_lang {
-            return true;
-        }
-        self.shell.tabs[idx].lang = new_lang;
-        if self.shell.active_tab == Some(idx) {
-            self.ui.apply_lang(new_lang);
-            // Refresh the status bar's language slot too — the
-            // lexer changes via `apply_lang` but the chrome
-            // doesn't know that, and a user-driven Language menu
-            // pick (or a plugin's NPPM_SETBUFFERLANGTYPE) shouldn't
-            // require a tab switch to reflect the new label. Read
-            // the rest of the metadata back from the tab so the
-            // call sets the same encoding / EOL / byte-length the
-            // bar already showed; the dynamic-parts refresh inside
-            // `update_status` re-reads Scintilla for length /
-            // cursor / INS-OVR.
-            let tab = &self.shell.tabs[idx];
-            let encoding = tab.encoding.clone();
-            let eol = tab.eol;
-            let byte_len = tab.byte_len;
-            self.ui.update_status(new_lang, &encoding, eol, byte_len);
-        }
-        self.shell
-            .pending_notifications
-            .push(Notification::LangChanged {
-                buffer_id: self.shell.tabs[idx].id as isize,
-            });
+        self.shell.set_tab_lang(self.ui, idx, LangType(lang));
         true
     }
 
@@ -10918,17 +10915,73 @@ mod tests {
     fn set_active_lang_no_active_tab_returns_false() {
         let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
         let mut shell = Shell::new(wake).unwrap();
-        assert!(!shell.set_active_lang(codepp_core::lang::L_CPP));
+        let mut ui = FakeUi::default();
+        assert!(!shell.set_active_lang(&mut ui, codepp_core::lang::L_CPP));
+        assert!(ui.apply_lang_calls.is_empty());
+        assert!(ui.status_calls.is_empty());
+        assert!(shell.take_notifications().is_empty());
+    }
+
+    #[test]
+    fn set_active_lang_with_a_stale_active_index_returns_false() {
+        // `active_tab` names a tab that is not there. The setter looks the
+        // tab up rather than indexing, so this is a no-op, not a panic.
+        let mut shell = shell_with_synthetic_tabs(0, Some(0));
+        let mut ui = FakeUi::default();
+        assert!(!shell.set_active_lang(&mut ui, codepp_core::lang::L_CPP));
+        assert!(ui.apply_lang_calls.is_empty());
+        assert!(shell.take_notifications().is_empty());
+    }
+
+    #[test]
+    fn set_active_lang_changes_the_active_tab_and_only_that_one() {
+        // With several tabs open, the menu changes the active one, repaints
+        // the status bar from *its* metadata, and names it in the notice.
+        // A single-tab test cannot tell the active tab from the first.
+        use codepp_core::lang::{L_CPP, L_TEXT};
+        let mut shell = shell_with_synthetic_tabs(3, Some(1));
+        let mut ui = FakeUi::default();
+        shell.tabs[1].encoding = Encoding::Utf16LeBom;
+        shell.tabs[1].eol = Eol::CrLf;
+        shell.tabs[1].byte_len = 101;
+        let active = shell.tabs[1].id;
+
+        assert!(shell.set_active_lang(&mut ui, L_CPP));
+        assert_eq!(
+            shell.tabs.iter().map(|t| t.lang).collect::<Vec<_>>(),
+            [L_TEXT, L_CPP, L_TEXT]
+        );
+        assert_eq!(ui.apply_lang_calls, [L_CPP]);
+        let status = ui.status_calls.last().expect("the status bar repainted");
+        assert_eq!(
+            (status.0, status.1.as_str(), status.2.as_str(), status.3),
+            (L_CPP, Encoding::Utf16LeBom.label(), Eol::CrLf.label(), 101)
+        );
+        let queued = shell.take_notifications();
+        assert!(
+            matches!(
+                queued.as_slice(),
+                [Notification::LangChanged { buffer_id }] if *buffer_id == active as isize
+            ),
+            "expected exactly NPPN_LANGCHANGED for buffer {active}, got {queued:?}",
+        );
     }
 
     #[test]
     fn set_active_lang_flips_then_no_ops_on_repeat() {
-        // A real change returns true (caller re-lexes); re-selecting the
-        // same language is a silent no-op so the menu doesn't re-style or
-        // flicker the status bar on every click.
+        // A real change re-lexes the editor, repaints the status bar and
+        // queues NPPN_LANGCHANGED for the active buffer, as a plugin's
+        // NPPM_SETBUFFERLANGTYPE does. The GTK and Cocoa Language menus come
+        // through here, and until both routes shared `set_tab_lang` theirs
+        // never told the plugins. Re-selecting the same language is a
+        // silent no-op, so the menu neither re-styles, flickers the status
+        // bar nor announces a change on every click.
+        use codepp_core::lang::L_CPP;
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("plain.txt");
-        std::fs::write(&path, "hello\n").unwrap();
+        // A BOM and CRLF, so the status bar's encoding and EOL are not the
+        // defaults a repaint could fall back to and still look right.
+        std::fs::write(&path, b"\xEF\xBB\xBFhello\r\n").unwrap();
 
         let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
         let mut shell = Shell::new(wake).unwrap();
@@ -10940,12 +10993,43 @@ mod tests {
             |u, _| !u.set_text_calls.is_empty(),
             Duration::from_secs(2),
         );
+        // What the open queued, so only the language change is seen below.
+        let _ = shell.take_notifications();
+        let id = shell.active().unwrap().id as isize;
+        let (applied, repainted) = (ui.apply_lang_calls.len(), ui.status_calls.len());
+        let before = ui.status_calls.last().unwrap().clone();
+        assert_ne!(before.1, Encoding::Utf8.label(), "precondition: a BOM file");
+        assert_ne!(before.2, Eol::Lf.label(), "precondition: CRLF line endings");
 
         // `.txt` detects as Normal Text; switching to C++ is a real change.
-        assert!(shell.set_active_lang(codepp_core::lang::L_CPP));
-        assert_eq!(shell.active().unwrap().lang, codepp_core::lang::L_CPP);
+        assert!(shell.set_active_lang(&mut ui, L_CPP));
+        assert_eq!(shell.active().unwrap().lang, L_CPP);
+        assert_eq!(ui.apply_lang_calls[applied..], [L_CPP]);
+        assert_eq!(ui.status_calls.len(), repainted + 1);
+        let after = ui.status_calls.last().unwrap();
+        assert_eq!(
+            after.0, L_CPP,
+            "the status bar must repaint with the new language"
+        );
+        assert_eq!(
+            (&after.1, &after.2, after.3),
+            (&before.1, &before.2, before.3),
+            "the repaint must keep the encoding, EOL and length the bar already showed"
+        );
+        let queued = shell.take_notifications();
+        assert!(
+            matches!(
+                queued.as_slice(),
+                [Notification::LangChanged { buffer_id }] if *buffer_id == id
+            ),
+            "expected exactly NPPN_LANGCHANGED for buffer {id}, got {queued:?}",
+        );
+
         // Re-selecting C++ is a no-op.
-        assert!(!shell.set_active_lang(codepp_core::lang::L_CPP));
+        assert!(!shell.set_active_lang(&mut ui, L_CPP));
+        assert_eq!(ui.apply_lang_calls.len(), applied + 1);
+        assert_eq!(ui.status_calls.len(), repainted + 1);
+        assert!(shell.take_notifications().is_empty());
     }
 
     #[test]
@@ -13879,13 +13963,13 @@ mod tests {
     }
 
     #[test]
-    #[cfg(target_os = "windows")]
     fn set_buffer_lang_type_updates_tab_and_queues_langchanged() {
         // Phase 4 m2: a plugin that NPPM_SETBUFFERLANGTYPE's the
         // active buffer to a new lang must (a) flip Tab.lang, (b)
         // re-apply the lexer through the UI (lexer lives on the
         // view, not the doc), (c) queue NPPN_LANGCHANGED so other
-        // plugins see the change.
+        // plugins see the change. Win32's Language menu takes this
+        // route too.
         use codepp_core::lang::{L_CPP, L_RUST};
         use codepp_plugin_host::dispatch::NPPM_SETBUFFERLANGTYPE;
         let dir = tempfile::tempdir().unwrap();
@@ -13907,7 +13991,11 @@ mod tests {
         // re-classify it as L_CPP via the dispatcher.
         assert_eq!(shell.tabs[0].lang, L_RUST);
         let id = shell.tabs[0].id as usize;
+        // What the open queued, so only the language change is seen below.
+        let _ = shell.take_notifications();
         let status_before = ui.status_calls.len();
+        // SAFETY: a real dispatch shape — id in wparam, LangType in
+        // lparam — with no pointer arguments to dereference.
         let r = unsafe {
             shell.dispatch_plugin_message(
                 &mut ui,
@@ -13939,18 +14027,93 @@ mod tests {
             L_CPP,
             "status bar must repaint with the new lang, not the old one",
         );
-        // NPPN_LANGCHANGED queued for delivery.
+        // Exactly one NPPN_LANGCHANGED, naming the buffer that changed.
+        let queued = shell.take_notifications();
         assert!(
-            shell
-                .pending_notifications
-                .iter()
-                .any(|n| matches!(n, Notification::LangChanged { .. })),
-            "NPPN_LANGCHANGED not queued",
+            matches!(
+                queued.as_slice(),
+                [Notification::LangChanged { buffer_id }] if *buffer_id == id as isize
+            ),
+            "expected exactly NPPN_LANGCHANGED for buffer {id}, got {queued:?}",
         );
     }
 
     #[test]
-    #[cfg(target_os = "windows")]
+    fn set_buffer_lang_type_on_a_background_tab_queues_but_leaves_the_view_alone() {
+        // A plugin may address any open buffer. The lexer lives on the
+        // view, so a background tab is only recorded — it gets its lexer
+        // when it is next shown — and the status bar, which describes the
+        // active tab, is left alone. The notification is still queued,
+        // naming that buffer. This pins Code++'s behaviour: Notepad++,
+        // read from its source and not yet measured, announces a language
+        // change only for a buffer on screen (DESIGN.md §7.4).
+        use codepp_core::lang::{L_CPP, L_TEXT};
+        use codepp_plugin_host::dispatch::NPPM_SETBUFFERLANGTYPE;
+        let mut shell = shell_with_synthetic_tabs(2, Some(1));
+        let mut ui = FakeUi::default();
+        let (background, active) = (shell.tabs[0].id, shell.tabs[1].id);
+        assert_eq!(shell.tabs[0].lang, L_TEXT);
+
+        // SAFETY: a real dispatch shape — id in wparam, LangType in
+        // lparam — with no pointer arguments to dereference.
+        let r = unsafe {
+            shell.dispatch_plugin_message(
+                &mut ui,
+                HostHandles::null(),
+                NPPM_SETBUFFERLANGTYPE,
+                background as usize,
+                L_CPP.as_npp_id() as isize,
+            )
+        };
+        assert_eq!(r, Some(1));
+        assert_eq!(shell.tabs[0].lang, L_CPP);
+        assert_eq!(shell.tabs[1].lang, L_TEXT, "the active tab is untouched");
+        assert_eq!(shell.active().unwrap().id, active);
+        assert!(
+            ui.apply_lang_calls.is_empty(),
+            "the active tab's lexer must not change for a background buffer"
+        );
+        assert!(ui.status_calls.is_empty());
+        let queued = shell.take_notifications();
+        assert!(
+            matches!(
+                queued.as_slice(),
+                [Notification::LangChanged { buffer_id }] if *buffer_id == background as isize
+            ),
+            "expected exactly NPPN_LANGCHANGED for buffer {background}, got {queued:?}",
+        );
+    }
+
+    #[test]
+    fn set_buffer_lang_type_with_an_unknown_id_answers_false() {
+        // Notepad++'s "no such buffer, nothing changed": the plugin reads 0,
+        // and nothing is recorded, re-lexed, repainted or announced.
+        use codepp_core::lang::{L_CPP, L_TEXT};
+        use codepp_plugin_host::dispatch::NPPM_SETBUFFERLANGTYPE;
+        let mut shell = shell_with_synthetic_tabs(2, Some(1));
+        let mut ui = FakeUi::default();
+        let unknown = 999;
+        assert!(shell.tabs.iter().all(|t| t.id != unknown));
+
+        // SAFETY: a real dispatch shape — id in wparam, LangType in
+        // lparam — with no pointer arguments to dereference.
+        let r = unsafe {
+            shell.dispatch_plugin_message(
+                &mut ui,
+                HostHandles::null(),
+                NPPM_SETBUFFERLANGTYPE,
+                unknown as usize,
+                L_CPP.as_npp_id() as isize,
+            )
+        };
+        assert_eq!(r, Some(0));
+        assert!(shell.tabs.iter().all(|t| t.lang == L_TEXT));
+        assert!(ui.apply_lang_calls.is_empty());
+        assert!(ui.status_calls.is_empty());
+        assert!(shell.take_notifications().is_empty());
+    }
+
+    #[test]
     fn set_buffer_lang_type_same_lang_is_idempotent() {
         // Re-classifying a buffer to its current lang must not
         // re-apply the lexer (visible flicker) or queue
@@ -13980,6 +14143,8 @@ mod tests {
         let apply_calls_before = ui.apply_lang_calls.len();
         let status_calls_before = ui.status_calls.len();
 
+        // SAFETY: a real dispatch shape — id in wparam, LangType in
+        // lparam — with no pointer arguments to dereference.
         let r = unsafe {
             shell.dispatch_plugin_message(
                 &mut ui,
@@ -14005,7 +14170,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(target_os = "windows")]
     fn buffer_lang_type_returns_tabs_lang_to_plugins() {
         // Verifies that `HostBridge::buffer_lang_type` (the trait
         // impl plugins reach via NPPM_GETBUFFERLANGTYPE) reads the

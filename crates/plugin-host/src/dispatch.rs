@@ -859,8 +859,10 @@ pub trait HostServices {
     fn current_buffer_id(&self) -> isize;
     /// Path of the buffer with id `id`. None if the id is unknown.
     fn buffer_path(&self, id: isize) -> Option<PathBuf>;
-    /// Lang-type for buffer `id`. Phase 3 returns `L_TEXT` (0); Phase
-    /// 4 wires this through the lexer registry.
+    /// Lang-type for buffer `id`: its built-in `LangType` id, or `L_TEXT`
+    /// (0) for an unknown id. A User Defined Language buffer answers
+    /// Code++'s internal UDL id (1024 and up), not Notepad++'s `L_USER`;
+    /// DESIGN.md §7.4 tracks the mapping.
     fn buffer_lang_type(&self, id: isize) -> i32;
     /// Short language name for `lang` (`NPPM_GETLANGUAGENAME`). N++
     /// uses the same string the user sees in the Language menu —

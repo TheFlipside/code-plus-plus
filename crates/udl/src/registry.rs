@@ -23,12 +23,14 @@ use crate::UdlDefinition;
 /// (well past N++'s ~1-per-year growth rate) before any
 /// collision.
 ///
-/// **These ids never leave Code++'s process boundary.** When a
-/// plugin queries a UDL buffer via `NPPM_GETCURRENTLANGTYPE`, the
-/// plugin-host dispatcher returns `L_USER = 15` — matching
-/// Notepad++'s public API contract for "buffer uses a UDL." The
-/// UDL-specific id is a Code++-internal detail for distinguishing
-/// which UDL applies to which buffer, not something plugins see.
+/// **These ids are meant never to leave Code++'s process.** A plugin
+/// asking a UDL buffer's language should get `L_USER = 15`, Notepad++'s
+/// public API contract for "buffer uses a UDL"; the UDL-specific id is a
+/// Code++-internal detail for telling which UDL applies to which buffer.
+/// **Not yet so:** `NPPM_GETCURRENTLANGTYPE` and `NPPM_GETBUFFERLANGTYPE`
+/// answer the id itself, since nothing maps it (DESIGN.md §7.4). The id
+/// follows the scan order of `userDefineLangs/`, so a plugin must not
+/// store it.
 pub const UDL_LANG_TYPE_BASE: i32 = 1024;
 
 /// End of the UDL dynamic-id space (inclusive). 1024 slots is

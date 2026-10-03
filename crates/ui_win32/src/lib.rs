@@ -27058,8 +27058,10 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                             // `apply_lang` (which reads `udl_registry`
                             // for UDL ids), queues `NPPN_LANGCHANGED`,
                             // and refreshes the status bar. One code
-                            // path, three sources (menu click, plugin
-                            // set, file-open by extension).
+                            // path for a menu click and a plugin's set;
+                            // a file's own language, set when it opens,
+                            // takes another path and announces nothing
+                            // (DESIGN.md §7.4).
                             let offset = i32::from(cmd_u16 - ID_UDL_ITEM_BASE);
                             let lang_type_id = codepp_udl::UDL_LANG_TYPE_BASE + offset;
                             handle_language_menu_click(hwnd, lang_type_id);

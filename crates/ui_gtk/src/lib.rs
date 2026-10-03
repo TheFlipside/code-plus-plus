@@ -376,7 +376,13 @@ pub fn run(initial_path: Option<PathBuf>, perf: Perf) -> Result<(), GtkUiError> 
     // may have focused its own panel.
     sci_widget.grab_focus();
 
-    gtk::main();
+    // Not if the quit has already begun. A plugin command the restore above
+    // ran may have run a nested main loop in which the window was closed.
+    // That quit could not end a loop that had not started yet, so this one
+    // would never end.
+    if !quitting() {
+        gtk::main();
+    }
 
     // Drop the state explicitly so `Shell` — and the worker threads its
     // channels keep alive — tear down here rather than at process exit.
@@ -428,15 +434,17 @@ fn connect_session_persistence(window: &gtk::Window) {
         )
     });
 
+    // `Stop`, so GTK never destroys the window: the quit ends the main loop
+    // and the process with it, as File → Exit does. With `Proceed`, a
+    // plugin's shutdown handler that runs a nested main loop let a second
+    // close in, which returned from `quit` at once and destroyed the window,
+    // and so the Scintilla views, while the first quit still had its save
+    // to do. The fallback is `Stop` too, so a panic cannot reopen that.
     window.connect_delete_event(|_, _| {
-        crate::at_callback_boundary(
-            "lib:window:delete_event",
-            glib::Propagation::Proceed,
-            || {
-                quit();
-                glib::Propagation::Proceed
-            },
-        )
+        crate::at_callback_boundary("lib:window:delete_event", glib::Propagation::Stop, || {
+            quit();
+            glib::Propagation::Stop
+        })
     });
 
     glib::timeout_add_seconds_local(AUTOSAVE_INTERVAL_SECS, || {
@@ -670,12 +678,11 @@ fn connect_tab_strip_signals(tab_strip: &tabs::TabStrip) {
             });
             if moved == Some(true) {
                 rebind_active_view();
-                // No `queue_buffer_activated` here: it is
-                // `#[cfg(target_os = "windows")]` in `shell` because it
-                // queues the `NPPN_BUFFERACTIVATED` plugin notification,
-                // and `platform::dynlib` has no `dlopen` arm yet, so GTK
-                // loads no plugins to notify. It joins this handler when
-                // the plugin host is ported.
+                // No `queue_buffer_activated` here yet, so a user's tab
+                // switch tells the plugins nothing on this backend, where
+                // Win32's selection handler queues `NPPN_BUFFERACTIVATED`
+                // itself. A known gap (DESIGN.md §7.4); the plugin host it
+                // once waited for is ported.
             }
         });
     });
@@ -1108,8 +1115,10 @@ impl Drop for FlagGuard {
 ///
 /// A caught panic is logged and swallowed, and the caller gets
 /// `fallback` — `Propagation::Proceed` for an event handler so the key
-/// or click still reaches the widget, `ControlFlow::Continue` for the
-/// auto-save timer so one bad save does not silence it for the session.
+/// or click still reaches the widget, except a window's close handler,
+/// whose fallback is `Stop` so a panic cannot let GTK destroy a window
+/// the state still holds; `ControlFlow::Continue` for the auto-save
+/// timer so one bad save does not silence it for the session.
 /// It is not a licence to panic: nothing here is expected to, and the
 /// log line is deliberately at `error` so one that does is not mistaken
 /// for normal operation.
@@ -1137,6 +1146,16 @@ pub(crate) fn drain_shell() {
     // the freeze and flushes once, so nothing a worker finished meanwhile
     // is lost; it just lands after the close rather than during it.
     if DrainFreeze::active() {
+        return;
+    }
+    // And stopped for good once the quit has begun. A plugin's shutdown
+    // handler may run a nested main loop, and a worker's wake or a
+    // Language-menu pick landing there must not start a drain: it would
+    // deliver queued notifications after `NPPN_SHUTDOWN`, and could put up
+    // a dialog on a window that is going. A delivery already under way
+    // when the quit begins finishes its batch; this is an entry check, as
+    // Cocoa's is. See [`quit`].
+    if QUITTING.with(Cell::get) {
         return;
     }
     let dialogs = with_state(|st| {
@@ -1178,6 +1197,63 @@ pub(crate) fn drain_shell() {
     // opened/saved/closed, buffer activated) to the loaded plugins — after
     // the borrow above is dropped, so a plugin's `beNotified` can call back.
     plugin::deliver_notifications();
+}
+
+/// Two properties of [`drain_shell`] that no runtime test here can see,
+/// pinned in the source as Cocoa pins its own drain. Every queued
+/// notification reaches the plugins through it. If it delivered from
+/// inside the `with_state` closure, each `NPPM_*` a plugin sends back
+/// would be declined. Without the quit check, a nested main loop in a
+/// plugin's shutdown handler could start a drain that delivers more after
+/// `NPPN_SHUTDOWN`.
+#[cfg(test)]
+mod drain_guard {
+    use crate::source_scan::{
+        block_after, code_only, fn_body, occurs_at_depth_one, strip_test_modules,
+    };
+
+    #[test]
+    fn the_drain_delivers_outside_its_borrow_and_stops_at_the_quit() {
+        let lib = strip_test_modules(&code_only(include_str!("lib.rs")));
+        let body = fn_body(&lib, "drain_shell");
+        assert!(
+            occurs_at_depth_one(&body, "plugin::deliver_notifications();"),
+            "`drain_shell` no longer delivers plugin notifications as a statement of its \
+             own; inside the `with_state` closure every `NPPM_*` callback would be declined"
+        );
+        assert_eq!(
+            body.matches("deliver_notifications").count(),
+            1,
+            "`drain_shell` must deliver once, as a statement of its own"
+        );
+        let gate = "if QUITTING.with(Cell::get) {";
+        assert!(
+            occurs_at_depth_one(&body, gate),
+            "the quit check must be a statement of the drain itself, spelled `{gate}`"
+        );
+        assert!(
+            occurs_at_depth_one(&block_after(&body, gate), "return;"),
+            "`drain_shell` no longer stops once the quit has begun"
+        );
+        let freeze = "if DrainFreeze::active() {";
+        assert!(
+            occurs_at_depth_one(&body, freeze)
+                && occurs_at_depth_one(&block_after(&body, freeze), "return;"),
+            "`drain_shell` must return while a nested loop holds the freeze, from a \
+             statement of its own spelled `{freeze}`"
+        );
+        let borrow = body.find("with_state(").expect("the drain takes the state");
+        let deliver = body
+            .find("plugin::deliver_notifications();")
+            .expect("checked above");
+        for check in [freeze, gate] {
+            let at = body.find(check).expect("checked above");
+            assert!(
+                at < borrow && at < deliver,
+                "`{check}` must come before the drain takes or delivers anything"
+            );
+        }
+    }
 }
 
 thread_local! {
@@ -2129,10 +2205,49 @@ fn window_geometry_to_persist(
     }
 }
 
-/// Persist the session. Safe to call repeatedly.
+/// Persist the session. Safe to call repeatedly. The autosave timer is
+/// its only caller.
+///
+/// A no-op once [`quit`] has begun, as Cocoa's is. The quit captures the
+/// state it saves first and pins the dock layout, so an autosave tick
+/// landing in a plugin's shutdown handler's nested main loop must not
+/// re-capture what the handler has changed since.
 pub(crate) fn save_session_now() {
+    if QUITTING.with(Cell::get) {
+        return;
+    }
     capture_ui_state_to_shell();
     persist_session();
+}
+
+/// The autosave's quit check, pinned in the source because what it
+/// prevents needs a plugin's shutdown handler running a nested main loop,
+/// or a stalled main loop, to reproduce.
+#[cfg(test)]
+mod autosave_guard {
+    use crate::source_scan::{
+        block_after, code_only, fn_body, occurs_at_depth_one, strip_test_modules,
+    };
+
+    #[test]
+    fn the_autosave_stops_once_the_quit_has_begun() {
+        let lib = strip_test_modules(&code_only(include_str!("lib.rs")));
+        let body = fn_body(&lib, "save_session_now");
+        let gate = "if QUITTING.with(Cell::get) {";
+        assert!(
+            occurs_at_depth_one(&body, gate)
+                && occurs_at_depth_one(&block_after(&body, gate), "return;"),
+            "the autosave no longer stops once the quit has begun"
+        );
+        let check = body.find(gate).expect("checked above");
+        let capture = body
+            .find("capture_ui_state_to_shell(")
+            .expect("the autosave captures the UI state");
+        assert!(
+            check < capture,
+            "the quit check must come before the autosave touches anything"
+        );
+    }
 }
 
 /// Snapshot the live dock layout, workspace-panel and window state into
@@ -2221,7 +2336,150 @@ pub(crate) fn quit() {
     dock::freeze_session();
     crate::at_callback_boundary("lib:quit:notify", (), plugin::notify_shutdown);
     crate::at_callback_boundary("lib:quit:save", (), persist_session);
-    gtk::main_quit();
+    // Only from inside a loop. A quit begun before `run` starts one would
+    // make gtk-rs panic in a debug build and do nothing in a release one;
+    // `run` checks `quitting()` and starts no loop instead. This ends only
+    // the innermost loop: a plugin command inside a `gtk_main` of its own
+    // strands the quit, a gap DESIGN.md §7.4 tracks.
+    if gtk::main_level() > 0 {
+        gtk::main_quit();
+    }
+}
+
+/// What the quit relies on, pinned in the source because each property
+/// goes wrong only while a plugin runs a nested main loop: in its shutdown
+/// handler, or in a command the startup restore runs. Every quit check in
+/// this crate reads `QUITTING`, so [`quit`] raises it before anything
+/// else, and before any plugin hears of the quit. A close must never let
+/// GTK destroy the window under a running quit, and must be wired before
+/// the startup restore can run a plugin's loop. The main loop must not
+/// start once a quit has begun, since nothing would end it. Cocoa pins
+/// its own quit's order the same way.
+#[cfg(test)]
+mod quit_guard {
+    use crate::source_scan::{
+        block_after, code_only, fn_body, occurs_at_depth_one, production_code, strip_test_modules,
+    };
+
+    fn lib() -> String {
+        strip_test_modules(&code_only(include_str!("lib.rs")))
+    }
+
+    /// `quit`'s body with its layout taken out: runs of whitespace become
+    /// one space, and a trailing comma before `)` goes. A longer boundary
+    /// label makes rustfmt wrap a step's call with a trailing comma, which
+    /// must not read as the step being gone.
+    fn quit_body(lib: &str) -> String {
+        fn_body(lib, "quit")
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+            .replace(", )", ")")
+    }
+
+    #[test]
+    fn the_quit_raises_its_flag_before_anything_else() {
+        let lib = lib();
+        let body = quit_body(&lib);
+        let raise = "if QUITTING.with(|q| q.replace(true)) {";
+        assert!(
+            body.trim_start_matches('{').trim_start().starts_with(raise),
+            "`quit` must raise `QUITTING` as its first statement, spelled `{raise}`: \
+             every quit check reads it"
+        );
+        assert!(
+            occurs_at_depth_one(&block_after(&body, raise), "return;"),
+            "a quit already under way must make a second one return at once"
+        );
+        assert_eq!(
+            body.matches("return").count(),
+            1,
+            "the quit must run every step once begun: its only return is a second quit's"
+        );
+        let end_loop = "if gtk::main_level() > 0 {";
+        let steps = [
+            "capture_ui_state_to_shell);",
+            "dock::freeze_session();",
+            "plugin::notify_shutdown);",
+            "persist_session);",
+            end_loop,
+        ];
+        let at: Vec<usize> = steps
+            .iter()
+            .map(|step| {
+                assert!(
+                    occurs_at_depth_one(&body, step),
+                    "the quit no longer runs `{step}` as a statement of its own"
+                );
+                body.find(step).expect("checked above")
+            })
+            .collect();
+        assert!(
+            at.windows(2).all(|pair| pair[0] < pair[1]),
+            "the quit's steps are out of order: {steps:?} at {at:?}"
+        );
+        assert!(
+            occurs_at_depth_one(&block_after(&body, end_loop), "gtk::main_quit();"),
+            "the quit no longer ends the main loop it runs in"
+        );
+        assert_eq!(
+            production_code().matches("main_quit").count(),
+            1,
+            "only the quit may end the main loop: anything else ending it skips the save \
+             and the plugins' shutdown notice, or calls it outside a loop"
+        );
+    }
+
+    #[test]
+    fn a_close_never_destroys_the_window_and_no_loop_starts_after_a_quit() {
+        let lib = lib();
+        let close = block_after(&lib, "window.connect_delete_event(|_, _| {");
+        assert!(
+            occurs_at_depth_one(&block_after(&close, "|| {"), "quit();"),
+            "the window's close must quit, as a statement of its handler: with `Stop`, a \
+             close that skipped it would leave a window nothing can close"
+        );
+        assert!(
+            !close.contains("Proceed") && close.matches("glib::Propagation::Stop").count() == 2,
+            "the close and its panic fallback must both stop GTK destroying the window"
+        );
+        let run = fn_body(&lib, "run");
+        let wired = run
+            .find("connect_session_persistence(")
+            .expect("`run` no longer wires the window's close");
+        let restore = run
+            .find("plugin::restore_panel_plugins();")
+            .expect("`run` no longer restores plugin panels");
+        assert!(
+            wired < restore,
+            "the close must be wired before the startup restore can run a plugin's loop, \
+             or a close there gets GTK's default and destroys the window"
+        );
+        assert_eq!(
+            run.matches("gtk::main();").count(),
+            1,
+            "`run` must enter the main loop in one place"
+        );
+        assert!(
+            occurs_at_depth_one(&block_after(&run, "if !quitting() {"), "gtk::main();"),
+            "the main loop must not start once a quit has begun: nothing would end it"
+        );
+    }
+
+    #[test]
+    fn deferred_dialogs_are_dropped_once_the_quit_has_begun() {
+        let lib = lib();
+        let body = fn_body(&lib, "present_deferred_dialogs");
+        let gate = "if QUITTING.with(Cell::get) {";
+        assert!(
+            occurs_at_depth_one(&body, gate)
+                && occurs_at_depth_one(&block_after(&body, gate), "return;"),
+            "dialogs queued during the quit must be dropped, not shown"
+        );
+        let check = body.find(gate).expect("checked above");
+        let pump = body.find("pump_dialogs()").expect("the dialogs are pumped");
+        assert!(check < pump, "the quit check must come before the pump");
+    }
 }
 
 /// Re-read the active buffer's modify bit into `Tab.dirty`, returning

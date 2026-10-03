@@ -366,6 +366,22 @@ directory must be on a volume that keeps ACLs (APFS does).
 
 ## 5. Common Tasks After Setup
 
+### Keep the tests off your own configuration
+
+`cargo test --workspace` writes the real Code++ configuration directory. The
+shell's tests push temporary paths onto `recent_files.xml` and a search onto
+`find_history.xml`, so a few runs replace your recent-files list. Until the
+tests get a directory of their own (DESIGN.md §7.4), point the configuration
+at a scratch directory:
+
+```sh
+XDG_CONFIG_HOME="$(mktemp -d)" cargo test --workspace    # Linux
+```
+
+On Windows set `APPDATA` instead. On macOS only `HOME` moves it; keep
+`CARGO_HOME` and `RUSTUP_HOME` pointing at the real ones when you override
+it, or rustup installs a fresh toolchain into the scratch home.
+
 ### Add or change an `NPPM_*` / `NPPN_*` / docking constant
 
 Verify the number against Notepad++'s published headers, mechanically:

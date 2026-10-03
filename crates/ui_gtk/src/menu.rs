@@ -2255,24 +2255,124 @@ fn add_lang_item(menu: &gtk::Menu, label: &str, lang_id: i32) -> (i32, gtk::Chec
     (lang_id, item.clone())
 }
 
-/// Apply a chosen language to the active buffer: flip the tab's `lang`,
-/// re-lex/re-colour via `apply_lang`, and repaint the status bar. Skips
-/// the work during a `show`-driven mark refresh (see [`REFRESHING_MARKS`]).
+/// Apply a chosen language to the active buffer. The shell records it,
+/// re-lexes the editor, repaints the status bar and queues
+/// `NPPN_LANGCHANGED` ([`codepp_shell::Shell::set_active_lang`]). The
+/// drain this function then runs delivers it to the plugins straight
+/// away, as Windows does, instead of leaving it for a later one. Skips
+/// the work during a `show`-driven mark refresh (see
+/// [`REFRESHING_MARKS`]).
 fn apply_language(lang_id: i32) {
     if REFRESHING_MARKS.with(std::cell::Cell::get) {
         return;
     }
     let lang = codepp_core::LangType(lang_id);
-    let changed = with_state(|st| st.shell.set_active_lang(lang)).unwrap_or(false);
+    let changed = with_state(|st| {
+        let (shell, mut ui) = st.split();
+        shell.set_active_lang(&mut ui, lang)
+    })
+    .unwrap_or(false);
+    // After the borrow has ended, so a plugin's `beNotified` can call
+    // back into `NPPM_*` rather than be declined.
     if changed {
-        with_state(|st| {
-            let (shell, mut ui) = st.split();
-            ui.apply_lang(lang);
-            if let Some(tab) = shell.active() {
-                let (l, enc, eol, blen) = (tab.lang, tab.encoding.clone(), tab.eol, tab.byte_len);
-                ui.update_status(l, &enc, eol, blen);
-            }
-        });
+        drain_shell();
+    }
+}
+
+/// A language picked from the menu reaches the plugins as soon as it is
+/// made: through the shell's shared setter, which queues
+/// `NPPN_LANGCHANGED`, then a drain once the state borrow has ended. Each
+/// of these is a placement no runtime test here can see. A drain moved
+/// into the borrow compiles and is declined; a hand-rolled re-lex
+/// compiles and tells the plugins nothing, which is how this menu went
+/// without the notification until Phase 5.
+#[cfg(test)]
+mod language_pick_guard {
+    use crate::source_scan::{
+        block_after, code_only, fn_body, occurs_at_depth_one, strip_test_modules,
+    };
+
+    #[test]
+    fn a_language_pick_is_announced_to_plugins_at_once() {
+        let menu = strip_test_modules(&code_only(include_str!("menu.rs")));
+        let body = fn_body(&menu, "apply_language");
+        let marks_check = "if REFRESHING_MARKS.with(std::cell::Cell::get) {";
+        assert!(
+            occurs_at_depth_one(&body, marks_check)
+                && occurs_at_depth_one(&block_after(&body, marks_check), "return;"),
+            "a mark refresh re-emits `activate`; without returning early, as a statement \
+             of the handler itself, it would change the language, and announce it"
+        );
+        let check = body
+            .find("if REFRESHING_MARKS.with(")
+            .expect("checked above");
+        let borrow_at = body.find("with_state(").expect("a pick takes the state");
+        assert!(
+            check < borrow_at,
+            "the mark-refresh check must come before anything changes"
+        );
+        let marks = fn_body(&menu, "set_language_marks");
+        // The whole binding: `let _ = …` would lower the flag at once.
+        let raised = marks
+            .find("let _refreshing = crate::FlagGuard::set(&REFRESHING_MARKS);")
+            .expect("a mark refresh no longer holds `REFRESHING_MARKS` up while it sets marks");
+        let marked = marks
+            .find("set_active(")
+            .expect("a mark refresh sets the marks");
+        assert!(
+            raised < marked,
+            "`REFRESHING_MARKS` must be up before a mark is set: setting one re-emits \
+             `activate`, which would change the language, and announce it"
+        );
+        assert_eq!(
+            body.matches("with_state(").count(),
+            1,
+            "a pick takes the state once, for the setter; a second borrow could hold the \
+             drain, where it is declined"
+        );
+        let borrow = block_after(&body, "with_state(|st| {");
+        assert!(
+            borrow.contains("set_active_lang(&mut ui"),
+            "a language pick no longer goes through the shell's shared setter, \
+             which is what queues NPPN_LANGCHANGED"
+        );
+        for own in ["apply_lang(", "update_status("] {
+            assert!(
+                !body.contains(own),
+                "a language pick calls `{own}` itself; the shell's setter does that, \
+                 and a copy here is how the notification went missing"
+            );
+        }
+        assert_eq!(
+            body.matches("drain_shell()").count(),
+            1,
+            "a language pick must drain once, to deliver what it queued"
+        );
+        assert!(
+            !borrow.contains("drain_shell"),
+            "a drain inside the state borrow is declined, and the plugins hear nothing"
+        );
+        assert!(
+            occurs_at_depth_one(&body, "if changed {")
+                && occurs_at_depth_one(&block_after(&body, "if changed {"), "drain_shell();"),
+            "the drain must be a statement of its own once the pick has changed \
+             something: inside a closure it may run under a borrow that declines it"
+        );
+        let set = body.find("set_active_lang(").expect("checked above");
+        let drain = body.find("if changed {").expect("checked above");
+        assert!(set < drain, "the drain must follow the change it delivers");
+        assert!(
+            !body.contains("deliver_notifications"),
+            "deliver through `drain_shell`, which waits while a nested loop holds the freeze"
+        );
+        assert_eq!(
+            crate::source_scan::production_code()
+                .matches("set_active_lang(")
+                .count(),
+            1,
+            "a second caller of the shell's setter must deliver what it queues too; \
+             route it through `apply_language`"
+        );
     }
 }
 

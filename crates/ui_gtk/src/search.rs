@@ -373,10 +373,12 @@ fn report_find(found: Option<u64>) {
 /// dialogs (Goto, the confirm prompts) that get it from GTK for free — a
 /// plain `gtk::Window` has no such behaviour, so it is wired explicitly.
 fn connect_hide_on_close(window: &gtk::Window) {
+    // The panic fallback is `Stop` as well: whatever happens, GTK must not
+    // destroy a window the state still holds.
     window.connect_delete_event(|w, _| {
         crate::at_callback_boundary(
             "search:window:delete_event",
-            glib::Propagation::Proceed,
+            glib::Propagation::Stop,
             || {
                 w.hide();
                 glib::Propagation::Stop
@@ -397,6 +399,27 @@ fn connect_hide_on_close(window: &gtk::Window) {
             },
         )
     });
+}
+
+/// The dialog's close hides it and never lets GTK destroy it, panic or
+/// not; pinned in the source because `hide` cannot panic today, so no
+/// runtime test can reach the fallback.
+#[cfg(test)]
+mod hide_on_close_guard {
+    use crate::source_scan::{block_after, code_only, occurs_at_depth_one, strip_test_modules};
+
+    #[test]
+    fn the_find_window_is_never_destroyed() {
+        let search = strip_test_modules(&code_only(include_str!("search.rs")));
+        let close = block_after(&search, "window.connect_delete_event(|w, _| {");
+        assert!(
+            occurs_at_depth_one(&block_after(&close, "|| {"), "w.hide();")
+                && !close.contains("Proceed")
+                && close.matches("glib::Propagation::Stop").count() == 2,
+            "closing the Find window must hide it, and it and its panic fallback must \
+             both stop GTK destroying a window the state still holds"
+        );
+    }
 }
 
 /// Build the dialog and wire every button. The widgets it returns are

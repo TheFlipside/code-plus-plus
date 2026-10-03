@@ -2643,21 +2643,23 @@ pub(crate) fn active_tab_id() -> Option<i32> {
     with_state(|st| st.shell.active().map(|t| t.id)).flatten()
 }
 
-/// Apply a language to the active buffer, re-lex, and repaint the status
-/// bar. A no-op if the buffer already has it.
+/// Apply a language picked from the Language menu to the active buffer.
+/// The shell records it, re-lexes the editor, repaints the status bar and
+/// queues `NPPN_LANGCHANGED` ([`codepp_shell::Shell::set_active_lang`]).
+/// The drain this function then runs delivers it to the plugins straight
+/// away, as Windows does, instead of leaving it for a later one. A no-op
+/// if the buffer already has it.
 pub(crate) fn apply_language(lang_id: i32) {
     let lang = codepp_core::LangType(lang_id);
-    if with_state(|st| st.shell.set_active_lang(lang)) != Some(true) {
-        return;
-    }
-    with_state(|st| {
+    let changed = with_state(|st| {
         let (shell, mut ui) = st.split();
-        ui.apply_lang(lang);
-        if let Some(tab) = shell.active() {
-            let (l, enc, eol, len) = (tab.lang, tab.encoding.clone(), tab.eol, tab.byte_len);
-            ui.update_status(l, &enc, eol, len);
-        }
-    });
+        shell.set_active_lang(&mut ui, lang)
+    }) == Some(true);
+    // After the borrow has ended, so a plugin's `beNotified` can call
+    // back into `NPPM_*` rather than be declined.
+    if changed {
+        drain_shell();
+    }
 }
 
 /// The Encoding menu tag matching the active buffer's encoding, or
@@ -6106,6 +6108,69 @@ let msg = \"found scintilla_cocoa_new() calls\";
             occurs_at_depth_one(&body, "plugin::deliver_notifications();"),
             "`drain_shell` no longer delivers plugin notifications at statement level; \
              inside the `with_state` closure they would be declined"
+        );
+    }
+
+    /// A language picked from the menu reaches the plugins as soon as it
+    /// is made: through the shell's shared setter, which queues
+    /// `NPPN_LANGCHANGED`, then a drain once the state borrow has ended.
+    /// Each of these is a placement no runtime test can see. A drain
+    /// moved into the borrow compiles and is declined; a hand-rolled
+    /// re-lex compiles and tells the plugins nothing, which is how this
+    /// menu went without the notification until Phase 5. `ui_gtk` pins
+    /// its menu the same way.
+    #[test]
+    fn a_language_pick_is_announced_to_plugins_at_once() {
+        let body = fn_body(&code_only(production_src()), "apply_language");
+        assert_eq!(
+            body.matches("with_state(").count(),
+            1,
+            "a pick takes the state once, for the setter; a second borrow could hold the \
+             drain, where it is declined"
+        );
+        let borrow = block_after(&body, "with_state(|st| {");
+        assert!(
+            borrow.contains("set_active_lang(&mut ui"),
+            "a language pick no longer goes through the shell's shared setter, \
+             which is what queues NPPN_LANGCHANGED"
+        );
+        for own in ["apply_lang(", "update_status("] {
+            assert!(
+                !body.contains(own),
+                "a language pick calls `{own}` itself; the shell's setter does that, \
+                 and a copy here is how the notification went missing"
+            );
+        }
+        assert_eq!(
+            body.matches("drain_shell()").count(),
+            1,
+            "a language pick must drain once, to deliver what it queued"
+        );
+        assert!(
+            !borrow.contains("drain_shell"),
+            "a drain inside the state borrow is declined, and the plugins hear nothing"
+        );
+        assert!(
+            occurs_at_depth_one(&body, "if changed {")
+                && occurs_at_depth_one(&block_after(&body, "if changed {"), "drain_shell();"),
+            "the drain must be a statement of its own once the pick has changed \
+             something: inside a closure it may run under a borrow that declines it"
+        );
+        let set = body.find("set_active_lang(").expect("checked above");
+        let drain = body.find("if changed {").expect("checked above");
+        assert!(set < drain, "the drain must follow the change it delivers");
+        assert!(
+            !body.contains("deliver_notifications"),
+            "deliver through `drain_shell`, which waits while a nested loop holds the \
+             freeze and stops once the quit has begun"
+        );
+        // `all_production_code` cuts each file at its first test module, so
+        // a caller placed after one is not counted; none is today.
+        assert_eq!(
+            all_production_code().matches("set_active_lang(").count(),
+            1,
+            "a second caller of the shell's setter must deliver what it queues too; \
+             route it through `apply_language`"
         );
     }
 

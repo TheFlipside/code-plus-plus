@@ -1630,6 +1630,109 @@ These are not blockers for the phase that surfaced them, but get addressed in Ph
     It needs a Windows machine.
   * No third-party plugin uses these on Linux, so `example-hello` agreeing with the host is agreement with ourselves, as the GTK plugin-panel entry says.
 
+- **Language-menu picks are announced to plugins on GTK and macOS (landed, Phase 5).** Picking a language from the Language menu sent `NPPN_LANGCHANGED` to the loaded plugins on Windows only.
+  * *Windows* sends the pick as `NPPM_SETBUFFERLANGTYPE` through the plugin dispatcher. The dispatcher's handler records the language, re-lexes the active tab and queues the notification.
+  * *GTK and Cocoa* called `Shell::set_active_lang`, which only recorded the language, and then re-lexed by hand. Nothing was queued.
+
+  So "change a tab's language" existed twice, and the second copy never told the plugins. The rustdoc cleanup (`7ae7f43`) found the gap and documented it on `set_active_lang`.
+
+  Every requested change now ends in one shell function, `Shell::set_tab_lang`. On a real change it records the language, re-lexes and repaints the status bar if the tab is the active one, and queues the notification. A same-language set does nothing. The GTK and Cocoa menus pass their UI to `set_active_lang`, which delegates to it. When the pick changed something, they then call `drain_shell()`, so the plugins hear of the pick from the drain that follows it, as on Windows, rather than from some later one. That drain presents any dialog it has queued first. `drain_shell()` is what both backends' worker wakes already call. It does nothing while a nested run loop holds the `DrainFreeze`, and a notice queued then waits for the next drain. Windows is unchanged: its route already went through the dispatcher's handler.
+
+  On GTK and macOS, every language pick that changes something now ends in `drain_shell`, so what GTK does during a quit matters more than it did, and the gate rounds for this change hardened its quit path. The first three fixes below match what Cocoa already did. Cocoa never had the fourth's exposure, because it restores plugin panels from inside its running loop.
+  * *`drain_shell` stops once the quit has begun.* A worker wake could already start a drain inside a plugin's shutdown handler and deliver notifications after `NPPN_SHUTDOWN`. The Language-menu drain would have been a second route to the same thing. Both need a shutdown handler that runs a nested main loop. The menu route also needs that loop to be non-modal, since a modal one blocks the menu. The check is on entry, on both backends: a delivery already under way when the quit begins finishes its batch. Stopping a delivery mid-batch is deferred, with the maintainer's sign-off.
+  * *The autosave stops once the quit has begun.* The quit captures what it saves first and pins the dock layout. A tick inside a shutdown handler's loop would capture again.
+  * *The window's close returns `Stop`, so GTK never destroys the window.* The quit ends the loop and the process, as File → Exit always did.
+    * With `Proceed`, a second close inside a shutdown handler's nested loop destroyed the window, and with it the Scintilla views, while the first quit still had its save to do. That is a use-after-free, which two security audits reproduced: GTK criticals on every run, and a SIGSEGV with a scribbled heap.
+    * One audit also stopped the process for a few seconds, with no plugin, so that the autosave fell due, then queued a close and let it run. The overdue autosave tick then ran after the close, against the destroyed editor. A later audit, stalling differently, could not repeat that.
+    * Neither can happen now that the window survives the close.
+    * The Find/Replace window's hide-on-close handler had the same `Proceed` as its panic fallback, though `hide` cannot panic. It returns `Stop` too.
+  * *The main loop no longer starts once a quit has begun.* A plugin command the startup restore runs can run a nested loop in which the window is closed. A quit cannot end a loop that has not started yet: gtk-rs makes `main_quit` panic in a debug build and do nothing in a release one. So the process hung: one audit measured it hanging in three runs of five and, on a build whose close still returned `Proceed`, crashing in two. A later one saw the hang and a GTK critical. The quit now calls `main_quit` only from inside a loop.
+
+  **Verified:**
+  * *The shell, on every platform.* A menu pick re-lexes and queues exactly one notice naming the active buffer, and a repeat does nothing. With three tabs open, the active one changes and no other, and the status bar repaints from that tab's own encoding, EOL and length. With no active tab, or an active index naming no tab, nothing happens.
+  * *The plugin route.* Three of its tests carried a `windows` gate whose reason, that the notification queue existed only on Windows, stopped being true in `5a288ba`. They now run everywhere. New tests cover a plugin changing a background buffer, which is recorded and announced with nothing re-lexed or repainted, and an unknown buffer id, which answers FALSE and changes nothing.
+  * *Each backend, by source.*
+    * The pick takes the state once, goes through the shell's setter, and re-lexes nothing itself.
+    * It drains exactly once, after the change, inside an `if changed` that is itself a statement of the handler, so outside every borrow.
+    * It never delivers directly, and nothing else in the crate calls the setter.
+    * On GTK, the mark-refresh check is a statement of the handler and returns before anything changes. The mark refresh raises its flag before it sets a mark.
+    * New GTK guards pin the quit path:
+      * `drain_shell` delivers once, outside its own borrow, and its freeze and quit checks are statements of the drain that return before it takes or delivers anything;
+      * the autosave checks the quit before it touches anything;
+      * `quit` raises its flag as its first statement, then captures, pins the layout, tells the plugins, saves and ends the loop, in that order, each as a statement of its own and with no other way out;
+      * only the quit ends the main loop;
+      * the close quits as a statement of its handler, is wired before the startup restore, and, with its panic fallback, returns `Stop`;
+      * the main loop starts only if no quit has begun, and deferred dialogs are dropped once one has;
+      * the Find window's close hides it, and it and its fallback return `Stop`.
+    * Cocoa's guards pin that its drain delivers outside the borrow, and its quit check by presence only. Its "nothing else calls the setter" covers each file up to its first test module, which is as far as its scan reads.
+    * Cocoa's guards run on macOS only; on this Linux host they ran extracted, with the module's other 56 tests.
+  * *Mutations.* 73 in all, each killed by a failing test or guard assertion:
+    * 12 in the shell:
+      * no notice queued;
+      * a notice on a same-language set;
+      * a background tab re-lexed;
+      * a notice naming the active tab;
+      * the tab indexed rather than looked up;
+      * the menu route ignoring the UI, or always changing the first tab;
+      * the repaint losing the tab's encoding, EOL and length, reading the first tab's, or reading the first tab's encoding alone;
+      * the plugin route answering FALSE for a same-language set, or TRUE for an unknown id.
+    * 24 against the two backends' picks, 12 each:
+      * a hand-rolled re-lex;
+      * the drain deleted, made unconditional, moved before the change, moved into the setter's borrow, or moved into a second borrow with or without braces;
+      * the conditional drain wrapped in a borrow, with or without braces;
+      * a direct delivery in place of the drain or alongside it;
+      * a second caller of the setter.
+    * 7 on GTK's mark refresh: the check removed, made to log instead of returning, nested under another `if`, or moved after the change; the flag not raised, dropped at once, or raised only after the marks are set.
+    * 9 on GTK's drain:
+      * the quit check removed, made to log instead of returning, nested, or moved after the borrow;
+      * the freeze check removed;
+      * the delivery moved into the borrow, hoisted above both checks or between them, or doubled inside the borrow.
+    * 2 on GTK's autosave: the quit check removed, or moved after the capture.
+    * 17 on GTK's quit path:
+      * the flag never raised, or raised after the plugins hear of the quit;
+      * the save moved before the notice, a step run only under a condition, or an early return between steps;
+      * `main_quit` called outside the loop check, the check no longer ending the loop, a second unguarded `main_quit`, or File → Exit ending the loop directly;
+      * the close returning `Proceed`, its panic fallback returning `Proceed`, the close no longer quitting, quitting only under a condition, or the close wired after the startup restore;
+      * the main loop starting after a quit;
+      * deferred dialogs shown during the quit, or checked only after the pump.
+    * 2 on the Find window's close: its panic fallback returning `Proceed`, or its hide made conditional.
+  * *The real app.* On GTK on a nested X server, under a scratch profile, a throwaway probe plugin built outside the tree logged every `NPPN_LANGCHANGED` it received. In each handler it asked for the language back with `NPPM_GETCURRENTLANGTYPE`. The menu was driven from the keyboard:
+    * Normal Text picked for a Rust file logged `buffer=1 current_lang=0`, with the probe's query answered;
+    * the same pick again logged nothing;
+    * the preinstalled Markdown UDL logged `current_lang=1024`.
+
+    A build of the commit before this one, driven the same way, changed the language on screen and logged nothing past `NPPN_READY`.
+  * *Not run.*
+    * Only GTK was driven.
+    * The Cocoa half has not run on AppKit. It rests on the shared shell code, its source guard and a macOS type-check.
+    * GTK's quit fixes rest on their guards and on the security audits' reproductions, which ran in the audits' own copies with throwaway probe plugins. One audit repeated the double-close reproduction against this change, with a build that reverted its quit fixes as the control. The control destroyed the window and hit GTK criticals on freed Scintilla adjustments; this change exited cleanly. No plugin in the tree runs a nested loop in its shutdown handler.
+    * The Windows route was not re-driven on Windows. Its handler now delegates to `set_tab_lang`, and the plugin-route tests reach it through the dispatcher on every platform. "Unchanged" rests on those tests and a reading of the code.
+
+  **Found while doing this, not changed here.** These predate this change, and the maintainer signed off deferring them. The first four were confirmed by reading Code++'s code. The last two were reproduced by a security audit with probe plugins.
+  * On GTK and macOS a user's tab switch queues no `NPPN_BUFFERACTIVATED`:
+    * Both backends rebind through `Shell::bind_active_view`, which queues nothing, while Win32's selection handler queues it itself.
+    * GTK's `switch-page` handler said the notification was Windows-only, a comment stale since `5a288ba`; it now names the gap.
+    * On those two backends, what New, Save and Save As queue also waits for the next drain, where Win32 delivers it before the command returns.
+    * The coverage matrix now records the tab-switch gap.
+  * A reload sets the tab's language from the session read at startup or by Load Session, or else from the extension. This covers File → Reload, the file-watcher prompt, `NPPM_RELOADFILE` and `NPPM_RELOADBUFFERID`. `apply_load_result` reads `self.session.tabs`, which nothing refreshes during a session (`save_session` takes `&self`). So an in-session pick is lost, and no notification says so. A file's first load does the same to a pick made while it was still loading, even though that pick was announced. All three backends.
+  * Save As re-detects the language from the new extension, over any language the user picked, and queues only `NPPN_FILESAVED`.
+  * A plugin asking for a UDL buffer's language (`NPPM_GETCURRENTLANGTYPE`, `NPPM_GETBUFFERLANGTYPE`) gets Code++'s internal UDL id, 1024 or above; the probe above read exactly that. Nothing maps it to `L_USER` (15), which `udl/src/registry.rs` now says too. All three backends; the coverage matrix now says so.
+  * Two more on GTK's quit path, which a follow-up commit will take on: making the quit robust to plugins' own nested main loops. Both happen on the build before this change and on this one.
+    * If a plugin command is inside a `gtk_main` of its own when the window is closed, the quit's `main_quit` ends that loop, not ours. The process then runs on with the quit begun and its drain and autosave off. Its window stays editable but ignores close, and File → Exit does nothing, because `quit` returns at once. Text typed after the close has no backup and is lost when the process is killed. With the old `Proceed` the process ran on headless instead, against freed widgets.
+    * A close during the startup panel restore lets that load pass go on after `NPPN_SHUTDOWN`. Each restored panel's command still runs, the pass still sends `NPPN_BUFFERACTIVATED` and `NPPN_READY`, and any plugin it had not yet notified still gets `NPPN_TBMODIFICATION` first. A plugin still inside `setInfo` when the close lands never receives `NPPN_SHUTDOWN` at all, since only loaded plugins are told.
+
+  **To measure before changing anything.** These four differences from Notepad++ come from reading its source, not from a measurement. A probe plugin in a real Notepad++ should settle each one:
+  * Code++ announces a plugin's `NPPM_SETBUFFERLANGTYPE` on a background buffer; Notepad++ does so only for a buffer shown in a view.
+  * Notepad++ announces a Save As that changes the buffer's language.
+  * Notepad++ keeps a language picked from the menu across a Save As.
+  * Notepad++ keeps a buffer's language across a reload.
+
+- **Running `codepp-shell`'s tests writes the user's real config files.** Nothing redirects `codepp_platform::config_dir()` under test. The shell suite therefore writes the real `recent_files.xml` and `find_history.xml`, and on an empty config it also creates `userDefineLangs/markdown._preinstalled.udl.xml`. So does any test elsewhere that builds a `Shell`, such as two in `ui_win32`. `cargo test --workspace`, the standard run, includes them all.
+  * *Measured* against a seeded scratch config. Each run pushes temporary paths onto the front of the recent-files list: four the first time, two per run after, so a full list of ten is gone in about four runs. Each run also pushes `hello` onto the front of the find history.
+  * *Found* by the security audit of the Language-menu change above and measured by its documentation review. On this Linux host the recent-files list already held only `/tmp` paths.
+  * *Until it is fixed*, run the suite with `XDG_CONFIG_HOME` (Linux) or `APPDATA` (Windows) pointing at a scratch directory. On macOS `config_dir()` is under `$HOME/Library/Application Support`, so only `HOME` moves it. When overriding that, keep `CARGO_HOME` and `RUSTUP_HOME` pointing at the real ones, or rustup installs a fresh toolchain into the scratch home. That combination has not been run with the full suite.
+  * *The fix* is to let the tests hand the shell a temporary config directory, as the plugin-panel key's tests hand theirs a temporary directory. That needs an override `Shell::new` honours, which the Language-menu change does not touch. Deferred with the maintainer's sign-off.
+
 - **The per-plugin dock-panel allowance keys on the module name a plugin declares, not on the plugin that registered the panel.** `MAX_PLUGIN_PANELS_PER_MODULE` (8) caps the identities one module's registrations may create, so a plugin that registers anew under fresh names runs out of its own names rather than the process-wide table of 64. But `tTbData.pszModuleName` is whatever the plugin says: a plugin that varies it gets round the allowance, and one that declares another plugin's name spends that plugin's. `core::dock` records this as accepted under §6.5. Raised by the security audit of the per-plugin routes as hardening that is now cheap. On Linux and macOS `DockDialogParams::caller` names the plugin that sent a registration for the first 128 plugins found, so the allowance could be charged to it when it is known, and fall back to the module name otherwise. Deferred with the maintainer's sign-off, because the change reaches `core::dock`'s interning and all three backends' registration paths, and wants a Windows run.
 
 - **`plugin-host`'s other `catch_unwind` wrappers around a plugin's entry points cannot catch anything, and §6.5 says otherwise.** The host wraps its calls into a plugin in `catch_unwind` — `isUnicode` and `getName` at load, the load-time `beNotified`, and `notify_all`'s — and §6.5 states it as a rule that this keeps a Rust-written plugin's panic from unwinding across the FFI. It cannot: each entry point is a plain `extern "C"` function, and a panic that tries to unwind out of one aborts the process inside the plugin, before control returns to the wrapper. The GTK plugin-panel change found this for `PluginMessageProc::send`, removed that wrapper and corrected its docs; the others predate it and were left alone rather than widen that change into the load path, with the maintainer's sign-off. Two of them also guard host code — the panel-restore callback in `LoadNotifications::deliver`, and the string copy after `getName` — and should keep a wrapper around that code, with a comment that says what it covers. The rest should go, and §6.5's bullet should say what is true: a plugin's panic takes the process down, as a C++ plugin's uncaught exception does in Notepad++.
