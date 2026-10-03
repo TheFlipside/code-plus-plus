@@ -67,7 +67,7 @@ const PANEL_WIDTH: f64 = 480.0;
 /// `NSTabView`'s inner rect with room to spare. An earlier value left
 /// that inner rect 50 pt tall, so a field overlapped the buttons; the
 /// pages are laid out bottom-up as well, so the two failure modes are
-/// independent. [`layout_tests`] pins both.
+/// independent. `layout_tests` pins both.
 const PANEL_HEIGHT: f64 = 380.0;
 const MARGIN: f64 = 14.0;
 const ROW_HEIGHT: f64 = 22.0;

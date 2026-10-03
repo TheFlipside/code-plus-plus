@@ -1,14 +1,10 @@
 //! GTK 3 UI backend for Code++.
 //!
-//! Scope so far: Linux opens, edits, saves and restores a session
-//! against real files, with encoding and EOL in the status bar,
-//! external changes detected, a working tab strip (switch, close,
-//! middle-click-close, drag-to-reorder), and Find/Replace + Goto with
-//! a Search menu. The toolbar, UDL styling and the plugin host are
-//! later milestones. (Plain code spans, not
-//! intra-doc links, for cross-crate references in this file — `ui_gtk`
-//! deliberately does not depend on `ui_win32`, so links to it would be
-//! unresolvable and would warn on `cargo doc`.)
+//! What it covers, and what is still open, is recorded in DESIGN.md
+//! §7.2 (Phase 5) and §7.4. (Plain code spans, not intra-doc links,
+//! for what this file cannot resolve on every target: `ui_gtk` does
+//! not depend on `ui_win32`, and these crate docs are compiled on every
+//! OS while the GTK items exist only on Linux.)
 //!
 //! # Why GTK 3
 //!
@@ -19,7 +15,7 @@
 //!
 //! # Why no `gtk::Application`
 //!
-//! [`gtk::Application`] wraps `GApplication`, which registers on the
+//! `gtk::Application` wraps `GApplication`, which registers on the
 //! session D-Bus at startup and performs single-instance arbitration.
 //! Code++'s cold-start budget is 80 ms (DESIGN.md §8) and none of that
 //! machinery is on the critical path to the first frame, so this

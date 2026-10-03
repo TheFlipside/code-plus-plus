@@ -651,7 +651,7 @@ fn pt_to_device_pixels(pt: i32, dpi: i32) -> i32 {
 // -------------------------------------------------------------------
 
 /// Reason the measure pass stopped short of `text_length`. Non-`None`
-/// values are surfaced to the user via [`show_error_dialog`] before
+/// values are surfaced to the user via [`crate::show_error_dialog`] before
 /// the (partial) render begins — a silent truncated printout would
 /// be worse UX than an explicit "your document was too long to
 /// paginate cleanly" heads-up.

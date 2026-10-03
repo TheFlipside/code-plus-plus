@@ -874,9 +874,10 @@ const DOCMAP_INSET_PX: i32 = 2;
 /// Height of the workspace panel's action row (three narrow
 /// buttons on the right).
 const WORKSPACE_ACTION_HEIGHT_PX: i32 = 26;
-/// Width of one action-row button. Three buttons + edge padding
-/// stay within [`MIN_WORKSPACE_WIDTH_PX`] so the row never
-/// visually overflows.
+/// Width of one action-row button. The row's three buttons are
+/// pinned to the right edge inside the panel's inset and clamped at
+/// the left inset, so in a panel too narrow for all three they overlap
+/// one another rather than spill past its left edge.
 const WORKSPACE_ACTION_BUTTON_WIDTH_PX: i32 = 26;
 /// Inset applied around the panel's inner content — a thin
 /// margin between the panel edge and header/action/tree rows.
@@ -1557,7 +1558,7 @@ struct WindowState {
     /// In-flight side-splitter drag, if any.
     dock_side_drag: Option<dock_panels::DockSideDrag>,
     /// Tab-bar icons (24 px premultiplied-BGRA DIBs), indexed by
-    /// [`dock_panels::panel_icon_index`]: workspace = 0, docmap = 1,
+    /// `dock_panels::panel_icon_index`: workspace = 0, docmap = 1,
     /// generic plugin = 2 — the same `assets/icons/` art the
     /// toolbar's quick-action buttons use, per the feature spec.
     ///
@@ -1576,11 +1577,12 @@ struct WindowState {
     // the dock group's caption carries the title + close now.
     /// Container HWND for the workspace panel content.
     workspace_hwnd: HWND,
-    /// Root path of the currently-shown workspace. `None` when
-    /// the panel has never been opened this session (or was
-    /// closed without re-opening). Set by the folder picker in
-    /// [`show_workspace_panel_prompting`]; consumed by the tree
-    /// populate in m3.
+    /// Root path of the currently-shown workspace. `None` until a
+    /// folder is opened this session, and again after
+    /// [`remove_workspace_root`]; hiding the panel keeps it. Set by
+    /// [`show_workspace_panel`],
+    /// which the folder picker in [`open_workspace_folder_flow`]
+    /// calls; consumed by the tree populate in m3.
     #[allow(dead_code, reason = "consumed by the tree populate in m3")]
     workspace_root: Option<PathBuf>,
     // In-panel child controls (all children of `workspace_hwnd`).
@@ -2064,7 +2066,7 @@ fn is_plugin_cmd_id(idm: i32) -> bool {
 }
 
 /// Translate a Notepad++-ABI `IDM_*` command id into the Code++
-/// internal [`ID_*`] `WM_COMMAND` id that runs the equivalent action.
+/// internal `ID_*` `WM_COMMAND` id that runs the equivalent action.
 /// Returns `None` for `IDM_*` values Code++ has no target for
 /// (e.g. Notepad++ features Code++ doesn't implement yet).
 ///
@@ -4173,7 +4175,7 @@ const TAB_WIDTH_DEFAULT: usize = 4;
 /// Background tint Scintilla paints behind the caret's line so the
 /// user always sees which line is active. `0x00FAE8D6` is BGR for
 /// RGB(214, 232, 250) — a soft pale blue that's clearly distinct
-/// from [`BG_DEFAULT`] (white) without compromising the contrast of
+/// from the default white background without compromising the contrast of
 /// black foreground text.
 const BG_CARET_LINE: u32 = 0x00_FA_E8_D6;
 
@@ -4252,7 +4254,7 @@ const FOLD_MARGIN_PX: i32 = 14;
 /// Called from [`Win32Ui::update_status`] on every tab switch
 /// (which already receives the tab's authoritative `eol` from
 /// the Shell layer), plus once at editor construction in
-/// [`Win32Ui::run`] with [`Eol::default`] for the initial
+/// [`run`] with [`Eol::default`] for the initial
 /// implicit document.
 ///
 /// **`Eol::Mixed` maps to LF.** Scintilla has no "mixed" mode —
@@ -4317,7 +4319,7 @@ fn sc_eol_for(eol: Eol) -> usize {
 /// with Scintilla's built-in `tabInChars = 8`, so this must be
 /// called immediately after each such creation — same
 /// discipline as `EditorHandle::enable_change_history`. Currently called at
-/// four sites: editor creation in [`Win32Ui::run`], and each of
+/// four sites: editor creation in [`run`], and each of
 /// the three real-doc `SCI_CREATEDOCUMENT` sites in
 /// [`Win32Ui::activate_tab`], the post-close-tab lazy-materialise
 /// path, and the `handle_tab_selchange` lazy-populate path. The
@@ -8941,7 +8943,7 @@ fn handle_load_session(hwnd: HWND) {
 
 /// File → Print — snapshots the active tab's display name plus a copy
 /// of the [`EditorHandle`] under a brief `&mut WindowState` borrow,
-/// then dispatches to the [`print`] module for the OS print dialog and
+/// then dispatches to the [`print`](mod@print) module for the OS print dialog and
 /// the two-pass render loop. All GDI + spooler work happens outside
 /// the borrow because `PrintDlgW` spins its own message pump that
 /// would re-enter `wnd_proc`.
@@ -15310,7 +15312,8 @@ struct FifSnapshot {
     whole_word: bool,
     regex: bool,
     /// User opted into hidden directories via the FIF tab
-    /// checkbox. Threaded through to [`FifWalkOpts::walk_hidden_dirs`].
+    /// checkbox. Threaded through to
+    /// [`codepp_core::fif::FifWalkOpts::walk_hidden_dirs`].
     hidden_folders: bool,
     /// `Some(s)` → Replace in Files (`s` may be empty for "delete
     /// each match"); `None` → plain Find in Files.
@@ -22569,7 +22572,8 @@ unsafe fn cancel_workspace_unfold(main_hwnd: HWND) {
 ///
 /// # Safety
 ///
-/// Same as [`tree_unfold_all`].
+/// `tree` must be a live `SysTreeView32` HWND, the workspace tree's.
+/// UI thread only.
 unsafe fn tree_fold_all(tree: HWND) {
     let root = unsafe {
         SendMessageW(
@@ -22811,7 +22815,7 @@ unsafe fn locate_current_file_in_workspace(main_hwnd: HWND) {
 ///      on the stack.
 ///
 /// Reconstructed paths defence-in-depth check against
-/// [`Path::starts_with(workspace_root)`] before being stashed,
+/// `Path::starts_with(workspace_root)` before being stashed,
 /// mirroring [`handle_tree_double_click`]'s defence against a
 /// hostile filesystem returning components with path separators.
 ///

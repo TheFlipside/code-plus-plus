@@ -430,6 +430,33 @@ cargo test -p scintilla-sys      # smoke test must pass
 
 Commit the submodule pointer bumps in the same commit that adapts any code to API changes.
 
+### Check the documentation
+
+```sh
+RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --document-private-items
+```
+
+CI runs this on every runner (DESIGN.md §9.3). Private items are
+documented because these crates' docs are written for maintainers and
+link private helpers by design. `[workspace.lints.rustdoc]` in the root
+`Cargo.toml` allows that one lint, and every other rustdoc warning
+fails. Each runner sees different cfg-gated docs, so check another
+platform's with the `--target` and the variables in the next section.
+If an error shows no file location, `--message-format json` has it:
+the human-readable output omits it when rustdoc merges a module's outer
+and inner docs.
+
+Three habits keep it passing on every target:
+- Link only items that exist wherever the doc is compiled. The crate
+  docs of the cfg-gated `ui_*` crates are compiled on every OS, while
+  their items exist on one, so name those, test modules, and
+  `debug_assertions`-only or other-OS items in a code span instead.
+- Brackets that are not a link, such as `wordlist[0]`, go in a code
+  span.
+- Give a module its docs in one place. With a `///` on its `mod` line
+  as well as its own `//!`, rustdoc resolves the module doc's links
+  from the parent instead of the module.
+
 ### Catch cross-platform breakage before pushing
 
 CI fans out across three runners, so a change that only builds on your
@@ -475,6 +502,32 @@ there. Anything that *does* link — a binary or a test target — fails
 with unresolved `scintilla_*` symbols instead, and the build script
 hard-errors if it sees the variable alongside `CI`. Never set it in a
 workflow or runner environment.
+
+**A stand-in `rc.exe` covers the rest of the Windows workspace.**
+Neither `cargo check` nor `cargo doc` links, so the resource that
+`codepp-app`'s and the plugins' build scripts compile only has to exist.
+An executable named `rc.exe` early on `PATH` that creates the file after
+`/fo` lets the whole workspace check for Windows:
+
+```sh
+mkdir -p ~/.local/fake-rc
+cat > ~/.local/fake-rc/rc.exe <<'EOF'
+#!/bin/sh
+# Stand-in for the Windows SDK's rc.exe, for builds that do not link:
+# it creates the .res named after /fo and exits 0.
+set -eu
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = /fo ]; then shift; : > "$1"; fi
+  shift
+done
+EOF
+chmod +x ~/.local/fake-rc/rc.exe
+PATH="$HOME/.local/fake-rc:$PATH" CODEPP_SKIP_NATIVE_BUILD=1 \
+    cargo check --workspace --all-targets --target x86_64-pc-windows-msvc
+```
+
+Keep it off `PATH` for anything that links: the empty file it writes is
+not a real resource.
 
 **This does not cover host-conditional dependencies.** Cargo matches
 `[target.'cfg(...)'.build-dependencies]` against the **host** triple,

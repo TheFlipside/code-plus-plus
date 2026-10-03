@@ -128,8 +128,8 @@ fn default_transparency_percent() -> u8 {
 }
 
 /// Top-level `<styles>` document. The Style Configurator dialog
-/// reads and writes one of these via [`save_to_xml`] /
-/// [`load_from_xml`]; the `shell` crate caches the latest value
+/// reads and writes one of these via [`Self::save_to_xml`] /
+/// [`Self::load_from_xml`]; the `shell` crate caches the latest value
 /// and the UI applies it through `UiPlatform::apply_default_style`.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename = "styles")]
@@ -299,7 +299,7 @@ impl Styles {
 
     /// Write `styles.xml` atomically.
     ///
-    /// Mirrors [`session::Session::save_to_xml`]: serialise to an
+    /// Mirrors [`crate::session::Session::save_to_xml`]: serialise to an
     /// in-memory string, write the bytes to a `NamedTempFile`
     /// anchored in the same directory, `sync_all` the temp, then
     /// `persist` (atomic same-filesystem rename) onto the target

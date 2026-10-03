@@ -29,6 +29,11 @@ unsafe_op_in_unsafe_fn = "deny"
 [workspace.lints.clippy]
 all = { level = "warn", priority = -1 }
 
+[workspace.lints.rustdoc]
+# These crates are an application's internals. Their docs are read with
+# `--document-private-items`, where links to private helpers resolve.
+private_intra_doc_links = "allow"
+
 # Internal crates declared centrally so cargo-deny's wildcard check is
 # satisfied (path-only deps without an explicit `version` are treated as
 # `*` by the bans check). Each per-crate manifest pulls these via

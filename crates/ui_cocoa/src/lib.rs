@@ -728,7 +728,8 @@ pub(crate) fn at_callback_boundary<R>(
 /// # Safety
 ///
 /// Called by Scintilla on the main thread. `lparam` is an
-/// `SCNotification*` when `message` is [`COCOA_WM_NOTIFY`], live for the
+/// `SCNotification*` when `message` is
+/// [`codepp_scintilla_sys::COCOA_WM_NOTIFY`], live for the
 /// duration of this synchronous call and owned by Scintilla.
 unsafe extern "C" fn on_sci_notify(_windowid: isize, message: u32, _wparam: usize, lparam: usize) {
     // Plain `extern "C"`, so an escaping panic is undefined behaviour
@@ -887,15 +888,12 @@ unsafe fn on_sci_notify_inner(message: u32, lparam: usize) {
     }
 }
 
-/// Assemble the window's content view and the three chrome strips.
-///
-/// Split out of [`run`] purely for length; the layout reasoning lives in
-/// the comments below rather than at the call site.
 /// Create the Document Map's miniature: the **second** permanent
 /// Scintilla view, and the last one.
 ///
 /// See `docmap`'s module docs for what it is, and the source scan in
-/// [`source_invariants`] that pins the count at two. Like the main view
+/// `source_invariants` that pins every place a Scintilla view is made.
+/// Like the main view
 /// it is created once and never destroyed, removed or reassigned; it
 /// shares each tab's document through `SCI_SETDOCPOINTER` rather than
 /// owning any text of its own, which is what keeps the `Copy`,
@@ -939,6 +937,10 @@ struct ContentViews {
     editor_cell: Retained<NSView>,
 }
 
+/// Assemble the window's content view and the three chrome strips.
+///
+/// Split out of [`run`] purely for length; the layout reasoning lives in
+/// the comments below rather than at the call site.
 fn build_content(
     window: &NSWindow,
     content_rect: NSRect,

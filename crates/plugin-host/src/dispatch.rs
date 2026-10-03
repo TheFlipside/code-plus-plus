@@ -403,7 +403,7 @@ pub const MAX_PATH_TCHARS: usize = 260;
 pub const MAX_SESSION_FILES: usize = 1024;
 
 /// Cap on the number of clipboard formats a single
-/// [`CODEPPM_SETCLIPBOARD`](crate::CODEPPM_SETCLIPBOARD) call may carry.
+/// [`CODEPPM_SETCLIPBOARD`] call may carry.
 /// Real callers need three (plain/HTML/RTF); this bounds a malformed
 /// `count` before the per-entry loop allocates.
 const MAX_CLIP_ENTRIES: usize = 16;
@@ -1509,7 +1509,7 @@ pub trait HostServices {
     /// `false`) never reach this call in production.
     fn dark_mode_colors(&self, out: &mut crate::ffi::NppDarkModeColors) -> bool;
 
-    /// Code++ extension for [`CODEPPM_SETCLIPBOARD`](crate::CODEPPM_SETCLIPBOARD).
+    /// Code++ extension for [`CODEPPM_SETCLIPBOARD`].
     /// Place one or more abstract clipboard formats on the system
     /// clipboard in a single operation. Each entry is `(format, bytes)`
     /// where `format` is a `CLIP_FORMAT_*` constant and the backend maps
@@ -1519,7 +1519,7 @@ pub trait HostServices {
     /// empty set.
     fn set_clipboard(&mut self, payloads: &[(u32, Vec<u8>)]) -> bool;
 
-    /// Code++ extension for [`CODEPPM_EXPORTSAVEDIALOG`](crate::CODEPPM_EXPORTSAVEDIALOG).
+    /// Code++ extension for [`CODEPPM_EXPORTSAVEDIALOG`].
     /// Queue a *deferred* native Save-As dialog: the host shows it after
     /// the dispatch returns (an inline modal would re-enter the message
     /// pump while the host borrow is live, aliasing `WindowState`), then

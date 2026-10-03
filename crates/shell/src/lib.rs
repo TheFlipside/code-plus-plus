@@ -2842,7 +2842,7 @@ impl Shell {
     }
 
     /// Repair the pinned-before-unpinned invariant after a load restores a pin
-    /// onto the tab at `target_idx` (see [`apply_load_result`]). Moves the tab
+    /// onto the tab at `target_idx` (see [`Self::apply_load_result`]). Moves the tab
     /// to the end of the pinned prefix and adjusts `active_tab`, but ONLY if it
     /// is actually misplaced per [`pinned_restore_target`] — which ignores
     /// still-loading tabs, so a full session restore (whose pinned tabs are
@@ -3063,7 +3063,7 @@ impl Shell {
     }
 
     /// Snapshot of every discovered plugin shaped for the Plugin
-    /// Manager UI — see [`PluginAdminEntry`]. Caller takes
+    /// Manager UI — see [`codepp_plugin_host::PluginAdminEntry`]. Caller takes
     /// ownership; no borrow on `Shell.plugins` is held across
     /// the modal pump.
     #[must_use]
@@ -6105,11 +6105,11 @@ impl Shell {
         Some(LangType(id))
     }
 
-    /// Set the **active** tab's syntax-highlighting language — the
-    /// menu-driven counterpart to the Windows-only, id-keyed
-    /// [`set_buffer_lang_type`](Self::set_buffer_lang_type), which lives on
-    /// the plugin `HostBridge` and so is unavailable to the GTK/Cocoa
-    /// backends.
+    /// Set the **active** tab's syntax-highlighting language from a
+    /// Language menu. The GTK and Cocoa menus call this. Win32's menu
+    /// sends `NPPM_SETBUFFERLANGTYPE` through
+    /// [`Self::dispatch_plugin_message`] instead, which reaches the id-keyed
+    /// [`HostServices::set_buffer_lang_type`], the route plugins use.
     ///
     /// Metadata-only, matching [`Self::set_buffer_encoding`]: it flips
     /// `tab.lang` and returns `true` on a real change so the caller re-lexes
@@ -6120,12 +6120,11 @@ impl Shell {
     /// tab's `lang` is written whenever it differs from the extension
     /// default.
     ///
-    /// Unlike the Windows `set_buffer_lang_type` path, this does **not**
-    /// queue an `NPPN_LANGCHANGED` plugin notification — the whole plugin
-    /// dispatch surface is Windows-only today (no `dlopen` arm on GTK/Cocoa
-    /// yet, DESIGN.md §5 Phase 5). When a cross-platform plugin host lands,
-    /// the menu handler must route through the notification path so loaded
-    /// plugins observe the change, not just flip metadata here.
+    /// Unlike that route, this does **not** queue an `NPPN_LANGCHANGED`
+    /// plugin notification. Both backends host plugins, so a language
+    /// picked from the GTK or Cocoa menu is not announced to the plugins
+    /// loaded there. Closing that means queueing the notification here, or
+    /// routing those menus the way Win32's goes.
     pub fn set_active_lang(&mut self, lang: codepp_core::LangType) -> bool {
         let Some(idx) = self.active_tab else {
             return false;

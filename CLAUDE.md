@@ -35,6 +35,7 @@ cargo run -p app                          		  # launches Code++ (current phase's
 cargo test --workspace                    		  # runs all tests
 cargo fmt --check                        		  # must pass
 cargo clippy -- -W clippy::pedantic -D warnings   # must pass
+$env:RUSTDOCFLAGS="-D warnings"; cargo doc --workspace --no-deps --document-private-items; Remove-Item Env:RUSTDOCFLAGS   # must pass
 ```
 
 ## Project-Specific Rules

@@ -21,7 +21,7 @@
 //!   temp-file + rename** (mirrors `shell::fif`'s pattern), warns
 //!   the user if the chosen save path is outside the UDL
 //!   directory, and posts
-//!   [`WM_APP_UDL_REFRESH`](super::WM_APP_UDL_REFRESH) so the main
+//!   [`WM_APP_UDL_REFRESH`] so the main
 //!   window re-scans the registry and the new UDL becomes
 //!   selectable from the Language menu without a restart. All
 //!   nested modal pumps (`GetSaveFileNameW`, `MessageBoxW`) are
@@ -918,7 +918,7 @@ extern "system" fn udl_editor_dlg_proc(
     })
 }
 
-/// Sent by [`udl_editor_wnd_proc`]'s `WM_DESTROY` handler to the
+/// Sent by [`udl_editor_dlg_proc`]'s `WM_DESTROY` handler to the
 /// main window on dialog close, so the main window can clear the
 /// `udl_editor_dlg: Option<HWND>` slot it stashed at
 /// `show_udl_editor` time. Otherwise a stale HWND would sit there

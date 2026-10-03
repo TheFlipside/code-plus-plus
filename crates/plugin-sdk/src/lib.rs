@@ -26,9 +26,10 @@
 //! Scintilla window — so `SendMessageW` is a direct `#[link(name =
 //! "user32")]` import. On Linux/macOS a plugin `.so`/`.dylib` has no
 //! Scintilla linked and there is no OS pump, so `SendMessageW` forwards
-//! to a **host-installed callback** ([`HOST_DISPATCH`]) instead. The
-//! host resolves [`codepp_plugin_set_dispatch`] in the loaded library
-//! right after `dlopen` and hands the plugin a routing function that
+//! to a **host-installed callback** (`HOST_DISPATCH`) instead. The
+//! host resolves `codepp_plugin_set_dispatch` in the loaded library
+//! once its `isUnicode` check passes, before anything else of it runs,
+//! and hands the plugin a routing function that
 //! sends `NPPM_*` to the host dispatcher and `SCI_*` to the Scintilla
 //! widget or view it names. Each plugin is handed a function of its
 //! own — each of the first 128 the host finds — so every message it

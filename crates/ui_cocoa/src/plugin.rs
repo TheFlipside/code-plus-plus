@@ -1401,13 +1401,14 @@ pub(crate) fn add_toolbar_icon(
 ///
 /// Hidden rather than `pub(crate)` because the consumer is a separate
 /// crate; hidden rather than a public API because the store
-/// [`arm_scintilla`] performs has exactly one legitimate non-test home,
+/// `arm_scintilla` performs has exactly one legitimate non-test home,
 /// [`discover`] — which does it inline, since this module does not
 /// exist in the builds `discover` ships in.
 ///
-/// **Compiled out of release builds.** [`arm_scintilla`] rewrites the
-/// one trust anchor `plugin_dispatch` checks before it messages a
-/// pointer, so it must not exist in a shipped binary at all — "nothing
+/// **Compiled out of release builds.** `arm_scintilla` rewrites
+/// `VALID_SCI`, one of the two trust anchors `plugin_dispatch` checks
+/// before it messages a pointer (`PLUGIN_SCIS` is the other), so it
+/// must not exist in a shipped binary at all — "nothing
 /// calls it" is a fact about today's tree, not a guarantee. It is gated
 /// on `debug_assertions` rather than a Cargo feature so the documented
 /// smoke-test command (`cargo test … --ignored`, a dev-profile build)

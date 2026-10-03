@@ -731,7 +731,7 @@ fn peer_tabs(lane: &NSView, id: i32) -> Vec<(Retained<NSView>, usize)> {
 
 /// Which slot a tab dropped at `origin_x` lands in.
 ///
-/// Split out from [`commit_reorder`] so the arithmetic is testable
+/// Split out from [`TabButton::track`] so the arithmetic is testable
 /// without a window server, an `NSButton` or a live `Shell` — the same
 /// pure-helper discipline `ui_win32`'s `resolve_tab_arm_commit` follows,
 /// and for the same reason: the interesting failures here are

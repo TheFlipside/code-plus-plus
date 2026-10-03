@@ -104,6 +104,17 @@ jobs:
         with:
           submodules: recursive
       - run: cargo clippy --workspace --all-targets -- -W clippy::pedantic -D warnings
+      # rustdoc with every warning denied and private items documented:
+      # these crates are an application's internals, read by maintainers,
+      # so their docs link private helpers by design (allowed once, in
+      # `[workspace.lints.rustdoc]`). Per runner, like clippy: each sees
+      # different cfg-gated docs. Nothing ran rustdoc until this step,
+      # and 45 broken or redundant links had piled up across the three
+      # targets.
+      - name: cargo doc
+        run: cargo doc --workspace --no-deps --document-private-items
+        env:
+          RUSTDOCFLAGS: -D warnings
 
   deny:
     name: cargo-deny

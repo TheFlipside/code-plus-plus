@@ -57,7 +57,7 @@
 //!
 //! A `DelimiterRule` may list multiple `open` (or `close`)
 //! [`Sequence`]s — the tokeniser matches ANY of them.
-//! [`Tokeniser::new`] sorts each rule's alternatives by
+//! [`UdlCompiledRules::new`] sorts each rule's alternatives by
 //! **descending literal length** so a UDL declaring both `` ` ``
 //! and ```` ``` ```` as openers matches the triple-backtick
 //! (longer) first when the buffer has ```` ``` ````. Without
@@ -206,11 +206,11 @@ pub struct StyleEvent {
 
 /// One keyword class (`Keywords1..=8`) pre-processed for
 /// tokeniser lookup: sorted word list + prefix-mode flag +
-/// destination style slot. Prepared once at [`Tokeniser::new`]
+/// destination style slot. Prepared once at [`UdlCompiledRules::new`]
 /// so per-token lookup is a binary search rather than a linear
 /// scan of the raw whitespace-separated string.
 ///
-/// When [`Tokeniser::case_ignored`] is true, [`Self::words`]
+/// When [`UdlCompiledRules::case_ignored`] is true, [`Self::words`]
 /// contains ASCII-lowercased copies of the source words and
 /// the tokeniser lowercases each candidate identifier before
 /// the search. Non-ASCII characters pass through unchanged —
@@ -240,7 +240,7 @@ struct KeywordClass {
 }
 
 /// Maximum byte length of a single keyword. Excess-length words
-/// are dropped with a `tracing::warn!` at [`Tokeniser::new`].
+/// are dropped with a `tracing::warn!` at [`UdlCompiledRules::new`].
 ///
 /// **`DoS` defence.** In prefix mode, the tokeniser scans the
 /// class's word list at every identifier start; without a per-
@@ -255,7 +255,7 @@ struct KeywordClass {
 const MAX_KEYWORD_BYTES: usize = 256;
 
 /// Cap on the number of words per keyword class. Excess words
-/// are dropped with a `tracing::warn!` at [`Tokeniser::new`].
+/// are dropped with a `tracing::warn!` at [`UdlCompiledRules::new`].
 ///
 /// **`DoS` defence.** In prefix mode, per-identifier lookup is
 /// linear-time in the class size after binary-search narrowing
@@ -743,8 +743,8 @@ fn any_word_is_prefix_of(sorted_words: &[String], candidate: &str) -> bool {
 
 /// Build eight [`KeywordClass`] entries from the raw whitespace-
 /// separated keyword strings on [`crate::UdlKeywordLists`].
-/// Called once from [`Tokeniser::new`]; results are cached on
-/// the tokeniser for the buffer's lifetime.
+/// Called once from [`UdlCompiledRules::new`]; the results live on
+/// the compiled rules, built once per loaded UDL.
 ///
 /// Discipline:
 /// - Empty word lists → `words: Vec::new()` (matcher skips).

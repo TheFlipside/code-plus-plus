@@ -62,9 +62,11 @@
 // whole table is unreachable anyway.
 #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
 pub mod theme;
-/// UDL container-lexer painting, shared by every UI backend. Gated to the
-/// platforms that build a real editor for the same reason as [`theme`]
-/// (it calls [`theme::apply_default_styles`]).
+// UDL container-lexer painting, shared by every UI backend. Gated to the
+// platforms that build a real editor for the same reason as `theme` (it
+// calls `theme::apply_default_styles`). A comment rather than a doc: the
+// module documents itself, and an outer doc here would make rustdoc
+// resolve that module doc's links from this scope instead of its own.
 #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
 pub mod udl_paint;
 

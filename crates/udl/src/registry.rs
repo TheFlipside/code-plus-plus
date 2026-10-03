@@ -95,7 +95,7 @@ pub struct UdlEntry {
     /// path the scanner loaded from.
     pub definition: UdlDefinition,
     /// Pre-compiled tokeniser rules — comment / delimiter
-    /// parses and the eight [`crate::tokenise::KeywordClass`]
+    /// parses and the eight `tokenise::KeywordClass`
     /// tables. Built exactly once here at
     /// [`UdlRegistry::scan_dir`] time and shared via
     /// [`std::sync::Arc`] with every subsequent

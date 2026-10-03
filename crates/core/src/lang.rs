@@ -8376,7 +8376,7 @@ pub const COBOL_KEYWORDS_A: &str = concat!(
 /// **`SCE_COBOL_WORD2 = 16` non-sequential.** Slot 16 in the
 /// `SCE_COBOL_*` enum, not 12 — the theme must reference the
 /// named constant, never a literal. See the `LexCOBOL` banner
-/// in [`codepp_scintilla_sys`].
+/// in `codepp_scintilla_sys`.
 ///
 /// Coverage: data-description clauses, the full USAGE mode
 /// family, figurative constants, common data-item qualifiers,
@@ -8749,8 +8749,8 @@ pub const D_KEYWORDS_2: &str = concat!(
 /// **Cross-list overlap permitted.** `return`, `deprecated`,
 /// `version`, `throw` also appear in [`D_KEYWORDS`] as
 /// language reserved words. This is NOT a duplication bug:
-/// `LexD`'s state machine dispatches wordlist[0] only in the
-/// identifier state (`:288-311`) and wordlist[2] only in the
+/// `LexD`'s state machine dispatches `wordlist[0]` only in the
+/// identifier state (`:288-311`) and `wordlist[2]` only in the
 /// doc-keyword state (`:358`), so the two lookups never
 /// compete. The cross-list uniqueness test invariant
 /// deliberately EXCLUDES `D_DOC_KEYWORDS` from the

@@ -129,7 +129,7 @@ extern "C" {
     /// Construct a `ScintillaView` and return an **owned** reference to
     /// it, or null if AppKit refused to build the view.
     ///
-    /// Ownership differs from [`scintilla_new`]'s despite the mirrored
+    /// Ownership differs from `scintilla_new`'s despite the mirrored
     /// name: GTK returns a *floating* reference that the container sinks,
     /// whereas `NSView` has no floating-reference concept, so this is a
     /// genuine +1 the caller keeps. Adding the view to a superview
@@ -147,7 +147,7 @@ extern "C" {
     pub fn scintilla_cocoa_new() -> *mut c_void;
 
     /// Send a Scintilla message to a view from [`scintilla_cocoa_new`].
-    /// The Cocoa sibling of [`scintilla_send_message`], and like it
+    /// The Cocoa sibling of `scintilla_send_message`, and like it
     /// reserved for setup and for capturing the direct-call pair — hot
     /// paths use the function pointer instead (DESIGN.md §4.2).
     ///

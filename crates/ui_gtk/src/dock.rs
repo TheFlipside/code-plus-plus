@@ -1469,7 +1469,7 @@ fn allocate(area: &gtk::Layout, w: &impl IsA<gtk::Widget>, r: DockRect) {
 }
 
 /// Ask for a fresh layout pass over the dock area; the carve happens
-/// in [`allocate_children`] when GTK gets there.
+/// in [`on_area_allocated`] when GTK gets there.
 fn relayout(d: &Ui) {
     d.area.queue_resize();
 }

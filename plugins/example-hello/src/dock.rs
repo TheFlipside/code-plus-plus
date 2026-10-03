@@ -55,7 +55,7 @@
 //!    macOS once a drag has ended, on Linux as it goes.
 //!
 //! Linux and macOS share everything but how the content is built —
-//! [`hosted`] registers, shows, renames and hears the `DMN_*`, and a
+//! `hosted` registers, shows, renames and hears the `DMN_*`, and a
 //! small module per toolkit builds the widget or the view. Windows has a
 //! module of its own, since there the content is a window with its own
 //! procedure.
@@ -85,8 +85,8 @@ pub(crate) use {gtk_view::scintilla_in, hosted::scintilla_notification};
 /// Everything here is the same on both, because the host's contract is
 /// the same on both: registration by `NPPM_DMMREGASDCKDLG`, the `DMN_*`
 /// at `messageProc`. What differs — building the content, and whether
-/// the toolkit is up to build it with — is in [`view`], one module per
-/// toolkit.
+/// the toolkit is up to build it with — is in `view`, one module per
+/// toolkit: `gtk_view` on Linux, `cocoa_view` on macOS.
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod hosted {
     use codepp_plugin_sdk::{
