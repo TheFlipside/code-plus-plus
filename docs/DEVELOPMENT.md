@@ -194,9 +194,11 @@ cargo test -p codepp-scintilla-sys -p codepp-ui-gtk -- --ignored
 xvfb-run cargo test -p codepp-scintilla-sys -p codepp-ui-gtk -- --ignored
 ```
 
-Add `G_DEBUG=fatal-criticals` to either: a GTK critical is otherwise one
-printed line in a run that passes, and the scenarios are written to pass
-with it.
+Add `G_DEBUG=fatal-warnings` to either: a GTK warning or critical is
+otherwise one printed line in a run that passes, and the scenarios print
+none. A warning GTK prints about the environment aborts the run too:
+`Locale not supported by C library` is one, when `LANG` names a locale
+that is not installed.
 
 `ui_gtk` carries display-gated scenarios for the same reason: they drive
 real GTK widgets, a real Scintilla among them, to pin the doc-pointer

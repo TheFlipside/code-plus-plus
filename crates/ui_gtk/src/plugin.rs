@@ -994,14 +994,16 @@ fn send_dock_notification(
 // something that is not an object at all faults in the type check rather
 // than being declined, as it does for a dock panel.
 //
-// Nothing in a plugin's widget tree is ever wrapped as an owned gtk-rs
-// object here — only borrowed, compared, or asked `is_ancestor`. gtk-rs
-// wraps a getter's result with `from_glib_none`, which takes over a
-// floating reference, so a temporary wrapper around a container the
-// plugin made and has not sunk would finalize it when dropped. The one
-// owned read is a dialog's `transient_for()`, which names a toplevel
-// window, and GTK holds every toplevel by a reference of its own from
-// creation, so that one is never floating.
+// Nothing in a plugin's widget tree is read through a gtk-rs getter here
+// — it is only borrowed, compared, or asked `is_ancestor`. gtk-rs wraps a
+// getter's result with `from_glib_none`, which takes over a floating
+// reference, so a temporary wrapper around a container the plugin made
+// and has not sunk would finalize it when dropped. The one owned read is
+// a dialog's `transient_for()`, which names a toplevel window, and GTK
+// holds every toplevel by a reference of its own from creation, so that
+// one is never floating. The one owned wrapper is the reference
+// `create_plugin_scintilla` holds across an add, made with `Clone`, which
+// takes a plain reference and leaves a floating one floating.
 
 /// What the host knows about one Scintilla widget it made for a plugin.
 /// Its index in [`PLUGIN_SCINTILLAS`] is its slot in [`PLUGIN_SCIS`].
@@ -1218,14 +1220,28 @@ pub(crate) fn create_plugin_scintilla(parent: *mut c_void) -> *mut c_void {
         );
     }
     if let Some(container) = into {
+        // The host's own reference on the container, across the add and
+        // the check after it. The add runs the plugin's code — its
+        // container's `add`, or a handler on that signal — and GTK reads
+        // the container again after it, so a plugin that let go of its
+        // container there would have it freed under GTK's add. Through the
+        // check too, so the address it compares still names the container.
+        // No plugin code runs between the parent check and here. Spelled
+        // as the container's `Clone`, which takes a plain reference and so
+        // leaves a floating container floating.
+        let held = gtk::Container::clone(&container);
         container.add(&*view);
-        if !view.is_ancestor(&*container) {
-            // A container that takes children its own way (a `GtkPaned`
-            // already full, say) declined it. The widget is made, recorded
-            // and routable, so the plugin gets it and can place it itself.
+        let turned_away = !view.is_ancestor(&*container);
+        drop(held);
+        if turned_away {
+            // The container turned the widget away — a menu takes only
+            // menu items, say, and a plugin's own container may take
+            // nothing — or the plugin's code the add ran took it out
+            // again. The widget is made, recorded and routable, so the
+            // plugin gets it and can place it itself.
             tracing::warn!(
                 index,
-                "NPPM_CREATESCINTILLAHANDLE: the parent declined the widget; it is in no container"
+                "NPPM_CREATESCINTILLAHANDLE: the widget is not inside the parent after the add"
             );
         }
     }
@@ -1280,11 +1296,14 @@ fn connect_plugin_scintilla(index: usize, view: &gtk::Widget, scrollbars: &[gtk:
 /// of the host's own,
 /// which is anything in the main window or a floating dock window that
 /// is not inside a plugin's docked panel; and a `GtkBin` that already
-/// holds a child, which would turn the widget away. Between them the last
-/// two refuse the host's wrapping around a plugin panel: the panel's own
-/// widget is what to pass. When the dock cannot be asked — only from
-/// inside its own layout pass — the parent is refused rather than guessed
-/// at.
+/// holds a child, or a `GtkPaned` that already holds two: GTK turns a
+/// widget away from either. A few `GtkBin`s hold a child of their own from
+/// the start and take a plugin's all the same — `GtkActionBar`,
+/// `GtkComboBox` — and are refused anyway, because the rule goes by class.
+/// Between them the host-widget and `GtkBin` rules refuse
+/// the host's wrapping around a plugin panel: the panel's own widget is
+/// what to pass. When the dock cannot be asked — only from inside its own
+/// layout pass — the parent is refused rather than guessed at.
 fn plugin_scintilla_parent(
     parent: *mut c_void,
 ) -> Result<Option<Borrowed<gtk::Container>>, &'static str> {
@@ -1316,11 +1335,32 @@ fn plugin_scintilla_parent(
         Some(true) => return Err("the parent is one of the host's own widgets"),
         Some(false) => {}
     }
+    // A full `GtkBin` or `GtkPaned` is recognised by its class. GTK's own
+    // `gtk_container_child_type` would answer for both, but it says
+    // `G_TYPE_NONE`, or a narrower type, for containers that take the
+    // widget all the same — `GtkLayout`, `GtkStack` and `GtkListBox` among
+    // them — so it cannot decide in general.
     if let Some(bin) = container.downcast_ref::<gtk::Bin>() {
-        // SAFETY: a plain field read on the live container; the child,
-        // if any, is not wrapped.
+        // SAFETY: `bin` is a live `GtkBin`, per the downcast; the getter
+        // checks its type and reads a field, and the child, if any, is not
+        // wrapped.
         if !unsafe { gtk::ffi::gtk_bin_get_child(bin.as_ptr()) }.is_null() {
             return Err("the parent is a GtkBin that already holds a widget");
+        }
+    }
+    if let Some(paned) = container.downcast_ref::<gtk::Paned>() {
+        // A `GtkPaned` fills its first free slot and has two; with both
+        // taken, GTK prints a warning and the widget goes nowhere.
+        //
+        // SAFETY: `paned` is a live `GtkPaned`, per the downcast; each
+        // getter checks its type and reads a field, and the children, if
+        // any, are not wrapped.
+        let full = unsafe {
+            !gtk::ffi::gtk_paned_get_child1(paned.as_ptr()).is_null()
+                && !gtk::ffi::gtk_paned_get_child2(paned.as_ptr()).is_null()
+        };
+        if full {
+            return Err("the parent is a GtkPaned that already holds two widgets");
         }
     }
     Ok(Some(container))
@@ -3105,6 +3145,80 @@ mod made_for_plugins_guards {
         );
     }
 
+    /// The parent is checked before a widget is made, so a refused parent
+    /// costs the plugin none; a full `GtkPaned` is refused exactly when
+    /// both its slots are taken; and the host holds a reference of its own
+    /// on the parent across the add and the check after it, and does not
+    /// touch the parent once it has let go. The display-gated scenario
+    /// shows the first two, and the hold across the add. Only this guard
+    /// pins the hold's extent through the check and the last rule, and
+    /// only this guard runs in CI, which has no display.
+    #[test]
+    fn the_parent_is_checked_first_and_held_across_the_add() {
+        let src = plugin_src();
+        let create = fn_body(&src, "create_plugin_scintilla");
+        let checked = "let into = match plugin_scintilla_parent(parent) {";
+        let check = create
+            .find(checked)
+            .expect("`create_plugin_scintilla` no longer checks the parent");
+        let make = create
+            .find("scintilla_new()")
+            .expect("`create_plugin_scintilla` no longer makes a widget");
+        assert!(
+            check < make,
+            "the parent must be checked before a widget is made"
+        );
+        assert!(
+            occurs_at_depth_one(&create, checked),
+            "the parent is checked only under a condition"
+        );
+        assert!(
+            occurs_at_depth_one(
+                &block_after(&create, "Err(why) => {"),
+                "return std::ptr::null_mut();"
+            ),
+            "a refused parent no longer stops the widget being made"
+        );
+
+        let parent = fn_body(&src, "plugin_scintilla_parent");
+        let paned = "if let Some(paned) = container.downcast_ref::<gtk::Paned>() {";
+        assert!(
+            occurs_at_depth_one(&parent, paned),
+            "a full GtkPaned is refused only under a condition"
+        );
+        // Whitespace dropped, so rustfmt's layout does not matter; string
+        // contents are already gone.
+        let rule: String = block_after(&parent, paned).split_whitespace().collect();
+        assert_eq!(
+            rule,
+            "{letfull=unsafe{!gtk::ffi::gtk_paned_get_child1(paned.as_ptr()).is_null()\
+             &&!gtk::ffi::gtk_paned_get_child2(paned.as_ptr()).is_null()};\
+             iffull{returnErr();}}",
+            "a GtkPaned is no longer refused exactly when both its slots are taken"
+        );
+
+        let steps = [
+            "let held = gtk::Container::clone(&container);",
+            "container.add(&*view);",
+            "let turned_away = !view.is_ancestor(&*container);",
+            "drop(held);",
+        ]
+        .map(|step| {
+            create
+                .find(step)
+                .unwrap_or_else(|| panic!("`create_plugin_scintilla` no longer has `{step}`"))
+        });
+        assert!(
+            steps.windows(2).all(|pair| pair[0] < pair[1]),
+            "the host's reference on the parent must be taken before the add and given \
+             back only after the check that follows it"
+        );
+        assert!(
+            !create[steps[3]..].contains("container"),
+            "the parent is used after the host's reference on it is given back"
+        );
+    }
+
     /// A plugin's widget gets the host view's wheel-overscroll clamp on
     /// each `SCN_UPDATEUI`, before the plugin hears of it, so the plugin
     /// reads the offset settled — the order the host's own view keeps its
@@ -3207,7 +3321,11 @@ mod made_for_plugins_guards {
     #[test]
     fn plugin_widgets_are_never_read_through_owning_getters() {
         let src = plugin_src();
-        for name in ["register_dock_dialog", "plugin_scintilla_parent"] {
+        for name in [
+            "register_dock_dialog",
+            "plugin_scintilla_parent",
+            "create_plugin_scintilla",
+        ] {
             let body = fn_body(&src, name);
             for getter in [
                 ".parent()",
@@ -3215,6 +3333,8 @@ mod made_for_plugins_guards {
                 ".transient_for()",
                 ".children()",
                 ".child()",
+                ".child1()",
+                ".child2()",
                 ".ancestor(",
             ] {
                 assert!(
@@ -3272,6 +3392,7 @@ pub(crate) mod host_made_tests {
     use gtk::glib;
     use gtk::glib::translate::{from_glib_borrow, from_glib_none, Borrowed};
     use gtk::prelude::*;
+    use gtk::subclass::prelude::ObjectSubclassIsExt;
 
     use codepp_plugin_host::{
         calling_plugin, plugin_route, CallingPlugin, FuncItem, MENU_TITLE_LENGTH,
@@ -3284,8 +3405,8 @@ pub(crate) mod host_made_tests {
 
     use super::{
         add_toolbar_icon, create_plugin_scintilla, npp_sentinel, plugin_dispatch,
-        register_modeless_dialog, set_menu_check, COMMAND_LABELS, HOPS_QUEUED, MAIN_THREAD,
-        PLUGIN_CHECKS, PLUGIN_SCINTILLAS, VALID_SCI,
+        plugin_scintilla_parent, register_modeless_dialog, set_menu_check, COMMAND_LABELS,
+        HOPS_QUEUED, MAIN_THREAD, PLUGIN_CHECKS, PLUGIN_SCINTILLAS, VALID_SCI,
     };
     use crate::dock::departure_tests::{
         dock_panel_back, finish, float_panel, install_bare_dock, open, plugin_widget, pump,
@@ -3395,7 +3516,13 @@ pub(crate) mod host_made_tests {
         VALID_SCI.store(host_sci, std::sync::atomic::Ordering::Release);
         let _ = MAIN_THREAD.set(std::thread::current().id());
 
+        // Widgets made with no plugin to charge share one plugin's
+        // allowance across every scenario below. One that makes more
+        // should charge them to a plugin of its own (`CallingPlugin::enter`),
+        // or a later scenario's widget is refused by the quota, which
+        // reads like an unrelated bug.
         scintilla_parents_are_checked(&main, host_sci);
+        a_full_paned_is_refused_before_a_widget_is_made();
         widgets_are_charged_to_the_plugin_that_asked();
         a_container_that_turns_the_widget_away_leaves_it_routed();
         a_refused_dock_registration_leaves_a_floating_parent_alone();
@@ -3513,6 +3640,52 @@ pub(crate) mod host_made_tests {
             !ask(handle_of(&plugins_own)).is_null(),
             "the same parent was refused once the dock was free"
         );
+    }
+
+    /// A `GtkPaned` holding two widgets already would turn a third away
+    /// with a warning, so it is refused, as a full `GtkBin` is — before a
+    /// widget is made, so the refusal costs the plugin none. One with a
+    /// slot free, whichever slot, is a parent like any other.
+    fn a_full_paned_is_refused_before_a_widget_is_made() {
+        let full = gtk::Paned::new(gtk::Orientation::Horizontal);
+        full.pack1(&gtk::Label::new(None), true, true);
+        full.pack2(&gtk::Label::new(None), true, true);
+        // Refused for being full, and not for some other reason — a spent
+        // allowance would refuse it too.
+        let refused = plugin_scintilla_parent(handle_of(&full)).err();
+        assert!(
+            refused.is_some_and(|why| why.contains("GtkPaned")),
+            "a GtkPaned that holds two widgets already is not refused as one: {refused:?}"
+        );
+        let made_before = PLUGIN_SCINTILLAS.with(|made| made.borrow().len());
+        assert!(
+            create_plugin_scintilla(handle_of(&full)).is_null(),
+            "a GtkPaned that holds two widgets already was accepted as a parent"
+        );
+        assert_eq!(
+            PLUGIN_SCINTILLAS.with(|made| made.borrow().len()),
+            made_before,
+            "refusing a full GtkPaned cost the plugin a widget"
+        );
+        let first_only = gtk::Paned::new(gtk::Orientation::Horizontal);
+        first_only.pack1(&gtk::Label::new(None), true, true);
+        let second_only = gtk::Paned::new(gtk::Orientation::Horizontal);
+        second_only.pack2(&gtk::Label::new(None), true, true);
+        // Asked of the check alone, which costs no widget; GTK's own `add`
+        // then shows the free slot is real, which is what the rule rests
+        // on.
+        for (what, half) in [("first", &first_only), ("second", &second_only)] {
+            assert!(
+                plugin_scintilla_parent(handle_of(half)).is_ok(),
+                "a GtkPaned holding only its {what} child was refused"
+            );
+            let another = gtk::Label::new(None);
+            half.add(&another);
+            assert!(
+                another.is_ancestor(half),
+                "GTK turned a widget away from a GtkPaned holding only its {what} child"
+            );
+        }
     }
 
     /// Which plugin a widget is charged to: the one that asked, whether
@@ -3676,14 +3849,63 @@ pub(crate) mod host_made_tests {
         finish(&panel);
     }
 
-    /// A container that turns the widget away — a `GtkPaned` already
-    /// holding two, which also prints GTK's own warning — leaves it in no
-    /// container, still answered and routed.
+    /// A container of a plugin's own that turns every child away without
+    /// a word. The host cannot refuse such a container in advance, so
+    /// this is what reaches its check after the add. GTK's own containers
+    /// print a warning or a critical when they turn a child away, so none
+    /// of them can stand in for this one in a run that prints nothing.
+    mod turns_children_away {
+        use std::cell::Cell;
+
+        use gtk::glib;
+        use gtk::prelude::*;
+        use gtk::subclass::prelude::*;
+
+        #[derive(Default)]
+        pub(super) struct Imp {
+            /// The container's reference count while its `add` last ran:
+            /// what shows whether anyone held it across the add.
+            pub(super) refs_in_add: Cell<u32>,
+        }
+
+        #[glib::object_subclass]
+        impl ObjectSubclass for Imp {
+            const NAME: &'static str = "CodeppTestTurnsChildrenAway";
+            type Type = super::TurnsChildrenAway;
+            type ParentType = gtk::Container;
+        }
+
+        impl ObjectImpl for Imp {}
+
+        impl WidgetImpl for Imp {}
+
+        impl ContainerImpl for Imp {
+            fn add(&self, _widget: &gtk::Widget) {
+                self.refs_in_add.set(self.obj().ref_count());
+            }
+        }
+    }
+
+    glib::wrapper! {
+        /// See [`turns_children_away`].
+        struct TurnsChildrenAway(ObjectSubclass<turns_children_away::Imp>)
+            @extends gtk::Container, gtk::Widget;
+    }
+
+    /// A container that turns the widget away leaves it in no container,
+    /// still answered and routed. The host holds a reference of its own on
+    /// the container across the add, so the container's `add` sees one
+    /// more than when the same container is added to directly.
     fn a_container_that_turns_the_widget_away_leaves_it_routed() {
-        let full_paned = gtk::Paned::new(gtk::Orientation::Horizontal);
-        full_paned.pack1(&gtk::Label::new(None), true, true);
-        full_paned.pack2(&gtk::Label::new(None), true, true);
-        let turned_away = create_plugin_scintilla(handle_of(&full_paned));
+        let refuser = glib::Object::new::<TurnsChildrenAway>();
+        refuser.add(&gtk::Label::new(None));
+        let direct = refuser.imp().refs_in_add.get();
+        let turned_away = create_plugin_scintilla(handle_of(&refuser));
+        assert_eq!(
+            refuser.imp().refs_in_add.get(),
+            direct + 1,
+            "the host held no reference of its own on the container across the add"
+        );
         assert!(
             !turned_away.is_null(),
             "a container that turned the widget away left the plugin without one"

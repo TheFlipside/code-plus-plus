@@ -256,14 +256,17 @@ typedef struct sessionInfo_ {
  *     (gtk_widget_show). Scintilla asks for next to no room, so
  *     a GtkBox packs it all but invisible unless the plugin sets
  *     hexpand / vexpand on it. A container that turns the widget
- *     away (a GtkPaned already full) leaves it in no container,
- *     still answered and routed; the npp handle as lParam makes
- *     a widget in no container too. The parent must be the
- *     plugin's own, as on macOS: a widget in the host's main
- *     window or a floating dock window is refused unless it is
- *     inside a plugin's dock panel, wherever that panel is, and
- *     so are the host's container around such a panel, a
- *     Scintilla widget, and a GtkBin that already holds a child.
+ *     away for a reason of its own (a GtkMenu takes only menu
+ *     items) leaves it in no container, still answered and
+ *     routed; the npp handle as lParam makes a widget in no
+ *     container too. The parent must be the plugin's own, as on
+ *     macOS: a widget in the host's main window or a floating
+ *     dock window is refused unless it is inside a plugin's dock
+ *     panel, wherever that panel is, and so are the host's
+ *     container around such a panel, a Scintilla widget, a
+ *     GtkBin that already holds a child (a GtkComboBox or a
+ *     GtkActionBar always does: it holds one of its own), and a
+ *     GtkPaned that already holds two.
  *     The widget is the plugin's to destroy, with its container
  *     or on its own, as a Windows plugin destroys its control.
  *     Once it is destroyed, SCI_* sent to it answers 0, as
@@ -290,9 +293,10 @@ typedef struct sessionInfo_ {
  *     which the mouse wheel could otherwise scroll past. The
  *     host adds the widget inside its own dispatch, so a handler
  *     that addition sets off, the container's add for one, runs
- *     where every NPPM_* is declined (answered 0); and a parent
- *     named while the host is laying out its dock panels is
- *     refused. */
+ *     where every NPPM_* is declined (answered 0), and so does
+ *     the container's teardown if such a handler let go of it;
+ *     and a parent named while the host is laying out its dock
+ *     panels is refused. */
 #define NPPM_CREATESCINTILLAHANDLE        (NPPMSG + 20)
 #define NPPM_DESTROYSCINTILLAHANDLE       (NPPMSG + 21)  /* deprecated upstream */
 /* v3: number of user-defined languages (UDL) currently
