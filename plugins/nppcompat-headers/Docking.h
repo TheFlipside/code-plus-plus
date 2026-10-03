@@ -335,7 +335,19 @@ typedef struct tTbData_ {
  * sends DMN_FLOATDROPPED to every panel of a container whenever it
  * lays the container out, a plain tab switch included; Code++ sends
  * none of those repeats. A resize — of the window, a band, a floating
- * panel — is reported when it ends, not at every step of the drag.
+ * panel — is reported on macOS when it ends, not at every step of the
+ * drag. On Linux it is reported as it goes, at most once a pass of the
+ * main loop, since there is no telling when a resize the window
+ * manager drives has ended: nearer Notepad++, which reports every step,
+ * than macOS is. On Linux, too, what a change to the arrangement owes
+ * — a show, a close, a tab switch, a float, a dock — is sent before
+ * GTK has laid that change out, so in the handler the panel's widget
+ * may still have its old size; a plugin that needs the new geometry
+ * follows the widget's size-allocate signal. A resize is reported once
+ * GTK has laid it out. On Linux and macOS no DMN_* is sent from the
+ * moment the host begins to quit, which comes before it sends
+ * NPPN_BEFORESHUTDOWN — not even DMN_CLOSE for a panel closed
+ * meanwhile.
  * When one change owes several notifications they go out in this
  * order: DMN_DOCK / DMN_FLOAT, then every DMN_SWITCHIN, then every
  * DMN_SWITCHOFF, then every DMN_FLOATDROPPED — so a tab switch tells
@@ -345,11 +357,11 @@ typedef struct tTbData_ {
  * dropped rather than sent. And handlers that keep changing the layout
  * in answer to these — two panels each bringing itself back to the
  * front whenever told it went behind — are cut off: past 768
- * notifications in one delivery, Code++ drops the rest and logs a
- * warning. That cut-off is macOS's alone so far; the other two
- * backends have none.
+ * notifications worked through in one delivery, sent or dropped as no
+ * longer true, Code++ drops the rest and logs a warning. That cut-off
+ * applies on macOS and Linux; Windows has none yet.
  *
- * Code++ sends these three on macOS; Windows and Linux do not send
+ * Code++ sends these three on macOS and Linux; Windows does not send
  * them yet, so a portable plugin must not depend on them there. In
  * Notepad++ their hwndFrom is the panel's container window rather
  * than the main window, so a handler behind the docking-dialog
@@ -357,8 +369,9 @@ typedef struct tTbData_ {
  * Of what is said here about Notepad++'s own behaviour, only that —
  * the container sends them as tabs switch — was measured, with a
  * probe plugin; the rest (when it repeats them, that docked panels get
- * DMN_FLOATDROPPED, that a closed panel gets no DMN_SWITCHOFF, the
- * order) was read from its source.
+ * DMN_FLOATDROPPED, that a closed panel gets no DMN_SWITCHOFF, that a
+ * resize is reported at every step, the order) was read from its
+ * source.
  *
  * Off Windows — on Linux and macOS, where hClient is a widget or a
  * view — the same notifications go to the plugin's messageProc
@@ -375,9 +388,9 @@ typedef struct tTbData_ {
 #define DMN_CLOSE        (DMN_FIRST + 1)  /* user closed the panel (panel hidden) */
 #define DMN_DOCK         (DMN_FIRST + 2)  /* panel is docked; HIWORD(code) = CONT_* */
 #define DMN_FLOAT        (DMN_FIRST + 3)  /* panel is floating; HIWORD(code) >= 4 */
-#define DMN_SWITCHIN     (DMN_FIRST + 4)  /* panel came on screen (macOS only so far) */
-#define DMN_SWITCHOFF    (DMN_FIRST + 5)  /* panel went behind another tab (macOS only so far) */
-#define DMN_FLOATDROPPED (DMN_FIRST + 6)  /* panel laid out anew (macOS only so far) */
+#define DMN_SWITCHIN     (DMN_FIRST + 4)  /* panel came on screen (not sent on Windows yet) */
+#define DMN_SWITCHOFF    (DMN_FIRST + 5)  /* panel went behind another tab (not sent on Windows yet) */
+#define DMN_FLOATDROPPED (DMN_FIRST + 6)  /* panel laid out anew (not sent on Windows yet) */
 
 #ifdef __cplusplus
 } /* extern "C" */

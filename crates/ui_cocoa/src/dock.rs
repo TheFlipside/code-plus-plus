@@ -270,6 +270,14 @@ struct PluginPanel {
     /// registration-time notification. Written before any notification
     /// goes out — see [`panel_notices`].
     told: PanelTold,
+    /// This registration's own number, never reused — what a notice
+    /// queued about it is matched against when its turn to be sent comes
+    /// ([`notice_still_applies`]). Neither the panel nor the handle can
+    /// do that alone: every reconcile forgets the registrations whose
+    /// views were taken back, a plugin's handler can reconcile while a
+    /// notice waits, and a new registration for the same panel can then
+    /// have its view allocated at the old one's address.
+    serial: u64,
 }
 
 impl PluginPanel {
@@ -309,6 +317,8 @@ pub(crate) struct DockNotice {
     pub handle: *mut c_void,
     pub caller: Option<usize>,
     pub code: u32,
+    /// The registration the notice is about ([`PluginPanel::serial`]).
+    pub serial: u64,
 }
 
 /// Everything the dock mechanism owns for the window's lifetime.
@@ -430,6 +440,8 @@ impl Ui {
 thread_local! {
     /// Installed once on the main thread by [`install`].
     static DOCK: RefCell<Option<Ui>> = const { RefCell::new(None) };
+    /// The [`PluginPanel::serial`] the next registration takes.
+    static NEXT_REGISTRATION: Cell<u64> = const { Cell::new(0) };
 }
 
 /// Run `f` against the dock state if it is installed and not already
@@ -1609,7 +1621,16 @@ pub(crate) fn apply_layout() {
 /// check [`schedule_placement_check`] queues for the changes that bypass
 /// it — a resize or a move that changes where a group is laid out but not
 /// the model's arrangement.
+///
+/// Nothing once the quit has begun. Every plugin has then heard
+/// `NPPN_SHUTDOWN`, or is about to, and may have let go of what its
+/// handlers need — while a plugin's own shutdown handler that closes its
+/// panel would otherwise tell the plugins beside it that their tabs came
+/// in front.
 fn notify_plugin_panels() {
+    if crate::quitting() {
+        return;
+    }
     let notices = with_dock(panel_notices).unwrap_or_default();
     crate::plugin::deliver_dock_notices(notices);
 }
@@ -1630,8 +1651,8 @@ fn notify_plugin_panels() {
 /// the nested pass must find the change already recorded. What bounds the
 /// round trip when a handler registers a *new* panel — which the nested
 /// pass has genuinely not told — is the delivery's queue, not this order.
-/// The same order as Win32's and GTK's `container_notices`, and a source
-/// scan pins it on all three.
+/// The same order as Win32's `container_notices` and GTK's
+/// `panel_notices`, and a source scan pins it on all three.
 ///
 /// Placements are read off the carve [`place_children`] lays the dock
 /// area out with, at the area's last laid-out size; before the area has
@@ -1654,23 +1675,28 @@ fn panel_notices(d: &mut Ui) -> Vec<DockNotice> {
         .filter(|entry| entry.live())
         .map(|entry| {
             let owed = entry.told.update(&d.layout, frame.as_ref(), entry.panel);
-            ((entry.panel, entry.handle, entry.caller), owed)
+            (
+                (entry.panel, entry.handle, entry.caller, entry.serial),
+                owed,
+            )
         })
         .collect();
     codepp_plugin_host::docking::delivery_order(&owed)
         .into_iter()
-        .map(|((panel, handle, caller), code)| DockNotice {
+        .map(|((panel, handle, caller, serial), code)| DockNotice {
             panel,
             handle,
             caller,
             code,
+            serial,
         })
         .collect()
 }
 
 /// Whom a [`DockNotice`] goes to: the panel, the view its plugin
-/// registered it under, and the plugin that registered it.
-type NoticeTarget = (DockPanel, *mut c_void, Option<usize>);
+/// registered it under, the plugin that registered it, and which
+/// registration it is.
+type NoticeTarget = (DockPanel, *mut c_void, Option<usize>, u64);
 
 thread_local! {
     /// Set while a [`schedule_placement_check`] block is waiting on the
@@ -1733,22 +1759,44 @@ fn schedule_placement_check() {
 /// `crate::plugin::deliver_dock_notices`, since a plugin's handler for an
 /// earlier notice may have changed the layout since this one was queued.
 ///
-/// The registration must still stand, under the view the notice names —
-/// a handler may have taken the view back, and its address may even have
-/// been reused by a view registered since, so both halves are checked.
-/// And what the notice says must still hold of the model, by the shared
-/// rule in `codepp_plugin_host::docking::still_applies`: a
-/// `DMN_SWITCHIN` only for a panel still in front, a `DMN_FLOATDROPPED`
-/// only for one still in a group, anything else as queued.
+/// The registration the notice is about must still stand — a handler may
+/// have taken its view back. It is found by its serial, not by the view's
+/// address: a registration forgotten since, its view released, can be
+/// followed by a new one for the same panel at the same address, which
+/// is owed notices of its own and not this one. And what the notice says
+/// must still hold of the model, by the shared rule in
+/// `codepp_plugin_host::docking::still_applies`: a `DMN_SWITCHIN` only for
+/// a panel still in front, a `DMN_FLOATDROPPED` only for one still in a
+/// group, anything else as queued.
 pub(crate) fn notice_still_applies(notice: &DockNotice) -> bool {
     with_dock(|d| {
         let live = d
             .plugin_panels
             .iter()
-            .any(|p| p.live() && p.panel == notice.panel && std::ptr::eq(p.handle, notice.handle));
+            .any(|p| p.live() && p.serial == notice.serial);
         live && codepp_plugin_host::docking::still_applies(&d.layout, notice.panel, notice.code)
     })
     .unwrap_or(false)
+}
+
+/// A notice about `panel` as the dock would raise it now, for the
+/// registration that stands for it — for the smoke scenarios, which
+/// check what a delivery makes of one. `None` with no such registration.
+#[cfg(debug_assertions)]
+pub(crate) fn notice_for(panel: DockPanel, code: u32) -> Option<DockNotice> {
+    with_dock(|d| {
+        d.plugin_panels
+            .iter()
+            .find(|p| p.panel == panel && p.live())
+            .map(|p| DockNotice {
+                panel,
+                handle: p.handle,
+                caller: p.caller,
+                code,
+                serial: p.serial,
+            })
+    })
+    .flatten()
 }
 
 /// Phase one of [`apply_layout`]: the view tree only.
@@ -2237,6 +2285,7 @@ pub(crate) fn register_plugin_panel(
         }
         let view = adopt();
         let content = PluginPanelHost::adopt(&view, mtm);
+        let serial = NEXT_REGISTRATION.with(|next| next.replace(next.get() + 1));
         d.plugin_panels.push(PluginPanel {
             panel: spec.panel,
             view,
@@ -2248,6 +2297,7 @@ pub(crate) fn register_plugin_panel(
             caller: spec.caller,
             icon: spec.icon,
             told: PanelTold::default(),
+            serial,
         });
         // Where the panel opens the first time it is shown, from the
         // plugin's own `DWS_DF_CONT_*` preference — never over a position

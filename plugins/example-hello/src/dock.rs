@@ -47,12 +47,12 @@
 //! 6. **On Linux and macOS, "Show Dock Panel" has a toolbar button**
 //!    (`NPPM_ADDTOOLBARICON`), added at `NPPN_TBMODIFICATION`. It runs
 //!    the command and shows its check mark as pressed.
-//! 7. **On macOS, switching between the two panels' tabs**, dragging a
-//!    panel out to float or resizing its band reports what the host
-//!    sends on the status bar: `DMN_SWITCHIN` for the panel coming in,
-//!    `DMN_SWITCHOFF` for the one going behind it, and
-//!    `DMN_FLOATDROPPED` for each panel laid out somewhere new — once
-//!    a drag has ended, not at every step of it.
+//! 7. **On Linux and macOS, switching between the two panels' tabs**,
+//!    dragging a panel out to float or resizing its band reports what
+//!    the host sends on the status bar: `DMN_SWITCHIN` for the panel
+//!    coming in, `DMN_SWITCHOFF` for the one going behind it, and
+//!    `DMN_FLOATDROPPED` for each panel laid out somewhere new — on
+//!    macOS once a drag has ended, on Linux as it goes.
 //!
 //! Linux and macOS share everything but how the content is built —
 //! [`hosted`] registers, shows, renames and hears the `DMN_*`, and a

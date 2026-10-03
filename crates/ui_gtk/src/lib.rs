@@ -2165,6 +2165,33 @@ thread_local! {
     static QUITTING: Cell<bool> = const { Cell::new(false) };
 }
 
+/// Whether [`quit`] has begun — for the paths outside this module that
+/// must tell plugins nothing more once it has, such as the dock's
+/// `DMN_*` notifications.
+pub(crate) fn quitting() -> bool {
+    QUITTING.with(Cell::get)
+}
+
+/// Behave as though [`quit`] had begun until the returned guard drops —
+/// for the display scenarios, which cannot run the real one: it ends the
+/// main loop.
+#[cfg(test)]
+pub(crate) fn pretend_quitting() -> PretendQuitting {
+    QUITTING.with(|quitting| quitting.set(true));
+    PretendQuitting
+}
+
+/// See [`pretend_quitting`].
+#[cfg(test)]
+pub(crate) struct PretendQuitting;
+
+#[cfg(test)]
+impl Drop for PretendQuitting {
+    fn drop(&mut self) {
+        QUITTING.with(|quitting| quitting.set(false));
+    }
+}
+
 /// Leave the application: tell the plugins, save the session, end the
 /// main loop. The one way out — the window's close and File → Exit both
 /// come here — and it runs once, whichever is first.
@@ -3514,6 +3541,7 @@ mod display_tests {
         crate::dock::departure_tests::a_live_drag_holds_retirement_until_it_ends();
         crate::dock::departure_tests::a_gesture_on_what_went_mid_drag_does_nothing();
         crate::dock::departure_tests::registrations_awaiting_retirement_are_bounded();
+        crate::dock::notice_tests::plugin_panels_hear_how_they_are_shown();
         crate::plugin::host_made_tests::what_plugins_ask_the_host_to_make();
         crate::toolbar::icon_display_tests::built_in_icons_keep_their_cell();
         crate::tabs::icon_display_tests::tab_icons_keep_their_square();

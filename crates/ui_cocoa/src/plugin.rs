@@ -506,21 +506,54 @@ thread_local! {
         const { RefCell::new(VecDeque::new()) };
     /// Set while [`deliver_dock_notices`] is draining.
     static DOCK_NOTICES_DELIVERING: Cell<bool> = const { Cell::new(false) };
+    /// Notices dropped since the last warning: refused because the queue
+    /// already held as many as one delivery may send, or still queued
+    /// when a delivery reached its cap. See [`deliver_dock_notices`].
+    static DOCK_NOTICES_DROPPED: Cell<usize> = const { Cell::new(0) };
     /// Set while a `DMN_CLOSE` is being delivered. See
     /// [`close_plugin_panel`].
     static DMN_CLOSE_ACTIVE: Cell<bool> = const { Cell::new(false) };
 }
 
+/// A stand-in for a plugin's `DMN_*` handler, as the smoke binary
+/// installs it. See [`STAND_IN_HANDLER`].
+#[cfg(debug_assertions)]
+type StandInHandler = Box<dyn FnMut(DockPanel, u32)>;
+
 #[cfg(debug_assertions)]
 thread_local! {
-    /// What [`deliver_dock_notices`] has sent, as `(panel, code)`, while
-    /// the smoke binary is recording it — `None` otherwise, which is
+    /// What [`send_dock_notification`] has sent, as `(panel, code)`,
+    /// while the smoke binary is recording it — `None` otherwise, which is
     /// always outside that binary. Its rig drives a real dock with no
     /// shell behind it, so there is no plugin to deliver to; this is how
     /// it sees what each change owed. Compiled out of release builds with
     /// the rest of the test surface ([`smoke_support`]).
     static SENT_DOCK_NOTICES: RefCell<Option<Vec<(DockPanel, u32)>>> =
         const { RefCell::new(None) };
+    /// What runs where a plugin's handler would, at each notice sent,
+    /// while the smoke binary installs one — a stand-in for a plugin that
+    /// answers a notification by raising more. See [`smoke_sent`].
+    static STAND_IN_HANDLER: RefCell<Option<StandInHandler>> = const { RefCell::new(None) };
+}
+
+/// A notice is being sent: record it for the smoke binary, then run its
+/// stand-in handler if one is installed, where the plugin's own handler
+/// would run. The handler is taken out while it runs, so a delivery it
+/// starts runs none — which is what a missing latch would show as.
+#[cfg(debug_assertions)]
+fn smoke_sent(panel: DockPanel, code: u32) {
+    SENT_DOCK_NOTICES.with(|sent| {
+        if let Some(sent) = sent.borrow_mut().as_mut() {
+            sent.push((panel, code));
+        }
+    });
+    let handler = STAND_IN_HANDLER.with(|handler| handler.borrow_mut().take());
+    if let Some(mut handler) = handler {
+        handler(panel, code);
+        STAND_IN_HANDLER.with(|slot| {
+            slot.borrow_mut().get_or_insert(handler);
+        });
+    }
 }
 
 /// `NPPM_DMMREGASDCKDLG` on this backend: adopt the plugin's view as a
@@ -686,10 +719,12 @@ pub(crate) fn update_dock_disp_info(handle: *mut c_void) -> bool {
 /// without the latch that recurses until the stack runs out. A close
 /// nested inside any other close skips its notification and just hides,
 /// the coarse direction Win32's `DmnCloseGuard` and GTK's latch take for
-/// the same reason.
+/// the same reason. So does a close once the quit has begun — a click
+/// while a plugin's shutdown handler spins a run loop, say: the plugin
+/// has heard `NPPN_SHUTDOWN`, or is hearing it, and is told nothing more.
 pub(crate) fn close_plugin_panel(panel: DockPanel) {
     if let Some((handle, caller)) = crate::dock::plugin_panel_notify_target(panel) {
-        if !DMN_CLOSE_ACTIVE.with(Cell::get) {
+        if !DMN_CLOSE_ACTIVE.with(Cell::get) && !crate::quitting() {
             let _closing = crate::FlagGuard::set(&DMN_CLOSE_ACTIVE);
             send_dock_notification(panel, handle, caller, codepp_plugin_host::DMN_CLOSE);
         }
@@ -715,16 +750,26 @@ pub(crate) fn close_plugin_panel(panel: DockPanel) {
 ///
 /// Queued behind a handler that may change the layout, a notice is
 /// checked again when its turn comes (`crate::dock::notice_still_applies`)
-/// and skipped if it no longer says something true — a view taken back,
-/// a panel switched in and closed again before hearing of it. The record
-/// is already written, so a skipped notice loses nothing that could
-/// still be delivered.
+/// and skipped if it no longer says something true — a registration
+/// gone, a panel switched in and closed again before hearing of it. The
+/// record is already written, so a skipped notice loses nothing that
+/// could still be delivered.
 ///
 /// The queue bounds depth, and the shared cap,
-/// `codepp_plugin_host::docking::MAX_NOTICES_PER_DELIVERY`, bounds time:
-/// past it, the rest of the queue is dropped.
+/// `codepp_plugin_host::docking::MAX_NOTICES_PER_DELIVERY`, bounds the
+/// rest: one delivery works through at most that many notices, sent or
+/// found stale, and drops the rest of the queue; and the queue never
+/// holds more than that many ([`queue_dock_notices`]), so a handler that
+/// keeps raising notices while one is delivered cannot grow it either.
+/// What is dropped is reported in one warning when the delivery ends.
+///
+/// A handler may also begin the quit, by closing the main window. On this
+/// backend that ends in `exit()` — `terminate:` does not return — so the
+/// delivery on that handler's stack never resumes. The loop still stops
+/// at the quit and drops the rest of the queue unsent, as GTK's must, so
+/// the two read alike and this one holds should a quit ever return.
 pub(crate) fn deliver_dock_notices(notices: Vec<crate::dock::DockNotice>) {
-    DOCK_NOTICES.with(|q| q.borrow_mut().extend(notices));
+    queue_dock_notices(notices);
     if DOCK_NOTICES_DELIVERING.with(Cell::get) {
         return;
     }
@@ -733,28 +778,22 @@ pub(crate) fn deliver_dock_notices(notices: Vec<crate::dock::DockNotice>) {
     while let Some(notice) = DOCK_NOTICES.with(|q| q.borrow_mut().pop_front()) {
         taken += 1;
         if taken > codepp_plugin_host::docking::MAX_NOTICES_PER_DELIVERY {
-            let dropped = 1 + DOCK_NOTICES.with(|q| {
+            let left = DOCK_NOTICES.with(|q| {
                 let mut q = q.borrow_mut();
                 let left = q.len();
                 q.clear();
                 left
             });
-            tracing::warn!(
-                dropped,
-                "plugins keep changing the dock layout from their DMN_* handlers; \
-                 dropping the notifications still queued"
-            );
+            DOCK_NOTICES_DROPPED.with(|dropped| dropped.set(dropped.get() + 1 + left));
+            break;
+        }
+        if crate::quitting() {
+            DOCK_NOTICES.with(|q| q.borrow_mut().clear());
             break;
         }
         if !crate::dock::notice_still_applies(&notice) {
             continue;
         }
-        #[cfg(debug_assertions)]
-        SENT_DOCK_NOTICES.with(|sent| {
-            if let Some(sent) = sent.borrow_mut().as_mut() {
-                sent.push((notice.panel, notice.code));
-            }
-        });
         tracing::debug!(
             panel = notice.panel.persist_key(),
             dmn = codepp_plugin_host::docking::dmn_name(notice.code),
@@ -763,6 +802,33 @@ pub(crate) fn deliver_dock_notices(notices: Vec<crate::dock::DockNotice>) {
         );
         send_dock_notification(notice.panel, notice.handle, notice.caller, notice.code);
     }
+    let dropped = DOCK_NOTICES_DROPPED.with(|dropped| dropped.replace(0));
+    if dropped > 0 {
+        tracing::warn!(
+            dropped,
+            "plugins keep changing the dock layout from their DMN_* handlers; \
+             dropped the notifications past one delivery's cap"
+        );
+    }
+}
+
+/// Append `notices` to the queue, keeping it no longer than one delivery
+/// may send. Anything past that could never go out — a delivery drops
+/// whatever is still queued once it reaches the cap — and refusing it
+/// here is what bounds the queue while a plugin's handler keeps raising
+/// notices from inside a delivery. What is refused is counted for the
+/// delivery's warning.
+fn queue_dock_notices(notices: Vec<crate::dock::DockNotice>) {
+    let refused = DOCK_NOTICES.with(|q| {
+        let mut q = q.borrow_mut();
+        let room = codepp_plugin_host::docking::MAX_NOTICES_PER_DELIVERY.saturating_sub(q.len());
+        let refused = notices.len().saturating_sub(room);
+        q.extend(notices.into_iter().take(room));
+        refused
+    });
+    if refused > 0 {
+        DOCK_NOTICES_DROPPED.with(|dropped| dropped.set(dropped.get() + refused));
+    }
 }
 
 /// Deliver one `DMN_*` about `panel` to the plugin that should hear it —
@@ -770,7 +836,18 @@ pub(crate) fn deliver_dock_notices(notices: Vec<crate::dock::DockNotice>) {
 /// `WM_NOTIFY`, `wParam` the panel's `hClient`, `lParam` an `NMHDR` from
 /// the npp handle with `idFrom` 0 and `code` as given. Called with no
 /// borrow held.
+///
+/// Sends nothing once the quit has begun. Every `DMN_*` goes out through
+/// here, so that holds for any caller, one added later included. The
+/// callers stop sooner — a reconcile raises nothing, a delivery drops
+/// its queue, a close skips its `DMN_CLOSE` — and this is the backstop
+/// behind them.
 fn send_dock_notification(panel: DockPanel, handle: *mut c_void, caller: Option<usize>, code: u32) {
+    if crate::quitting() {
+        return;
+    }
+    #[cfg(debug_assertions)]
+    smoke_sent(panel, code);
     let Some(target) =
         with_state(|st| st.shell.plugin_panel_message_target(caller, panel)).flatten()
     else {
@@ -1449,7 +1526,11 @@ pub mod smoke_support {
     /// reported from inside a layout pass, only by the check the run loop
     /// runs in its default mode — once, however many passes the resize
     /// took; a floating window AppKit moves is reported through its
-    /// delegate; and one delivery stops at its cap.
+    /// delegate; one delivery stops at its cap, a handler that keeps
+    /// raising notices included, and the queue never holds more than that;
+    /// a notice that stopped being true while it waited is not sent; a
+    /// notice raised for a registration that has gone does not reach the
+    /// one that replaced it; and once the quit has begun nothing is sent.
     pub fn plugin_panels_hear_how_they_are_shown() {
         use codepp_core::dock::{DockRect, DropTarget};
         use codepp_plugin_host::{
@@ -1551,8 +1632,12 @@ pub mod smoke_support {
         expect_sent_now(&[], "the delegate tells the plugins nothing itself");
         expect_sent(&[(b, RELAID)], "a floating window moved");
 
-        panel_scenario::a_runaway_delivery_is_cut_off(&first, a);
-        panel_scenario::stale_notices_are_not_sent(&first, a, &second, b);
+        panel_scenario::a_burst_past_the_cap_is_cut_to_it(a);
+        panel_scenario::a_handler_that_keeps_raising_notices_is_cut_off(a);
+        panel_scenario::the_queue_holds_no_more_than_one_delivery_sends(a);
+        panel_scenario::stale_notices_are_not_sent(a, &second, b);
+        panel_scenario::a_replacement_hears_none_of_its_predecessors_notices(&rig, mtm);
+        panel_scenario::no_dock_notice_reaches_a_plugin_once_the_quit_has_begun(a);
         std::mem::forget((rig, first, second));
     }
 
@@ -2474,18 +2559,37 @@ pub mod smoke_support {
             }
         }
 
-        /// One delivery works through at most its cap of notices, however
-        /// many are queued, and the rest go with the queue: a second
-        /// delivery starts from nothing. `a` must be on screen, so each
-        /// notice is still true when its turn comes.
-        pub(super) fn a_runaway_delivery_is_cut_off(first: &NSView, a: DockPanel) {
+        /// A notice about `panel` as the dock would raise it now, for the
+        /// registration that stands for it.
+        fn notice(panel: DockPanel, code: u32) -> crate::dock::DockNotice {
+            crate::dock::notice_for(panel, code).expect("the panel has a registration that stands")
+        }
+
+        /// How many notices are waiting to be sent.
+        fn queued() -> usize {
+            super::super::DOCK_NOTICES.with(|q| q.borrow().len())
+        }
+
+        /// Run `handler` at each notice sent from now on, where a plugin's
+        /// handler runs — inside the delivery, with no borrow held — until
+        /// [`stand_down`].
+        fn stand_in(handler: impl FnMut(DockPanel, u32) + 'static) {
+            super::super::STAND_IN_HANDLER
+                .with(|slot| *slot.borrow_mut() = Some(Box::new(handler)));
+        }
+
+        /// Remove the stand-in handler.
+        fn stand_down() {
+            super::super::STAND_IN_HANDLER.with(|slot| *slot.borrow_mut() = None);
+        }
+
+        /// A delivery handed more notices than one delivery may send takes
+        /// that many — the queue refuses the rest — and sends them, and the
+        /// next delivery starts from nothing. `a` must be on screen, so
+        /// each notice is still true when its turn comes.
+        pub(super) fn a_burst_past_the_cap_is_cut_to_it(a: DockPanel) {
             let cap = codepp_plugin_host::docking::MAX_NOTICES_PER_DELIVERY;
-            let relaid = crate::dock::DockNotice {
-                panel: a,
-                handle: handle_of(first),
-                caller: None,
-                code: codepp_plugin_host::DMN_FLOATDROPPED,
-            };
+            let relaid = notice(a, codepp_plugin_host::DMN_FLOATDROPPED);
             let _ = take_notices();
             super::super::deliver_dock_notices(vec![relaid; cap + 50]);
             assert_eq!(
@@ -2500,49 +2604,183 @@ pub mod smoke_support {
             );
         }
 
+        /// A plugin whose handler answers every notice by raising another
+        /// is cut off once one delivery has worked through its cap, and
+        /// its own deliveries only queue: a stand-in handler, run where the
+        /// plugin's would be, feeds one notice back per notice sent. It
+        /// stops feeding past the cap on its own, so a delivery that never
+        /// stops fails here rather than hanging. `a` must be on screen.
+        pub(super) fn a_handler_that_keeps_raising_notices_is_cut_off(a: DockPanel) {
+            let cap = codepp_plugin_host::docking::MAX_NOTICES_PER_DELIVERY;
+            let relaid = notice(a, codepp_plugin_host::DMN_FLOATDROPPED);
+            let fed = std::rc::Rc::new(std::cell::Cell::new(0usize));
+            let feeding = std::rc::Rc::clone(&fed);
+            let _ = take_notices();
+            stand_in(move |_, _| {
+                if feeding.get() <= cap + 100 {
+                    feeding.set(feeding.get() + 1);
+                    super::super::deliver_dock_notices(vec![relaid]);
+                }
+            });
+            super::super::deliver_dock_notices(vec![relaid]);
+            stand_down();
+            assert_eq!(
+                take_notices().len(),
+                cap,
+                "a handler that keeps raising notices was not cut off at the cap"
+            );
+            assert_eq!(fed.get(), cap, "the handler ran once per notice sent");
+            assert_eq!(queued(), 0, "the notices past the cap were left queued");
+        }
+
+        /// The queue never holds more than one delivery may send: what a
+        /// plugin's handler raises past that from inside a delivery is
+        /// refused at once, not kept for the cap to throw away. `a` must be
+        /// on screen.
+        pub(super) fn the_queue_holds_no_more_than_one_delivery_sends(a: DockPanel) {
+            let cap = codepp_plugin_host::docking::MAX_NOTICES_PER_DELIVERY;
+            let relaid = notice(a, codepp_plugin_host::DMN_FLOATDROPPED);
+            let _ = take_notices();
+            {
+                let _delivering = crate::FlagGuard::set(&super::super::DOCK_NOTICES_DELIVERING);
+                for _ in 0..3 {
+                    super::super::deliver_dock_notices(vec![relaid; cap / 2]);
+                }
+            }
+            assert!(
+                take_notices().is_empty(),
+                "a delivery asked for inside a delivery sent something"
+            );
+            assert_eq!(
+                queued(),
+                cap,
+                "the queue grew past what one delivery may send"
+            );
+            super::super::deliver_dock_notices(Vec::new());
+            assert_eq!(take_notices().len(), cap);
+            assert_eq!(queued(), 0);
+        }
+
         /// A notice queued behind a handler that changed the layout is
         /// checked again when its turn comes, and one that no longer says
-        /// something true is not sent: a view that is not the
-        /// registration's, a switch-in or a relayout for a panel closed
-        /// since. A switch-off goes out as queued.
+        /// something true is not sent — a switch-in or a relayout for a
+        /// panel closed since — through the delivery itself, which is
+        /// where the check has to be made. A switch-off goes out as
+        /// queued. `front` must be its group's front tab, `other` open.
         pub(super) fn stale_notices_are_not_sent(
-            first: &NSView,
-            a: DockPanel,
+            front: DockPanel,
             second: &NSView,
-            b: DockPanel,
+            other: DockPanel,
         ) {
             use codepp_plugin_host::{DMN_FLOATDROPPED, DMN_SWITCHIN, DMN_SWITCHOFF};
-            let applies = |panel, view: &NSView, code| {
-                crate::dock::notice_still_applies(&crate::dock::DockNotice {
-                    panel,
-                    handle: handle_of(view),
-                    caller: None,
-                    code,
-                })
-            };
+            let still = crate::dock::notice_still_applies;
             assert!(
-                applies(a, first, DMN_SWITCHIN),
+                still(&notice(front, DMN_SWITCHIN)),
                 "a panel in front, as queued"
             );
-            assert!(
-                !applies(a, second, DMN_SWITCHIN),
-                "another registration's view is not this panel's"
-            );
+            // Raised while the panel was open, and still queued when it
+            // closed.
+            let stale = [
+                notice(other, DMN_SWITCHIN),
+                notice(other, DMN_FLOATDROPPED),
+                notice(other, DMN_SWITCHOFF),
+            ];
             assert!(crate::dock::hide_plugin_panel(handle_of(second)));
             reconcile();
             let _ = take_notices();
+            assert!(!still(&stale[0]), "switched in, then closed");
+            assert!(!still(&stale[1]), "laid out, then closed");
+            assert!(still(&stale[2]), "a switch-off goes out as queued");
+            super::super::deliver_dock_notices(stale.to_vec());
+            expect_sent_now(
+                &[(other, DMN_SWITCHOFF)],
+                "stale notices through the delivery",
+            );
+        }
+
+        /// A notice raised for a registration that has gone does not reach
+        /// the one that replaced it — not even one for the same panel whose
+        /// view sits at the old one's address, which is what a view
+        /// allocated where its predecessor was freed looks like. The
+        /// address is forged here.
+        pub(super) fn a_replacement_hears_none_of_its_predecessors_notices(
+            rig: &Rig,
+            mtm: MainThreadMarker,
+        ) {
+            use codepp_plugin_host::DMN_SWITCHIN;
+            let gone = plugin_view(mtm);
+            let panel = register_apart(rig, &gone, "Notice C");
+            assert!(crate::dock::show_plugin_panel(handle_of(&gone)));
+            reconcile();
+            let predecessors = notice(panel, DMN_SWITCHIN);
+            gone.removeFromSuperview();
+            spin_until(|| {
+                !crate::dock::layout_snapshot()
+                    .expect("the dock is installed")
+                    .is_visible(panel)
+            });
+            let replacement = plugin_view(mtm);
+            assert_eq!(register_apart(rig, &replacement, "Notice C"), panel);
+            assert!(crate::dock::show_plugin_panel(handle_of(&replacement)));
+            reconcile();
+            let at_the_same_address = crate::dock::DockNotice {
+                handle: handle_of(&replacement),
+                ..predecessors
+            };
             assert!(
-                !applies(b, second, DMN_SWITCHIN),
-                "switched in, then closed"
+                !crate::dock::notice_still_applies(&at_the_same_address),
+                "a notice for a registration that has gone reached the one that replaced it"
             );
             assert!(
-                !applies(b, second, DMN_FLOATDROPPED),
-                "laid out, then closed"
+                crate::dock::notice_still_applies(&notice(panel, DMN_SWITCHIN)),
+                "the replacement's own notice"
             );
+            assert!(crate::dock::hide_plugin_panel(handle_of(&replacement)));
+            reconcile();
+            let _ = take_notices();
+            // Kept for the process, like every view this binary makes.
+            std::mem::forget((gone, replacement));
+        }
+
+        /// Once the quit has begun no plugin is told anything more: not the
+        /// rest of a delivery whose handler began it — by closing the main
+        /// window, say — not what a later change to the layout owes, and
+        /// not the `DMN_CLOSE` of a panel closed meanwhile, which still
+        /// closes. Leaves `a` closed.
+        pub(super) fn no_dock_notice_reaches_a_plugin_once_the_quit_has_begun(a: DockPanel) {
+            use codepp_core::dock::DockSide;
+            let relaid = notice(a, codepp_plugin_host::DMN_FLOATDROPPED);
+            let quit: std::rc::Rc<std::cell::RefCell<Option<crate::PretendQuitting>>> =
+                std::rc::Rc::default();
+            let begin = std::rc::Rc::clone(&quit);
+            let _ = take_notices();
+            stand_in(move |_, _| {
+                begin
+                    .borrow_mut()
+                    .get_or_insert_with(crate::pretend_quitting);
+            });
+            super::super::deliver_dock_notices(vec![relaid; 3]);
+            stand_down();
+            expect_sent_now(
+                &[(a, codepp_plugin_host::DMN_FLOATDROPPED)],
+                "a delivery whose handler began the quit",
+            );
+            assert_eq!(queued(), 0, "the rest of the delivery was left queued");
+            assert!(crate::dock::update_layout(|l| {
+                l.set_side_size(DockSide::Bottom, l.side_size(DockSide::Bottom) + 30);
+                true
+            }));
+            crate::dock::apply_layout();
+            expect_sent_now(&[], "a layout change once the quit had begun");
+            super::super::close_plugin_panel(a);
+            expect_sent_now(&[], "a close once the quit had begun");
             assert!(
-                applies(b, second, DMN_SWITCHOFF),
-                "a switch-off goes out as queued"
+                !crate::dock::layout_snapshot()
+                    .expect("the dock is installed")
+                    .is_visible(a),
+                "the panel no longer closes"
             );
+            drop(quit);
         }
 
         /// Run the main run loop in its default mode — where the sweep is

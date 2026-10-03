@@ -3158,6 +3158,33 @@ thread_local! {
     static QUITTING: Cell<bool> = const { Cell::new(false) };
 }
 
+/// Whether [`quit`] has begun — for the paths outside this module that
+/// must tell plugins nothing more once it has, such as the dock's
+/// `DMN_*` notifications.
+pub(crate) fn quitting() -> bool {
+    QUITTING.with(Cell::get)
+}
+
+/// Behave as though [`quit`] had begun until the returned guard drops —
+/// for the smoke scenarios, which cannot run the real one: it runs as
+/// the application terminates.
+#[cfg(debug_assertions)]
+pub(crate) fn pretend_quitting() -> PretendQuitting {
+    QUITTING.with(|quitting| quitting.set(true));
+    PretendQuitting
+}
+
+/// See [`pretend_quitting`].
+#[cfg(debug_assertions)]
+pub(crate) struct PretendQuitting;
+
+#[cfg(debug_assertions)]
+impl Drop for PretendQuitting {
+    fn drop(&mut self) {
+        QUITTING.with(|quitting| quitting.set(false));
+    }
+}
+
 /// Leave the application's working state: tell the plugins, save the
 /// session. The one way out: ⌘Q, the Quit menu item and the main
 /// window's close button all reach it through `terminate:` and the
@@ -5971,6 +5998,76 @@ let msg = \"found scintilla_cocoa_new() calls\";
         );
     }
 
+    /// The smoke binary's hooks — `plugin::smoke_support`, which can
+    /// rewrite the dispatcher's handle-identity trust anchor, and what it
+    /// installs in the delivery path — are compiled under
+    /// `cfg(debug_assertions)`, so what keeps them out of a shipped build
+    /// is the profile it is built with leaving `debug-assertions` off. A
+    /// comment in the workspace manifest says so; this holds it, in the
+    /// manifest and in a checked-in `.cargo` config, for every profile but
+    /// `dev` and `test`, whose builds do not ship.
+    ///
+    /// Strict by construction rather than a TOML parser: outside a `dev`
+    /// or `test` table, anything that mentions `debug-assertions` must be
+    /// the plain `debug-assertions = false`, so a dotted or quoted key, an
+    /// inline table or a key at the root fails whatever it says, and no
+    /// profile may inherit `dev` or `test`, which turn them on. What a
+    /// build is given from outside the tree — `RUSTFLAGS`, `--config`,
+    /// `CARGO_PROFILE_*` variables, a `.cargo` config above the
+    /// workspace — is out of its reach.
+    #[test]
+    fn no_shipping_profile_turns_debug_assertions_on() {
+        let check = |text: &str, origin: &str| {
+            let mut table = String::new();
+            for line in text.lines() {
+                let line: String = line
+                    .split('#')
+                    .next()
+                    .unwrap_or("")
+                    .split_whitespace()
+                    .collect();
+                if line.starts_with('[') {
+                    table = line;
+                    continue;
+                }
+                // `[profile.<name>]`, or one of its `.package…` /
+                // `.build-override` tables, which build with it.
+                let profile = table
+                    .strip_prefix("[profile.")
+                    .and_then(|rest| rest.split(['.', ']']).next());
+                if matches!(profile, Some("dev" | "test")) {
+                    continue;
+                }
+                assert!(
+                    !line.contains("debug-assertions") || line == "debug-assertions=false",
+                    "`{line}` in {origin}'s `{table}` can turn debug-assertions on, which \
+                     ships the smoke binary's hooks"
+                );
+                assert!(
+                    !["dev", "test"].iter().any(|name| {
+                        line.contains(&format!("inherits=\"{name}\""))
+                            || line.contains(&format!("inherits='{name}'"))
+                    }),
+                    "`{line}` in {origin}'s `{table}` inherits debug-assertions from a \
+                     development profile"
+                );
+            }
+        };
+        let manifest = include_str!("../../../Cargo.toml");
+        check(manifest, "Cargo.toml");
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        for config in [".cargo/config.toml", ".cargo/config"] {
+            if let Ok(text) = std::fs::read_to_string(root.join(config)) {
+                check(&text, config);
+            }
+        }
+        // Sanity: a manifest read wrongly must not let this pass vacuously.
+        assert!(
+            manifest.contains("[profile.release]") && manifest.matches("[profile.").count() >= 2,
+            "the workspace manifest no longer has the profiles this reads"
+        );
+    }
+
     /// A plugin is called with **no** `with_state` borrow held.
     ///
     /// `with_state` declines a re-entrant borrow rather than panicking,
@@ -6247,35 +6344,225 @@ let msg = \"found scintilla_cocoa_new() calls\";
     /// are unit-tested where they live; what only a scan can see here is
     /// that this backend still calls them, and in the order that makes
     /// them work — the smoke scenarios that would notice otherwise are
-    /// display-gated. Matched as squashed whole conditions, not names,
-    /// so a copy of the rule or of the number, a condition weakened
-    /// around the call, or the check moved after the send all fail; the
-    /// rule's call is matched without its closing parenthesis, so a
-    /// rustfmt reflow that adds a trailing comma does not.
+    /// display-gated. The latch that keeps a handler's re-entry one level
+    /// deep is pinned with them, its check and its raising both. Matched
+    /// as squashed whole statements, the latch through the cap as one
+    /// run, so a copy of the rule or of the number, a condition weakened
+    /// around the call, the latch not raised, the count not advanced or
+    /// advanced outside the loop, or the check moved after the send all
+    /// fail; the rule's call is matched without its closing parenthesis,
+    /// so a rustfmt reflow that adds a trailing comma does not. The twin
+    /// of `ui_gtk`'s test of the same name.
     #[test]
     fn the_delivery_applies_the_shared_cap_and_staleness_rule() {
-        let deliver: String = fn_body(&plugin_src(), "deliver_dock_notices")
+        let plugin = plugin_src();
+        let deliver: String = fn_body(&plugin, "deliver_dock_notices")
             .split_whitespace()
             .collect();
-        assert!(
-            deliver.contains("iftaken>codepp_plugin_host::docking::MAX_NOTICES_PER_DELIVERY{"),
-            "one delivery no longer stops at the shared cap"
-        );
+        let queued = deliver
+            .find("queue_dock_notices(notices);")
+            .expect("the notices no longer go through the bounded queue");
+        let capped = deliver
+            .find(concat!(
+                "ifDOCK_NOTICES_DELIVERING.with(Cell::get){return;}",
+                "let_delivering=crate::FlagGuard::set(&DOCK_NOTICES_DELIVERING);",
+                "letmuttaken=0usize;",
+                "whileletSome(notice)=DOCK_NOTICES.with(|q|q.borrow_mut().pop_front()){",
+                "taken+=1;",
+                "iftaken>codepp_plugin_host::docking::MAX_NOTICES_PER_DELIVERY{",
+            ))
+            .expect(
+                "the latch, its raising, the count or the shared cap is gone from the delivery, \
+                 or out of order",
+            );
         let checked = deliver
             .find("if!crate::dock::notice_still_applies(&notice){continue;}")
             .expect("a notice that waited behind a handler is no longer checked before it is sent");
         let sent = deliver
             .find("send_dock_notification(")
             .expect("the delivery no longer sends the notices");
-        assert!(checked < sent, "a notice is sent before it is checked");
+        assert!(queued < capped, "the notices are queued after the latch");
+        assert!(
+            capped < checked && checked < sent,
+            "a notice is sent before it is checked"
+        );
+        let queue: String = fn_body(&plugin, "queue_dock_notices")
+            .split_whitespace()
+            .collect();
+        assert!(
+            queue.contains(
+                "letroom=codepp_plugin_host::docking::MAX_NOTICES_PER_DELIVERY.saturating_sub(q.len());"
+            ) && queue.contains("q.extend(notices.into_iter().take(room));"),
+            "the queue is no longer bounded by what one delivery may send"
+        );
         let applies: String = fn_body(&dock_src(), "notice_still_applies")
             .split_whitespace()
             .collect();
+        assert!(
+            applies.contains(".any(|p|p.live()&&p.serial==notice.serial);"),
+            "a notice is no longer matched to the registration it was raised for"
+        );
         assert!(
             applies.contains(
                 "live&&codepp_plugin_host::docking::still_applies(&d.layout,notice.panel,notice.code"
             ),
             "the staleness check no longer applies the shared rule to a registration that stands"
+        );
+        // The bound holds only while the queue has one way in: no code but
+        // the delivery and the bounded queue touches it, whatever the call
+        // — `with`, `with_borrow_mut`, `take`, a reference taken to it. So
+        // every mention of the queue's own name counts, as a whole word:
+        // not `SENT_DOCK_NOTICES` or `DOCK_NOTICES_DELIVERING`. The smoke
+        // binary's support code is compiled into debug builds, and so into
+        // this text: it is cut out first, and held to reading the queue.
+        let uses = |text: &str| -> Vec<usize> {
+            let word = |c: char| c == '_' || c.is_alphanumeric();
+            text.match_indices("DOCK_NOTICES")
+                .map(|(at, _)| at)
+                .filter(|&at| {
+                    !text[..at].chars().next_back().is_some_and(word)
+                        && !text[at + "DOCK_NOTICES".len()..]
+                            .chars()
+                            .next()
+                            .is_some_and(word)
+                })
+                .collect()
+        };
+        let smoke = block_after(&plugin, "pub mod smoke_support {");
+        let production = plugin.replacen(&smoke, "", 1);
+        // Its declaration, and the two functions allowed to touch it.
+        assert_eq!(
+            uses(&production).len(),
+            1 + uses(&fn_body(&plugin, "deliver_dock_notices")).len()
+                + uses(&fn_body(&plugin, "queue_dock_notices")).len(),
+            "something other than the delivery and the bounded queue touches the queue"
+        );
+        assert!(
+            uses(&smoke).into_iter().all(|at| {
+                smoke[at..]
+                    .chars()
+                    .filter(|c| !c.is_whitespace())
+                    .take("DOCK_NOTICES.with(|q|q.borrow()".len())
+                    .eq("DOCK_NOTICES.with(|q|q.borrow()".chars())
+            }),
+            "the smoke binary's support code changes the queue"
+        );
+    }
+
+    /// A queued notice is matched to the registration it was raised for
+    /// by serial (`notice_still_applies`), which holds only while no two
+    /// registrations share one: each registration takes the next value
+    /// and keeps it, nothing else touches the counter, and the notices
+    /// carry their registration's own. The smoke scenario forges a
+    /// predecessor's notice and sees it refused; this pins the serials
+    /// where it does not run. The twin of `ui_gtk`'s test of the same
+    /// name.
+    #[test]
+    fn a_notice_names_the_registration_it_was_raised_for() {
+        // Whether the struct literal `literal` opens in `text` sets its
+        // `serial` field from a binding of that name.
+        let keeps_serial = |text: &str, literal: &str| {
+            text.split(literal)
+                .nth(1)
+                .and_then(|rest| rest.split('}').next())
+                .is_some_and(|fields| {
+                    fields
+                        .split(',')
+                        .any(|field| field == "serial" || field == "serial:serial")
+                })
+        };
+        let dock = dock_src();
+        let register: String = fn_body(&dock, "register_plugin_panel")
+            .split_whitespace()
+            .collect();
+        assert!(
+            register
+                .contains("letserial=NEXT_REGISTRATION.with(|next|next.replace(next.get()+1));"),
+            "a registration no longer takes the next serial"
+        );
+        assert!(
+            keeps_serial(&register, "PluginPanel{"),
+            "a registration no longer keeps the serial it took"
+        );
+        // Its declaration and that one allocation.
+        assert_eq!(
+            dock.matches("NEXT_REGISTRATION").count(),
+            2,
+            "something other than a registration touches the serial counter"
+        );
+        let notices: String = fn_body(&dock, "panel_notices").split_whitespace().collect();
+        assert!(
+            notices.contains("(entry.panel,entry.handle,entry.caller,entry.serial)")
+                && keeps_serial(&notices, "DockNotice{"),
+            "the notices no longer carry their registration's serial"
+        );
+    }
+
+    /// Once the quit has begun no plugin is told anything more about its
+    /// panels, whichever way a notification would have gone. The sender
+    /// itself refuses — every `DMN_*` goes out through it — and its
+    /// callers stop sooner: nothing new is raised, the rest of a delivery
+    /// already under way is dropped unsent, and a panel closed meanwhile
+    /// sends no `DMN_CLOSE`. The smoke scenario drives the behaviour, and
+    /// with the sender's backstop in place it cannot see any one of the
+    /// others go; this pins each, and runs where the smoke binary does
+    /// not. The twin of `ui_gtk`'s test of the same name.
+    #[test]
+    fn no_dock_notice_reaches_a_plugin_once_the_quit_has_begun() {
+        let notify: String = fn_body(&dock_src(), "notify_plugin_panels")
+            .split_whitespace()
+            .collect();
+        let gate = notify
+            .find("ifcrate::quitting(){return;}")
+            .expect("plugins are told about their panels after the quit has begun");
+        let record = notify
+            .find("with_dock(panel_notices)")
+            .expect("the plugins' records are no longer written");
+        assert!(gate < record, "the quit gate comes after the telling");
+
+        let plugin = plugin_src();
+        let deliver: String = fn_body(&plugin, "deliver_dock_notices")
+            .split_whitespace()
+            .collect();
+        let popped = deliver
+            .find("whileletSome(notice)=DOCK_NOTICES.with(|q|q.borrow_mut().pop_front()){")
+            .expect("the delivery no longer drains the queue");
+        let stopped = deliver
+            .find("ifcrate::quitting(){DOCK_NOTICES.with(|q|q.borrow_mut().clear());break;}")
+            .expect("a delivery under way no longer stops once the quit has begun");
+        let sent = deliver
+            .find("send_dock_notification(")
+            .expect("the delivery no longer sends the notices");
+        assert!(
+            popped < stopped && stopped < sent,
+            "the quit is checked outside the loop, or after the send"
+        );
+
+        let close: String = fn_body(&plugin, "close_plugin_panel")
+            .split_whitespace()
+            .collect();
+        assert!(
+            close.contains("if!DMN_CLOSE_ACTIVE.with(Cell::get)&&!crate::quitting(){"),
+            "a panel closed once the quit has begun still sends DMN_CLOSE"
+        );
+
+        let sender: String = fn_body(&plugin, "send_dock_notification")
+            .split_whitespace()
+            .collect();
+        assert!(
+            sender.starts_with("{ifcrate::quitting(){return;}"),
+            "the sender no longer refuses, first thing, once the quit has begun"
+        );
+        for after in ["smoke_sent(", "target.send("] {
+            assert!(
+                sender.contains(after),
+                "the sender no longer reaches `{after}`"
+            );
+        }
+
+        assert!(
+            fn_body(production_src(), "quitting").contains("QUITTING.with(Cell::get)"),
+            "`quitting` no longer reads the flag `quit` raises"
         );
     }
 

@@ -461,8 +461,9 @@ fn dispatch_nppm(msg: u32, wparam: usize, lparam: isize) -> isize {
     // session through `with_state` and would be declined under the live
     // borrow. So the handler marks and the reconcile happens here, with
     // the borrow ended — the same shape as `needs_rebind` above, and as
-    // Win32's `dock_dirty`. It also sends the `DMN_DOCK` / `DMN_FLOAT` a
-    // registration owes the plugin, before its `SendMessage` returns.
+    // Win32's `dock_dirty`. It also sends the `DMN_*` the change owes —
+    // a registration's `DMN_DOCK` / `DMN_FLOAT`, a show's `DMN_SWITCHIN`
+    // and `DMN_FLOATDROPPED` — before the plugin's `SendMessage` returns.
     if crate::dock::take_dirty() {
         crate::dock::apply_layout();
     }
@@ -489,15 +490,109 @@ fn dispatch_nppm(msg: u32, wparam: usize, lparam: isize) -> isize {
 // `codepp_plugin_host::WM_NOTIFY`.
 
 thread_local! {
-    /// `DMN_DOCK` / `DMN_FLOAT` notices waiting to be sent. See
+    /// `DMN_*` notices a dock reconcile owes, waiting to be sent. See
     /// [`deliver_dock_notices`].
     static DOCK_NOTICES: std::cell::RefCell<std::collections::VecDeque<crate::dock::DockNotice>> =
         const { std::cell::RefCell::new(std::collections::VecDeque::new()) };
     /// Set while [`deliver_dock_notices`] is draining.
     static DOCK_NOTICES_DELIVERING: Cell<bool> = const { Cell::new(false) };
+    /// Notices dropped since the last warning: refused because the queue
+    /// already held as many as one delivery may send, or still queued
+    /// when a delivery reached its cap. See [`deliver_dock_notices`].
+    static DOCK_NOTICES_DROPPED: Cell<usize> = const { Cell::new(0) };
     /// Set while a `DMN_CLOSE` is being delivered. See
     /// [`close_plugin_panel`].
     static DMN_CLOSE_ACTIVE: Cell<bool> = const { Cell::new(false) };
+}
+
+/// A stand-in for a plugin's `DMN_*` handler, as the display scenarios
+/// install it. See [`sent_dock_notices::stand_in`].
+#[cfg(test)]
+type StandInHandler = Box<dyn FnMut(codepp_core::dock::DockPanel, u32)>;
+
+#[cfg(test)]
+thread_local! {
+    /// What [`send_dock_notification`] has sent, as `(panel, code)`, while
+    /// a display scenario is recording it — `None` otherwise. The dock rig
+    /// those scenarios drive has no shell behind it, so there is no plugin
+    /// to deliver to; this is how a scenario sees what each change owed.
+    /// See [`sent_dock_notices`].
+    static SENT_DOCK_NOTICES: std::cell::RefCell<Option<Vec<(codepp_core::dock::DockPanel, u32)>>> =
+        const { std::cell::RefCell::new(None) };
+    /// What runs where a plugin's handler would, at each notice sent. See
+    /// [`sent_dock_notices::stand_in`].
+    static STAND_IN_HANDLER: std::cell::RefCell<Option<StandInHandler>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Recording what the dock sends plugins, and standing in for a plugin
+/// that answers, for the display scenarios.
+#[cfg(test)]
+pub(crate) mod sent_dock_notices {
+    use codepp_core::dock::DockPanel;
+
+    /// A notice is being sent: record it, then run the stand-in handler if
+    /// one is installed, where the plugin's own handler would run. The
+    /// handler is taken out while it runs, so a delivery it starts runs
+    /// none — which is what a missing latch would show as.
+    pub(super) fn sent(panel: DockPanel, code: u32) {
+        super::SENT_DOCK_NOTICES.with(|sent| {
+            if let Some(sent) = sent.borrow_mut().as_mut() {
+                sent.push((panel, code));
+            }
+        });
+        let handler = super::STAND_IN_HANDLER.with(|handler| handler.borrow_mut().take());
+        if let Some(mut handler) = handler {
+            handler(panel, code);
+            super::STAND_IN_HANDLER.with(|slot| {
+                slot.borrow_mut().get_or_insert(handler);
+            });
+        }
+    }
+
+    /// Run `handler` at each notice sent from now on, as a plugin's
+    /// handler runs — with no borrow held, inside the delivery — until
+    /// [`stand_down`].
+    pub(crate) fn stand_in(handler: impl FnMut(DockPanel, u32) + 'static) {
+        super::STAND_IN_HANDLER.with(|slot| *slot.borrow_mut() = Some(Box::new(handler)));
+    }
+
+    /// Remove the stand-in handler.
+    pub(crate) fn stand_down() {
+        super::STAND_IN_HANDLER.with(|slot| *slot.borrow_mut() = None);
+    }
+
+    /// Record the notices sent from now on, starting from none.
+    pub(crate) fn record() {
+        super::SENT_DOCK_NOTICES.with(|sent| *sent.borrow_mut() = Some(Vec::new()));
+    }
+
+    /// Stop recording, and forget what was recorded.
+    pub(crate) fn stop() {
+        super::SENT_DOCK_NOTICES.with(|sent| *sent.borrow_mut() = None);
+    }
+
+    /// The notices sent since the last call.
+    pub(crate) fn take() -> Vec<(DockPanel, u32)> {
+        super::SENT_DOCK_NOTICES.with(|sent| {
+            sent.borrow_mut()
+                .as_mut()
+                .map(std::mem::take)
+                .unwrap_or_default()
+        })
+    }
+
+    /// Run `f` as a plugin's handler runs: while a delivery is draining,
+    /// so a delivery `f` asks for only queues.
+    pub(crate) fn inside_a_delivery(f: impl FnOnce()) {
+        let _delivering = crate::FlagGuard::set(&super::DOCK_NOTICES_DELIVERING);
+        f();
+    }
+
+    /// How many notices are waiting to be sent.
+    pub(crate) fn queued() -> usize {
+        super::DOCK_NOTICES.with(|q| q.borrow().len())
+    }
 }
 
 /// `NPPM_DMMREGASDCKDLG` on this backend: adopt the plugin's widget as a
@@ -726,9 +821,12 @@ pub(crate) fn update_dock_disp_info(handle: *mut c_void) -> bool {
 /// without the latch that recurses until the stack runs out. A close
 /// nested inside any other close skips its notification and just hides,
 /// the coarse direction Win32's `DmnCloseGuard` takes for the same reason.
+/// So does a close once the quit has begun — a click while a plugin's
+/// shutdown handler spins a main loop, say: the plugin has heard
+/// `NPPN_SHUTDOWN`, or is hearing it, and is told nothing more.
 pub(crate) fn close_plugin_panel(panel: codepp_core::dock::DockPanel) {
     if let Some((handle, caller)) = crate::dock::plugin_panel_notify_target(panel) {
-        if !DMN_CLOSE_ACTIVE.with(Cell::get) {
+        if !DMN_CLOSE_ACTIVE.with(Cell::get) && !crate::quitting() {
             let _closing = crate::FlagGuard::set(&DMN_CLOSE_ACTIVE);
             send_dock_notification(panel, handle, caller, codepp_plugin_host::DMN_CLOSE);
         }
@@ -736,7 +834,9 @@ pub(crate) fn close_plugin_panel(panel: codepp_core::dock::DockPanel) {
     crate::dock::set_panel_visible(panel, false);
 }
 
-/// Send each `DMN_DOCK` / `DMN_FLOAT` notice.
+/// Send each notice a dock reconcile owes: `DMN_DOCK` / `DMN_FLOAT`,
+/// `DMN_SWITCHIN` / `DMN_SWITCHOFF` and `DMN_FLOATDROPPED`, in the order
+/// `crate::dock::panel_notices` queued them.
 ///
 /// **Notices raised while one is being delivered are queued, not sent.**
 /// The plugin's handler runs with no borrow held, so it may send
@@ -746,34 +846,88 @@ pub(crate) fn close_plugin_panel(panel: codepp_core::dock::DockPanel) {
 /// handler could do the same, nesting a full round trip per link until
 /// the registration cap or the stack ran out. So a call made while a
 /// delivery is running only appends to the queue and returns, and the
-/// outermost call drains it in order: nothing is dropped, and the
-/// nesting stays one level deep whatever the plugin does. The same queue
-/// Win32's `deliver_container_notices` keeps.
+/// outermost call drains it in order: nothing is dropped that is still
+/// true, and the nesting stays one level deep whatever the plugin does.
+/// The same queue Win32's `deliver_container_notices` and Cocoa's keep.
+///
+/// Queued behind a handler that may change the layout, a notice is
+/// checked again when its turn comes (`crate::dock::notice_still_applies`)
+/// and skipped if it no longer says something true — a registration
+/// gone, a panel switched in and closed again before hearing of it. The
+/// record is already written, so a skipped notice loses nothing that
+/// could still be delivered.
+///
+/// The queue bounds depth, and the shared cap,
+/// `codepp_plugin_host::docking::MAX_NOTICES_PER_DELIVERY`, bounds the
+/// rest: one delivery works through at most that many notices, sent or
+/// found stale, and drops the rest of the queue; and the queue never
+/// holds more than that many ([`queue_dock_notices`]), so a handler that
+/// keeps raising notices while one is delivered cannot grow it either.
+/// What is dropped is reported in one warning when the delivery ends.
+///
+/// A handler may also begin the quit — by closing the main window — and
+/// once it has, the rest of the queue is dropped unsent: every plugin is
+/// about to hear `NPPN_SHUTDOWN`, or has, and is told nothing more.
 pub(crate) fn deliver_dock_notices(notices: Vec<crate::dock::DockNotice>) {
-    DOCK_NOTICES.with(|q| q.borrow_mut().extend(notices));
+    queue_dock_notices(notices);
     if DOCK_NOTICES_DELIVERING.with(Cell::get) {
         return;
     }
     let _delivering = crate::FlagGuard::set(&DOCK_NOTICES_DELIVERING);
+    let mut taken = 0usize;
     while let Some(notice) = DOCK_NOTICES.with(|q| q.borrow_mut().pop_front()) {
-        // A handler for an earlier notice may have taken this one's
-        // widget out of the host's container — moved or destroyed it;
-        // the record is already written, so skipping it loses nothing
-        // that could still be delivered.
-        if !crate::dock::plugin_panel_is_live(notice.panel, notice.handle) {
+        taken += 1;
+        if taken > codepp_plugin_host::docking::MAX_NOTICES_PER_DELIVERY {
+            let left = DOCK_NOTICES.with(|q| {
+                let mut q = q.borrow_mut();
+                let left = q.len();
+                q.clear();
+                left
+            });
+            DOCK_NOTICES_DROPPED.with(|dropped| dropped.set(dropped.get() + 1 + left));
+            break;
+        }
+        if crate::quitting() {
+            DOCK_NOTICES.with(|q| q.borrow_mut().clear());
+            break;
+        }
+        if !crate::dock::notice_still_applies(&notice) {
             continue;
         }
         tracing::debug!(
             panel = notice.panel.persist_key(),
-            dmn = if notice.code & 0xFFFF == codepp_plugin_host::DMN_DOCK {
-                "DMN_DOCK"
-            } else {
-                "DMN_FLOAT"
-            },
+            dmn = codepp_plugin_host::docking::dmn_name(notice.code),
             container = notice.code >> 16,
-            "dock container notification"
+            "dock panel notification"
         );
         send_dock_notification(notice.panel, notice.handle, notice.caller, notice.code);
+    }
+    let dropped = DOCK_NOTICES_DROPPED.with(|dropped| dropped.replace(0));
+    if dropped > 0 {
+        tracing::warn!(
+            dropped,
+            "plugins keep changing the dock layout from their DMN_* handlers; \
+             dropped the notifications past one delivery's cap"
+        );
+    }
+}
+
+/// Append `notices` to the queue, keeping it no longer than one delivery
+/// may send. Anything past that could never go out — a delivery drops
+/// whatever is still queued once it reaches the cap — and refusing it
+/// here is what bounds the queue while a plugin's handler keeps raising
+/// notices from inside a delivery. What is refused is counted for the
+/// delivery's warning.
+fn queue_dock_notices(notices: Vec<crate::dock::DockNotice>) {
+    let refused = DOCK_NOTICES.with(|q| {
+        let mut q = q.borrow_mut();
+        let room = codepp_plugin_host::docking::MAX_NOTICES_PER_DELIVERY.saturating_sub(q.len());
+        let refused = notices.len().saturating_sub(room);
+        q.extend(notices.into_iter().take(room));
+        refused
+    });
+    if refused > 0 {
+        DOCK_NOTICES_DROPPED.with(|dropped| dropped.set(dropped.get() + refused));
     }
 }
 
@@ -782,12 +936,23 @@ pub(crate) fn deliver_dock_notices(notices: Vec<crate::dock::DockNotice>) {
 /// `WM_NOTIFY`, `wParam` the panel's `hClient`, `lParam` an `NMHDR` from
 /// the npp handle with `idFrom` 0 and `code` as given. Called with no
 /// borrow held.
+///
+/// Sends nothing once the quit has begun. Every `DMN_*` goes out through
+/// here, so that holds for any caller, one added later included. The
+/// callers stop sooner — a reconcile raises nothing, a delivery drops
+/// its queue, a close skips its `DMN_CLOSE` — and this is the backstop
+/// behind them.
 fn send_dock_notification(
     panel: codepp_core::dock::DockPanel,
     handle: *mut c_void,
     caller: Option<usize>,
     code: u32,
 ) {
+    if crate::quitting() {
+        return;
+    }
+    #[cfg(test)]
+    sent_dock_notices::sent(panel, code);
     let Some(target) =
         with_state(|st| st.shell.plugin_panel_message_target(caller, panel)).flatten()
     else {

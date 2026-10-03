@@ -133,8 +133,9 @@ define_class!(
                 // Order is load-bearing. The quit tells the plugins and
                 // saves the session, which reads the caret position back
                 // out of the live Scintilla view, so it has to run while
-                // the state is still installed. A no-op when the main
-                // window's close button already ran it.
+                // the state is still installed. This is the one call:
+                // every way out — the main window's close button, ⌘Q, the
+                // Quit item — reaches it through `terminate:`.
                 crate::quit();
             });
             crate::at_callback_boundary("applicationWillTerminate:perf", (), crate::report_perf);

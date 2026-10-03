@@ -511,10 +511,10 @@ pub const DMN_FLOAT: u32 = DMN_FIRST + 3;
 /// The panel came on screen: its tab is now the one its group shows,
 /// where it had been hidden or behind another tab. The bare code, with
 /// nothing in the high word, as upstream sends it. Notepad++ sends it
-/// from the panel's container window; so far only the Cocoa backend
-/// sends it here, with the npp handle as `hwnd_from` as for every
-/// `DMN_*` off Windows. When it is owed is `docking::PanelTold`'s
-/// decision.
+/// from the panel's container window; the Cocoa and GTK backends send it
+/// here, with the npp handle as `hwnd_from` as for every `DMN_*` off
+/// Windows, and the Win32 backend does not send it yet. When it is owed
+/// is `docking::PanelTold`'s decision.
 pub const DMN_SWITCHIN: u32 = DMN_FIRST + 4;
 /// Another tab of the panel's group came in front of it, and the panel
 /// is still open behind it — never sent for a panel being closed. See
