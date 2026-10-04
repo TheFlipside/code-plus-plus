@@ -2657,22 +2657,58 @@ impl Shell {
     }
 
     /// Queue `NPPN_BUFFERACTIVATED` for the currently-active tab.
-    /// Call sites: `apply_load_result` after a fresh open (the new
-    /// tab becomes active), `HostBridge::switch_to_file` when a
-    /// plugin activates an existing tab, and `ui_win32`'s
-    /// `handle_tab_selchange` on a user tab click. Each delivery
-    /// fires after the `&mut Shell` borrow drops, so plugin
-    /// `beNotified` callbacks can `SendMessage(NPPM_*)` back
-    /// without aliasing UB.
+    /// Call sites: [`Self::switch_to_tab`], for an open that finds its
+    /// file already open and a plugin's `NPPM_SWITCHTOFILE` /
+    /// `NPPM_ACTIVATEDOC`; `apply_load_result` when a load lands on the
+    /// active tab; [`Self::new_untitled`]; a close that leaves a
+    /// different tab in front; and `ui_win32`'s `handle_tab_selchange`
+    /// on a user tab click. Each delivery fires after the `&mut Shell`
+    /// borrow drops, so plugin `beNotified` callbacks can
+    /// `SendMessage(NPPM_*)` back without aliasing UB.
     ///
-    /// Idempotent — a no-op when there's no active tab. Safe to
-    /// call from sites that may race with a close-tab path.
+    /// Every call queues one notification; with no active tab it queues
+    /// nothing. Safe to call from sites that may race with a close-tab
+    /// path.
     pub fn queue_buffer_activated(&mut self) {
         if let Some(tab) = self.active() {
             let buffer_id = tab.id as isize;
             self.pending_notifications
                 .push(Notification::BufferActivated { buffer_id });
         }
+    }
+
+    /// Make the tab at `idx` the active one on behalf of whatever is
+    /// switching to it: a plugin's `NPPM_SWITCHTOFILE` or
+    /// `NPPM_ACTIVATEDOC`, or an open that finds its file already open.
+    /// Queues `NPPN_BUFFERACTIVATED` when, and only when, that changes
+    /// which buffer is active. A switch to the tab already in front is
+    /// not an activation: announcing it would have a plugin that audits
+    /// activations log one that did not happen, and one that resets
+    /// per-buffer state on activation throw away state that is still
+    /// valid.
+    ///
+    /// Returns whether the active buffer changed. An index with no tab
+    /// changes nothing and returns `false`.
+    ///
+    /// The view is not bound here. As after every other move of
+    /// `active_tab`, the caller rebinds it — every backend's rebind goes
+    /// through [`Self::bind_active_view`] — and then delivers what is
+    /// queued, with no borrow held.
+    pub fn switch_to_tab(&mut self, idx: usize) -> bool {
+        if idx >= self.tabs.len() {
+            tracing::warn!(
+                idx,
+                tabs = self.tabs.len(),
+                "switch to a tab that does not exist"
+            );
+            return false;
+        }
+        if self.active_tab == Some(idx) {
+            return false;
+        }
+        self.active_tab = Some(idx);
+        self.queue_buffer_activated();
+        true
     }
 
     /// Reorder the tab list by moving the entry at `from` to position
@@ -4496,12 +4532,10 @@ impl Shell {
             .iter()
             .position(|t| t.path.as_deref() == Some(path.as_path()))
         {
-            return if self.active_tab == Some(idx) {
-                OpenFileOutcome::AlreadyActive
-            } else {
-                self.active_tab = Some(idx);
-                self.queue_buffer_activated();
+            return if self.switch_to_tab(idx) {
                 OpenFileOutcome::SwitchedToExisting(idx)
+            } else {
+                OpenFileOutcome::AlreadyActive
             };
         }
 
@@ -8451,17 +8485,10 @@ impl<U: UiPlatform> HostServices for HostBridge<'_, U> {
             .iter()
             .position(|t| t.path.as_deref() == Some(path.as_path()))
         {
-            // Skip the queue entirely if the target is already
-            // active — `NPPN_BUFFERACTIVATED` signals "the user's
-            // active buffer changed," and a switch to the
-            // already-active buffer is not such a change. Plugins
-            // that audit-log activations would otherwise log
-            // false positives, and plugins that reset buffer-local
-            // state on activation would clobber valid state.
-            if self.shell.active_tab != Some(idx) {
-                self.shell.active_tab = Some(idx);
-                self.shell.queue_buffer_activated();
-            }
+            // TRUE whether or not this moved anything: a switch to
+            // the buffer already in front succeeds, and announces
+            // nothing — see `Shell::switch_to_tab`.
+            self.shell.switch_to_tab(idx);
             true
         } else {
             // Return value discarded: the position() check above
@@ -8548,11 +8575,11 @@ impl<U: UiPlatform> HostServices for HostBridge<'_, U> {
         // view (Phase 5). Out-of-range pos returns false.
         //
         // Same metadata-only pattern as `switch_to_file`'s
-        // activate-existing-tab branch: flip `active_tab`, queue
-        // `NPPN_BUFFERACTIVATED`, leave the visible Scintilla
-        // re-binding to the wnd_proc's normal sync cycle. Plugin-
-        // driven activation of a non-current tab is rare and the
-        // existing dispatch path treats this the same way.
+        // activate-existing-tab branch: `Shell::switch_to_tab` moves
+        // `active_tab` and announces a real change, and each backend
+        // rebinds the visible Scintilla view once the dispatch returns
+        // (its post-dispatch `needs_rebind` check) — unless the tab's
+        // load is still in flight, which binds it when it lands.
         if view != 0 || pos < 0 {
             return false;
         }
@@ -8560,10 +8587,7 @@ impl<U: UiPlatform> HostServices for HostBridge<'_, U> {
         if idx >= self.shell.tabs.len() {
             return false;
         }
-        if self.shell.active_tab != Some(idx) {
-            self.shell.active_tab = Some(idx);
-            self.shell.queue_buffer_activated();
-        }
+        self.shell.switch_to_tab(idx);
         true
     }
 
@@ -9373,11 +9397,6 @@ impl<U: UiPlatform> HostServices for HostBridge<'_, U> {
 /// `Session::save_to_xml`. Returns `true` on success, `false` on
 /// any I/O / serialization failure (the dispatcher reports the
 /// boolean back to the plugin via the message return value).
-///
-/// `cfg(target_os = "windows")`-gated because every caller is in
-/// the `HostBridge` impl, which is similarly gated. Without the
-/// gate, Linux / macOS CI runs the dead-code lint and fails
-/// (`-D warnings`).
 fn write_session_files(path: &Path, files: &[PathBuf]) -> bool {
     let session = codepp_core::session::Session {
         active: None,
@@ -13254,7 +13273,6 @@ mod tests {
         assert!(shell.resolve_plugin_command("cpshort_pending", 0).is_none());
     }
 
-    #[cfg(target_os = "windows")]
     #[test]
     fn notify_plugins_with_zero_loaded_is_noop() {
         // Sanity: notify_plugins on a Shell with no loaded plugins
@@ -13266,7 +13284,6 @@ mod tests {
         shell.notify_plugins(Notification::Ready, core::ptr::null_mut());
     }
 
-    #[cfg(target_os = "windows")]
     #[test]
     fn successful_open_queues_file_opened_notification() {
         // A successful load through the loader → drain → apply path
@@ -13314,7 +13331,6 @@ mod tests {
         assert!(shell.take_notifications().is_empty());
     }
 
-    #[cfg(target_os = "windows")]
     #[test]
     fn successful_save_queues_file_saved_notification() {
         let dir = tempfile::tempdir().unwrap();
@@ -13432,7 +13448,6 @@ mod tests {
         assert_eq!(shell.tabs[1].path.as_ref(), Some(&path_b));
     }
 
-    #[cfg(target_os = "windows")]
     #[test]
     fn switch_to_file_activates_existing_tab_without_reopen() {
         // Open two files (one tab each), then have a "plugin" call
@@ -13490,7 +13505,6 @@ mod tests {
         );
     }
 
-    #[cfg(target_os = "windows")]
     #[test]
     fn open_queues_buffer_activated_for_the_new_tab() {
         // A successful open completes with the new tab as active —
@@ -13529,7 +13543,6 @@ mod tests {
         ));
     }
 
-    #[cfg(target_os = "windows")]
     #[test]
     fn switch_to_file_queues_buffer_activated() {
         // NPPM_SWITCHTOFILE on an already-open path activates the
@@ -13589,7 +13602,6 @@ mod tests {
         ));
     }
 
-    #[cfg(target_os = "windows")]
     #[test]
     fn switch_to_file_to_already_active_tab_skips_notification() {
         // NPPM_SWITCHTOFILE for the path that's already active is
@@ -13747,7 +13759,6 @@ mod tests {
         assert_eq!(shell.tabs[0].path.as_ref(), Some(&a));
     }
 
-    #[cfg(target_os = "windows")]
     #[test]
     fn close_active_tab_queues_file_closed_then_buffer_activated() {
         // Closing one of two open tabs queues, in order:
@@ -13798,7 +13809,6 @@ mod tests {
         ));
     }
 
-    #[cfg(target_os = "windows")]
     #[test]
     fn close_last_tab_queues_only_file_closed() {
         // Closing the only open tab queues NPPN_FILEBEFORECLOSE
@@ -14479,7 +14489,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(target_os = "windows")]
     fn new_untitled_queues_buffer_activated() {
         // BUFFERACTIVATED — but not FILEOPENED — fires for a brand-new
         // untitled buffer. The distinction matches Notepad++'s
@@ -14918,27 +14927,32 @@ mod tests {
         );
 
         // Re-open p1 (idx 0) while p2 (idx 1) is active — dedupe
-        // branch fires and returns the target index.
+        // branch fires and returns the target index, and announces the
+        // switch once.
         assert_eq!(shell.active_tab, Some(1));
+        let _ = shell.take_notifications();
         let outcome = shell.open_file(p1.clone());
         assert_eq!(outcome, OpenFileOutcome::SwitchedToExisting(0));
         assert_eq!(shell.active_tab, Some(0));
+        let queued = shell.take_notifications();
+        assert_eq!(queued.len(), 1, "{queued:?}");
+        assert!(matches!(
+            queued[0],
+            Notification::BufferActivated { buffer_id } if buffer_id == shell.tabs[0].id as isize
+        ));
 
-        // Re-open p1 again while p1 is now active — no state change.
+        // Re-open p1 again while p1 is now active — no state change,
+        // and nothing announced.
         let outcome = shell.open_file(p1);
         assert_eq!(outcome, OpenFileOutcome::AlreadyActive);
         assert_eq!(shell.active_tab, Some(0));
+        assert!(shell.take_notifications().is_empty());
     }
 
     #[test]
-    #[cfg(target_os = "windows")]
     fn open_file_already_active_is_idempotent() {
         // If the path is already open AND active, open_file is a
         // pure no-op — no extra tab, no spurious BUFFERACTIVATED.
-        // Windows-gated because `take_notifications` and the
-        // `Notification` enum are only compiled in on Windows
-        // today (the plugin host is Phase 5 work for the other
-        // platforms; until then the queue doesn't exist).
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("only.txt");
         std::fs::write(&path, "x\n").unwrap();
@@ -16295,7 +16309,7 @@ mod tests {
 
     /// A caller that skips the announcement still delivers every
     /// event: the close falls back to queueing `FILEBEFORECLOSE`, at
-    /// the pre-protocol timing. Portable twin of the Windows-gated
+    /// the pre-protocol timing. A twin, with no loader thread, of
     /// `close_active_tab_queues_file_closed_then_buffer_activated`.
     #[test]
     fn unannounced_close_falls_back_to_the_deferred_file_before_close() {
@@ -16390,6 +16404,95 @@ mod tests {
         assert!(shell.begin_close_active_tab().is_none());
         assert!(shell.close_active_tab().is_none());
         assert!(shell.close_announced_tab(1).is_none());
+    }
+
+    /// The one rule for a switch: moving onto another tab announces it,
+    /// once, naming that tab.
+    #[test]
+    fn switching_to_another_tab_announces_it_once() {
+        let mut shell = shell_with_synthetic_tabs(3, Some(0));
+        let _ = shell.take_notifications();
+        let target_id = shell.tabs[2].id as isize;
+
+        assert!(shell.switch_to_tab(2), "the active buffer changed");
+        assert_eq!(shell.active_tab, Some(2));
+        let queued = shell.take_notifications();
+        assert_eq!(queued.len(), 1, "{queued:?}");
+        assert!(
+            matches!(
+                queued[0],
+                Notification::BufferActivated { buffer_id } if buffer_id == target_id
+            ),
+            "{queued:?}"
+        );
+
+        // From no active tab at all, too: that is a change.
+        let mut shell = shell_with_synthetic_tabs(2, None);
+        let _ = shell.take_notifications();
+        assert!(shell.switch_to_tab(1));
+        assert_eq!(shell.take_notifications().len(), 1);
+    }
+
+    /// A switch to the tab already in front is not an activation, so it
+    /// announces nothing — the rule `NPPM_SWITCHTOFILE`,
+    /// `NPPM_ACTIVATEDOC` and the open dedupe have always followed, now
+    /// in one place.
+    #[test]
+    fn switching_to_the_tab_in_front_announces_nothing() {
+        let mut shell = shell_with_synthetic_tabs(3, Some(1));
+
+        assert!(!shell.switch_to_tab(1));
+        assert_eq!(shell.active_tab, Some(1));
+        assert!(shell.take_notifications().is_empty());
+    }
+
+    #[test]
+    fn switching_to_a_tab_that_does_not_exist_changes_nothing() {
+        let mut shell = shell_with_synthetic_tabs(2, Some(0));
+
+        assert!(!shell.switch_to_tab(2));
+        assert_eq!(shell.active_tab, Some(0));
+        assert!(shell.take_notifications().is_empty());
+    }
+
+    /// `NPPM_ACTIVATEDOC` switches through the same rule: a real move is
+    /// announced once, a repeat of it is not, and a position or view
+    /// with no tab is refused without touching anything.
+    #[test]
+    fn activate_doc_switches_and_announces_a_real_change_once() {
+        const NPPM_ACTIVATEDOC: u32 = (0x0400 + 1000) + 28;
+        let mut shell = shell_with_synthetic_tabs(3, Some(0));
+        let _ = shell.take_notifications();
+        let mut ui = FakeUi::default();
+        let mut activate = |shell: &mut Shell, view: usize, pos: isize| {
+            // SAFETY: integer arguments only; no pointer is passed.
+            unsafe {
+                shell.dispatch_plugin_message(
+                    &mut ui,
+                    HostHandles::null(),
+                    NPPM_ACTIVATEDOC,
+                    view,
+                    pos,
+                )
+            }
+        };
+
+        assert_eq!(activate(&mut shell, 0, 2), Some(1));
+        assert_eq!(shell.active_tab, Some(2));
+        let queued = shell.take_notifications();
+        assert_eq!(queued.len(), 1, "{queued:?}");
+        assert!(matches!(
+            queued[0],
+            Notification::BufferActivated { buffer_id } if buffer_id == shell.tabs[2].id as isize
+        ));
+
+        assert_eq!(activate(&mut shell, 0, 2), Some(1), "already in front");
+        assert!(shell.take_notifications().is_empty());
+
+        assert_eq!(activate(&mut shell, 0, 3), Some(0), "no such position");
+        assert_eq!(activate(&mut shell, 1, 0), Some(0), "no secondary view");
+        assert_eq!(shell.active_tab, Some(2));
+        assert!(shell.take_notifications().is_empty());
     }
 
     /// `NPPM_RELOADBUFFERID` with the alert flag asks first: the
@@ -16890,7 +16993,6 @@ mod tests {
         assert_eq!(shell.active_tab, None);
     }
 
-    #[cfg(target_os = "windows")]
     #[test]
     fn move_tab_queues_doc_order_changed() {
         // A real reorder must fire NPPN_DOCORDERCHANGED so plugins
@@ -17093,7 +17195,6 @@ mod tests {
         assert_eq!(session, before);
     }
 
-    #[cfg(target_os = "windows")]
     #[test]
     fn set_pinned_queues_doc_order_changed() {
         // The plugin ABI's view of buffer order changes on
@@ -17109,7 +17210,6 @@ mod tests {
         );
     }
 
-    #[cfg(target_os = "windows")]
     #[test]
     fn external_remove_of_open_file_queues_file_deleted() {
         // The file watcher reports a Removed event for a file
@@ -17179,7 +17279,6 @@ mod tests {
         }
     }
 
-    #[cfg(target_os = "windows")]
     #[test]
     fn external_remove_of_unopened_file_does_not_queue() {
         // A Removed event for a path that's NOT open in any tab
@@ -17557,7 +17656,6 @@ mod tests {
         assert!(matches!(&out[0], FileChange::Modified(p) if *p == path));
     }
 
-    #[cfg(target_os = "windows")]
     #[test]
     fn move_tab_no_op_does_not_queue_doc_order_changed() {
         // The early `from == to` short-circuit must not queue a
