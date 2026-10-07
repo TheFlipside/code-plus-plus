@@ -36,8 +36,8 @@ use crate::tabs::TabStrip;
 
 /// Everything the GTK backend owns for the lifetime of the window.
 pub struct GtkUiState {
-    /// The toplevel. Kept so `Shell`-driven operations can retitle it
-    /// and so the delete-event handler can end the main loop.
+    /// The toplevel. Kept so `Shell`-driven operations can retitle it,
+    /// and as the parent of the dialogs this backend shows.
     pub window: gtk::Window,
     /// The Scintilla widget, as adopted into gtk-rs.
     ///

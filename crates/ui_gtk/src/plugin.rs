@@ -1715,6 +1715,16 @@ pub(crate) fn restore_panel_plugins() {
 ///   4. once `NPPN_READY` is over: a restored panel whose plugin loaded
 ///      and still supplied nothing is closed, one whose command the guard
 ///      withheld is parked, and one no loaded plugin can supply is parked.
+///
+/// A quit asked for while the pass runs — the window closed inside a
+/// main loop one of these plugins runs, which is how a close reaches the
+/// window during the startup restore — stops it at the next step: no
+/// further plugin is loaded or told anything, no panel command runs, and
+/// step 4 is skipped, since a pass that stopped part-way cannot tell a
+/// panel that never registered from one whose plugin was never asked.
+/// The quit, which waits for the pass (`crate::request_quit`), tells
+/// every plugin loaded by then — the one that was inside `setInfo`
+/// included — and the layout it saves still has those panels open.
 fn load_plugins_where(scope: LoadScope) {
     // Holding the borrow across the whole load used to make this
     // unnecessary: a wake landing mid-load found the state borrowed and
@@ -1730,6 +1740,12 @@ fn load_plugins_where(scope: LoadScope) {
     let mut notices = codepp_plugin_host::LoadNotifications::default();
     let mut loaded_now: Vec<usize> = Vec::new();
     loop {
+        // Before asking for the next plugin, which sets `PluginHost`'s
+        // load latch: a quit asked for during the previous one's load
+        // ends the pass here, with nothing outstanding.
+        if crate::quit_requested() {
+            break;
+        }
         let pending = with_state(|st| match scope {
             LoadScope::All => st.shell.next_plugin_to_load(),
             LoadScope::RestoredPanels => st.shell.next_restored_panel_plugin_to_load(),
@@ -1772,6 +1788,13 @@ fn load_plugins_where(scope: LoadScope) {
     // `NPPM_GETMENUHANDLE` answers NULL here, so no plugin can reach the
     // menu before it exists.
     absorb_loaded_commands();
+    if crate::quit_requested() {
+        // No load-time notification: the quit that runs once this pass
+        // has returned tells every loaded plugin, these included, that the
+        // host is shutting down — the next thing they hear from it.
+        leave_unannounced(&loaded_now);
+        return;
+    }
     // A panel parked because its plugin could not supply it is put back
     // first, so a plugin that has become loadable since — re-enabled in
     // the Plugin Manager — gets its panel restored the way it would have
@@ -1792,12 +1815,22 @@ fn load_plugins_where(scope: LoadScope) {
     // READY never finishes its own initialisation.
     let mut withheld: Vec<codepp_core::dock::DockPanel> = Vec::new();
     let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        notices.deliver(
+        // Ended part-way by a quit asked for from inside a handler — see
+        // this function's docs.
+        notices.deliver_until(
             data.npp_handle,
             || with_state(|st| st.shell.active_buffer_id()).flatten(),
             || restore_plugin_panels(&restore, &mut withheld),
+            crate::quit_requested,
         );
     }));
+    if crate::quit_requested() {
+        // Stopped part-way, so what follows would misjudge: a restored
+        // panel whose command never ran would be closed as one its plugin
+        // never registered. Left as they are, the quit saves them open.
+        leave_unannounced(&loaded_now);
+        return;
+    }
     // Only now, after READY: a plugin may register its panel from there,
     // and one that does must not find it already closed — or parked.
     close_unregistered_restored_panels(&restore, &withheld);
@@ -1807,6 +1840,25 @@ fn load_plugins_where(scope: LoadScope) {
     // And a panel whose plugin could not be loaded at all is parked
     // rather than left on screen with nothing in it.
     park_unsupplied_plugin_panels();
+}
+
+thread_local! {
+    /// The plugins a load pass loaded and then stopped before it was done
+    /// — a quit was asked for while it ran. Those the stop came before
+    /// never heard `NPPN_READY`, and none of them will now: the quit is on
+    /// its way. So once the pass has returned, none of their commands runs
+    /// ([`on_plugin_command`]). Conservative by design: a plugin the stop
+    /// came after is refused too. A quit usually runs one loop iteration
+    /// after its pass stops; this matters when it waits behind another
+    /// plugin's loop, with the Plugins menu still in reach.
+    static UNANNOUNCED: std::cell::RefCell<Vec<usize>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Record that the plugins at `loaded` were loaded by a pass a quit
+/// stopped — see [`UNANNOUNCED`].
+fn leave_unannounced(loaded: &[usize]) {
+    UNANNOUNCED.with(|unannounced| unannounced.borrow_mut().extend_from_slice(loaded));
 }
 
 /// What a load pass needs to bring back the dock panels its plugins had
@@ -1949,6 +2001,13 @@ fn restore_plugin_panels(restore: &PanelRestore, withheld: &mut Vec<codepp_core:
     })
     .unwrap_or_default();
     for &cmd in &commands {
+        // A command may run a main loop of its own, and a quit asked for
+        // inside it stops the rest — see `load_plugins_where`. The fronts
+        // are still put back below, so the layout the quit saves is the
+        // one the session had.
+        if crate::quit_requested() {
+            break;
+        }
         tracing::debug!(cmd, "restoring a plugin panel by running its command");
         // A boundary per command, as each click on a menu item has:
         // host bookkeeping that fails for one panel must not cost the
@@ -2106,8 +2165,12 @@ pub(crate) fn ensure_loaded_and_rebuild(menu: &gtk::Menu) {
     rebuild_plugin_accel_group();
     // NPPN_READY fired inside `load_pending_plugins`, outside any
     // borrow; anything a plugin queued back is drained on the next
-    // wake.
-    crate::drain_shell();
+    // wake. Not when a quit stopped the load: the plugins it loaded may
+    // never have heard READY, and the quit, not a queued notification,
+    // should be what they hear next.
+    if !crate::quit_requested() {
+        crate::drain_shell();
+    }
 }
 
 /// A menu item's display chord: Ctrl, Alt, Shift, and the Win32 virtual
@@ -2572,11 +2635,33 @@ fn funcitem_label(f: &codepp_plugin_host::FuncItem) -> String {
 /// it — so the plugin's re-entrant `NPPM_*` calls get a fresh borrow —
 /// at a [`crate::at_callback_boundary`] (a panic must not cross the C
 /// frame).
+///
+/// Nothing runs once the quit has begun. A plugin's shutdown handler may
+/// run a main loop of its own, and a click or a chord landing in it must
+/// not run a plugin's code after `NPPN_SHUTDOWN` — the plugin may well
+/// have freed what its commands use. A quit that has only been *asked
+/// for*, and is waiting for a plugin's loop to return, does not stop a
+/// command: the plugin's own command may be what ends that loop. Once a
+/// load pass the quit stopped has returned, a command of a plugin it
+/// loaded does not run, since the plugin may not have heard
+/// `NPPN_READY` ([`UNANNOUNCED`]). Before then — while the quit waits
+/// inside a later plugin's `setInfo` — it still runs, as it would with
+/// no quit at all.
 pub(crate) fn on_plugin_command(cmd_id: i32) {
+    if crate::quitting() {
+        return;
+    }
     let cmd = with_state(|st| st.shell.lookup_plugin_command(cmd_id)).flatten();
     let Some(cmd) = cmd else {
         return;
     };
+    if UNANNOUNCED.with(|unannounced| unannounced.borrow().contains(&cmd.owner())) {
+        tracing::debug!(
+            cmd_id,
+            "not running a command of a plugin whose load a quit stopped"
+        );
+        return;
+    }
     // SAFETY: `cmd` is a plugin `FuncItem.p_func`, invoked on the UI
     // thread with no arguments, per the N++ ABI, and marked as its own
     // plugin while it runs (`codepp_plugin_host::caller`). The boundary
@@ -2708,11 +2793,11 @@ pub(crate) fn rebuild_plugin_accel_group() {
             *gdk_key,
             mods,
             gtk::AccelFlags::VISIBLE,
-            // Return whether the chord actually dispatched: `false`
-            // lets GTK propagate the key to the editor, so a chord
-            // whose plugin/command no longer resolves (e.g. a bogus
+            // Return whether the chord was handled: `false` lets GTK
+            // propagate the key to the editor, so a chord whose
+            // plugin/command no longer resolves (e.g. a bogus
             // hand-edited `internalID`) does not silently swallow the
-            // keystroke.
+            // keystroke. See `fire_plugin_chord` for what counts.
             move |_, _, _, _| {
                 crate::at_callback_boundary("plugin:accel:accel_group", false, || {
                     fire_plugin_chord(ctrl, alt, shift, key)
@@ -2727,9 +2812,19 @@ pub(crate) fn rebuild_plugin_accel_group() {
 /// chord against the **live** cache ([`codepp_shell::Shell::match_plugin_chord`]),
 /// lazy-loads every pending plugin (the hotkey is the §6.4 load
 /// trigger), resolves the identity to the loaded command, and
-/// dispatches it. Returns `true` iff a command actually ran — the
-/// accel-group closure propagates the key to the editor on `false`,
-/// and a removed binding (`match` returns `None`) fires nothing.
+/// dispatches it through [`on_plugin_command`], exactly as a menu click
+/// would — which refuses it once the quit has begun, or, once the pass
+/// has returned, when a quit asked for while it ran stopped the plugin's
+/// load. Returns whether the
+/// key was handled: the accel-group closure propagates the key to the
+/// editor on `false`, and a removed binding (`match` returns `None`)
+/// fires nothing.
+///
+/// A command that resolves counts as handled whether it ran or was
+/// refused. One that does not resolve while a quit is asked for — its
+/// plugin never loaded, because the quit stopped or skipped the load —
+/// counts as handled too: a plugin's chord handed to the editor would run
+/// whatever Scintilla binds it to (Ctrl+Shift+L deletes a line).
 fn fire_plugin_chord(ctrl: bool, alt: bool, shift: bool, key: u8) -> bool {
     // Live-cache check first: a chord removed via NPPM (or otherwise
     // no longer registrable) must not fire, even though its closure
@@ -2756,6 +2851,10 @@ fn fire_plugin_chord(ctrl: bool, alt: bool, shift: bool, key: u8) -> bool {
         .map(|(cmd_id, _)| cmd_id);
     if let Some(cmd_id) = cmd_id {
         on_plugin_command(cmd_id);
+        true
+    } else if crate::quit_requested() {
+        // Not loaded, because a quit asked for stopped or skipped the
+        // load: swallowed rather than handed to the editor.
         true
     } else {
         // Loaded but the identity didn't resolve to a live command
@@ -2821,6 +2920,12 @@ pub(crate) fn notify_shutdown() {
 /// announces — with no `with_state` borrow held, then present anything
 /// the handlers queued.
 pub(crate) fn deliver_sync(announced: &codepp_shell::SyncNotification) {
+    // Nothing once the quit has begun: a tab closed inside a plugin's
+    // shutdown handler's own main loop must not announce itself to plugins
+    // that have already heard `NPPN_SHUTDOWN`. The close itself goes on.
+    if crate::quitting() {
+        return;
+    }
     announced.deliver(npp_sentinel());
     crate::present_deferred_dialogs();
 }
@@ -2965,6 +3070,201 @@ mod shortcut_tests {
 
         // A layout-dependent OEM key has no portable mapping.
         assert!(chord_to_gdk(true, false, false, 0xBF).is_none());
+    }
+}
+
+/// Where the plugin paths stop for a quit, pinned in the source because
+/// each matters only while a plugin runs a main loop of its own inside
+/// which the window is closed — which needs a real plugin and a real
+/// close to observe. See `load_plugins_where`'s docs and
+/// `crate::request_quit`.
+#[cfg(test)]
+mod quit_request_guards {
+    use crate::source_scan::{
+        block_after, code_only, depth_one_position, depth_one_position_from, fn_body,
+        occurs_at_depth_one, strip_test_modules,
+    };
+
+    fn plugin_src() -> String {
+        strip_test_modules(&code_only(include_str!("plugin.rs")))
+    }
+
+    const ASKED: &str = "if crate::quit_requested() {";
+
+    /// Where `ASKED` first stands at depth one of `block` at or after
+    /// `from`, checked to end in `exit` — `break;`, `return;` or
+    /// `return true;`.
+    fn stops_at(block: &str, from: usize, exit: &str, what: &str) -> usize {
+        let at = depth_one_position_from(block, ASKED, from)
+            .unwrap_or_else(|| panic!("{what} no longer stops for a quit"));
+        assert!(
+            occurs_at_depth_one(&block_after(&block[at..], ASKED), exit),
+            "{what}'s quit check no longer ends in `{exit}`"
+        );
+        at
+    }
+
+    /// The load pass loads nothing more, tells these plugins nothing, and
+    /// skips its conclusions about unregistered panels once a quit is
+    /// asked for — and asks before `next_*_to_load`, so the host's load
+    /// latch is never left set.
+    #[test]
+    fn the_load_pass_stops_for_a_quit_at_every_step() {
+        let src = plugin_src();
+        let pass = fn_body(&src, "load_plugins_where");
+        let each = block_after(&pass, "loop {");
+        let check = stops_at(&each, 0, "break;", "the load loop");
+        let next = each
+            .find("let pending = with_state(")
+            .expect("the load loop asks for the next plugin");
+        assert!(
+            check < next,
+            "the load loop must check for a quit before asking for the next plugin"
+        );
+        let absorbed = depth_one_position(&pass, "absorb_loaded_commands();")
+            .expect("the pass takes the loaded commands in");
+        let before_notices = stops_at(&pass, absorbed, "return;", "the pass");
+        let unpark = depth_one_position(&pass, "let unparked = unpark_loaded_plugins_panels(")
+            .expect("the pass unparks");
+        assert!(
+            before_notices < unpark,
+            "the pass must stop before unparking and notifying when a quit is asked for"
+        );
+        let flat: String = pass.split_whitespace().collect();
+        assert!(
+            flat.contains("crate::quit_requested,);") || flat.contains("crate::quit_requested);"),
+            "the load-time notifications must stop when a quit is asked for"
+        );
+        assert!(
+            flat.contains("notices.deliver_until(") && !flat.contains("notices.deliver("),
+            "the load-time notifications must go through `deliver_until`"
+        );
+        let delivered = pass.find("notices.deliver_until(").expect("checked above");
+        let after = stops_at(&pass, delivered, "return;", "the pass after its notices");
+        for (stop, what) in [(before_notices, "before"), (after, "after")] {
+            assert!(
+                occurs_at_depth_one(
+                    &block_after(&pass[stop..], ASKED),
+                    "leave_unannounced(&loaded_now);"
+                ),
+                "a pass stopped {what} its notifications must record the plugins it loaded \
+                 as never told READY, so none of their commands runs"
+            );
+        }
+        let conclusions = depth_one_position(&pass, "close_unregistered_restored_panels(")
+            .expect("the pass closes unregistered panels");
+        assert!(
+            after < conclusions,
+            "a pass a quit stopped must not close or park panels it never asked about"
+        );
+    }
+
+    /// No panel command runs once a quit is asked for, and no plugin
+    /// command at all once the quit has begun. While a quit merely waits a
+    /// command still runs, since it may be what ends the loop the quit is
+    /// waiting for, unless a quit stopped its plugin's load
+    /// ([`super::UNANNOUNCED`]). A chord runs its command the way a menu
+    /// click does, and never hands a plugin's key to the editor while a
+    /// quit is asked for.
+    #[test]
+    fn plugin_commands_stop_for_a_quit() {
+        let src = plugin_src();
+        let restore = fn_body(&src, "restore_plugin_panels");
+        let each = block_after(&restore, "for &cmd in &commands {");
+        let check = stops_at(&each, 0, "break;", "the panel restore");
+        let run = each
+            .find("on_plugin_item_activated(cmd)")
+            .expect("the panel restore runs each command");
+        assert!(
+            check < run,
+            "the panel restore must check before each command"
+        );
+
+        let command = fn_body(&src, "on_plugin_command");
+        let begun = "if crate::quitting() {";
+        assert!(
+            command
+                .trim_start_matches('{')
+                .trim_start()
+                .starts_with(begun)
+                && occurs_at_depth_one(&block_after(&command, begun), "return;"),
+            "a plugin command must not run once the quit has begun"
+        );
+        assert!(
+            !command.contains("quit_requested"),
+            "a plugin command must still run while a quit waits for a plugin's loop"
+        );
+        let never_ready =
+            "if UNANNOUNCED.with(|unannounced| unannounced.borrow().contains(&cmd.owner())) {";
+        let refused = depth_one_position(&command, never_ready)
+            .expect("a command of a plugin a stopped pass loaded must be refused");
+        assert!(
+            occurs_at_depth_one(&block_after(&command[refused..], never_ready), "return;")
+                && refused < command.find("cmd.run()").expect("the command runs"),
+            "the refusal must return before the command runs"
+        );
+
+        let chord = fn_body(&src, "fire_plugin_chord");
+        let flat: String = chord.split_whitespace().collect();
+        assert!(
+            flat.contains("ifletSome(cmd_id)=cmd_id{on_plugin_command(cmd_id);true}"),
+            "a chord's command must go through `on_plugin_command`, which refuses it once \
+             the quit has begun or when a quit stopped its plugin's load"
+        );
+        assert!(
+            flat.contains("}elseifcrate::quit_requested(){true}else{"),
+            "a chord whose command a quit left unloaded must be swallowed, not handed to the \
+             editor"
+        );
+        // The two constructs above say what the function does; these say what it
+        // cannot do besides. The only `false` results are the removed binding's
+        // early return and the tail of the final `else` (reached only when no quit
+        // is asked for), and the command runs through `on_plugin_command` alone.
+        assert_eq!(
+            chord.matches("false").count(),
+            2,
+            "a chord reaches the editor only when its binding was removed or no quit is \
+             asked for: any other `false` hands a plugin's key to Scintilla"
+        );
+        assert!(
+            !chord.contains(".run()") && !chord.contains("lookup_plugin_command"),
+            "a chord must run its command through `on_plugin_command` alone"
+        );
+    }
+
+    /// The record [`super::on_plugin_command`] reads: the plugins a stopped
+    /// pass loaded, as given. Each test runs on a thread of its own, so the
+    /// record starts empty.
+    #[test]
+    fn a_stopped_pass_records_the_plugins_it_loaded() {
+        assert!(super::UNANNOUNCED.with(|u| u.borrow().is_empty()));
+        super::leave_unannounced(&[7, 9]);
+        super::leave_unannounced(&[]);
+        assert_eq!(super::UNANNOUNCED.with(|u| u.borrow().clone()), [7, 9]);
+    }
+
+    /// What follows a load pass, and the `NPPN_*BEFORE*` family, stay
+    /// quiet for a quit: the drain after a lazy load would hand queued
+    /// notifications to plugins that may not have heard READY, and a tab closed
+    /// inside a shutdown handler's loop would announce itself after
+    /// `NPPN_SHUTDOWN`.
+    #[test]
+    fn no_notification_slips_past_a_quit() {
+        let src = plugin_src();
+        let menu = fn_body(&src, "ensure_loaded_and_rebuild");
+        let gate = "if !crate::quit_requested() {";
+        assert!(
+            occurs_at_depth_one(&block_after(&menu, gate), "crate::drain_shell();")
+                && menu.matches("drain_shell").count() == 1,
+            "the drain after a lazy load must be skipped when a quit stopped the load"
+        );
+        let sync = fn_body(&src, "deliver_sync");
+        let begun = "if crate::quitting() {";
+        assert!(
+            sync.trim_start_matches('{').trim_start().starts_with(begun)
+                && occurs_at_depth_one(&block_after(&sync, begun), "return;"),
+            "an `NPPN_*BEFORE*` notification must not go out once the quit has begun"
+        );
     }
 }
 

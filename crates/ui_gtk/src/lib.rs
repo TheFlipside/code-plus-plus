@@ -376,13 +376,7 @@ pub fn run(initial_path: Option<PathBuf>, perf: Perf) -> Result<(), GtkUiError> 
     // may have focused its own panel.
     sci_widget.grab_focus();
 
-    // Not if the quit has already begun. A plugin command the restore above
-    // ran may have run a nested main loop in which the window was closed.
-    // That quit could not end a loop that had not started yet, so this one
-    // would never end.
-    if !quitting() {
-        gtk::main();
-    }
+    run_main_loop();
 
     // Drop the state explicitly so `Shell` — and the worker threads its
     // channels keep alive — tear down here rather than at process exit.
@@ -390,6 +384,28 @@ pub fn run(initial_path: Option<PathBuf>, perf: Perf) -> Result<(), GtkUiError> 
     // After the loop, so the distribution covers the whole session.
     perf.report();
     Ok(())
+}
+
+/// Run Code++'s main loop until the quit ends it — or, if the window was
+/// closed during the startup restore, quit without starting one. Split
+/// out of [`run`] for length; `run` calls it once the restore is over.
+///
+/// Before `gtk::main` an event reaches the window only through a main loop
+/// some plugin ran during that restore, so a close made there waited
+/// ([`request_quit`]) and the restore stopped at its next step. The quit
+/// runs here, with nothing of any plugin's left on the stack, and no loop
+/// is started after it: nothing would end one.
+fn run_main_loop() {
+    if quit_requested() {
+        quit();
+    }
+    if !quitting() {
+        // From here on a quit asked for is handed to a source this loop
+        // dispatches once whatever asked for it has returned; see
+        // `request_quit`.
+        MAIN_LOOP_RUNNING.with(|running| running.set(true));
+        gtk::main();
+    }
 }
 
 /// Wire everything that keeps `session.xml` current. Split out of `run`
@@ -407,9 +423,12 @@ pub fn run(initial_path: Option<PathBuf>, perf: Perf) -> Result<(), GtkUiError> 
 ///     before maximizing (the maximized branch keeps the *previous*
 ///     restored size). Both only refresh the shell's cached geometry
 ///     (cheap); the persist to disk still happens at save time.
-///   * `delete-event` persists before tearing down — `Shell::save_session`
-///     needs the editor alive to read the caret position back out — then
-///     quits the main loop.
+///   * `delete-event` asks to quit ([`request_quit`]). The quit saves
+///     before anything is torn down — `Shell::save_session` needs the
+///     editor alive to read the caret position back out — and then ends
+///     the main loop. It runs once the handler has returned, from a
+///     source Code++'s own loop dispatches, so a close made inside a
+///     plugin's own loop waits for that loop.
 ///   * The periodic auto-save. Win32 uses `SetTimer` + `WM_TIMER`;
 ///     `timeout_add_seconds_local` is the direct GTK analogue and stays on
 ///     the main thread, so it can touch the editor safely.
@@ -439,10 +458,12 @@ fn connect_session_persistence(window: &gtk::Window) {
     // plugin's shutdown handler that runs a nested main loop let a second
     // close in, which returned from `quit` at once and destroyed the window,
     // and so the Scintilla views, while the first quit still had its save
-    // to do. The fallback is `Stop` too, so a panic cannot reopen that.
+    // to do. The fallback is `Stop` too, so a panic cannot reopen that. A
+    // close made inside a plugin's own loop waits for it; see
+    // `request_quit`.
     window.connect_delete_event(|_, _| {
         crate::at_callback_boundary("lib:window:delete_event", glib::Propagation::Stop, || {
-            quit();
+            request_quit();
             glib::Propagation::Stop
         })
     });
@@ -1985,6 +2006,10 @@ pub(crate) fn present_deferred_dialogs() {
         // Queued once the quit began — by a plugin's shutdown handler,
         // say: the window is going, and a modal now would hold the quit
         // hostage. Win32 drops these at `WM_DESTROY` for the same reason.
+        // Not while a quit merely waits (`request_quit`): the app is live
+        // then, and a dropped prompt — a file changed on disk, say —
+        // would leave the user's next save to overwrite that change
+        // unasked.
         tracing::debug!(
             count = dialogs.len(),
             "dropping dialogs queued during shutdown"
@@ -2933,8 +2958,10 @@ fn window_geometry_to_persist(
     }
 }
 
-/// Persist the session. Safe to call repeatedly. The autosave timer is
-/// its only caller.
+/// Persist the session. Safe to call repeatedly. The autosave timer
+/// calls it, and so does a quit request that has to wait
+/// ([`request_quit`]), so that a process killed while it waits loses
+/// nothing.
 ///
 /// A no-op once [`quit`] has begun, as Cocoa's is. The quit captures the
 /// state it saves first and pins the dock layout, so an autosave tick
@@ -3002,6 +3029,13 @@ fn persist_session() {
 thread_local! {
     /// Set once [`quit`] has begun. See there.
     static QUITTING: Cell<bool> = const { Cell::new(false) };
+    /// Set by [`request_quit`] when a quit is asked for, and withdrawn
+    /// only if the source that runs it cannot be attached. See there.
+    static QUIT_REQUESTED: Cell<bool> = const { Cell::new(false) };
+    /// Set directly before `run` enters `gtk::main`. Before then an event
+    /// reaches the window only through a main loop some plugin runs
+    /// during the startup restore.
+    static MAIN_LOOP_RUNNING: Cell<bool> = const { Cell::new(false) };
 }
 
 /// Whether [`quit`] has begun — for the paths outside this module that
@@ -3009,6 +3043,228 @@ thread_local! {
 /// `DMN_*` notifications.
 pub(crate) fn quitting() -> bool {
     QUITTING.with(Cell::get)
+}
+
+/// Whether the host has been asked to quit: the request is waiting to
+/// run ([`request_quit`]), or the quit has begun.
+///
+/// A load pass stops at its next step once this holds: no further
+/// plugin is loaded, no further load-time notification is sent and no
+/// restored panel's command runs. The rest of the app stays live while
+/// a quit waits: the drain, the autosave, dialogs and plugin commands
+/// carry on until [`quitting`], except the commands of plugins a stopped
+/// pass loaded, which `plugin::on_plugin_command` refuses once that pass
+/// has returned.
+pub(crate) fn quit_requested() -> bool {
+    QUIT_REQUESTED.with(Cell::get) || QUITTING.with(Cell::get)
+}
+
+/// Whether a quit has been asked for and is waiting to run — asked for,
+/// not yet begun. See [`request_quit`].
+fn quit_waiting() -> bool {
+    QUIT_REQUESTED.with(Cell::get) && !QUITTING.with(Cell::get)
+}
+
+/// What the window title ends with while a quit waits for the code
+/// below it ([`refresh_tab_chrome`]). The title rather than the status
+/// bar: the status bar's free part is a few characters wide at the
+/// default window size, and a plugin can write over any of its parts.
+const QUIT_WAITING_TITLE: &str = " — closing once the task in progress finishes";
+
+/// Ask to quit — what the window's close and File → Exit do.
+///
+/// The quit never runs here. Once the main loop runs, it is handed to a
+/// source that only Code++'s own loop can dispatch
+/// ([`attach_at_top_level`]), so it runs after whatever called this has
+/// returned, with nothing of anyone else's left below it. A plain close,
+/// made from Code++'s own loop, quits one loop iteration later. The
+/// cases this exists for are the others:
+///
+///   * Inside a main loop of someone else's — a plugin command that shows
+///     a window and runs `gtk_main` until it closes, say — the quit's
+///     `gtk::main_quit` would end *that* loop rather than Code++'s, which
+///     would then run on with the quit latched: nothing could close it
+///     again. And `NPPN_SHUTDOWN` would reach a plugin whose call is
+///     still running.
+///   * Inside a plugin's own code — a host call into it (`setInfo`, a
+///     command, a notification), or a GTK handler of its own that
+///     synthesises a close — the plugin still has its call to finish, and
+///     one still loading is not yet among the plugins the quit tells.
+///   * Before `run` has started the main loop, an event can only arrive
+///     through a loop a plugin runs during the startup restore. There is
+///     no source to attach then: the restore stops at its next step, and
+///     `run` quits once it has returned.
+///
+/// When the host can see that the quit will wait ([`quit_will_wait`]), the
+/// request also saves the session at once — so a process killed while it
+/// waits loses no more than the autosave interval, the autosave running
+/// on meanwhile — and the window title says why the window is still
+/// there. A second request, while one waits or once the quit has begun,
+/// does nothing.
+///
+/// The order is load-bearing. The source is attached before anything that
+/// could panic, and the two best-effort steps run at boundaries of their
+/// own, so no failure can leave a request recorded with nothing to run it
+/// — every later close would return at the first line.
+pub(crate) fn request_quit() {
+    if quit_requested() {
+        return;
+    }
+    QUIT_REQUESTED.with(|requested| requested.set(true));
+    let running = MAIN_LOOP_RUNNING.with(Cell::get);
+    if running && !attach_at_top_level(None, quit) {
+        // Not reachable — see `attach_at_top_level` — but a request with
+        // no source to run it would make every later close return at
+        // once, so it is withdrawn and the next close tries again.
+        QUIT_REQUESTED.with(|requested| requested.set(false));
+        return;
+    }
+    let depth = glib::main_depth();
+    let plugin_on_stack = codepp_plugin_host::calling_plugin().is_some();
+    if quit_will_wait(running, depth, plugin_on_stack) {
+        tracing::info!(
+            running,
+            depth,
+            plugin_on_stack,
+            "quit asked for inside code that has not returned; it runs once that code has"
+        );
+        crate::at_callback_boundary("lib:request_quit:save", (), save_session_now);
+        crate::at_callback_boundary("lib:request_quit:title", (), refresh_tab_chrome);
+    }
+}
+
+/// Whether a quit asked for now will wait for code below the request
+/// that the host can see: a nested main loop (dispatch depth above 1), a
+/// host call into a plugin, or — before `run` starts the main loop — the
+/// startup restore. A plain close from Code++'s own loop does not: the
+/// top-level source runs it as soon as the handler returns. A plugin's
+/// own GTK handler is the one case the host cannot see; the source makes
+/// its quit wait all the same. See [`request_quit`].
+fn quit_will_wait(main_loop_running: bool, depth: i32, plugin_on_stack: bool) -> bool {
+    !main_loop_running || depth > 1 || plugin_on_stack
+}
+
+/// [`TopLevelSource`]'s priority: above every priority `GLib` names, so in
+/// the round where it becomes ready no other source is dispatched ahead
+/// of it. One that was could start a nested loop and keep it waiting —
+/// `dispatch` declines at that depth — round after round.
+const TOP_LEVEL_PRIORITY: std::ffi::c_int = glib::ffi::G_PRIORITY_HIGH * 10;
+
+/// A `GSource` that runs `action` the next time Code++'s outermost main
+/// loop iterates — never from inside a nested one — and then goes away.
+#[repr(C)]
+struct TopLevelSource {
+    /// `GLib`'s own part. It must come first: the `*mut GSource` `GLib` hands
+    /// the callbacks is then a `*mut TopLevelSource`.
+    base: glib::ffi::GSource,
+    /// What to run. `Option` because `g_source_new` zero-fills, and a
+    /// zeroed `fn()` would be an invalid value until written.
+    action: Option<fn()>,
+}
+
+// The layout `attach_at_top_level` and `top_level_dispatch` rely on,
+// checked by the compiler rather than by the comment above: `GLib`'s
+// header first, and room after it for `action`.
+const _: () = assert!(std::mem::offset_of!(TopLevelSource, base) == 0);
+const _: () =
+    assert!(std::mem::size_of::<TopLevelSource>() > std::mem::size_of::<glib::ffi::GSource>());
+
+/// The [`TopLevelSource`] callbacks. `GLib` never writes through the
+/// pointer `g_source_new` takes, so a `static` will do — glib-rs makes
+/// its own sources the same way.
+static TOP_LEVEL_FUNCS: glib::ffi::GSourceFuncs = glib::ffi::GSourceFuncs {
+    prepare: Some(top_level_prepare),
+    check: None,
+    dispatch: Some(top_level_dispatch),
+    finalize: None,
+    closure_callback: None,
+    closure_marshal: None,
+};
+
+/// Attach a [`TopLevelSource`] that runs `action` to `context` — `None`
+/// for the global default context, the one Code++'s main loop runs
+/// ([`context_ptr`]). Returns whether it is attached.
+fn attach_at_top_level(context: Option<&glib::MainContext>, action: fn()) -> bool {
+    let context = context_ptr(context);
+    // SAFETY: `g_source_new` allocates and zero-fills a block of the size
+    // asked for, with GLib's header at its start — the `#[repr(C)]` layout
+    // above, checked at compile time — so writing `action` stays inside
+    // it. The funcs are a `static`, alive for as long as any source made
+    // from them, and the name a `'static` C string. `g_source_attach`
+    // takes its own reference, so the one `g_source_new` gave us is
+    // dropped at once, as glib-rs's own sources do.
+    let id = unsafe {
+        let source = glib::ffi::g_source_new(
+            std::ptr::addr_of!(TOP_LEVEL_FUNCS).cast_mut(),
+            std::mem::size_of::<TopLevelSource>() as std::ffi::c_uint,
+        );
+        std::ptr::addr_of_mut!((*source.cast::<TopLevelSource>()).action).write(Some(action));
+        glib::ffi::g_source_set_priority(source, TOP_LEVEL_PRIORITY);
+        glib::ffi::g_source_set_name(source, c"Code++ quit at the top level".as_ptr());
+        let id = glib::ffi::g_source_attach(source, context);
+        glib::ffi::g_source_unref(source);
+        id
+    };
+    if id == 0 {
+        // `GLib` refuses only a source already attached or destroyed,
+        // which a source made a line above cannot be.
+        tracing::error!("could not attach the source that runs the quit");
+    }
+    id != 0
+}
+
+/// The context `g_source_attach` is given: null for `None`, which `GLib`
+/// takes as the global default context — the one `gtk_main` iterates on
+/// the main thread — whatever thread-default context a plugin may have
+/// pushed.
+fn context_ptr(context: Option<&glib::MainContext>) -> *mut glib::ffi::GMainContext {
+    use glib::translate::ToGlibPtr;
+    context.map_or(std::ptr::null_mut(), |context| context.to_glib_none().0)
+}
+
+/// [`TopLevelSource`]'s readiness: ready only while the outermost loop
+/// prepares.
+///
+/// `g_main_depth` counts the dispatches on this thread's stack. A loop
+/// that is itself outside any dispatch — once `run` has started it,
+/// Code++'s own `gtk_main` — prepares at 0; a loop run from inside a
+/// callback prepares at 1 or more. Not ready means no timeout either, so
+/// a nested loop neither polls nor spins on it. It reads one integer and
+/// writes one: nothing here can panic across the FFI.
+unsafe extern "C" fn top_level_prepare(
+    _source: *mut glib::ffi::GSource,
+    timeout: *mut std::ffi::c_int,
+) -> glib::ffi::gboolean {
+    // SAFETY: GLib passes a valid out-pointer for the source's timeout.
+    unsafe { timeout.write(-1) };
+    glib::ffi::gboolean::from(glib::main_depth() == 0)
+}
+
+/// [`TopLevelSource`]'s dispatch: run the action if, and only if, the
+/// outermost loop is the one dispatching.
+///
+/// `prepare` alone is not enough. `GLib` marks a source ready in `prepare`
+/// and clears the mark only when it dispatches it; if a source ahead of
+/// this one in the same round runs a nested loop, that loop finds this
+/// one still marked, skips its `prepare`, and dispatches it from inside.
+/// So the depth is checked again: anything but 1 — directly under the
+/// outermost loop — keeps the source, and with the mark now cleared the
+/// nested loop's next `prepare` answers for itself rather than spinning.
+unsafe extern "C" fn top_level_dispatch(
+    source: *mut glib::ffi::GSource,
+    _callback: glib::ffi::GSourceFunc,
+    _user_data: glib::ffi::gpointer,
+) -> glib::ffi::gboolean {
+    if glib::main_depth() != 1 {
+        return glib::ffi::G_SOURCE_CONTINUE;
+    }
+    // SAFETY: the source GLib is dispatching is one `attach_at_top_level`
+    // made, so it is a `TopLevelSource`, and it is alive while dispatched.
+    let action = unsafe { (*source.cast::<TopLevelSource>()).action };
+    if let Some(action) = action {
+        crate::at_callback_boundary("lib:top_level_source", (), action);
+    }
+    glib::ffi::G_SOURCE_REMOVE
 }
 
 /// Behave as though [`quit`] had begun until the returned guard drops —
@@ -3032,8 +3288,12 @@ impl Drop for PretendQuitting {
 }
 
 /// Leave the application: tell the plugins, save the session, end the
-/// main loop. The one way out — the window's close and File → Exit both
-/// come here — and it runs once, whichever is first.
+/// main loop. The one way out, and it runs once. The window's close and
+/// File → Exit reach it through [`request_quit`], which leaves it to run
+/// with nothing but Code++'s own main loop below: from the source it
+/// attaches, when that loop next iterates, or from `run` after the
+/// startup restore — never from inside a handler, a nested loop or a
+/// plugin call.
 ///
 /// The order is Win32's `notify_plugins_of_shutdown` followed by its
 /// `WM_DESTROY` save, and each step matters:
@@ -3066,9 +3326,9 @@ pub(crate) fn quit() {
     crate::at_callback_boundary("lib:quit:save", (), persist_session);
     // Only from inside a loop. A quit begun before `run` starts one would
     // make gtk-rs panic in a debug build and do nothing in a release one;
-    // `run` checks `quitting()` and starts no loop instead. This ends only
-    // the innermost loop: a plugin command inside a `gtk_main` of its own
-    // strands the quit, a gap DESIGN.md §7.4 tracks.
+    // `run` checks `quitting()` and starts no loop instead. `main_quit`
+    // ends only the innermost `gtk_main`, which is Code++'s own here:
+    // `request_quit` never runs this from inside another.
     if gtk::main_level() > 0 {
         gtk::main_quit();
     }
@@ -3086,7 +3346,8 @@ pub(crate) fn quit() {
 #[cfg(test)]
 mod quit_guard {
     use crate::source_scan::{
-        block_after, code_only, fn_body, occurs_at_depth_one, production_code, strip_test_modules,
+        block_after, code_only, depth_one_position, fn_body, occurs_at_depth_one, production_code,
+        strip_test_modules,
     };
 
     fn lib() -> String {
@@ -3159,42 +3420,6 @@ mod quit_guard {
     }
 
     #[test]
-    fn a_close_never_destroys_the_window_and_no_loop_starts_after_a_quit() {
-        let lib = lib();
-        let close = block_after(&lib, "window.connect_delete_event(|_, _| {");
-        assert!(
-            occurs_at_depth_one(&block_after(&close, "|| {"), "quit();"),
-            "the window's close must quit, as a statement of its handler: with `Stop`, a \
-             close that skipped it would leave a window nothing can close"
-        );
-        assert!(
-            !close.contains("Proceed") && close.matches("glib::Propagation::Stop").count() == 2,
-            "the close and its panic fallback must both stop GTK destroying the window"
-        );
-        let run = fn_body(&lib, "run");
-        let wired = run
-            .find("connect_session_persistence(")
-            .expect("`run` no longer wires the window's close");
-        let restore = run
-            .find("plugin::restore_panel_plugins();")
-            .expect("`run` no longer restores plugin panels");
-        assert!(
-            wired < restore,
-            "the close must be wired before the startup restore can run a plugin's loop, \
-             or a close there gets GTK's default and destroys the window"
-        );
-        assert_eq!(
-            run.matches("gtk::main();").count(),
-            1,
-            "`run` must enter the main loop in one place"
-        );
-        assert!(
-            occurs_at_depth_one(&block_after(&run, "if !quitting() {"), "gtk::main();"),
-            "the main loop must not start once a quit has begun: nothing would end it"
-        );
-    }
-
-    #[test]
     fn deferred_dialogs_are_dropped_once_the_quit_has_begun() {
         let lib = lib();
         let body = fn_body(&lib, "present_deferred_dialogs");
@@ -3207,6 +3432,447 @@ mod quit_guard {
         let check = body.find(gate).expect("checked above");
         let pump = body.find("pump_dialogs()").expect("the dialogs are pumped");
         assert!(check < pump, "the quit check must come before the pump");
+        assert!(
+            !body.contains("quit_requested"),
+            "dialogs must still be shown while a quit merely waits: the app is live, and a \
+             dropped prompt can let the user's next save overwrite a change on disk unasked"
+        );
+    }
+
+    /// Every whole-word `quit` in production code, as byte offsets. A
+    /// whole word, so `request_quit`, `quit_requested`, `main_quit` and
+    /// `QUITTING` are other identifiers rather than calls of this one —
+    /// and `crate::quit` passed as a value counts, where `"quit();"` would
+    /// miss it, and would match inside `request_quit();` besides.
+    fn whole_word_quit(src: &str) -> Vec<usize> {
+        let ident = |c: Option<char>| c.is_some_and(|c| c.is_alphanumeric() || c == '_');
+        src.match_indices("quit")
+            .map(|(at, _)| at)
+            .filter(|&at| {
+                !ident(src[..at].chars().next_back()) && !ident(src[at + 4..].chars().next())
+            })
+            .collect()
+    }
+
+    /// The quit runs from exactly two places, each with nothing of any
+    /// plugin's below it: the source `request_quit` attaches, and `run`'s
+    /// loop after a close made during the startup restore. A close or an
+    /// Exit calling `quit` itself would run it inside a plugin's loop
+    /// again — the gap this rule exists to close.
+    #[test]
+    fn the_quit_runs_only_from_where_nothing_else_is_below_it() {
+        let lib = lib();
+        let production = production_code();
+        let found = whole_word_quit(&production).len();
+        let request = fn_body(&lib, "request_quit");
+        let main_loop = fn_body(&lib, "run_main_loop");
+        assert_eq!(
+            production.matches("fn quit(").count(),
+            1,
+            "one definition of `quit`"
+        );
+        assert_eq!(
+            (
+                whole_word_quit(&request).len(),
+                whole_word_quit(&main_loop).len()
+            ),
+            (1, 1),
+            "`request_quit` names `quit` only as the source's action, `run_main_loop` \
+             only after the startup restore"
+        );
+        assert_eq!(
+            found, 3,
+            "`quit` is named somewhere other than its definition, `request_quit` and \
+             `run_main_loop`: everything else asks through `request_quit`"
+        );
+        let close = block_after(&lib, "window.connect_delete_event(|_, _| {");
+        assert!(
+            occurs_at_depth_one(&block_after(&close, "|| {"), "request_quit();"),
+            "the window's close must ask to quit, as a statement of its handler: with \
+             `Stop`, a close that skipped it would leave a window nothing can close"
+        );
+        let menu = strip_test_modules(&code_only(include_str!("menu.rs")));
+        assert!(
+            menu.contains("(), crate::request_quit);"),
+            "File → Exit must ask to quit at its callback boundary"
+        );
+    }
+
+    /// `request_quit`'s order: a second request does nothing; then the
+    /// request is recorded and, while the main loop runs, handed to the
+    /// top-level source — before anything that could panic, so no failure
+    /// strands a recorded request with nothing to run it; then, when the
+    /// quit will wait, the session is saved and the title updated, each at
+    /// a boundary of its own. The quit itself never runs here.
+    #[test]
+    fn a_quit_request_is_handed_to_the_top_level_source() {
+        let lib = lib();
+        let body = fn_body(&lib, "request_quit");
+        let again = "if quit_requested() {";
+        assert!(
+            body.trim_start_matches('{').trim_start().starts_with(again)
+                && occurs_at_depth_one(&block_after(&body, again), "return;"),
+            "a request must first return when one is waiting or the quit has begun"
+        );
+        for input in [
+            "let running = MAIN_LOOP_RUNNING.with(Cell::get);",
+            "let depth = glib::main_depth();",
+            "let plugin_on_stack = codepp_plugin_host::calling_plugin().is_some();",
+        ] {
+            assert!(
+                occurs_at_depth_one(&body, input),
+                "the rule's input `{input}` is gone"
+            );
+        }
+        let waits = "if quit_will_wait(running, depth, plugin_on_stack) {";
+        let attach_or_withdraw = "if running && !attach_at_top_level(None, quit) {";
+        let steps = [
+            "QUIT_REQUESTED.with(|requested| requested.set(true));",
+            attach_or_withdraw,
+            waits,
+        ];
+        let at: Vec<usize> = steps
+            .iter()
+            .map(|step| {
+                depth_one_position(&body, step)
+                    .unwrap_or_else(|| panic!("`request_quit` no longer runs `{step}`"))
+            })
+            .collect();
+        assert!(
+            at.windows(2).all(|pair| pair[0] < pair[1]),
+            "`request_quit`'s steps are out of order: {steps:?} at {at:?}"
+        );
+        let withdraw = block_after(&body, attach_or_withdraw);
+        assert!(
+            withdraw.split_whitespace().collect::<String>()
+                == "{QUIT_REQUESTED.with(|requested|requested.set(false));return;}",
+            "while the main loop runs, the request is handed to the top-level source, on \
+             the default context, before anything else — and withdrawn if it cannot be"
+        );
+        let waiting: String = block_after(&body, waits).split_whitespace().collect();
+        for step in [
+            "crate::at_callback_boundary(,(),save_session_now);",
+            "crate::at_callback_boundary(,(),refresh_tab_chrome);",
+        ] {
+            assert!(
+                waiting.contains(step),
+                "a waiting quit must run `{step}` at a boundary of its own"
+            );
+        }
+        assert!(
+            !waiting.contains("save_session_now();") && !waiting.contains("refresh_tab_chrome();"),
+            "the save and the title must not run outside their boundaries"
+        );
+        // And the title says why the window is still there.
+        let chrome = fn_body(&lib, "refresh_tab_chrome");
+        assert!(
+            occurs_at_depth_one(
+                &block_after(&chrome, "if quit_waiting() {"),
+                "title.push_str(QUIT_WAITING_TITLE);"
+            ),
+            "the title must say a quit is waiting"
+        );
+    }
+
+    #[test]
+    fn a_close_never_destroys_the_window_and_no_loop_starts_after_a_quit() {
+        let lib = lib();
+        let close = block_after(&lib, "window.connect_delete_event(|_, _| {");
+        assert!(
+            !close.contains("Proceed") && close.matches("glib::Propagation::Stop").count() == 2,
+            "the close and its panic fallback must both stop GTK destroying the window"
+        );
+        let run = fn_body(&lib, "run");
+        let wired = run
+            .find("connect_session_persistence(")
+            .expect("`run` no longer wires the window's close");
+        let restore = depth_one_position(&run, "plugin::restore_panel_plugins();")
+            .expect("`run` no longer restores plugin panels");
+        assert!(
+            wired < restore,
+            "the close must be wired before the startup restore can run a plugin's loop, \
+             or a close there gets GTK's default and destroys the window"
+        );
+        let enter = depth_one_position(&run, "run_main_loop();")
+            .expect("`run` no longer runs the main loop");
+        assert!(
+            restore < enter,
+            "the main loop must start after the startup restore, which a close made inside \
+             it waits for"
+        );
+        assert_eq!(
+            production_code().matches("gtk::main();").count(),
+            1,
+            "Code++ must enter its main loop in one place"
+        );
+        let main_loop = fn_body(&lib, "run_main_loop");
+        let waited = "if quit_requested() {";
+        let gate = "if !quitting() {";
+        assert!(
+            occurs_at_depth_one(&block_after(&main_loop, waited), "quit();"),
+            "a close made during the startup restore must quit once the restore returns"
+        );
+        let quits = depth_one_position(&main_loop, waited).expect("checked above");
+        let gate_at = depth_one_position(&main_loop, gate)
+            .expect("`run_main_loop` no longer gates the loop on the quit");
+        assert!(
+            quits < gate_at,
+            "that quit must come before the loop's gate, or the loop starts anyway"
+        );
+        let gated = block_after(&main_loop, gate);
+        let running = "MAIN_LOOP_RUNNING.with(|running| running.set(true));";
+        assert!(
+            gated.split_whitespace().collect::<String>()
+                == format!("{{{running}gtk::main();}}").replace(' ', ""),
+            "the gate must hold exactly the flag `request_quit` reads and the loop, in that \
+             order: the main loop must not start once a quit has begun, nothing would end \
+             it, and the flag must say the loop runs from the moment it does"
+        );
+    }
+
+    /// The top-level source's two callbacks are entries `GLib` calls into
+    /// that the callback-boundary scan does not see: it reads closures
+    /// handed to `connect_*` and timers. So they are pinned here.
+    /// `prepare` must stay free of anything that can panic, and
+    /// `dispatch` must check the depth again before the action and run
+    /// the action only at a boundary — see their docs for why each.
+    #[test]
+    fn the_top_level_source_is_shaped_as_documented() {
+        let lib = lib();
+        let squash = |s: &str| s.split_whitespace().collect::<String>();
+        assert_eq!(
+            squash(&fn_body(&lib, "top_level_prepare")),
+            squash(
+                "{ unsafe { timeout.write(-1) }; \
+                 glib::ffi::gboolean::from(glib::main_depth() == 0) }"
+            ),
+            "`prepare` must only report whether the outermost loop is preparing"
+        );
+        let dispatch = fn_body(&lib, "top_level_dispatch");
+        let recheck = "if glib::main_depth() != 1 {";
+        assert!(
+            dispatch
+                .trim_start_matches('{')
+                .trim_start()
+                .starts_with(recheck)
+                && occurs_at_depth_one(
+                    &block_after(&dispatch, recheck),
+                    "return glib::ffi::G_SOURCE_CONTINUE;"
+                ),
+            "`dispatch` must first keep the source when a nested loop dispatches it"
+        );
+        let run = squash(&dispatch);
+        assert!(
+            run.contains("ifletSome(action)=action{crate::at_callback_boundary(,(),action);}")
+                && !run.contains("action()"),
+            "`dispatch` must run the action only at a callback boundary"
+        );
+        assert!(
+            squash(&dispatch).ends_with("glib::ffi::G_SOURCE_REMOVE}"),
+            "`dispatch` must remove the source once it has run"
+        );
+        let funcs = squash(&block_after(
+            &lib,
+            "static TOP_LEVEL_FUNCS: glib::ffi::GSourceFuncs = glib::ffi::GSourceFuncs {",
+        ));
+        for field in [
+            "prepare:Some(top_level_prepare),",
+            "check:None,",
+            "dispatch:Some(top_level_dispatch),",
+        ] {
+            assert!(funcs.contains(field), "the source's funcs lost `{field}`");
+        }
+        let attach = squash(&fn_body(&lib, "attach_at_top_level"));
+        for call in [
+            "std::mem::size_of::<TopLevelSource>()asstd::ffi::c_uint,",
+            "glib::ffi::g_source_set_priority(source,TOP_LEVEL_PRIORITY);",
+            "letid=glib::ffi::g_source_attach(source,context);",
+            "glib::ffi::g_source_unref(source);",
+        ] {
+            assert!(attach.contains(call), "`attach_at_top_level` lost `{call}`");
+        }
+        assert!(
+            attach.ends_with("id!=0}"),
+            "`attach_at_top_level` must report a source attached as attached: `request_quit` \
+             withdraws the request when it reports otherwise, and every close would then do \
+             nothing"
+        );
+        assert!(
+            squash(&lib)
+                .contains("constTOP_LEVEL_PRIORITY:std::ffi::c_int=glib::ffi::G_PRIORITY_HIGH*10;"),
+            "the source must sit above every priority `GLib` names"
+        );
+    }
+}
+
+/// The quit request at run time, without a display: the flags and the
+/// rule `request_quit` reads, and [`TopLevelSource`] against `GLib`
+/// itself — on a private main context, so in CI too, and through the
+/// production funcs, `prepare` and `dispatch`, with only the action the
+/// test's own.
+#[cfg(test)]
+mod quit_request_tests {
+    use super::{
+        attach_at_top_level, context_ptr, quit_requested, quit_waiting, quit_will_wait, quitting,
+        MAIN_LOOP_RUNNING, QUITTING, QUIT_REQUESTED, TOP_LEVEL_PRIORITY,
+    };
+    use gtk::glib;
+    use std::cell::{Cell, RefCell};
+    use std::time::Duration;
+
+    thread_local! {
+        /// What happened, in order.
+        static EVENTS: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
+        /// The outer loop, then the nested one, for the callbacks that
+        /// end them.
+        static LOOPS: RefCell<Vec<glib::MainLoop>> = const { RefCell::new(Vec::new()) };
+    }
+
+    fn log(event: impl Into<String>) {
+        EVENTS.with(|events| events.borrow_mut().push(event.into()));
+    }
+
+    /// The action under test: note the depth it runs at, and end the
+    /// outer loop.
+    fn action() {
+        log(format!("action at depth {}", glib::main_depth()));
+        LOOPS.with(|loops| {
+            if let Some(outer) = loops.borrow().first() {
+                outer.quit();
+            }
+        });
+    }
+
+    /// A priority as `GLib` numbers it.
+    fn priority(value: std::ffi::c_int) -> glib::Priority {
+        // SAFETY: a `Priority` is a plain integer, any value of which
+        // `GLib` accepts.
+        unsafe { glib::translate::from_glib(value) }
+    }
+
+    /// Each test runs on a thread of its own, so its thread-locals start as
+    /// `run` finds them: nothing requested, nothing begun, no loop yet.
+    #[test]
+    fn the_quit_flags_start_clear_and_read_as_documented() {
+        assert!(
+            !MAIN_LOOP_RUNNING.with(Cell::get),
+            "no main loop before `run` starts one"
+        );
+        assert!(
+            !quit_requested() && !quit_waiting() && !quitting(),
+            "nothing asked for yet"
+        );
+        QUIT_REQUESTED.with(|requested| requested.set(true));
+        assert!(
+            quit_requested() && quit_waiting() && !quitting(),
+            "a request that waits is requested and waiting, not begun"
+        );
+        QUITTING.with(|quitting| quitting.set(true));
+        assert!(
+            quit_requested() && !quit_waiting() && quitting(),
+            "a quit under way is requested, and no longer waiting"
+        );
+        QUIT_REQUESTED.with(|requested| requested.set(false));
+        assert!(
+            quit_requested() && !quit_waiting(),
+            "a quit begun counts as requested on its own: a load pass must stop for it too"
+        );
+        // Left as found, so the test does not depend on running alone on
+        // its thread.
+        QUITTING.with(|quitting| quitting.set(false));
+    }
+
+    #[test]
+    fn a_quit_waits_inside_a_nested_loop_a_plugin_call_or_before_the_loop_starts() {
+        // (main loop running, dispatch depth, plugin call on the stack)
+        for (running, depth, plugin, waits) in [
+            (true, 1, false, false),
+            (true, 0, false, false),
+            (true, 2, false, true),
+            (true, 1, true, true),
+            (false, 1, false, true),
+            (false, 0, false, true),
+        ] {
+            assert_eq!(
+                quit_will_wait(running, depth, plugin),
+                waits,
+                "running {running}, depth {depth}, plugin on the stack {plugin}"
+            );
+        }
+    }
+
+    /// `None` reaches `g_source_attach` as null, which `GLib` takes as the
+    /// global default context — the one `gtk_main` runs.
+    #[test]
+    fn the_source_goes_to_the_global_default_context_unless_told_otherwise() {
+        use glib::translate::ToGlibPtr;
+        assert!(context_ptr(None).is_null());
+        let context = glib::MainContext::new();
+        let given: *mut glib::ffi::GMainContext = context.to_glib_none().0;
+        assert_eq!(context_ptr(Some(&context)), given);
+    }
+
+    /// The source runs its action once, at depth 1, and only after a
+    /// nested loop has returned — including when that loop started in the
+    /// very round the outer loop first found the source ready, which
+    /// leaves `GLib`'s ready mark on it inside the nested loop.
+    #[test]
+    fn the_source_runs_only_once_a_nested_loop_has_returned() {
+        let context = glib::MainContext::new();
+        let outer = glib::MainLoop::new(Some(&context), false);
+        LOOPS.with(|loops| loops.borrow_mut().push(outer.clone()));
+        // Above the source's priority, so a source that never stops being
+        // ready cannot starve it: a broken source fails the test rather
+        // than hanging it.
+        let watchdog = glib::timeout_source_new(
+            Duration::from_secs(5),
+            None,
+            priority(TOP_LEVEL_PRIORITY * 2),
+            || {
+                log("watchdog");
+                LOOPS.with(|loops| loops.borrow().iter().for_each(glib::MainLoop::quit));
+                glib::ControlFlow::Break
+            },
+        );
+        watchdog.attach(Some(&context));
+        // Ahead of the source at the same priority: in the round where the
+        // outer loop first finds the source ready, this runs first, and the
+        // nested loop it starts finds the source still marked ready.
+        let nested_context = context.clone();
+        glib::idle_source_new(None, priority(TOP_LEVEL_PRIORITY), move || {
+            log("nested loop starts");
+            let nested = glib::MainLoop::new(Some(&nested_context), false);
+            LOOPS.with(|loops| loops.borrow_mut().push(nested.clone()));
+            // Below the source, and attached after it, so every round of
+            // the nested loop asks the source first.
+            let ending = nested.clone();
+            glib::idle_source_new(None, glib::Priority::DEFAULT_IDLE, move || {
+                ending.quit();
+                glib::ControlFlow::Break
+            })
+            .attach(Some(&nested_context));
+            nested.run();
+            log("nested loop returned");
+            glib::ControlFlow::Break
+        })
+        .attach(Some(&context));
+        assert!(
+            attach_at_top_level(Some(&context), action),
+            "a fresh source must report itself attached"
+        );
+        outer.run();
+        // Removed once it has run: further rounds do not run it again.
+        for _ in 0..5 {
+            context.iteration(false);
+        }
+        assert_eq!(
+            EVENTS.with(|events| events.borrow().clone()),
+            [
+                "nested loop starts",
+                "nested loop returned",
+                "action at depth 1"
+            ],
+        );
     }
 }
 
@@ -3450,6 +4116,9 @@ pub(crate) fn sync_tab_strip() {
 /// up updating one and not the other. Named to match `ui_win32`'s
 /// `refresh_tab_chrome`, which plays the same role there.
 ///
+/// While a quit waits for a plugin's code to return ([`request_quit`]),
+/// the title also says so, which is why the window is still there.
+///
 /// The title's name comes from `codepp_shell::tab_display_name` rather
 /// than from `tab.path` directly, which matters for three separate
 /// reasons:
@@ -3469,10 +4138,13 @@ pub(crate) fn sync_tab_strip() {
 ///     `ui_win32`'s `refresh_window_title` resolves the same way.
 pub(crate) fn refresh_tab_chrome() {
     with_state(|st| {
-        let title = st.shell.active().map_or_else(
+        let mut title = st.shell.active().map_or_else(
             || "Code++".to_string(),
             |tab| format!("{} - Code++", codepp_shell::tab_display_name(tab)),
         );
+        if quit_waiting() {
+            title.push_str(QUIT_WAITING_TITLE);
+        }
         st.window.set_title(&title);
     });
     // Re-poll the dirty bit before rendering. Every caller reaches
@@ -3635,6 +4307,15 @@ mod source_scan {
     /// cannot: it would also accept the later statement moved into a
     /// nested block or a closure.
     pub(crate) fn depth_one_position(block: &str, needle: &str) -> Option<usize> {
+        depth_one_position_from(block, needle, 0)
+    }
+
+    /// [`depth_one_position`], for the first occurrence at or after byte
+    /// `from` — "the first check after this statement". The depth is still
+    /// measured from the start of `block`; slicing `block` at `from`
+    /// instead would restart it at 0 and miss every statement of the
+    /// block.
+    pub(crate) fn depth_one_position_from(block: &str, needle: &str, from: usize) -> Option<usize> {
         let bytes = block.as_bytes();
         let mut depth = 0usize;
         let mut i = 0;
@@ -3648,7 +4329,7 @@ mod source_scan {
                 b'}' => depth = depth.saturating_sub(1),
                 _ => {}
             }
-            if depth == 1 && bytes[i..].starts_with(needle.as_bytes()) {
+            if i >= from && depth == 1 && bytes[i..].starts_with(needle.as_bytes()) {
                 return Some(i);
             }
             i += 1;
@@ -3678,6 +4359,18 @@ mod source_scan {
         assert!(occurs_at_depth_one(&then, "return 1;"));
         let x = depth_one_position(&body, "x();").expect("a statement of the block");
         assert!(body[x..].starts_with("x();"));
+        assert_eq!(depth_one_position_from(&body, "x();", x), Some(x));
+        assert_eq!(
+            depth_one_position_from(&body, "x();", x + 1),
+            None,
+            "an occurrence before `from` was placed"
+        );
+        let after_if = body.find("if a").expect("the `if` is there");
+        assert_eq!(
+            depth_one_position_from(&body, "x();", after_if),
+            Some(x),
+            "the depth restarted at `from`"
+        );
         assert_eq!(
             depth_one_position(&body, "h();"),
             None,

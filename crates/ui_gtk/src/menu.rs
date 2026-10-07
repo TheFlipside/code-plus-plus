@@ -861,7 +861,9 @@ fn build_file_menu_lower(menu: &gtk::Menu, accel: &gtk::AccelGroup) {
 
     // Exit stays at the bottom; Alt+F4 is the conventional close accelerator
     // and is shown as its hint (the window manager typically also maps it to
-    // the window's delete path, which saves + quits the same way).
+    // the window's delete path, which asks to quit the same way). Through
+    // `request_quit`, never `quit` itself: a click made inside a plugin's own
+    // main loop must wait for that loop, as a close does.
     let exit = gtk::MenuItem::with_mnemonic("E_xit");
     exit.add_accelerator(
         "activate",
@@ -871,7 +873,7 @@ fn build_file_menu_lower(menu: &gtk::Menu, accel: &gtk::AccelGroup) {
         gtk::AccelFlags::VISIBLE,
     );
     exit.connect_activate(|_| {
-        crate::at_callback_boundary("menu:exit:activate", (), crate::quit);
+        crate::at_callback_boundary("menu:exit:activate", (), crate::request_quit);
     });
     menu.append(&exit);
 }

@@ -173,7 +173,8 @@ typedef struct FuncItem_ {
  *        buffer; then NPPN_READY.
  *      A plugin can therefore tick its own menu items from either
  *      handler, and is told READY only after every plugin of its
- *      batch has had TBMODIFICATION and its panels are back.
+ *      batch has had TBMODIFICATION and its panels are back — or, on
+ *      Linux, not at all if the host is asked to quit meanwhile (6).
  *   4. beNotified() is called for every NPPN_ / SCN_ notification
  *      delivered while the plugin is loaded.
  *   5. messageProc() is called for plugin-targeted Win32 messages
@@ -187,6 +188,22 @@ typedef struct FuncItem_ {
  *      two apart: the npp handle for a DMN_*, the widget or view for a
  *      Scintilla notification.
  *   6. NPPN_SHUTDOWN fires at exit. The DLL is not unloaded.
+ *      On Linux the quit runs only once whatever asked for it has
+ *      returned — from the host's own main loop, or at startup before
+ *      that loop starts — never inside a handler, a call the host made
+ *      into a plugin, or a main loop a plugin runs (gtk_main() until
+ *      its window closes, say). So NPPN_BEFORESHUTDOWN and
+ *      NPPN_SHUTDOWN never arrive inside plugin code that is still
+ *      running, and once they have been sent no NPPN_ or DMN_
+ *      notification follows and no plugin command runs; a plugin's own
+ *      Scintilla widgets still forward their SCN_ notifications. A quit
+ *      asked for while plugins are loading stops the load at its next
+ *      step: a plugin loaded by then may hear the shutdown pair without
+ *      having heard NPPN_READY — or NPPN_TBMODIFICATION, if the stop
+ *      came before its turn — no restored panel's command runs, and
+ *      once the load has stopped its own commands are refused. Save in
+ *      NPPN_SHUTDOWN only what was loaded before NPPN_READY (in setInfo,
+ *      say), or check that READY came.
  *
  * Plugins must not perform expensive work in setInfo or getName —
  * those run synchronously on the UI thread.

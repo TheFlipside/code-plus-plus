@@ -157,6 +157,14 @@ pub struct PluginCommand {
 }
 
 impl PluginCommand {
+    /// Registry index of the plugin this command belongs to — for a
+    /// backend deciding whether that plugin may be run at all, as
+    /// [`PluginMessageProc::owner`] is for a message.
+    #[must_use]
+    pub fn owner(self) -> usize {
+        self.owner
+    }
+
     /// Run the command as its plugin, marked with [`CallingPlugin`] for
     /// the length of the call.
     ///

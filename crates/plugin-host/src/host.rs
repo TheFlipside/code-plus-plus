@@ -1052,27 +1052,62 @@ impl LoadNotifications {
     /// either way; this keeps the synthetic one from being false in
     /// between.) The callback must take no borrow the caller holds —
     /// it is called with plugin code before and after it.
+    ///
+    /// Always runs to the end; [`Self::deliver_until`] can stop part-way.
     pub fn deliver(
         &self,
         npp_handle: crate::ffi::Hwnd,
         active_buffer: impl Fn() -> Option<usize>,
         restore_panels: impl FnOnce(),
     ) {
+        self.deliver_until(npp_handle, active_buffer, restore_panels, || false);
+    }
+
+    /// [`Self::deliver`], ending part-way once `stop` answers `true`.
+    ///
+    /// `stop` is asked before every notification and before
+    /// `restore_panels`; once it has answered `true`, nothing more is
+    /// sent and the hook does not run. A backend passes "the host has
+    /// been asked to quit": a plugin's handler may run a main loop of its
+    /// own, the user may close the window inside it, and the quit's
+    /// `NPPN_BEFORESHUTDOWN` and `NPPN_SHUTDOWN` must then be the last
+    /// things any plugin hears — so the rest of the sequence is dropped
+    /// rather than sent after them. Like the other two callbacks, `stop`
+    /// must take no borrow the caller holds.
+    pub fn deliver_until(
+        &self,
+        npp_handle: crate::ffi::Hwnd,
+        active_buffer: impl Fn() -> Option<usize>,
+        restore_panels: impl FnOnce(),
+        stop: impl Fn() -> bool,
+    ) {
         if self.plugins.is_empty() {
             return;
         }
         for ready in &self.plugins {
+            if stop() {
+                return;
+            }
             ready.notify(npp_handle, NPPN_TBMODIFICATION, 0);
+        }
+        if stop() {
+            return;
         }
         if catch_unwind(AssertUnwindSafe(restore_panels)).is_err() {
             tracing::warn!("restoring plugin dock panels panicked; continuing to NPPN_READY");
         }
         for ready in &self.plugins {
+            if stop() {
+                return;
+            }
             if let Some(buffer) = active_buffer() {
                 ready.notify(npp_handle, NPPN_BUFFERACTIVATED, buffer);
             }
         }
         for ready in &self.plugins {
+            if stop() {
+                return;
+            }
             ready.notify(npp_handle, NPPN_READY, 0);
         }
     }
@@ -2215,6 +2250,105 @@ mod load_order_tests {
                 ('p', Some(4)),
                 ('p', Some(6)),
             ]
+        );
+    }
+
+    std::thread_local! {
+        /// `(plugin, code)` in the order the stop-test recorders saw
+        /// them — per thread, so the test cannot see another's.
+        static HEARD: std::cell::RefCell<Vec<(char, u32)>> =
+            const { std::cell::RefCell::new(Vec::new()) };
+    }
+
+    fn heard(who: char, sci: *const SCNotification) {
+        // SAFETY: `LoadNotifications` hands a live `SCNotification`.
+        let code = unsafe { (*sci).nmhdr.code };
+        HEARD.with(|h| h.borrow_mut().push((who, code)));
+    }
+    unsafe extern "C" fn heard_a(sci: *const SCNotification) {
+        heard('a', sci);
+    }
+    unsafe extern "C" fn heard_b(sci: *const SCNotification) {
+        heard('b', sci);
+    }
+
+    /// Deliver to two plugins, stopping once `stop_after` notifications
+    /// have been heard (`'*'` marks the restore hook), and return what
+    /// was heard.
+    fn deliver_stopping_after(stop_after: usize) -> Vec<(char, u32)> {
+        let mut notices = LoadNotifications::default();
+        notices.push(ready(0, heard_a));
+        notices.push(ready(1, heard_b));
+        HEARD.with(|h| h.borrow_mut().clear());
+        notices.deliver_until(
+            core::ptr::null_mut(),
+            || Some(7),
+            || HEARD.with(|h| h.borrow_mut().push(('*', 0))),
+            || HEARD.with(|h| h.borrow().len() >= stop_after),
+        );
+        HEARD.with(|h| h.borrow().clone())
+    }
+
+    /// Once `stop` answers `true`, nothing more is sent — not the rest of
+    /// a broadcast, not the restore hook, not a later broadcast. A quit
+    /// asked for from inside a handler relies on it: its shutdown pair
+    /// must be the last thing any plugin hears.
+    #[test]
+    fn deliver_until_sends_nothing_once_stopped() {
+        // Each stop is checked *before* the send it guards: a check moved
+        // after the send would still deliver the first notification here,
+        // and the first READY in the `5` case.
+        assert_eq!(
+            deliver_stopping_after(0),
+            vec![],
+            "a stop raised before delivery began still sent something"
+        );
+        assert_eq!(
+            deliver_stopping_after(1),
+            vec![('a', NPPN_TBMODIFICATION)],
+            "a stop after the first notification still sent more"
+        );
+        assert_eq!(
+            deliver_stopping_after(2),
+            vec![('a', NPPN_TBMODIFICATION), ('b', NPPN_TBMODIFICATION)],
+            "a stop before the restore hook still ran it"
+        );
+        assert_eq!(
+            deliver_stopping_after(3),
+            vec![
+                ('a', NPPN_TBMODIFICATION),
+                ('b', NPPN_TBMODIFICATION),
+                ('*', 0),
+            ],
+            "a stop raised by the restore hook still sent NPPN_BUFFERACTIVATED"
+        );
+        assert_eq!(
+            deliver_stopping_after(5),
+            vec![
+                ('a', NPPN_TBMODIFICATION),
+                ('b', NPPN_TBMODIFICATION),
+                ('*', 0),
+                ('a', NPPN_BUFFERACTIVATED),
+                ('b', NPPN_BUFFERACTIVATED),
+            ],
+            "a stop raised by the last NPPN_BUFFERACTIVATED still sent NPPN_READY"
+        );
+        assert_eq!(
+            deliver_stopping_after(6),
+            vec![
+                ('a', NPPN_TBMODIFICATION),
+                ('b', NPPN_TBMODIFICATION),
+                ('*', 0),
+                ('a', NPPN_BUFFERACTIVATED),
+                ('b', NPPN_BUFFERACTIVATED),
+                ('a', NPPN_READY),
+            ],
+            "a stop between two NPPN_READYs still sent the second"
+        );
+        assert_eq!(
+            deliver_stopping_after(usize::MAX).len(),
+            7,
+            "a stop that never answers `true` must deliver everything"
         );
     }
 
