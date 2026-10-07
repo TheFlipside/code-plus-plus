@@ -896,6 +896,9 @@ pub(crate) fn row_activated(row: isize) {
         Some(OpenFileOutcome::SwitchedToExisting(_)) => {
             crate::rebind_active_view();
             apply_pending_jump();
+            // The switch's `NPPN_BUFFERACTIVATED`, before returning. A
+            // `Loading` open's notifications go out with its load's wake.
+            crate::drain_shell();
         }
         Some(OpenFileOutcome::AlreadyActive) => apply_pending_jump(),
         // `Loading`: the jump applies when the load lands via

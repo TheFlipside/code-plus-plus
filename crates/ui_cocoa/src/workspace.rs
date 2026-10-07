@@ -422,8 +422,15 @@ define_class!(
                 // backend takes the same guard; without it a drain could
                 // move `active_tab`, or a future worker-driven re-root
                 // could swap the tree under the open menu.
-                let _freeze = crate::DrainFreeze::new();
+                let freeze = crate::DrainFreeze::new();
                 NSMenu::popUpContextMenu_withEvent_forView(&menu, event, self);
+                // The menu's command ran under the freeze, so what it
+                // queued — an Open's `NPPN_BUFFERACTIVATED` — is still
+                // waiting, along with any wake the freeze swallowed.
+                // Flushed once the freeze is down, unconditionally, as
+                // `open_folder_flow` does after its picker.
+                drop(freeze);
+                crate::drain_shell();
             });
         }
     }
@@ -981,6 +988,8 @@ pub(crate) fn activate_selected_row() {
         return;
     }
     crate::open_path(path);
+    // What the open queued, before the gesture returns.
+    crate::drain_shell();
 }
 
 /// Build the context menu for a row, or `None` for a stale/marker row.

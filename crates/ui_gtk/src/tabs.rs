@@ -463,7 +463,9 @@ fn build_tab_label(tab: &Tab, scale: i32) -> gtk::Widget {
         gtk::IconSize::Menu,
     ));
     close.connect_clicked(move |_| {
-        crate::at_callback_boundary("tabs:close:clicked", (), || crate::close_tab_by_id(id));
+        crate::at_callback_boundary("tabs:close:clicked", (), || {
+            crate::close_tab_by_id(id);
+        });
     });
     row.pack_start(&close, false, false, 0);
 

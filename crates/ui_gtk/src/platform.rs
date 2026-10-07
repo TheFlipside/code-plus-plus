@@ -132,10 +132,20 @@ impl GtkUi {
             return f(self);
         }
         let view = self.snapshot_view();
+        // Hold a reference of our own on the document being swapped away
+        // from. `SCI_SETDOCPOINTER` releases the view's reference, and a
+        // document the view alone still holds (one a tab has `release_doc`'d)
+        // would be freed here and then re-bound below as a dangling pointer.
+        if prior != 0 {
+            self.editor
+                .send(codepp_scintilla_sys::SCI_ADDREFDOCUMENT, 0, prior);
+        }
         self.editor.send(SCI_SETDOCPOINTER, 0, doc);
         let out = f(self);
         if prior != 0 {
             self.editor.send(SCI_SETDOCPOINTER, 0, prior);
+            self.editor
+                .send(codepp_scintilla_sys::SCI_RELEASEDOCUMENT, 0, prior);
             self.restore_view(&view);
         }
         out
@@ -748,10 +758,11 @@ impl UiPlatform for GtkUi {
             return;
         }
         // Drops the tab-owned reference. A still-bound document only
-        // goes 2→1 here (the view holds its own reference; the free
-        // happens at the next `SCI_SETDOCPOINTER`); an unbound one is
-        // freed immediately. Same call `close_tab_by_id`'s `ClosedTab`
-        // path makes in `lib.rs` — see the trait docs.
+        // goes 2→1 here: the view holds its own reference, and the next
+        // real rebind frees it. Not a temporary swap: `with_doc` takes a
+        // reference of its own on the document it returns to. An unbound
+        // one is freed immediately. Same call `close_tab_by_id`'s
+        // `ClosedTab` path makes in `lib.rs` — see the trait docs.
         self.editor.send(SCI_RELEASEDOCUMENT, 0, doc);
     }
 
@@ -1056,6 +1067,57 @@ pub(crate) mod doc_binding_tests {
         tab_strip_scenarios(&ui);
         single_view_invariant(&ui);
         regex_replace_expands_groups(&mut ui);
+        a_document_only_the_view_holds_survives_every_swap();
+    }
+
+    /// A document only the view still holds survives every helper that
+    /// swaps the view to another document and back.
+    ///
+    /// A confirmed reload landing on a background tab releases that
+    /// tab's document, and the view can still be showing it: the active
+    /// tab is a fresh open still loading, so nothing has rebound the
+    /// view. The swap away drops the view's reference, so a helper
+    /// without one of its own freed the document and then bound the
+    /// freed pointer — a crash in `Editor::SetDocPointer` from the next
+    /// auto-save. Found by the third code review of the tab-switch
+    /// change, which reproduced it 3 of 3.
+    fn a_document_only_the_view_holds_survives_every_swap() {
+        use codepp_scintilla_sys::SCI_GETDOCPOINTER;
+        let mut ui = fixture();
+        let doc_a = ui.activate_tab(0, 0);
+        ui.set_buffer_text("AAAA-file-A-contents", 0);
+        let doc_b = ui.activate_tab(1, 0);
+        ui.set_buffer_text("BBBB-file-B-contents", 0);
+        assert_eq!(ui.activate_tab(0, doc_a), doc_a);
+        // The tab lets go of A, and only the view holds it now.
+        ui.release_doc(doc_a);
+
+        // Each helper swaps away and back; the view must come back to A,
+        // with A's text.
+        let back_on_a = |ui: &mut GtkUi, after: &str| {
+            assert_eq!(
+                ui.editor.send(SCI_GETDOCPOINTER, 0, 0),
+                doc_a,
+                "{after} left the view on another document"
+            );
+            assert_eq!(
+                ui.get_buffer_text(),
+                "AAAA-file-A-contents",
+                "{after} lost the document only the view held"
+            );
+        };
+        let _ = ui.is_doc_dirty(doc_b);
+        back_on_a(&mut ui, "is_doc_dirty");
+        assert_eq!(ui.capture_text_from_doc(doc_b), "BBBB-file-B-contents");
+        back_on_a(&mut ui, "capture_text_from_doc");
+        let _ = ui.convert_doc_eols(doc_b, codepp_core::Eol::CrLf);
+        back_on_a(&mut ui, "convert_doc_eols");
+        assert!(ui.replace_doc_text(doc_b, "BBBB-replaced"));
+        back_on_a(&mut ui, "replace_doc_text");
+
+        // A real rebind lets go of A at last.
+        assert_eq!(ui.activate_tab(1, doc_b), doc_b);
+        assert_eq!(ui.get_buffer_text(), "BBBB-replaced");
     }
 
     /// `replace_all` with the REGEX flag must expand `\1` against the
@@ -1324,5 +1386,34 @@ mod clipboard_plan_tests {
     #[test]
     fn empty_payload_set_plans_nothing() {
         assert!(plan_clipboard_targets(&[]).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod swap_guard {
+    use crate::source_scan::{fn_body, production_code};
+
+    /// `with_doc` swaps the view to another document and back, and holds
+    /// a reference of its own on the one it returns to across the swap.
+    /// The swap away drops the view's reference, and a document only the
+    /// view still held — one a tab has released — would be freed there
+    /// and then bound again, dangling. The display scenario
+    /// `a_document_only_the_view_holds_survives_every_swap` exercises it
+    /// against a real Scintilla; this pins it where no display runs.
+    #[test]
+    fn with_doc_holds_the_document_it_returns_to() {
+        let body = fn_body(&production_code(), "with_doc<R>");
+        let at = |needle: &str| {
+            body.find(needle)
+                .unwrap_or_else(|| panic!("`with_doc` no longer has `{needle}`"))
+        };
+        let held = at("SCI_ADDREFDOCUMENT, 0, prior)");
+        let away = at("SCI_SETDOCPOINTER, 0, doc)");
+        let back = at("SCI_SETDOCPOINTER, 0, prior)");
+        let let_go = at("SCI_RELEASEDOCUMENT, 0, prior)");
+        assert!(
+            held < away && away < back && back < let_go,
+            "hold the document before swapping away, let go after swapping back"
+        );
     }
 }

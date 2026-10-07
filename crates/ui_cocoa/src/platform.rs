@@ -201,10 +201,20 @@ impl CocoaUi {
             return f(self);
         }
         let view = self.snapshot_view();
+        // Hold a reference of our own on the document being swapped away
+        // from. `SCI_SETDOCPOINTER` releases the view's reference, and a
+        // document the view alone still holds (one a tab has `release_doc`'d)
+        // would be freed here and then re-bound below as a dangling pointer.
+        if prior != 0 {
+            self.editor
+                .send(codepp_scintilla_sys::SCI_ADDREFDOCUMENT, 0, prior);
+        }
         self.editor.send(SCI_SETDOCPOINTER, 0, doc);
         let out = f(self);
         if prior != 0 {
             self.editor.send(SCI_SETDOCPOINTER, 0, prior);
+            self.editor
+                .send(codepp_scintilla_sys::SCI_RELEASEDOCUMENT, 0, prior);
             self.restore_view(&view);
         }
         out
@@ -840,9 +850,10 @@ impl UiPlatform for CocoaUi {
             return;
         }
         // Drops the tab-owned reference. A still-bound document only
-        // goes 2→1 here (the view holds its own reference; the free
-        // happens at the next `SCI_SETDOCPOINTER`); an unbound one is
-        // freed immediately — the same shape `action_close_tab`'s
+        // goes 2→1 here: the view holds its own reference, and the next
+        // real rebind frees it. Not a temporary swap: `with_doc` takes a
+        // reference of its own on the document it returns to. An unbound
+        // one is freed immediately — the same shape `action_close_tab`'s
         // release relies on, and consistent with the `LAST_SEEDED_DOC`
         // ABA premise in `lib.rs`: nothing here frees a document a
         // pending bind is about to install. See the trait docs.

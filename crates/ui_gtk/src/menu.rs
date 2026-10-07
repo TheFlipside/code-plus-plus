@@ -177,6 +177,8 @@ fn populate_open_files_menu(menu: &gtk::Menu) {
             item.connect_activate(move |_| {
                 crate::at_callback_boundary("menu:populate_open_files_menu:activate", (), || {
                     crate::select_tab_by_id(id);
+                    // The switch's `NPPN_BUFFERACTIVATED`, before returning.
+                    crate::drain_shell();
                 });
             });
             menu.append(&item);
@@ -454,10 +456,11 @@ fn on_move_to_recycle_bin() {
     // Same resync `on_save` does after `mark_saved`.
     refresh_tab_chrome();
     if !close_active_tab() {
-        // The close can only decline here via a re-entrant `with_state`
-        // (vanishingly rare, and the prompt is already suppressed). The file is
-        // already trashed, so the tab is left pointing at a deleted path — a
-        // later Save would simply recreate it. Log rather than swallow it.
+        // The prompt is already suppressed, so the close declines here only on
+        // a re-entrant `with_state` (vanishingly rare) or when a plugin moves
+        // the front from inside `NPPN_FILEBEFORECLOSE`. The file is already
+        // trashed, so the tab is left pointing at a deleted path — a later
+        // Save would simply recreate it. Log rather than swallow it.
         tracing::warn!(
             ?path,
             "recycle-bin close declined after trash; buffer left open on a now-deleted path"
@@ -2594,6 +2597,10 @@ pub(crate) fn on_new() {
         shell.new_untitled(&mut ui);
     });
     refresh_tab_chrome();
+    // The new buffer's `NPPN_BUFFERACTIVATED`, delivered before the
+    // command returns, as Win32 delivers it. A File → New posts no
+    // worker wake, so left to the next drain it could wait indefinitely.
+    drain_shell();
 }
 
 pub(crate) fn on_open() {
@@ -2644,8 +2651,12 @@ pub(crate) fn open_paths(paths: Vec<PathBuf>) {
             st.shell.open_file_replacing_scratch(path, pristine)
         }) {
             // Already open: `Shell` moved `active_tab` with no load to
-            // wake, so move the view to match. See `rebind_active_view`.
-            Some(OpenFileOutcome::SwitchedToExisting(_)) => rebind_active_view(),
+            // wake, so move the view to match — see `rebind_active_view` —
+            // and deliver the switch it announced.
+            Some(OpenFileOutcome::SwitchedToExisting(_)) => {
+                rebind_active_view();
+                drain_shell();
+            }
             // Already the active tab: nothing moved, nothing to rebind.
             Some(OpenFileOutcome::AlreadyActive) => {}
             // A load was queued; its wake drains and rebinds the view.
@@ -2656,15 +2667,38 @@ pub(crate) fn open_paths(paths: Vec<PathBuf>) {
     }
 }
 
-/// `pub(crate)` because the close-confirm gate in `lib.rs` routes a
-/// dirty buffer's Save through this same path (in place if titled, via
-/// Save As if untitled), so the two never diverge.
+/// File → Save, and the toolbar's Save: [`save_active`], then deliver
+/// what the save queued (`NPPN_FILEBEFORESAVE`, `NPPN_FILESAVED`) before
+/// returning, as Win32 does from inside the command. A save posts no
+/// worker wake of its own, so left to the next drain the plugins could
+/// hear of it much later, about a buffer since closed.
 pub(crate) fn on_save() {
+    save_active();
+    drain_shell();
+}
+
+/// Save the active buffer — in place if it has a path, through Save As if
+/// it is untitled — and report a failure. Delivers nothing.
+///
+/// `pub(crate)` because the close-confirm gate in `lib.rs` routes a dirty
+/// buffer's Save through this same path, so the two never diverge. The
+/// gate calls this and not [`on_save`]: plugin code run between its prompt
+/// and the close the prompt gates could move the focus, so what the save
+/// queued is delivered by the close's own flush instead.
+pub(crate) fn save_active() {
     // An untitled buffer has no path to save to, so Save behaves as
-    // Save As — same as Notepad++.
-    let has_path = with_state(|st| st.shell.active().is_some_and(|t| t.path.is_some()));
-    if has_path == Some(false) {
-        on_save_as();
+    // Save As — same as Notepad++. A file still loading has no path yet
+    // either, but it is about to: the save below refuses it
+    // (`ShellError::LoadInFlight`) with "the file is still loading",
+    // where a chooser would ask where to put a file that already has a
+    // place on disk.
+    let untitled = with_state(|st| {
+        st.shell
+            .active()
+            .is_some_and(|t| t.path.is_none() && t.pending_load.is_none())
+    });
+    if untitled == Some(true) {
+        save_active_as();
         return;
     }
     let result = with_state(|st| {
@@ -2685,10 +2719,37 @@ pub(crate) fn on_save() {
     refresh_tab_chrome();
 }
 
+/// File → Save As, and Rename on a buffer that has a path:
+/// [`save_active_as`], then deliver what it queued before returning —
+/// see [`on_save`].
 fn on_save_as() {
+    save_active_as();
+    drain_shell();
+}
+
+/// Save the active buffer to a path the user picks, and report a failure.
+/// Delivers nothing; see [`save_active`] for why the close gate needs that.
+///
+/// The chooser spins a nested main loop, and two things can move the
+/// active tab while it is up: a drain run by a worker's wake, and a
+/// plugin's own handler. `save_buffer_as` reads the active tab *after*
+/// the chooser returns, so either would put one buffer's text at the path
+/// the user chose for another. The [`crate::DrainFreeze`] stops the
+/// first, as Cocoa's Save As does; the second is caught by checking that
+/// the tab in front is still the one the chooser was opened for, as
+/// Win32's `run_save_as_flow` does, and writing nothing if it is not.
+fn save_active_as() {
+    let _freeze = crate::DrainFreeze::new();
+    let Some(for_tab) = with_state(|st| st.shell.active().map(|t| t.id)).flatten() else {
+        return;
+    };
     let Some(path) = choose_save_path("Save As") else {
         return;
     };
+    if !crate::active_tab_is(for_tab) {
+        tracing::warn!("Save As abandoned: another tab came to the front while the chooser was up");
+        return;
+    }
     let result = with_state(|st| {
         let (shell, mut ui) = st.split();
         shell.save_buffer_as(&mut ui, path)
@@ -2815,8 +2876,51 @@ fn on_load_session() {
     drain_shell();
 }
 
+/// File → Reload from Disk. Asks first when the buffer holds unsaved
+/// work, which the reload discards — Win32's question, in Win32's words.
+/// It discarded the edits without asking until Phase 5. Only the Yes is
+/// consent to discard: a reload of a buffer with nothing unsaved asks
+/// nothing and goes unconfirmed, so an edit typed while the load is
+/// under way survives it rather than vanishing with no undo.
+///
+/// The path is read with the dirty bit, before the question, and the
+/// reload goes to that path rather than to whichever tab is in front once
+/// it is answered: the dialog's loop runs plugin code, a switch made there
+/// moves the front, and the Yes is consent to discard the edits of the
+/// file the question was about. The freeze holds off a worker's drain
+/// while the dialog is up, as the close prompt's does, and the drain after
+/// it runs on a No as well, to replay what the freeze held back.
 fn on_reload() {
-    with_state(|st| st.shell.reload_active());
+    let sample = with_state(|st| {
+        let live_dirty = st.editor.send(codepp_scintilla_sys::SCI_GETMODIFY, 0, 0) != 0;
+        st.shell.active().and_then(|t| {
+            let unsaved = live_dirty || t.dirty || st.shell.is_unsaved_restore(t.id);
+            t.path.clone().map(|path| (path, unsaved))
+        })
+    })
+    .flatten();
+    let Some((path, unsaved)) = sample else {
+        // Untitled, or no tab: nothing on disk to reload from.
+        return;
+    };
+    // Only a Yes to the question is consent to discard unsaved work. With
+    // nothing unsaved nothing is asked, and the reload goes unconfirmed,
+    // so an edit typed while the load is under way survives it.
+    let consent = if unsaved {
+        let _freeze = crate::DrainFreeze::new();
+        (crate::message_dialog(
+            gtk::MessageType::Question,
+            gtk::ButtonsType::YesNo,
+            "Reload from Disk",
+            "Discard unsaved changes and reload from disk?",
+        ) == gtk::ResponseType::Yes)
+            .then_some(codepp_shell::ReloadConsent::Confirmed)
+    } else {
+        Some(codepp_shell::ReloadConsent::Unconfirmed)
+    };
+    if let Some(consent) = consent {
+        with_state(|st| st.shell.request_reload(path, consent));
+    }
     drain_shell();
 }
 
@@ -2831,6 +2935,11 @@ pub(crate) fn on_save_all() {
     })
     .unwrap_or_default();
     refresh_tab_chrome();
+    // Each saved buffer's `NPPN_FILEBEFORESAVE` and `NPPN_FILESAVED`,
+    // delivered before the command returns — see `on_save`. Ahead of the
+    // error summary, so a modal on screen does not hold back the news of
+    // what did save.
+    drain_shell();
     if errors.is_empty() {
         return;
     }

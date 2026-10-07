@@ -2134,8 +2134,17 @@ impl UiPlatform for Win32Ui {
             )
         };
         // Bind the resolved document to the single Scintilla view.
-        // wparam is unused; lparam is the doc pointer.
-        self.editor.send(SCI_SETDOCPOINTER, 0, doc);
+        // wparam is unused; lparam is the doc pointer. Skipped when the
+        // view already shows it: `SCI_SETDOCPOINTER` with the bound
+        // document is not a no-op — `Editor::SetDocPointer` clears the
+        // selection and the fold state — and the shell rebinds where the
+        // view may have been left on another document, which most of the
+        // time it was not (the `UiPlatform::activate_tab` contract).
+        // `ui_gtk` and `ui_cocoa` skip it the same way. A fresh document
+        // is never the bound one, so it always binds.
+        if self.editor.send(SCI_GETDOCPOINTER, 0, 0) != doc {
+            self.editor.send(SCI_SETDOCPOINTER, 0, doc);
+        }
         // Change-history is per-document state — enable on every
         // freshly-minted doc so its lines start tracking edits
         // against the save-point. Bound docs that already existed
@@ -2166,8 +2175,9 @@ impl UiPlatform for Win32Ui {
         // `NPPM_SWITCHTOFILE`, `ensure_one_tab`); Win32-side
         // tab-switch / tab-close paths also call
         // `sync_docmap_to_active_tab` on top for defence in
-        // depth (redundant same-doc rebinds are Scintilla
-        // no-ops). Without this call the map view stays pinned
+        // depth (a redundant same-doc rebind resets only the
+        // miniature's own selection and folds, which nothing
+        // shows). Without this call the map view stays pinned
         // to whatever doc it was last bound to, both showing
         // stale content AND leaking a Scintilla `Document` ref
         // on any tab the user closed.
@@ -3729,10 +3739,18 @@ impl UiPlatform for Win32Ui {
         // the active tab's caret and scroll get reset to (0, 0)
         // every auto-save tick.
         let view = self.snapshot_active_view();
+        // Own a reference on the document being left: a document only the
+        // view still holds would be freed by the swap and re-bound dangling.
+        if prior_doc != 0 {
+            self.editor
+                .send(codepp_scintilla_sys::SCI_ADDREFDOCUMENT, 0, prior_doc);
+        }
         self.editor.send(SCI_SETDOCPOINTER, 0, scintilla_doc);
         let text = <Self as UiPlatform>::get_buffer_text(self);
         if prior_doc != 0 {
             self.editor.send(SCI_SETDOCPOINTER, 0, prior_doc);
+            self.editor
+                .send(codepp_scintilla_sys::SCI_RELEASEDOCUMENT, 0, prior_doc);
             self.restore_active_view(view);
         }
         text
@@ -3758,6 +3776,10 @@ impl UiPlatform for Win32Ui {
         // `SCI_SETDOCPOINTER` clears the selection, including the swap
         // back, so the active tab's caret and scroll must be restored.
         let view = self.snapshot_active_view();
+        if prior_doc != 0 {
+            self.editor
+                .send(codepp_scintilla_sys::SCI_ADDREFDOCUMENT, 0, prior_doc);
+        }
         self.editor.send(SCI_SETDOCPOINTER, 0, doc);
         // `SCI_SETTEXT` only. See the trait docs for why the
         // `SCI_EMPTYUNDOBUFFER` / `SCI_SETSAVEPOINT` pair that
@@ -3765,6 +3787,8 @@ impl UiPlatform for Win32Ui {
         self.editor.send(SCI_SETTEXT, 0, bytes.as_ptr() as isize);
         if prior_doc != 0 {
             self.editor.send(SCI_SETDOCPOINTER, 0, prior_doc);
+            self.editor
+                .send(codepp_scintilla_sys::SCI_RELEASEDOCUMENT, 0, prior_doc);
             self.restore_active_view(view);
         }
         true
@@ -3780,10 +3804,16 @@ impl UiPlatform for Win32Ui {
         }
         // Same view-snapshot dance as `capture_text_from_doc`.
         let view = self.snapshot_active_view();
+        if prior_doc != 0 {
+            self.editor
+                .send(codepp_scintilla_sys::SCI_ADDREFDOCUMENT, 0, prior_doc);
+        }
         self.editor.send(SCI_SETDOCPOINTER, 0, scintilla_doc);
         let dirty = self.editor.send(SCI_GETMODIFY, 0, 0) != 0;
         if prior_doc != 0 {
             self.editor.send(SCI_SETDOCPOINTER, 0, prior_doc);
+            self.editor
+                .send(codepp_scintilla_sys::SCI_RELEASEDOCUMENT, 0, prior_doc);
             self.restore_active_view(view);
         }
         dirty
@@ -3795,9 +3825,11 @@ impl UiPlatform for Win32Ui {
             return;
         }
         // Drops the tab-owned reference. A still-bound document only
-        // goes 2→1 here (the view holds its own reference; the free
-        // happens at the next `SCI_SETDOCPOINTER`); an unbound one is
-        // freed immediately. Same call the `ClosedTab` path makes in
+        // goes 2→1 here: the view holds its own reference, and the next
+        // real rebind frees it. Not a temporary swap: the doc-pointer
+        // helpers and the Replace-in-Files loop take a reference of their
+        // own on the document they return to. An unbound one is freed
+        // immediately. Same call the `ClosedTab` path makes in
         // `handle_close_active_tab` — see the trait docs.
         self.editor.send(SCI_RELEASEDOCUMENT, 0, doc);
     }
@@ -3834,10 +3866,16 @@ impl UiPlatform for Win32Ui {
         // `SCI_SETDOCPOINTER` clears the selection, including the swap
         // back, so the active tab's caret and scroll must be restored.
         let view = self.snapshot_active_view();
+        if prior_doc != 0 {
+            self.editor
+                .send(codepp_scintilla_sys::SCI_ADDREFDOCUMENT, 0, prior_doc);
+        }
         self.editor.send(SCI_SETDOCPOINTER, 0, doc);
         convert_eols(&self.editor, eol);
         if prior_doc != 0 {
             self.editor.send(SCI_SETDOCPOINTER, 0, prior_doc);
+            self.editor
+                .send(codepp_scintilla_sys::SCI_RELEASEDOCUMENT, 0, prior_doc);
             self.restore_active_view(view);
         }
         true
@@ -4318,15 +4356,14 @@ fn sc_eol_for(eol: Eol) -> usize {
 /// Every fresh document minted via `SCI_CREATEDOCUMENT` starts
 /// with Scintilla's built-in `tabInChars = 8`, so this must be
 /// called immediately after each such creation — same
-/// discipline as `EditorHandle::enable_change_history`. Currently called at
-/// four sites: editor creation in [`run`], and each of
-/// the three real-doc `SCI_CREATEDOCUMENT` sites in
-/// [`Win32Ui::activate_tab`], the post-close-tab lazy-materialise
-/// path, and the `handle_tab_selchange` lazy-populate path. The
-/// short-lived placeholder doc in the tab-close path
-/// deliberately skips this call — the doc is bound for one
-/// paint cycle and immediately released, and no indent-guide
-/// paint on a blank buffer would be observable.
+/// discipline as `EditorHandle::enable_change_history`. Called at
+/// two sites: editor creation in [`run`], and the
+/// `SCI_CREATEDOCUMENT` in [`Win32Ui::activate_tab`], which makes
+/// every tab's document — the tab switch and the close reach it
+/// through `Shell::bind_active_view`. The short-lived placeholder
+/// doc in the tab-close path deliberately skips this call — the
+/// doc is bound for one paint cycle and immediately released, and
+/// no indent-guide paint on a blank buffer would be observable.
 ///
 /// Without this call, Scintilla defaults to 8 and the
 /// indent-guide algorithm draws guides at multiples of 8 —
@@ -5123,20 +5160,6 @@ unsafe fn handle_close_active_tab_inner(hwnd: HWND) -> CloseOutcome {
         return CloseOutcome::NothingToClose;
     };
 
-    // Defense in depth: a refactor that ever produced
-    // `closed.scintilla_doc == closed.new_active_doc` (e.g. a
-    // future "reload in place" path that reuses the existing
-    // doc) would have us release the view's only ref to the
-    // doc before the rebind — UAF. Catch it as an assert in
-    // debug builds; release builds rely on the structural
-    // guarantee that `SCI_CREATEDOCUMENT` returns unique pointers.
-    if closed.scintilla_doc != 0 && closed.new_active_doc != 0 {
-        debug_assert_ne!(
-            closed.scintilla_doc, closed.new_active_doc,
-            "closed and new-active doc pointers must be distinct"
-        );
-    }
-
     // Phase 2: platform cleanup. Re-acquire the borrow; no plugin
     // code runs in this phase either (TCM_*, SCI_* are all
     // synchronous and don't re-enter our wnd_proc).
@@ -5175,21 +5198,22 @@ unsafe fn handle_close_active_tab_inner(hwnd: HWND) -> CloseOutcome {
                 .send(SCI_RELEASEDOCUMENT, 0, closed.scintilla_doc);
         }
 
-        // Rebind the view to whatever's now active. Three sub-
-        // cases:
+        // Rebind the view to whatever's now active. Two cases:
         //
-        //  1. New active tab has a materialized doc — straight
-        //     SCI_SETDOCPOINTER. View releases the just-released
-        //     `closed.scintilla_doc` (now its final release →
-        //     buffer freed) and AddRefs the new doc.
-        //  2. New active tab has *no* materialized doc (it was
-        //     loaded in the background and never activated).
-        //     **Must** lazy-create + populate the doc here, not
-        //     defer to a future click: leaving the view bound to
-        //     the just-released document would create a use-after-
-        //     free window where any keystroke or paint touches a
-        //     buffer whose external refcount is zero.
-        //  3. No new active tab (closed the last open tab). Bind
+        //  1. A tab is now active: bind it through the shell —
+        //     `Shell::bind_active_view` — as `handle_tab_selchange`
+        //     does, and as `ui_gtk` and `ui_cocoa` always have here.
+        //     **Must** happen now, not on a future click: leaving the
+        //     view bound to the just-released document would create a
+        //     use-after-free window where any keystroke or paint
+        //     touches a buffer whose external refcount is zero. The
+        //     bind's `activate_tab` re-points the view and the Document
+        //     Map's miniature, which drops the last two references on
+        //     `closed.scintilla_doc` and frees it, and takes references
+        //     on the new document. Its first call is that bind, so
+        //     nothing swaps the view away from the doomed document and
+        //     back first.
+        //  2. No new active tab (closed the last open tab). Bind
         //     the view to a fresh empty placeholder doc so the user
         //     sees an empty editor — not the just-closed file's
         //     stale content. Without this, Scintilla's view-implicit
@@ -5270,40 +5294,23 @@ unsafe fn handle_close_active_tab_inner(hwnd: HWND) -> CloseOutcome {
             );
         }
         if let Some(active_idx) = state.shell.active_tab {
-            if closed.new_active_doc != 0 {
-                state
-                    .editor
-                    .send(SCI_SETDOCPOINTER, 0, closed.new_active_doc);
-            } else if let Some(text) = state.shell.tabs.get(active_idx).map(|t| t.text.clone()) {
-                // Sub-case 2: lazily materialize the doc from the
-                // tab's stored text. `tabs.get(active_idx)` rather
-                // than `[active_idx]` so a future refactor that
-                // could put `active_tab` out of range fails as a
-                // missed-rebind no-op rather than a panic across
-                // the `extern "system"` wnd_proc frame. Same
-                // pattern as `handle_tab_selchange`'s lazy-create
-                // branch.
-                let new_doc = state
-                    .editor
-                    .send(SCI_CREATEDOCUMENT, 0, SC_DOCUMENTOPTION_DEFAULT);
-                state.editor.send(SCI_SETDOCPOINTER, 0, new_doc);
-                // Per-doc state — every fresh document needs
-                // change-history enabled AND tab width re-applied
-                // (`SCI_SETTABWIDTH` is per-document; see the
-                // `apply_tab_width` doc). The view-side margin
-                // already exists from `configure_change_history_margin`
-                // at editor creation.
-                state.editor.enable_change_history();
-                apply_tab_width(&state.editor);
-                let mut bytes = Vec::with_capacity(text.len() + 1);
-                bytes.extend_from_slice(text.as_bytes());
-                bytes.push(0);
-                state.editor.send(SCI_SETTEXT, 0, bytes.as_ptr() as isize);
-                state.editor.send(SCI_EMPTYUNDOBUFFER, 0, 0);
-                state.editor.send(SCI_SETSAVEPOINT, 0, 0);
-                if let Some(tab) = state.shell.tabs.get_mut(active_idx) {
-                    tab.scintilla_doc = new_doc;
-                }
+            // Through the shell's binder rather than by hand, as this
+            // path did until Phase 5: it bound the new tab's document as
+            // it was, or built one from `Tab::text` when there was none,
+            // and so skipped everything `bind_and_fill` knows. A
+            // background tab whose reload had landed while it held a
+            // clean document (`Tab::doc_needs_text`) came back showing
+            // its pre-reload text, which the next Ctrl+S wrote over the
+            // newer file; a shadow rewritten in memory
+            // (`Tab::shadow_unsaved`) went in clean at the save point,
+            // so the tab then closed without a prompt and the rewrite
+            // was lost. Found by the third security audit of the
+            // tab-switch change. The shell follows the bind with
+            // `apply_lang` and `update_status`, which this path used to
+            // make by hand.
+            {
+                let (shell, mut win32_ui) = state.split();
+                shell.bind_active_view(&mut win32_ui);
             }
 
             // Sync the visual selection on the tab strip with
@@ -5317,54 +5324,15 @@ unsafe fn handle_close_active_tab_inner(hwnd: HWND) -> CloseOutcome {
                 );
             }
 
-            // Re-apply the new active tab's lexer/theme AND refresh
-            // the status bar. Both fields live on the *view* (lexer
-            // attachment) and the chrome (status bar text), neither
-            // of which the rebind above touches — without these
-            // calls the user sees the closed tab's colours and
-            // status text after the close. The two snapshots happen
-            // together so we hold the &Tab borrow once. Pulled out
-            // of the borrow scope by Copy: status_hwnd is HWND and
-            // editor is EditorHandle, both Copy; the Win32Ui
-            // methods only touch self.{editor,status_hwnd}, so the
-            // outer &mut state borrow stays sound across the calls.
-            let snapshot = state
-                .shell
-                .tabs
-                .get(active_idx)
-                .map(|t| (t.lang, t.encoding.clone(), t.eol, t.byte_len));
-            if let Some((lang, encoding, eol, byte_len)) = snapshot {
-                let mut win32_ui = Win32Ui {
-                    status_hwnd: state.status_hwnd,
-                    tab_hwnd: state.tab_hwnd,
-                    toolbar_hwnd: state.toolbar_hwnd,
-                    main_menu: state.main_menu,
-                    accel_handle: &raw mut state.accel_handle,
-                    plugin_modeless_dialogs: &raw mut state.plugin_modeless_dialogs,
-                    dock_dialogs: &raw mut state.dock_dialogs,
-                    dock_layout: &raw mut state.dock_layout,
-                    dock_dirty: &raw mut state.dock_dirty,
-                    udl_registry: &raw const state.shell.udl_registry,
-                    editor: state.editor,
-                    docmap_editor: state.docmap_editor,
-                };
-                <Win32Ui as UiPlatform>::apply_lang(&mut win32_ui, lang);
-                <Win32Ui as UiPlatform>::update_status(
-                    &mut win32_ui,
-                    lang,
-                    &encoding,
-                    eol,
-                    byte_len,
-                );
-                // Same SCI_SETDOCPOINTER-doesn't-fire-SCN_UPDATEUI
-                // story as `handle_tab_selchange`: refresh toolbar
-                // state explicitly so Undo/Redo and view-toggle
-                // checks reflect the now-active buffer.
-                // SAFETY: `state.toolbar_hwnd` is owned by us;
-                // `state.editor` is bound to the active doc.
-                unsafe {
-                    toolbar::refresh_state(state.toolbar_hwnd, &state.editor);
-                }
+            // Same SCI_SETDOCPOINTER-doesn't-fire-SCN_UPDATEUI story
+            // as `handle_tab_selchange`: refresh toolbar state
+            // explicitly so Undo/Redo and view-toggle checks reflect
+            // the now-active buffer. The bind above already re-applied
+            // the lexer and refreshed the status bar.
+            // SAFETY: `state.toolbar_hwnd` is owned by us;
+            // `state.editor` is bound to the active doc.
+            unsafe {
+                toolbar::refresh_state(state.toolbar_hwnd, &state.editor);
             }
         }
     }
@@ -5378,15 +5346,14 @@ unsafe fn handle_close_active_tab_inner(hwnd: HWND) -> CloseOutcome {
         fire_queued_notifications(hwnd);
     }
     // Sync the Document Map's miniature view to the surviving
-    // active tab. The "no tabs left" path invokes
-    // `ensure_one_tab`, which calls `shell.new_untitled(&mut ui)`
-    // — that trip through `Win32Ui::activate_tab` handles the
-    // map sync via the primary path. This explicit call covers
-    // the surviving-active-tab close case where the Win32-side
-    // rebind above (`SCI_SETDOCPOINTER` on the main view for the
-    // new active doc) doesn't go through the trait method.
-    // Runs after the notifications block so a re-entrant plugin
-    // can't race the sync.
+    // active tab. Both outcomes already bind through
+    // `Win32Ui::activate_tab`, which syncs the map in lockstep: the
+    // "no tabs left" path through `ensure_one_tab`'s
+    // `shell.new_untitled(&mut ui)`, and a surviving active tab
+    // through `Shell::bind_active_view` above. Kept as defence in
+    // depth, as `handle_tab_selchange` keeps its own call. Runs
+    // after the notifications block so a re-entrant plugin can't
+    // race the sync.
     unsafe {
         sync_docmap_to_active_tab(hwnd);
     }
@@ -5505,7 +5472,15 @@ unsafe fn handle_tab_selchange(hwnd: HWND) {
         // sync_tab_strip keeps them in lockstep.
         return;
     }
-    state.shell.active_tab = Some(new_idx);
+    // Through the shell's one rule for a switch, which announces
+    // `NPPN_BUFFERACTIVATED` only when the active buffer changes. This
+    // handler is also the rebind after a switch a shell operation has
+    // already made and announced — an open of a file that is already
+    // open, a plugin's `NPPM_SWITCHTOFILE` / `NPPM_ACTIVATEDOC` — and it
+    // used to queue the notification itself, unconditionally, so plugins
+    // heard about those switches twice, and about a switch to the tab
+    // already in front once.
+    state.shell.switch_to_tab(new_idx);
     // Begin/End Select is anchored to the byte position of a specific
     // buffer; switching tabs makes the anchor meaningless. Reset the
     // arm so the menu refresh on the new tab paints both entries
@@ -5559,11 +5534,6 @@ unsafe fn handle_tab_selchange(hwnd: HWND) {
         update_window_title(hwnd, &state.shell);
     }
 
-    // Queue NPPN_BUFFERACTIVATED for plugins that track the
-    // active buffer. The borrow on `state` is released by NLL at
-    // its last use here (the queue method), before
-    // `fire_queued_notifications` re-acquires a fresh borrow.
-    state.shell.queue_buffer_activated();
     // Repaint the entire tab strip so both the previously-active
     // and newly-active cells redraw with their correct active /
     // inactive styling. The system tab control invalidates only
@@ -8384,8 +8354,12 @@ fn present_pending_dialog(hwnd: HWND, dialog: PendingDialog) {
                 // SAFETY: called on the UI thread with no aliasing
                 // `WindowState` borrow live (the drain's borrow ended
                 // before this fn was called).
+                // The shell decides what the Yes consents to, from what
+                // the buffer holds now: over nothing unsaved it consents
+                // to nothing, so text typed during the load survives it.
                 if let Some(state) = unsafe { state_from_hwnd(hwnd) } {
-                    state.shell.confirm_reload(path);
+                    let (shell, mut ui) = state.split();
+                    shell.confirm_reload(&mut ui, path);
                 }
             }
         }
@@ -15506,13 +15480,28 @@ unsafe fn apply_fif_in_buffer_replace(
             if !walk_opts.path_matches(path) {
                 return None;
             }
-            // A tab whose document was never materialized has no
-            // in-memory buffer to rewrite. Should be impossible in
-            // practice (every loaded tab gets activated at least
-            // once, which calls SCI_CREATEDOCUMENT), but guard so a
-            // future code path that defers materialization doesn't
-            // silently corrupt by writing into doc 0.
+            // A tab whose document was never materialized — loaded in
+            // the background and not shown yet, or released by a
+            // confirmed reload — has no document to rewrite here, and
+            // writing into doc 0 would corrupt. Skipping it here is not
+            // skipping it: the worker hands its replacement to
+            // `Shell::drain`, which writes it into the tab's text
+            // (`apply_open_buffer_replacement`).
             if tab.scintilla_doc == 0 {
+                return None;
+            }
+            // Nor does one whose document is stale: a reload landed on
+            // it in the background, and the file's text waits in
+            // `Tab::text` for the next activation (`Tab::doc_needs_text`).
+            // Replacing inside the old text dirtied the document, the
+            // worker's own replacement for the file was then skipped as
+            // dirty, and the activation kept the document and dropped the
+            // reloaded text, so a Save wrote the old text over the newer
+            // file. Left alone here, the worker's replacement, computed
+            // from the file on disk, reaches the document through
+            // `Shell::drain`. Found by the fourth security audit of the
+            // tab-switch change.
+            if tab.doc_needs_text {
                 return None;
             }
             Some(tab.scintilla_doc)
@@ -15527,6 +15516,14 @@ unsafe fn apply_fif_in_buffer_replace(
     // doc-swap dance. Without this the user's active tab silently
     // changes to whichever candidate was visited last.
     let original_doc = state.editor.send(SCI_GETDOCPOINTER, 0, 0);
+    // Own a reference on it for the whole swap loop (see `with_doc`'s pin on
+    // the other backends): the first `SCI_SETDOCPOINTER` below drops the
+    // view's, and a document the view alone holds would be freed.
+    if original_doc != 0 {
+        state
+            .editor
+            .send(codepp_scintilla_sys::SCI_ADDREFDOCUMENT, 0, original_doc);
+    }
 
     // Suppress repaint while we cycle the bound document. Each
     // SCI_SETDOCPOINTER triggers a full editor repaint, which would
@@ -15621,6 +15618,11 @@ unsafe fn apply_fif_in_buffer_replace(
     // Restore the original document. Redraw is restored when
     // `_redraw_guard` drops at the end of this scope.
     state.editor.send(SCI_SETDOCPOINTER, 0, original_doc);
+    if original_doc != 0 {
+        state
+            .editor
+            .send(codepp_scintilla_sys::SCI_RELEASEDOCUMENT, 0, original_doc);
+    }
     // Re-measure the line-number margin's width against the restored
     // doc: the loop above may have rewritten the *active* tab's buffer
     // across a digit boundary, and the `SCN_MODIFIED` arm's re-measure
@@ -22250,12 +22252,15 @@ unsafe fn handle_tree_double_click(main_hwnd: HWND, tree: HWND) {
     // A fresh open queues a load; the tab strip / editor update when
     // it completes (WM_APP_WAKE drain). An already-open target moved
     // `active_tab` with no load to wake, so rebind the view here.
+    // Deliver last, once the view is bound: the switch queued
+    // `NPPN_BUFFERACTIVATED`, and a plugin reading the view from its
+    // handler must find the buffer it was told about.
     unsafe {
-        crate::fire_queued_notifications(main_hwnd);
         refresh_tab_chrome(main_hwnd);
         if matches!(outcome, OpenFileOutcome::SwitchedToExisting(_)) {
             handle_tab_selchange(main_hwnd);
         }
+        crate::fire_queued_notifications(main_hwnd);
     }
 }
 
@@ -23703,15 +23708,17 @@ unsafe fn toggle_docmap_panel(main_hwnd: HWND) {
 /// Defensive re-sync of the map view's Scintilla binding to the
 /// active tab's document. The **primary** sync path is
 /// [`Win32Ui::activate_tab`], which rebinds the map view in
-/// lockstep with the main view — that covers every Shell-driven
-/// activation (File→Open, File→New, session restore, plugin
-/// `NPPM_SWITCHTOFILE`, `ensure_one_tab`). This helper is called
-/// from the Win32-side tab-switch / tab-close paths that mutate
-/// the main view's binding without going through the trait
-/// method: `handle_tab_selchange`, `handle_close_active_tab_inner`,
-/// `show_docmap_panel` (belt-and-braces after a hidden-panel
-/// tab switch), and the cold-start seed. Same-doc redundant
-/// rebinds are Scintilla no-ops so the double coverage is safe.
+/// lockstep with the main view — that covers every activation,
+/// the tab switch and the close included, since both bind through
+/// `Shell::bind_active_view`. This helper runs after those two
+/// (`handle_tab_selchange`, `handle_close_active_tab_inner`) as
+/// defence in depth, seeds the map at cold start, and catches the
+/// map up when the dock reconciler
+/// (`dock_panels::apply_dock_layout`) shows it. A same-doc
+/// rebind is not a no-op for Scintilla — it resets the view's
+/// selection and folds — but the miniature takes no input and folds
+/// nothing, so it has neither to lose; `Win32Ui::activate_tab`
+/// re-points it unconditionally for the same reason.
 ///
 /// Cheap: one `SCI_SETDOCPOINTER` direct-call. Scintilla's
 /// ref-counting makes the shared binding safe — the doc's
@@ -26140,11 +26147,13 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                                 // right-click → Open with only an
                                 // untouched "new 1" open replaces it.
                                 let outcome = open_user_path(hwnd, target.path);
-                                fire_queued_notifications(hwnd);
                                 refresh_tab_chrome(hwnd);
                                 if matches!(outcome, OpenFileOutcome::SwitchedToExisting(_)) {
                                     handle_tab_selchange(hwnd);
                                 }
+                                // After the bind, as in the tree's
+                                // double-click.
+                                fire_queued_notifications(hwnd);
                             }
                         }
                     }
@@ -26585,31 +26594,45 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                         //      content and the user said No to the
                         //      Confirm Reload dialog, the stale
                         //      version they were keeping.
-                        let (has_path, dirty) = if let Some(state) = state_from_hwnd(hwnd) {
-                            let (has_path, cached_dirty) = state
+                        //
+                        // The path is read with the dirty bit, before the
+                        // question, and the reload goes to that path: the
+                        // question's modal pump can run a plugin's
+                        // cross-thread `SendMessage`, which may switch
+                        // tabs, and the Yes is consent to discard the
+                        // edits of the file the question was about.
+                        let (path, dirty) = if let Some(state) = state_from_hwnd(hwnd) {
+                            let (path, cached_dirty) = state
                                 .shell
                                 .active()
-                                .map_or((false, false), |t| (t.path.is_some(), t.dirty));
+                                .map_or((None, false), |t| (t.path.clone(), t.dirty));
                             let dirty = state.editor.send(SCI_GETMODIFY, 0, 0) != 0 || cached_dirty;
-                            (has_path, dirty)
+                            (path, dirty)
                         } else {
-                            (false, false)
+                            (None, false)
                         };
-                        if has_path {
-                            let proceed = if dirty {
-                                show_yes_no_dialog(
-                                    hwnd,
-                                    "Reload from Disk",
-                                    "Discard unsaved changes and reload from disk?",
-                                )
+                        if let Some(path) = path {
+                            // Only the question's Yes is consent to discard
+                            // unsaved work. With nothing unsaved nothing is
+                            // asked, and the reload goes unconfirmed, so an
+                            // edit typed while the load is under way
+                            // survives it.
+                            let consent = if !dirty {
+                                Some(codepp_shell::ReloadConsent::Unconfirmed)
+                            } else if show_yes_no_dialog(
+                                hwnd,
+                                "Reload from Disk",
+                                "Discard unsaved changes and reload from disk?",
+                            ) {
+                                Some(codepp_shell::ReloadConsent::Confirmed)
                             } else {
-                                true
+                                None
                             };
-                            if proceed {
+                            if let Some(consent) = consent {
                                 if let Some(state) = state_from_hwnd(hwnd) {
                                     let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(
                                         || {
-                                            state.shell.reload_active();
+                                            state.shell.request_reload(path, consent);
                                         },
                                     ));
                                 }
@@ -30421,6 +30444,28 @@ mod plugin_reentry_guards {
         panic!("no statement end after byte {from}");
     }
 
+    /// The brace-matched block that follows `marker` in `src`.
+    pub(super) fn block_after(src: &str, marker: &str) -> String {
+        let start = src
+            .find(marker)
+            .unwrap_or_else(|| panic!("no `{marker}` in the source"));
+        let open = src[start..].find('{').expect("no block") + start;
+        let mut depth = 0usize;
+        for (i, c) in src[open..].char_indices() {
+            match c {
+                '{' => depth += 1,
+                '}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return src[open..=open + i].to_string();
+                    }
+                }
+                _ => {}
+            }
+        }
+        panic!("unterminated block after `{marker}`");
+    }
+
     /// `body` with every `//` line comment removed, so a guard matches
     /// the construct and not a mention of it in a comment — the pitfall
     /// DESIGN.md §7.2 records for the m3c and m4d guards.
@@ -30429,6 +30474,51 @@ mod plugin_reentry_guards {
             .map(|l| l.split("//").next().unwrap_or(""))
             .collect::<Vec<_>>()
             .join("\n")
+    }
+
+    /// `body` with every `//` comment and the contents of every string
+    /// literal removed, for a guard whose pinned text must be code: a
+    /// quoted copy of it, in a log line or a message, satisfies
+    /// [`code_only`]. As crude as `ui_gtk`'s and `ui_cocoa`'s scanners:
+    /// a raw string, a block comment, a `'"'` char literal or a string
+    /// that runs over a line end throws it off. The older guards here
+    /// keep `code_only`; some of them match string contents on purpose.
+    pub(super) fn code_without_strings(body: &str) -> String {
+        let mut out = String::with_capacity(body.len());
+        for line in body.lines() {
+            let line = line.split("//").next().unwrap_or("");
+            let mut in_str = false;
+            let mut prev_backslash = false;
+            for c in line.chars() {
+                match c {
+                    '"' if !prev_backslash => in_str = !in_str,
+                    _ if in_str => {}
+                    _ => out.push(c),
+                }
+                prev_backslash = c == '\\' && !prev_backslash;
+            }
+            out.push('\n');
+        }
+        out
+    }
+
+    #[test]
+    fn the_string_free_scanner_keeps_code_and_drops_quotes() {
+        let sample = "let a = f(); // f();\n\
+                      let m = \"f();\";\n\
+                      let e = \"a \\\"f();\\\" b\"; let b = g();\n";
+        let code = code_without_strings(sample);
+        assert_eq!(code.matches("f();").count(), 1, "{code}");
+        assert!(
+            code.contains("let b = g();"),
+            "code after a string was lost: {code}"
+        );
+        // An escaped backslash does not escape the quote after it.
+        let code = code_without_strings("let p = \"C:\\\\\"; let k = h();");
+        assert!(
+            code.contains("let k = h();"),
+            "an escaped backslash swallowed the code after it: {code}"
+        );
     }
 
     /// The close announces `NPPN_FILEBEFORECLOSE`, delivers it with no
@@ -30454,6 +30544,234 @@ mod plugin_reentry_guards {
             !body.contains("PluginCallGuard::enter"),
             "the close arms the guard around the announcement; the plugin's \
              NPPM_GETFULLPATHFROMBUFFERID is then refused"
+        );
+    }
+
+    /// A tab switch goes through the shell's one rule for a switch,
+    /// which announces `NPPN_BUFFERACTIVATED` only when the active
+    /// buffer changes. Written back to a bare `active_tab` assignment it
+    /// would compile and announce nothing — `queue_buffer_activated` is
+    /// private, so the old trailing call cannot be restored beside it —
+    /// and a user's click on the strip would go unheard, which no
+    /// headless test here can see.
+    #[test]
+    fn a_tab_switch_goes_through_the_shells_rule() {
+        let body = code_only(&fn_body(production_src(), "handle_tab_selchange"));
+        assert!(
+            body.contains("state.shell.switch_to_tab(new_idx);"),
+            "`handle_tab_selchange` no longer switches through `Shell::switch_to_tab`"
+        );
+        assert!(
+            !body.contains("active_tab = Some"),
+            "`handle_tab_selchange` moves `active_tab` itself, which announces nothing"
+        );
+    }
+
+    /// Opening a file that is already open is a switch the shell has
+    /// already announced, so the two workspace-tree opens must deliver
+    /// only once `handle_tab_selchange` has bound the view. Delivered
+    /// first, a plugin's `NPPN_BUFFERACTIVATED` handler is told about
+    /// the new buffer and reads the previous one out of the view. Both
+    /// orders compile, so the order is pinned here, and the count
+    /// stops a second, early delivery from coming back beside it.
+    #[test]
+    fn a_dedupe_open_from_the_workspace_delivers_after_the_rebind() {
+        let src = production_src();
+        let dblclk = code_only(&fn_body(src, "handle_tree_double_click"));
+        let start = src
+            .find("ID_WORKSPACE_CTX_OPEN_FILE => {")
+            .expect("the workspace context menu's Open arm is gone");
+        let end = src[start..]
+            .find("ID_WORKSPACE_CTX_RUN_BY_SYSTEM =>")
+            .expect("the arm after the context menu's Open is gone")
+            + start;
+        let ctx = code_only(&src[start..end]);
+        for (name, body, hwnd) in [
+            ("double-click", dblclk.as_str(), "main_hwnd"),
+            ("context menu Open", ctx.as_str(), "hwnd"),
+        ] {
+            let fire = format!("fire_queued_notifications({hwnd});");
+            let rebind = format!("handle_tab_selchange({hwnd});");
+            assert_eq!(
+                body.matches(&fire).count(),
+                1,
+                "the workspace {name} must deliver exactly once"
+            );
+            let rebind_at = body
+                .find(&rebind)
+                .unwrap_or_else(|| panic!("the workspace {name} no longer rebinds a dedupe open"));
+            let fire_at = body.find(&fire).expect("counted above");
+            assert!(
+                rebind_at < fire_at,
+                "the workspace {name} delivers before the view is rebound"
+            );
+        }
+    }
+
+    /// Binding the document the view already shows must leave the view
+    /// alone: `SCI_SETDOCPOINTER` with the bound document clears the
+    /// selection and the folds, and the shell rebinds where the view may
+    /// have been left on another document — a reload that failed — which
+    /// most of the time it was not. Both forms compile, so the skip is
+    /// pinned here, and the count stops a second, unconditional bind
+    /// coming back beside it.
+    #[test]
+    fn binding_the_bound_document_leaves_the_view_alone() {
+        let squashed: String = code_only(&fn_body(production_src(), "activate_tab"))
+            .chars()
+            .filter(|c| !c.is_whitespace())
+            .collect();
+        assert!(
+            squashed.contains(
+                "ifself.editor.send(SCI_GETDOCPOINTER,0,0)!=doc{\
+                 self.editor.send(SCI_SETDOCPOINTER,0,doc);}"
+            ),
+            "`activate_tab` re-binds the document the view already shows"
+        );
+        assert_eq!(
+            squashed
+                .matches("self.editor.send(SCI_SETDOCPOINTER")
+                .count(),
+            1,
+            "`activate_tab` binds the main view in more than one place"
+        );
+    }
+
+    /// File → Reload reads the path with the dirty bit, before its
+    /// question, and reloads that path: the question's modal pump can run
+    /// a plugin's cross-thread `SendMessage` that switches tabs, and the
+    /// Yes is consent to discard the edits of the file it was about.
+    #[test]
+    fn file_reload_reloads_the_file_it_asked_about() {
+        let src = production_src();
+        let start = src
+            .find("ID_FILE_RELOAD => {")
+            .expect("the File → Reload arm is gone");
+        let end = src[start..]
+            .find("ID_FILE_CLOSE => {")
+            .expect("the arm after File → Reload is gone")
+            + start;
+        let arm = code_only(&src[start..end]);
+        let sampled = arm
+            .find("let (path, dirty) =")
+            .expect("File → Reload no longer reads the path with the dirty bit");
+        let asked = arm
+            .find("show_yes_no_dialog(")
+            .expect("File → Reload no longer asks before discarding edits");
+        let reloaded = arm
+            .find("request_reload(path, consent)")
+            .expect("File → Reload no longer reloads the path it read");
+        assert!(
+            sampled < asked && asked < reloaded,
+            "read the path, ask, then reload that path"
+        );
+        assert_eq!(
+            arm.matches(".active()").count(),
+            1,
+            "File → Reload reads the active tab again after its question"
+        );
+        // And the answer is what gates the reload: Scintilla's own modify
+        // bit counts as unsaved, a dirty buffer reloads only on Yes, and a
+        // clean one reloads without asking and without consent to discard,
+        // so an edit typed while the load is under way survives it. A
+        // `true ||`, an `if false`, a dropped `SCI_GETMODIFY` or a clean
+        // reload confirmed unasked each compiles and reads naturally.
+        let squashed: String = arm.split_whitespace().collect();
+        assert!(
+            squashed.contains("letdirty=state.editor.send(SCI_GETMODIFY,0,0)!=0||cached_dirty;"),
+            "File → Reload no longer counts what Scintilla knows is modified as unsaved"
+        );
+        assert!(
+            squashed.contains(
+                "letconsent=if!dirty{Some(codepp_shell::ReloadConsent::Unconfirmed)}\
+                 elseifshow_yes_no_dialog(hwnd,\"ReloadfromDisk\",\
+                 \"Discardunsavedchangesandreloadfromdisk?\",)\
+                 {Some(codepp_shell::ReloadConsent::Confirmed)}else{None};"
+            ),
+            "File → Reload no longer reloads a dirty buffer only on the question's Yes, or \
+             confirms a reload nobody was asked about"
+        );
+        assert!(
+            block_after(&arm, "if let Some(consent) = consent {")
+                .contains("request_reload(path, consent)"),
+            "File → Reload reloads whatever the answer"
+        );
+        assert_eq!(
+            arm.matches("request_reload(").count(),
+            1,
+            "File → Reload reloads on a path other than its answer's"
+        );
+        assert!(
+            !arm.contains("confirm_reload("),
+            "File → Reload confirms a reload nobody was asked about"
+        );
+    }
+
+    /// The file-changed prompt's Yes goes through `Shell::confirm_reload`
+    /// with the UI, which decides from what the buffer holds whether the
+    /// Yes consents to discarding anything, and reloads the file the
+    /// prompt named. A confirmed reload requested here directly compiles
+    /// and reads naturally, and discards text typed while the file
+    /// reloads over a buffer that held nothing unsaved. The call must sit
+    /// inside the Yes branch and nowhere else in the arm: hoisted out of
+    /// it, a No reloads too.
+    #[test]
+    fn the_reload_prompt_lets_the_shell_decide_what_its_yes_consents_to() {
+        let arm = block_after(
+            &code_without_strings(&fn_body(production_src(), "present_pending_dialog")),
+            "PendingDialog::ConfirmReload(path) => {",
+        );
+        let yes = block_after(&arm, "if show_reload_dialog(hwnd, &path) {");
+        assert!(
+            yes.contains("shell.confirm_reload(&mut ui, path);")
+                && arm.matches("confirm_reload(").count() == 1
+                && !arm.contains("request_reload(")
+                && !arm.contains(".active()"),
+            "the reload prompt no longer passes its Yes, and only its Yes, to \
+             `Shell::confirm_reload` for the file it named"
+        );
+    }
+
+    /// Every helper that swaps the view to another document and back
+    /// holds a reference of its own on the one it returns to, across the
+    /// swap. The swap away drops the view's reference, and a document
+    /// only the view still held — one a tab has released, while the
+    /// active tab is still loading — would be freed there and then bound
+    /// again, dangling: the crash the third code review of the
+    /// tab-switch change reproduced on GTK.
+    #[test]
+    fn swap_helpers_hold_the_document_they_return_to() {
+        let src = production_src();
+        let pinned = |body: &str, what: &str, prior: &str, away: &str| {
+            let at = |needle: &str| {
+                body.find(needle)
+                    .unwrap_or_else(|| panic!("{what} no longer has `{needle}`"))
+            };
+            let held = at(&format!("SCI_ADDREFDOCUMENT, 0, {prior})"));
+            let swapped = at(away);
+            let back = at(&format!("SCI_SETDOCPOINTER, 0, {prior})"));
+            let let_go = at(&format!("SCI_RELEASEDOCUMENT, 0, {prior})"));
+            assert!(
+                held < swapped && swapped < back && back < let_go,
+                "{what}: hold the document before swapping away, let go after swapping back"
+            );
+        };
+        for (name, away) in [
+            (
+                "capture_text_from_doc",
+                "SCI_SETDOCPOINTER, 0, scintilla_doc)",
+            ),
+            ("replace_doc_text", "SCI_SETDOCPOINTER, 0, doc)"),
+            ("is_doc_dirty", "SCI_SETDOCPOINTER, 0, scintilla_doc)"),
+            ("convert_doc_eols", "SCI_SETDOCPOINTER, 0, doc)"),
+        ] {
+            pinned(&code_only(&fn_body(src, name)), name, "prior_doc", away);
+        }
+        pinned(
+            &code_only(&fn_body(src, "apply_fif_in_buffer_replace")),
+            "the Replace-in-Files loop",
+            "original_doc",
+            "SCI_SETDOCPOINTER, 0, *doc)",
         );
     }
 
@@ -30768,29 +31086,7 @@ mod drain_freeze_guards {
     //! Each scan matches the construct, not a mention of it in a
     //! comment (`code_only`), the lesson DESIGN.md §7.2 records.
 
-    use super::plugin_reentry_guards::{code_only, fn_body, production_src};
-
-    /// The brace-matched block that follows `marker` in `src`.
-    fn block_after(src: &str, marker: &str) -> String {
-        let start = src
-            .find(marker)
-            .unwrap_or_else(|| panic!("no `{marker}` in the source"));
-        let open = src[start..].find('{').expect("no block") + start;
-        let mut depth = 0usize;
-        for (i, c) in src[open..].char_indices() {
-            match c {
-                '{' => depth += 1,
-                '}' => {
-                    depth -= 1;
-                    if depth == 0 {
-                        return src[open..=open + i].to_string();
-                    }
-                }
-                _ => {}
-            }
-        }
-        panic!("unterminated block after `{marker}`");
-    }
+    use super::plugin_reentry_guards::{block_after, code_only, fn_body, production_src};
 
     /// The close takes the freeze before it samples the tab it will
     /// prompt about, so nothing can move `active_tab` between the
@@ -30874,6 +31170,31 @@ mod drain_freeze_guards {
             "the ID_FILE_CLOSE_ALL arm",
             "for _ in 0..initial {",
         );
+    }
+
+    /// Both Close-All loops stop at a close that did not happen: a
+    /// Cancel, a failed save, or a close a plugin refused. A `continue`
+    /// compiles as well, and the next iteration would close the same
+    /// tab again, asking about it once for every tab left.
+    #[test]
+    fn both_close_all_loops_stop_at_a_close_that_did_not_happen() {
+        let many: String = code_only(&fn_body(production_src(), "close_multiple_documents"))
+            .split_whitespace()
+            .collect();
+        assert!(
+            many.contains("CloseOutcome::Aborted|CloseOutcome::NothingToClose=>break,"),
+            "Close Multiple no longer stops when a close does not happen"
+        );
+        let all = code_only(&block_after(production_src(), "ID_FILE_CLOSE_ALL => {"));
+        for outcome in [
+            "CloseOutcome::Aborted => {",
+            "CloseOutcome::NothingToClose => {",
+        ] {
+            assert!(
+                block_after(&all, outcome).contains("break;"),
+                "Close All no longer stops at `{outcome}`"
+            );
+        }
     }
 
     /// The freeze cannot stop a plugin's cross-thread
@@ -31977,6 +32298,93 @@ mod dock_client_style_tests {
         assert!(
             reparent < restyle && restyle < framechange,
             "restyle must follow the reparent and precede the frame change"
+        );
+    }
+}
+
+#[cfg(test)]
+mod view_binding_guards {
+    //! Source-level guards for the rule that a path which puts a tab in
+    //! front binds the view through `Shell::bind_active_view` — the one
+    //! place that installs a stale document's newer text
+    //! (`Tab::doc_needs_text`) and promotes an unsaved shadow
+    //! (`Tab::shadow_unsaved`) — rather than by hand, and that the
+    //! in-buffer Replace-in-Files pass leaves a stale document to it.
+    //! A hand-rolled bind compiles, shows a document, and looks right
+    //! until a reload has landed in the background; it needs a real
+    //! Scintilla view to observe, so it is pinned in the source, the
+    //! same tool the other guards here use.
+
+    use super::plugin_reentry_guards::{
+        block_after, code_without_strings, fn_body, production_src,
+    };
+
+    /// Neither the close nor the tab switch binds or fills a document
+    /// itself. `body` is string-free code, so a quoted copy of the shell
+    /// call does not stand in for the call.
+    fn binds_through_the_shell(body: &str, what: &str) {
+        assert!(
+            body.contains("shell.bind_active_view(&mut win32_ui);"),
+            "{what} no longer binds the view through `Shell::bind_active_view`"
+        );
+        for by_hand in [
+            "SCI_SETDOCPOINTER",
+            "SCI_CREATEDOCUMENT",
+            "SCI_SETTEXT",
+            "activate_tab(",
+            "set_buffer_text(",
+        ] {
+            assert!(
+                !body.contains(by_hand),
+                "{what} binds or fills a document by hand (`{by_hand}`), skipping the \
+                 shell's handling of a stale document and an unsaved shadow"
+            );
+        }
+    }
+
+    /// The close binds the tab that is now in front through the shell.
+    /// It used to bind that tab's document as it was, so a background
+    /// tab whose reload had landed came back showing the pre-reload
+    /// text, which the next Ctrl+S wrote over the newer file.
+    #[test]
+    fn the_close_binds_the_next_tab_through_the_shell() {
+        let body =
+            code_without_strings(&fn_body(production_src(), "handle_close_active_tab_inner"));
+        binds_through_the_shell(
+            &block_after(&body, "if let Some(active_idx) = state.shell.active_tab {"),
+            "the close",
+        );
+    }
+
+    /// The in-buffer Replace-in-Files pass leaves a stale document to the
+    /// shell. Editing the old text in it dirties the document, so the
+    /// activation keeps it and drops the reload that landed on it, and
+    /// a Save writes the old text over the newer file.
+    #[test]
+    fn replace_in_files_leaves_a_stale_document_to_the_shell() {
+        let body = code_without_strings(&fn_body(production_src(), "apply_fif_in_buffer_replace"));
+        let candidates = body
+            .find("let candidates: Vec<isize> =")
+            .expect("the pre-pass no longer collects its candidate documents");
+        let skip = body[candidates..]
+            .find("if tab.doc_needs_text {\n                return None;")
+            .expect("the pre-pass no longer skips a stale document");
+        let first_edit = body[candidates..]
+            .find("SCI_SETDOCPOINTER")
+            .expect("the pre-pass no longer swaps to its candidates");
+        assert!(
+            skip < first_edit,
+            "the stale-document skip must sit in the candidate filter, before any edit"
+        );
+    }
+
+    /// A click on the tab strip binds through the shell, as it has since
+    /// Phase 5.
+    #[test]
+    fn a_tab_switch_binds_through_the_shell() {
+        binds_through_the_shell(
+            &code_without_strings(&fn_body(production_src(), "handle_tab_selchange")),
+            "the tab switch",
         );
     }
 }

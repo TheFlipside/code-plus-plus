@@ -178,6 +178,16 @@ pub trait UiPlatform {
     /// document to the single Scintilla view. Multi-tab Phase 3
     /// uses this pattern to keep each tab independent without
     /// owning multiple Scintilla controls.
+    ///
+    /// Binding the document the view already shows must leave the view
+    /// as it is — caret, selection, scroll position, folds. The shell
+    /// rebinds where the view may have been left on another document
+    /// (a reload that failed after a plugin switched to its tab, see
+    /// `apply_failed_load`), and most of the time it was not.
+    /// `SCI_SETDOCPOINTER` with the bound document is not a no-op: it
+    /// clears the selection and the fold state (`Editor::SetDocPointer`),
+    /// so an implementation skips it when `SCI_GETDOCPOINTER` already
+    /// answers the document.
     fn activate_tab(&mut self, idx: usize, scintilla_doc: isize) -> isize;
 
     /// Push the given decoded text into the *currently-active*
@@ -648,10 +658,19 @@ pub trait UiPlatform {
     /// one owned reference (from `SCI_CREATEDOCUMENT`), and a *bound*
     /// document additionally carries the view's own reference
     /// (`SCI_SETDOCPOINTER` addrefs). Releasing a still-bound document
-    /// therefore only drops 2→1 — the free happens at the next rebind,
-    /// by which point the incoming document has already been allocated
-    /// (see `ui_cocoa`'s `LAST_SEEDED_DOC` docs for why that ordering
-    /// holds) — while releasing an unbound one frees it immediately.
+    /// therefore only drops 2→1 — the free happens at the next real
+    /// rebind, by which point the incoming document has already been
+    /// allocated (see `ui_cocoa`'s `LAST_SEEDED_DOC` docs for why that
+    /// ordering holds) — while releasing an unbound one frees it
+    /// immediately. Until that rebind the view shows a document no tab
+    /// owns, held by the view alone, so **a helper that swaps the view
+    /// to another document and back must take a reference of its own on
+    /// the one it returns to** (`SCI_ADDREFDOCUMENT` before the swap,
+    /// `SCI_RELEASEDOCUMENT` after the swap back). The swap away drops
+    /// the view's reference, and without its own the helper would free
+    /// the document and then bind the freed pointer. Every such helper
+    /// does: `with_doc` on GTK and Cocoa, and on Win32 the doc-pointer
+    /// helpers and the Replace-in-Files loop.
     /// A backend with further views bound to the same document (e.g. an
     /// open Document Map) holds correspondingly more references, and
     /// the same rule extends: the free happens when the last binding
@@ -880,7 +899,7 @@ pub enum SessionRestoreEntry {
 #[derive(Debug, Clone)]
 pub enum PendingDialog {
     /// "File changed externally — reload?" prompt for `path`. If the
-    /// user accepts, the UI calls `Shell::confirm_reload(path)` to
+    /// user accepts, the UI calls `Shell::confirm_reload(ui, path)` to
     /// requeue the load.
     ConfirmReload(PathBuf),
     /// Non-fatal error: title and message strings to display.
@@ -1051,9 +1070,13 @@ pub struct Tab {
     /// result actually pertains to this tab (vs. a stale one if
     /// the user dropped a second file before the first finished).
     pub pending_load: Option<RequestId>,
-    /// Scintilla document pointer (`sptr_t`). Non-zero once the tab
-    /// has been attached to a Scintilla view. Milestone 6b's UI
-    /// populates this; milestone 6a leaves it 0.
+    /// Scintilla document pointer (`sptr_t`) the tab owns, or 0 while
+    /// it has none. A tab gets one the first time it is bound to the
+    /// view ([`Shell::bind_active_view`]); one loaded in the background
+    /// has none until it is first shown. The field can also go back to
+    /// 0: a reload confirmed over a background tab's unsaved edits
+    /// releases the document as the load lands, and the next activation
+    /// builds a fresh one from [`Self::text`].
     pub scintilla_doc: isize,
     /// Set when a load finishes onto a tab that is **not** the active
     /// one *and* already owns a Scintilla document, so
@@ -1101,22 +1124,31 @@ pub struct Tab {
     /// write the shadow to a recovery backup.
     pub shadow_unsaved: bool,
     /// The reload recorded in `pending_load` was **confirmed** — the
-    /// user answered the "reload and discard any unsaved edits?" prompt,
-    /// chose File → Reload, or a plugin asked with `alert = TRUE` and the
-    /// same prompt was answered — so unsaved work yields to it. Cleared
-    /// by [`Shell::request_reload`] for the one unconfirmed route, a
-    /// plugin's `NPPM_RELOADBUFFERID(alert = FALSE)`, which never
-    /// discards unsaved work anywhere: not on a background tab (the rule
-    /// that always held there) and, since the same change, not on the
-    /// active one either — the reload is declined and logged, and the
-    /// plugin can ask with the alert to get the prompt.
+    /// user agreed to discard the unsaved work this buffer held: a Yes
+    /// to the file-changed prompt, to File → Reload's question, or to
+    /// the same prompt a plugin's `alert = TRUE` raises, given while the
+    /// buffer held unsaved work — so that work yields to it. Cleared by
+    /// [`Shell::request_reload`] for every other route: a plugin's
+    /// `NPPM_RELOADBUFFERID(alert = FALSE)`, File → Reload of a buffer
+    /// with nothing unsaved, which asks nothing, and a Yes given over a
+    /// buffer with nothing unsaved ([`Shell::confirm_reload`] decides
+    /// which a Yes is). None of those discards unsaved work anywhere: not
+    /// on a background tab (the rule that always held there) and not on
+    /// the active one either — the reload is declined and logged. A
+    /// plugin can ask with the alert to get the prompt, and on the other
+    /// routes the work in question is an edit made while the load was
+    /// under way, which nobody agreed to lose.
     ///
-    /// Consent has to travel with the request because the decision is
-    /// made twice: when the load lands (`apply_load_result`), and — for
-    /// a background tab — again when the activation installs it
-    /// (`bind_and_fill`'s clobber check). It is therefore left set until
-    /// the load has landed and the install that consumes it has run, or
-    /// the load fails.
+    /// Consent travels with the request because the decision is made
+    /// when the load lands (`apply_load_result`), which may be well after
+    /// the Yes, and it is spent there whichever way the landing goes: the
+    /// unsaved work it covered is discarded then, on a background tab as
+    /// much as the active one, and a buffer clean at the landing had none
+    /// for it to cover. So it is set only while its load is in flight,
+    /// and an edit made after the landing is never discarded by it: the
+    /// activation that later fills a background tab decides by the
+    /// unsaved-work check alone. Cleared, too, when the load fails or a
+    /// later request replaces it.
     pub reload_confirmed: bool,
     /// N++-compatible `LangType` for this buffer. Phase 4 m1 derives
     /// it from the path extension on first load; later milestones
@@ -1590,17 +1622,12 @@ pub struct ClosedTab {
     pub path: Option<PathBuf>,
     /// Scintilla document pointer the closed tab owned. UI calls
     /// `SCI_RELEASEDOCUMENT` against this so Scintilla can free
-    /// the underlying buffer. Zero when the tab never had its
-    /// document materialized (rare — only background-loaded tabs
-    /// closed before first activation).
+    /// the underlying buffer. Zero when the tab had no document: one
+    /// loaded in the background and closed before it was first shown,
+    /// or one whose document a reload confirmed in the background
+    /// released. No tab left open owns the same document. The UI then
+    /// binds the tab now in front through [`Shell::bind_active_view`].
     pub scintilla_doc: isize,
-    /// Scintilla document pointer for the new active tab, if any.
-    /// UI calls `SCI_SETDOCPOINTER` on this to bind the view to
-    /// the now-visible tab. Zero when there's no new active tab
-    /// (closed the last open tab) or when the new active tab's
-    /// document hasn't been materialized yet — `handle_tab_selchange`
-    /// will lazily create one on the next user click.
-    pub new_active_doc: isize,
 }
 
 /// A notification the host must deliver to plugins **synchronously**,
@@ -2657,19 +2684,23 @@ impl Shell {
     }
 
     /// Queue `NPPN_BUFFERACTIVATED` for the currently-active tab.
-    /// Call sites: [`Self::switch_to_tab`], for an open that finds its
-    /// file already open and a plugin's `NPPM_SWITCHTOFILE` /
-    /// `NPPM_ACTIVATEDOC`; `apply_load_result` when a load lands on the
-    /// active tab; [`Self::new_untitled`]; a close that leaves a
-    /// different tab in front; and `ui_win32`'s `handle_tab_selchange`
-    /// on a user tab click. Each delivery fires after the `&mut Shell`
-    /// borrow drops, so plugin `beNotified` callbacks can
-    /// `SendMessage(NPPM_*)` back without aliasing UB.
+    /// Call sites: [`Self::switch_to_tab`], for every move onto a tab
+    /// that already exists, a user's included; `apply_load_result` when
+    /// a load lands on the active tab; [`Self::new_untitled`]; and a
+    /// close that leaves a different tab in front. Each delivery fires
+    /// after the `&mut Shell` borrow drops, so plugin `beNotified`
+    /// callbacks can `SendMessage(NPPM_*)` back without aliasing UB.
+    ///
+    /// Private, so no backend can announce an activation on its own:
+    /// `ui_win32`'s tab-selection handler used to, unconditionally,
+    /// which told plugins twice about every switch a shell operation
+    /// had already announced, and once about switches that changed
+    /// nothing.
     ///
     /// Every call queues one notification; with no active tab it queues
     /// nothing. Safe to call from sites that may race with a close-tab
     /// path.
-    pub fn queue_buffer_activated(&mut self) {
+    fn queue_buffer_activated(&mut self) {
         if let Some(tab) = self.active() {
             let buffer_id = tab.id as isize;
             self.pending_notifications
@@ -2678,8 +2709,9 @@ impl Shell {
     }
 
     /// Make the tab at `idx` the active one on behalf of whatever is
-    /// switching to it: a plugin's `NPPM_SWITCHTOFILE` or
-    /// `NPPM_ACTIVATEDOC`, or an open that finds its file already open.
+    /// switching to it: the user clicking the tab strip or picking a
+    /// buffer from a menu, a plugin's `NPPM_SWITCHTOFILE` or
+    /// `NPPM_ACTIVATEDOC`, an open that finds its file already open.
     /// Queues `NPPN_BUFFERACTIVATED` when, and only when, that changes
     /// which buffer is active. A switch to the tab already in front is
     /// not an activation: announcing it would have a plugin that audits
@@ -2979,6 +3011,23 @@ impl Shell {
                 return None;
             }
         }
+        // The UI releases the closed tab's document, so no tab left open
+        // may own the same one: the view, or a later bind, would go on
+        // using it after the release frees it. Checked before anything
+        // changes, so a failure leaves the close undone rather than half
+        // done.
+        debug_assert!(
+            {
+                let doc = self.tabs[idx].scintilla_doc;
+                doc == 0
+                    || self
+                        .tabs
+                        .iter()
+                        .enumerate()
+                        .all(|(i, t)| i == idx || t.scintilla_doc != doc)
+            },
+            "a tab left open shares the closed tab's Scintilla document"
+        );
         let removed = self.tabs.remove(idx);
 
         if let Some(p) = &removed.path {
@@ -3002,10 +3051,6 @@ impl Shell {
             Some(self.tabs.len() - 1)
         };
         self.active_tab = new_active;
-
-        let new_active_doc = new_active
-            .and_then(|i| self.tabs.get(i))
-            .map_or(0, |t| t.scintilla_doc);
 
         // Notifications, in the order N++ delivers them:
         //   1. NPPN_FILEBEFORECLOSE — delivered *synchronously* by the
@@ -3067,7 +3112,6 @@ impl Shell {
             buffer_id: removed.id,
             path: removed.path,
             scintilla_doc: removed.scintilla_doc,
-            new_active_doc,
         })
     }
 
@@ -4068,7 +4112,7 @@ impl Shell {
             // `get_buffer_text` and writes it to disk, so binding a
             // document whose tab has been loaded into in the background
             // would overwrite the file with stale bytes.
-            self.bind_and_fill(ui, idx, false);
+            self.bind_and_fill(ui, idx);
             self.active_tab = Some(idx);
 
             // Wrap the per-tab save in `catch_unwind` so a panic in
@@ -4129,32 +4173,6 @@ impl Shell {
         errors
     }
 
-    /// Re-read the active tab's file from disk, discarding any
-    /// in-buffer edits. Returns `false` (and does nothing) if the
-    /// active tab has no path (untitled buffer) or no tab is open.
-    ///
-    /// Phase 4 m8: drives File→Reload from Disk. Routes through
-    /// [`Self::confirm_reload`] (the same path the file-watcher
-    /// "external change detected, reload?" prompt takes), so the
-    /// in-buffer edits the user discards are exactly the same set
-    /// the watcher path would discard.
-    ///
-    /// Caller (the UI) is responsible for prompting the user
-    /// before calling this — `reload_active` itself doesn't ask.
-    /// The dirty check belongs in the UI because it requires
-    /// querying Scintilla's `SCI_GETMODIFY` directly (Code++
-    /// doesn't shadow dirty state on the `Tab`).
-    pub fn reload_active(&mut self) -> bool {
-        let path = self.active().and_then(|t| t.path.clone());
-        match path {
-            Some(p) => {
-                self.confirm_reload(p);
-                true
-            }
-            None => false,
-        }
-    }
-
     /// Save the active tab to a caller-supplied path, updating the
     /// tab's path metadata so subsequent Save (`Ctrl+S`) writes to
     /// the same destination. Driven by File→Save As… and by the
@@ -4182,14 +4200,12 @@ impl Shell {
         // view is not bound to it yet — `open_file` sets `active_tab`
         // immediately but defers the bind until the loader finishes —
         // so `ui.get_buffer_text()` below would return the *previous*
-        // tab's contents and write them out under this tab's identity.
-        // Same defect family as the failed-load reindex this commit
-        // fixes: the active tab and the bound document disagreeing.
-        // `save_current_to_disk` is already immune because it requires
-        // a path, which a still-loading fresh tab does not have; these
-        // two only require *an* active tab, so they need it explicitly.
+        // tab's contents and write them out under this tab's identity:
+        // the active tab and the bound document disagreeing.
+        // `save_current_to_disk` refuses the same way; requiring a path
+        // is not enough there, because a reload in flight keeps one.
         if self.active().is_some_and(|t| t.pending_load.is_some()) {
-            return Err(ShellError::NoActivePath);
+            return Err(ShellError::LoadInFlight);
         }
 
         let (old_path, encoding) = {
@@ -4250,7 +4266,6 @@ impl Shell {
                     // Same as `save_current_to_disk`: a save retires any
                     // reload outcome still waiting to be installed.
                     tab.doc_needs_text = false;
-                    tab.reload_confirmed = false;
                     // The buffer is no longer untitled — drop the
                     // sequence number so the tab strip switches
                     // from "new N" to the file's basename, and so
@@ -4346,14 +4361,12 @@ impl Shell {
         // view is not bound to it yet — `open_file` sets `active_tab`
         // immediately but defers the bind until the loader finishes —
         // so `ui.get_buffer_text()` below would return the *previous*
-        // tab's contents and write them out under this tab's identity.
-        // Same defect family as the failed-load reindex this commit
-        // fixes: the active tab and the bound document disagreeing.
-        // `save_current_to_disk` is already immune because it requires
-        // a path, which a still-loading fresh tab does not have; these
-        // two only require *an* active tab, so they need it explicitly.
+        // tab's contents and write them out under this tab's identity:
+        // the active tab and the bound document disagreeing.
+        // `save_current_to_disk` refuses the same way; requiring a path
+        // is not enough there, because a reload in flight keeps one.
         if self.active().is_some_and(|t| t.pending_load.is_some()) {
-            return Err(ShellError::NoActivePath);
+            return Err(ShellError::LoadInFlight);
         }
 
         let encoding = self
@@ -4877,6 +4890,32 @@ impl Shell {
         };
         let doc = self.tabs[idx].scintilla_doc;
 
+        // Unsaved work of every kind, checked before either branch
+        // below. `has_unsaved_work`, not `is_doc_dirty`: a
+        // crash-recovered buffer sits at its Scintilla save point and so
+        // reads clean, while its contents exist nowhere but memory;
+        // replacing into one would discard exactly the work the recovery
+        // preserved. A shadow that no longer matches disk — a plugin's
+        // EOL conversion, or an earlier Replace-in-Files run, waiting in
+        // `Tab::text` to be installed (`Tab::shadow_unsaved`) — is
+        // unsaved work too, and was not counted: whether the tab had no
+        // document yet or a stale one, the worker's text replaced it, so
+        // a second run threw the first run's replacements away and a
+        // conversion's line endings went while `Tab::eol` kept naming
+        // them. Found by the fifth security audit of the tab-switch
+        // change, older than it. Checking first also covers a recovery
+        // marker on a tab with no document, which no restore produces
+        // today (both restore paths bind a document at once), as
+        // defence.
+        if self.tabs[idx].shadow_unsaved || self.has_unsaved_work(ui, idx) {
+            return FifEvent::ReplacedInOpenBuffer {
+                job,
+                path,
+                replaced: 0,
+                outcome: OpenBufferOutcome::SkippedDirty,
+            };
+        }
+
         // A tab whose document was never materialised has no buffer to
         // edit — its content is still the text the loader produced,
         // which by definition matches disk. Update the shadow directly;
@@ -4895,19 +4934,6 @@ impl Shell {
                 path,
                 replaced,
                 outcome: OpenBufferOutcome::Replaced,
-            };
-        }
-
-        // `has_unsaved_work`, not `is_doc_dirty`: a crash-recovered
-        // buffer sits at its Scintilla save point and so reads clean,
-        // while its contents exist nowhere but memory. Replacing into
-        // one would discard exactly the work the recovery preserved.
-        if self.has_unsaved_work(ui, idx) {
-            return FifEvent::ReplacedInOpenBuffer {
-                job,
-                path,
-                replaced: 0,
-                outcome: OpenBufferOutcome::SkippedDirty,
             };
         }
 
@@ -4931,7 +4957,7 @@ impl Shell {
         // left in place. Reachable because a background load can flag
         // the tab before the user ever activates it, and a
         // Replace-in-Files run can then target the same still-inactive
-        // buffer. The `is_doc_dirty` guard above is checked at *this*
+        // buffer. The unsaved-work check above is made at *this*
         // moment, so it does not cover the reverse order on its own.
         self.tabs[idx].doc_needs_text = false;
         self.cancel_reload_consent(idx);
@@ -4990,30 +5016,57 @@ impl Shell {
     /// Confirm a deferred reload: requeue the file through the loader,
     /// targeting the *existing* tab that already has this path. Called
     /// by the UI after the user clicks Yes on the reload prompt
-    /// returned in [`PendingDialog::ConfirmReload`], and by File→Reload
-    /// (via [`Self::reload_active`]).
+    /// returned in [`PendingDialog::ConfirmReload`], which the file
+    /// watcher raises and a plugin's reload with the alert flag raises
+    /// too. File → Reload asks its own question and passes its answer
+    /// through [`Self::request_reload`] with the path of the tab it
+    /// asked about. Keyed by path rather than by "the active tab" on
+    /// purpose: the question runs a modal loop, plugin code can move the
+    /// focus while it is up, and the consent the user gave is for the
+    /// file the question named.
     ///
-    /// Does **not** create a new tab — the path is already open by
-    /// definition (the file watcher only fires for watched files,
-    /// which are open files; menu-driven Reload only runs on the
-    /// active tab's path). Marks the matching tab's `pending_load`
-    /// so `apply_load_result` overwrites its contents in
-    /// place when the loader completes.
+    /// Marks the matching tab's `pending_load` so `apply_load_result`
+    /// overwrites its contents in place when the loader completes; it
+    /// creates no tab when the path is open, which it always is for
+    /// the watcher's prompt (the watcher fires only for watched files,
+    /// which are open files). A plugin's `NPPM_RELOADFILE` with the
+    /// alert flag can name any path, though, and a path found in no
+    /// tab falls through to [`Self::open_file`], which will
+    /// deduplicate or open as appropriate.
     ///
-    /// If the path *isn't* found in any tab — a defensive fallback
-    /// for hypothetical stale-watcher scenarios — falls through to
-    /// [`Self::open_file`], which will deduplicate or open as
-    /// appropriate.
-    pub fn confirm_reload(&mut self, path: PathBuf) {
-        self.request_reload(path, ReloadConsent::Confirmed);
+    /// **The consent is decided here, from what the tab holds when the
+    /// Yes arrives.** The Yes agrees to discard the unsaved work the
+    /// buffer held then — edits, a crash-recovery marker, an
+    /// uninstalled shadow — so that is [`ReloadConsent::Confirmed`].
+    /// Over a buffer holding nothing unsaved there is nothing to agree
+    /// to, and the request goes [`ReloadConsent::Unconfirmed`]: text
+    /// typed while the load is under way survives it, as it does after
+    /// File → Reload of a clean buffer. Recording `Confirmed` for every
+    /// Yes let the file-changed prompt, and a plugin's alert prompt,
+    /// discard such text with no undo. Decided in the shell rather than
+    /// at each backend's Yes arm so the three cannot drift on it.
+    pub fn confirm_reload<U: UiPlatform>(&mut self, ui: &mut U, path: PathBuf) {
+        let unsaved = self
+            .tabs
+            .iter()
+            .position(|t| t.path.as_deref() == Some(path.as_path()))
+            .is_some_and(|idx| self.tabs[idx].shadow_unsaved || self.has_unsaved_work(ui, idx));
+        let consent = if unsaved {
+            ReloadConsent::Confirmed
+        } else {
+            ReloadConsent::Unconfirmed
+        };
+        self.request_reload(path, consent);
     }
 
     /// Requeue `path` through the loader onto the tab that holds it,
     /// recording whether unsaved work may yield to the result.
-    /// [`Self::confirm_reload`] is the confirmed form; the only
-    /// unconfirmed caller is a plugin's `NPPM_RELOADBUFFERID` with the
-    /// alert flag clear. See [`Tab::reload_confirmed`] for what each
-    /// buys.
+    /// [`Self::confirm_reload`] decides the consent for a prompt's Yes
+    /// from what the tab holds; the other callers are File → Reload,
+    /// which passes the answer to its own question, and a plugin's
+    /// `NPPM_RELOADFILE` / `NPPM_RELOADBUFFERID` with the alert flag
+    /// clear, which carries none. See [`Tab::reload_confirmed`] for what
+    /// each buys.
     pub fn request_reload(&mut self, path: PathBuf, consent: ReloadConsent) {
         let Some(idx) = self
             .tabs
@@ -5090,46 +5143,36 @@ impl Shell {
     /// history and resetting the save point on content that never
     /// reached disk, rather than restoring stale text (`Tab::text` is
     /// kept current by whoever wrote the document).
-    /// `activation` says whether this bind is the one that shows the tab
-    /// to the user — [`Self::bind_active_view`] — or bookkeeping that
-    /// only needs the document bound to read it ([`Self::save_all`]).
-    /// Passed explicitly rather than inferred from `active_tab == idx`:
-    /// `NPPM_SWITCHTOFILE` / `NPPM_ACTIVATEDOC` move `active_tab` and
-    /// leave the rebind to the backend, which GTK and Cocoa do not do
-    /// until the next model event, so a plugin's switch followed by
-    /// `NPPM_SAVEALLFILES` would have made a bookkeeping bind look like
-    /// an activation and force-installed a landed reload over the very
-    /// edits Save All exists to keep.
-    fn bind_and_fill<U: UiPlatform>(&mut self, ui: &mut U, idx: usize, activation: bool) -> isize {
+    ///
+    /// No reload's consent overrides that check: consent is spent when
+    /// its load lands ([`Self::apply_load_result`]), which discards the
+    /// unsaved work it covered there and then, so whatever is unsaved by
+    /// the time the tab is bound was made after the landing. Until the
+    /// fourth security audit of the tab-switch change, a consent that
+    /// found a clean document at the landing stayed set, and the
+    /// activation installed the file over edits made after it.
+    fn bind_and_fill<U: UiPlatform>(&mut self, ui: &mut U, idx: usize) -> isize {
         let Some(tab) = self.tabs.get(idx) else {
             return 0;
         };
+        debug_assert!(
+            !tab.reload_confirmed || tab.pending_load.is_some(),
+            "a reload's consent outlived its landing"
+        );
         let (existing_doc, text, stale) = (tab.scintilla_doc, tab.text.clone(), tab.doc_needs_text);
-        // A landed, confirmed reload: the user (or a plugin through the
-        // prompt) consented to discarding whatever the document holds,
-        // so the unsaved-work check does not apply to it. Only once the
-        // load has landed — a click onto the tab while the reload is
-        // still in flight binds the stale document as it is, and the
-        // consent stays recorded for the landing to consume. And only
-        // when this bind *is* the activation: `save_all` binds every
-        // titled tab as bookkeeping, and its whole purpose is to keep
-        // unsaved work, not discard it — keyed on the flag alone, a Save
-        // All would have consumed the consent at a moment nobody was
-        // looking at the tab, and written the reloaded text over the
-        // file with the edits gone and the tab reading clean.
-        let forced = tab.reload_confirmed && tab.pending_load.is_none() && activation;
         let bound = ui.activate_tab(idx, existing_doc);
-        let clobbers_edits =
-            stale && existing_doc != 0 && !forced && self.has_unsaved_work(ui, idx);
-        let installs = existing_doc == 0 || (stale && !clobbers_edits);
-        if installs && stale && forced {
-            // The content the marker stood for is the content being
-            // discarded — released *before* `set_buffer_text`, whose
-            // save point reaches Win32's savepoint handler synchronously
-            // and is answered from this set.
-            let id = self.tabs[idx].id;
-            self.unsaved_restore_ids.remove(&id);
+        let clobbers_edits = stale && existing_doc != 0 && self.has_unsaved_work(ui, idx);
+        if clobbers_edits {
+            // The landing's decline, made again here for work that
+            // reached the document after the load landed in the
+            // background, and recorded the same way: the log is the only
+            // record that the reloaded file was not installed.
+            tracing::warn!(
+                path = ?self.tabs[idx].path,
+                "reloaded file not installed over work made since it landed; keeping the work"
+            );
         }
+        let installs = existing_doc == 0 || (stale && !clobbers_edits);
         if installs {
             // Caret to 0: a tab reached this way was never displayed,
             // so there is no caret position to preserve. The session's
@@ -5145,15 +5188,6 @@ impl Shell {
             tab.scintilla_doc = bound;
         }
         tab.doc_needs_text = false;
-        if forced {
-            tab.reload_confirmed = false;
-            if installs && stale {
-                // Explicit, as the reload arm's install is: the cached bit
-                // must not outlive the marker on a backend whose handler
-                // ran before this bookkeeping.
-                tab.dirty = false;
-            }
-        }
         // An unsaved shadow just became an unsaved *document* sitting at
         // the save point `set_buffer_text` set — from here the id set is
         // the record (see `Tab::shadow_unsaved` for why not before). A
@@ -5207,7 +5241,7 @@ impl Shell {
         let Some(idx) = self.active_tab else {
             return;
         };
-        self.bind_and_fill(ui, idx, true);
+        self.bind_and_fill(ui, idx);
         let Some(tab) = self.tabs.get(idx) else {
             return;
         };
@@ -5378,11 +5412,14 @@ impl Shell {
                 // not yet installed) or edits in the document — the
                 // durable marker included, since a crash-recovered buffer
                 // reads clean (`has_unsaved_work`, not `is_doc_dirty`).
-                // Consent is the user's answer to "reload and discard any
-                // unsaved edits?", File → Reload, or a plugin's request
-                // with the alert flag; a plugin's silent
-                // `NPPM_RELOADBUFFERID` carries none, and the load is
-                // declined for it — on the active tab as much as a
+                // Consent is a Yes to "reload and discard any unsaved
+                // edits?" given while the buffer held unsaved work
+                // (`Shell::confirm_reload` decides it for the file-changed
+                // prompt and a plugin's alert prompt, and File → Reload
+                // asks its own question). A plugin's silent reload, File →
+                // Reload of a buffer that had nothing unsaved, and a Yes
+                // given over such a buffer carry none, and the load is
+                // declined for them — on the active tab as much as a
                 // background one. Before consent was recorded, a
                 // confirmed reload of a background tab was declined by the
                 // same rule, contradicting the prompt the user had just
@@ -5518,20 +5555,8 @@ impl Shell {
                 self.pending_notifications
                     .push(Notification::FileOpened { buffer_id });
 
-                if !is_active && stored_doc != 0 && !keeps_work {
-                    // The load landed on a background tab that already
-                    // owns a document, so that document now holds the
-                    // wrong text. Nothing rebinds it here — doing so
-                    // would point the single view at the wrong buffer
-                    // for the rest of the drain — so flag it and let
-                    // `bind_active_view` fill it on first activation.
-                    // `bind_and_fill` re-checks for unsaved work then,
-                    // because Replace-in-Files can dirty a background
-                    // document in between; a confirmed reload carries its
-                    // consent through to that check (`reload_confirmed`).
-                    if let Some(tab) = self.tabs.get_mut(target_idx) {
-                        tab.doc_needs_text = true;
-                    }
+                if !is_active && !keeps_work {
+                    self.settle_background_landing(ui, target_idx, stored_doc, unsaved);
                 }
                 self.show_on_active_view(ui, target_idx, active_bind, keeps_shadow, cursor);
 
@@ -5546,6 +5571,69 @@ impl Shell {
                 self.repair_restored_pin_placement(target_idx);
             }
             Err(err) => self.apply_failed_load(ui, &err, pending),
+        }
+    }
+
+    /// What a load that landed on a background tab does to the tab's
+    /// document, when the tab keeps no unsaved work against it: the load
+    /// found none, or a confirmed reload discards it
+    /// (`discarded_work`). The other half of the landing in
+    /// [`Self::apply_load_result`], a separate method so that one stays
+    /// inside clippy's `too_many_lines` gate.
+    ///
+    /// **Discarded work goes now, not at the tab's next activation.** It
+    /// is either edits in the document or the crash-recovery marker of a
+    /// tab that has no document yet. Left in the document until the
+    /// activation, the edits were what a crash backup saved and what Save
+    /// All wrote, so a restart brought them back and a Save All put them
+    /// over the file just reloaded; a marker left behind kept the tab
+    /// reading modified, with a backup, over a file it now matched. The
+    /// document is released rather than refilled, which needs no swap of
+    /// the single view: the tab is materialised from the loaded text when
+    /// it is next shown, as a tab loaded in the background is. A document
+    /// the view still shows (the active tab is a fresh open still
+    /// loading, so nothing has rebound the view) stays alive on the
+    /// view's own reference until the next real rebind, and a helper's
+    /// swap in the meantime holds a reference of its own
+    /// ([`UiPlatform::release_doc`]).
+    ///
+    /// **Without discarded work**, a tab that already owns a document now
+    /// holds the wrong text in it. Nothing rebinds it here — doing so
+    /// would point the single view at the wrong buffer for the rest of
+    /// the drain — so it is flagged for `bind_active_view` to fill on
+    /// first activation. `bind_and_fill` re-checks for unsaved work then,
+    /// because Replace-in-Files can dirty a background document in
+    /// between.
+    ///
+    /// **The consent is spent here either way.** It covered the unsaved
+    /// work the buffer held when the Yes was given, and a document clean
+    /// at the landing holds none. An edit made after the landing — typed
+    /// into a document the view still shows, or a plugin's conversion —
+    /// is work nobody agreed to lose. Left set, the consent made the next
+    /// activation install the file over such an edit, with no undo.
+    /// Found by the fourth security audit of the tab-switch change.
+    fn settle_background_landing<U: UiPlatform>(
+        &mut self,
+        ui: &mut U,
+        idx: usize,
+        stored_doc: isize,
+        discarded_work: bool,
+    ) {
+        if discarded_work {
+            if stored_doc != 0 {
+                ui.release_doc(stored_doc);
+            }
+            if let Some(tab) = self.tabs.get_mut(idx) {
+                tab.scintilla_doc = 0;
+                tab.reload_confirmed = false;
+                tab.dirty = false;
+                self.unsaved_restore_ids.remove(&tab.id);
+            }
+        } else if let Some(tab) = self.tabs.get_mut(idx) {
+            tab.reload_confirmed = false;
+            if stored_doc != 0 {
+                tab.doc_needs_text = true;
+            }
         }
     }
 
@@ -5608,8 +5696,11 @@ impl Shell {
         // existed. The release below runs before the `remove`, possibly
         // while the document is still bound, which is safe: the view
         // holds its own reference, so a bound document only drops 2→1
-        // here and is freed by the rebind further down, after the
+        // here and is freed by the view's next real rebind, after the
         // incoming document has been allocated (see the trait docs).
+        // That is the rebind further down when the failed tab was in
+        // front; otherwise the view goes on showing the document until
+        // whatever moved the front away from the tab binds its own.
         let borrowed_an_existing_tab = self.loads_onto_existing_tabs.remove(&err.id);
         let target = self
             .tabs
@@ -5681,6 +5772,21 @@ impl Shell {
                 // travelled with it, which has nothing left to apply to.
                 self.tabs[idx].pending_load = None;
                 self.tabs[idx].reload_confirmed = false;
+                // And bind the view, if this is the tab in front. No
+                // backend rebinds onto a tab whose load is in flight when
+                // a plugin switches to it — the landing binds it — so a
+                // plugin's switch onto this tab while it reloaded left the
+                // view on the previous tab's document. A load that lands
+                // ends that; one that fails ended nothing, and with the
+                // load over `save_current_to_disk`'s `LoadInFlight` guard
+                // no longer applies, so the next save wrote the previous
+                // buffer over this tab's file. Usually the view already
+                // holds this document, and then the rebind changes nothing:
+                // binding the bound document leaves the view as it is (see
+                // `UiPlatform::activate_tab`).
+                if self.active_tab == Some(idx) {
+                    self.bind_active_view(ui);
+                }
             }
         }
         // Both halves sanitized here, because `ui_gtk` and `ui_cocoa`
@@ -5812,6 +5918,20 @@ impl Shell {
         // below — so it needs no `unused_variables` gate.)
         let (path, encoding, buffer_id) = {
             let tab = self.active().ok_or(ShellError::NoActivePath)?;
+            // Refuse while a load is in flight for this tab, before the
+            // path is required: a reload keeps its path, and a fresh open
+            // has none until it lands. No backend rebinds the view onto
+            // such a tab when a plugin switches to it: the load binds it
+            // when it lands. Until then the view still holds the
+            // previous tab's document, and this save, which takes its
+            // path from the active tab and its bytes from the view, would
+            // write that buffer over this tab's file — reachable as
+            // `NPPM_SWITCHTOFILE` followed by `NPPM_SAVECURRENTFILE`.
+            // `save_buffer_as` and `save_active_as_copy` refuse the same
+            // way.
+            if tab.pending_load.is_some() {
+                return Err(ShellError::LoadInFlight);
+            }
             (
                 tab.path.as_ref().ok_or(ShellError::NoActivePath)?.clone(),
                 tab.encoding.clone(),
@@ -5896,13 +6016,13 @@ impl Shell {
             tab.byte_len = bytes.len() as u64;
             // The document just became what is on disk, and the shadow
             // now equals it — so a reload that landed on this tab in the
-            // background and was waiting to be installed is superseded,
-            // consented or not. Left set, the next activation would
-            // reinstall the shadow over an identical document (wiping
-            // its undo history), and a confirmed one would do so by
-            // force. The save is the later, explicit intent.
+            // background and was waiting to be installed is superseded.
+            // Left set, the next activation would reinstall the shadow
+            // over an identical document, wiping its undo history. The
+            // save is the later, explicit intent. (No consent is left to
+            // retire: a save refuses while a load is in flight, and a
+            // landing spends its consent.)
             tab.doc_needs_text = false;
-            tab.reload_confirmed = false;
         }
 
         // Queue NPPN_FILESAVED *before* clearing the dirty glyph.
@@ -6343,7 +6463,7 @@ impl Shell {
         let Some(idx) = self.tabs.iter().position(|t| t.id as isize == id) else {
             return false;
         };
-        let (doc, stale, forced) = {
+        let (doc, stale) = {
             let tab = &mut self.tabs[idx];
             tracing::debug!(
                 buffer_id = id,
@@ -6354,15 +6474,10 @@ impl Shell {
                 "set_buffer_eol_by_id"
             );
             tab.eol = eol;
-            (
-                tab.scintilla_doc,
-                tab.doc_needs_text,
-                tab.reload_confirmed && tab.pending_load.is_none(),
-            )
+            (tab.scintilla_doc, tab.doc_needs_text)
         };
         // The same question `bind_and_fill` will ask, so the copy it
-        // installs is the copy converted: a confirmed reload's shadow
-        // wins over the document regardless of its unsaved work.
+        // installs is the copy converted.
         // A conversion while a reload is still in flight is work the
         // consent never covered, so it withdraws it — see
         // `cancel_reload_consent`. After the landing the conversion
@@ -6372,7 +6487,7 @@ impl Shell {
         // an already-unsaved buffer — or one that changed nothing —
         // withdraws nothing. The edge is what matters, not the level.
         let in_flight = self.tabs[idx].pending_load.is_some();
-        if doc == 0 || (stale && (forced || !self.has_unsaved_work(ui, idx))) {
+        if doc == 0 || (stale && !self.has_unsaved_work(ui, idx)) {
             let was_unsaved = self.tabs[idx].shadow_unsaved;
             let changed = self.convert_shadow_text(idx, eol);
             if in_flight && changed && !was_unsaved {
@@ -6874,13 +6989,14 @@ impl Shell {
         // Restore the recorded active tab by its stable id (the loop above
         // left the LAST opened file active). Making it active before its
         // async load completes lets the paint land on the right buffer.
+        // A switch like any other, so plugins hear of it here: the UI's
+        // rebind after a load announces nothing, and Win32 once covered
+        // for that only because its tab-selection handler announced every
+        // rebind, the ones a shell operation had already announced too.
         let mut active_overridden = false;
         if let Some(target_id) = recorded_active_target_id {
             if let Some(idx) = self.tabs.iter().position(|t| t.id == target_id) {
-                if self.active_tab != Some(idx) {
-                    self.active_tab = Some(idx);
-                    active_overridden = true;
-                }
+                active_overridden = self.switch_to_tab(idx);
             }
         }
 
@@ -7514,7 +7630,7 @@ impl Shell {
         // shell's `deferred_dialogs` queue — `Shell::drain`
         // returns it to the UI on the next pump iteration, where
         // the existing reload-prompt path takes over (Yes →
-        // `confirm_reload(path)` replaces the backup text with
+        // `confirm_reload(ui, path)` replaces the backup text with
         // disk content; No → user keeps their unsaved edits and
         // their next save overwrites the disk).
         if disk_changed_externally {
@@ -8244,6 +8360,7 @@ fn prune_unreferenced_backups(dir: &Path, keep: &[String]) {
 ///   Describes OS-level filesystem-watcher state (e.g. "too many
 ///   watchers"); no user paths.
 /// * `NoActivePath` — no payload, no path data.
+/// * `LoadInFlight` — no payload, no path data.
 /// * `Encoding(s)` — surfaces `codepp_core::encoding::encode`
 ///   errors. Describes byte-level encoding failures (e.g. "char
 ///   '⠿' not representable in windows-1252"); no paths.
@@ -8267,6 +8384,15 @@ fn prune_unreferenced_backups(dir: &Path, keep: &[String]) {
 pub enum ShellError {
     WatcherInit(String),
     NoActivePath,
+    /// The active tab's file is still loading, so the view may not hold
+    /// its text yet: a reload in flight, which keeps the tab's path, or a
+    /// fresh open, which has none until it lands. Checked before the
+    /// path, and distinct from [`ShellError::NoActivePath`], which
+    /// `ui_win32` answers with Save As: a reloading tab has a path, and a
+    /// fresh one is about to get one, so asking for another would be
+    /// wrong. On Win32 a Ctrl+S in that moment reports "the file is still
+    /// loading" rather than opening Save As.
+    LoadInFlight,
     Encoding(String),
     Io(String),
     Session(String),
@@ -8277,6 +8403,7 @@ impl std::fmt::Display for ShellError {
         match self {
             ShellError::WatcherInit(s) => write!(f, "watcher init failed: {s}"),
             ShellError::NoActivePath => write!(f, "no active file path"),
+            ShellError::LoadInFlight => write!(f, "the file is still loading"),
             ShellError::Encoding(s) => write!(f, "encoding error: {s}"),
             ShellError::Io(s) => write!(f, "I/O error: {s}"),
             ShellError::Session(s) => write!(f, "session error: {s}"),
@@ -8290,11 +8417,16 @@ impl std::error::Error for ShellError {}
 /// [`Tab::reload_confirmed`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ReloadConsent {
-    /// The user answered the "reload and discard any unsaved edits?"
-    /// prompt, chose File → Reload, or a plugin asked with the alert
-    /// flag and the prompt was answered.
+    /// The user agreed to discard the unsaved work the buffer held: a
+    /// Yes to the file-changed prompt, to File → Reload's question, or
+    /// to the prompt a plugin's alert flag raises, given over unsaved
+    /// work.
     Confirmed,
-    /// A plugin's `NPPM_RELOADBUFFERID` with the alert flag clear.
+    /// Anything else: a plugin's `NPPM_RELOADFILE` /
+    /// `NPPM_RELOADBUFFERID` with the alert flag clear, File → Reload of
+    /// a buffer with nothing unsaved, which asks nothing, or a Yes given
+    /// over a buffer holding nothing unsaved. An edit made while the
+    /// load is under way survives it.
     Unconfirmed,
 }
 
@@ -8469,9 +8601,13 @@ impl<U: UiPlatform> HostServices for HostBridge<'_, U> {
         self.shell.request_reload(path, ReloadConsent::Unconfirmed);
     }
 
-    fn save_current_file(&mut self) {
-        if let Err(e) = self.shell.save_current_to_disk(self.ui) {
-            tracing::warn!(error = ?e, "plugin-triggered save failed");
+    fn save_current_file(&mut self) -> bool {
+        match self.shell.save_current_to_disk(self.ui) {
+            Ok(()) => true,
+            Err(e) => {
+                tracing::warn!(error = ?e, "plugin-triggered save failed");
+                false
+            }
         }
     }
 
@@ -10768,6 +10904,11 @@ mod tests {
                 .unwrap_or_default()
         }
         fn is_doc_dirty(&mut self, scintilla_doc: isize) -> bool {
+            // Document 0 is the "never materialised" sentinel, never dirty,
+            // as on every backend.
+            if scintilla_doc == 0 {
+                return false;
+            }
             self.doc_dirty
                 .get(&scintilla_doc)
                 .copied()
@@ -11771,7 +11912,7 @@ mod tests {
             "precondition"
         );
 
-        shell.confirm_reload(path);
+        shell.confirm_reload(&mut ui, path);
         let deadline = Instant::now() + Duration::from_secs(2);
         while shell.tabs[0].pending_load.is_some() {
             assert!(Instant::now() < deadline, "reload did not complete in time");
@@ -11837,7 +11978,7 @@ mod tests {
         // With consent, the same reload goes through — that is the
         // existing `confirm_reload_overwrites_active_tab_in_place`
         // contract, re-asserted here against the recovered case.
-        shell.confirm_reload(path);
+        shell.confirm_reload(&mut ui, path);
         let deadline = Instant::now() + Duration::from_secs(2);
         while shell.tabs[0].pending_load.is_some() {
             assert!(Instant::now() < deadline, "reload did not complete in time");
@@ -11897,7 +12038,7 @@ mod tests {
 
         // A confirmed one — the user said "discard any unsaved edits?" —
         // replaces it, shadow and all.
-        shell.confirm_reload(first);
+        shell.confirm_reload(&mut ui, first);
         let deadline = Instant::now() + Duration::from_secs(2);
         while shell.tabs[0].pending_load.is_some() {
             assert!(Instant::now() < deadline, "reload did not complete in time");
@@ -13687,8 +13828,60 @@ mod tests {
         assert_eq!(closed.closed_idx, 0);
         assert!(shell.tabs.is_empty());
         assert_eq!(shell.active_tab, None);
-        // No new active tab → the snapshot's new_active_doc is 0.
-        assert_eq!(closed.new_active_doc, 0);
+    }
+
+    /// The UI releases the closed tab's document, so two tabs sharing
+    /// one would leave the other bound to a freed document. No path
+    /// makes them share; the close asserts it in debug builds rather than
+    /// trusting that. Debug builds only, as the assertion is.
+    #[cfg(debug_assertions)]
+    #[test]
+    #[should_panic(expected = "shares the closed tab's Scintilla document")]
+    fn a_close_refuses_in_debug_to_release_a_document_another_tab_owns() {
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        shell.tabs = vec![
+            Tab {
+                id: 1,
+                path: Some(PathBuf::from("/tmp/a.txt")),
+                scintilla_doc: 7,
+                ..Tab::default()
+            },
+            Tab {
+                id: 2,
+                path: Some(PathBuf::from("/tmp/b.txt")),
+                scintilla_doc: 7,
+                ..Tab::default()
+            },
+        ];
+        shell.active_tab = Some(0);
+        let _ = shell.close_active_tab();
+    }
+
+    /// The same, with the tab that shares the document before the one
+    /// closing rather than after it: the check covers every other tab.
+    #[cfg(debug_assertions)]
+    #[test]
+    #[should_panic(expected = "shares the closed tab's Scintilla document")]
+    fn a_close_refuses_in_debug_to_release_a_document_an_earlier_tab_owns() {
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        shell.tabs = vec![
+            Tab {
+                id: 1,
+                path: Some(PathBuf::from("/tmp/a.txt")),
+                scintilla_doc: 7,
+                ..Tab::default()
+            },
+            Tab {
+                id: 2,
+                path: Some(PathBuf::from("/tmp/b.txt")),
+                scintilla_doc: 7,
+                ..Tab::default()
+            },
+        ];
+        shell.active_tab = Some(1);
+        let _ = shell.close_active_tab();
     }
 
     #[test]
@@ -14740,59 +14933,6 @@ mod tests {
     }
 
     #[test]
-    fn reload_active_with_no_tab_returns_false() {
-        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
-        let mut shell = Shell::new(wake).unwrap();
-        assert!(!shell.reload_active());
-    }
-
-    #[test]
-    fn reload_active_on_untitled_returns_false() {
-        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
-        let mut shell = Shell::new(wake).unwrap();
-        let mut ui = FakeUi::default();
-        shell.new_untitled(&mut ui);
-        // Untitled has no path; reload is a no-op.
-        assert!(!shell.reload_active());
-    }
-
-    #[test]
-    fn reload_active_on_titled_kicks_off_load() {
-        // After Reload, the loader is given a new request for the
-        // active tab's path. Use the same observation FakeUi-based
-        // round-trip tests use: drain until set_buffer_text is
-        // called for the post-reload content.
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("reload.txt");
-        std::fs::write(&path, "first\n").unwrap();
-
-        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
-        let mut shell = Shell::new(wake).unwrap();
-        let mut ui = FakeUi::default();
-        shell.open_file(path.clone());
-        drain_until(
-            &mut shell,
-            &mut ui,
-            |u, _| !u.set_text_calls.is_empty(),
-            Duration::from_secs(2),
-        );
-
-        // Externally rewrite the file and Reload.
-        std::fs::write(&path, "second\n").unwrap();
-        let calls_before = ui.set_text_calls.len();
-        assert!(shell.reload_active());
-        // Reload kicks off an async load — drain until the second
-        // set_buffer_text lands.
-        drain_until(
-            &mut shell,
-            &mut ui,
-            |u, _| u.set_text_calls.len() > calls_before,
-            Duration::from_secs(2),
-        );
-        assert!(ui.set_text_calls.last().unwrap().0.contains("second"));
-    }
-
-    #[test]
     fn save_buffer_as_no_active_tab_returns_error() {
         // Save As without any open tab is `NoActivePath`, matching
         // the same-shape return on `save_current_to_disk`.
@@ -15374,6 +15514,80 @@ mod tests {
         );
     }
 
+    /// Replace-in-Files leaves a tab alone when it holds unsaved work the
+    /// worker cannot see: a shadow rewritten in memory, whether the tab
+    /// has no document yet or a stale one, and crash-recovered text. The
+    /// worker's text was computed from disk, so installing it would throw
+    /// that work away; a second run used to discard the first run's
+    /// replacements, and a conversion's line endings. Found by the fifth
+    /// security audit of the tab-switch change. The recovered tab is
+    /// built through the real restore, which binds a document at once.
+    #[test]
+    fn replace_in_files_keeps_unsaved_work_the_worker_cannot_see() {
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+        shell.tabs = vec![
+            Tab {
+                id: 1,
+                path: Some(PathBuf::from("/tmp/shadow.txt")),
+                text: "after the first run\n".to_string(),
+                shadow_unsaved: true,
+                ..Tab::default()
+            },
+            Tab {
+                id: 2,
+                path: Some(PathBuf::from("/tmp/stale.txt")),
+                scintilla_doc: 7,
+                doc_needs_text: true,
+                text: "converted\r\n".to_string(),
+                shadow_unsaved: true,
+                ..Tab::default()
+            },
+        ];
+        shell.active_tab = Some(0);
+        let _ = shell.restore_dirty_with_text(
+            &mut ui,
+            PathBuf::from("/tmp/recovered.txt"),
+            "recovered\n".to_string(),
+            0,
+            Encoding::default(),
+            Eol::default(),
+            false,
+            false,
+            None,
+            false,
+        );
+        for path in ["/tmp/shadow.txt", "/tmp/stale.txt", "/tmp/recovered.txt"] {
+            let idx = shell
+                .tabs
+                .iter()
+                .position(|t| t.path.as_deref() == Some(std::path::Path::new(path)))
+                .unwrap();
+            let doc = shell.tabs[idx].scintilla_doc;
+            let before = (shell.tabs[idx].text.clone(), ui.doc_text.get(&doc).cloned());
+            let out = shell.apply_open_buffer_replacement(
+                &mut ui,
+                FifJobId::for_test(1),
+                PathBuf::from(path),
+                "from disk\n",
+                1,
+            );
+            assert!(
+                matches!(
+                    out,
+                    FifEvent::ReplacedInOpenBuffer {
+                        outcome: OpenBufferOutcome::SkippedDirty,
+                        ..
+                    }
+                ),
+                "{path}: {out:?}"
+            );
+            let after = (shell.tabs[idx].text.clone(), ui.doc_text.get(&doc).cloned());
+            assert_eq!(after, before, "{path}");
+        }
+    }
+
     /// An **unconfirmed** background load must never silently discard
     /// unsaved edits.
     ///
@@ -15383,9 +15597,9 @@ mod tests {
     /// `set_buffer_text`, which empties the undo buffer and sets the
     /// save point, so an unguarded flag turns a previously inert
     /// background reload into silent, unrecoverable data loss. The
-    /// confirmed routes — the watcher's prompt, File → Reload — are the
-    /// other test below: there the user has answered "discard any
-    /// unsaved edits?", and the load wins.
+    /// confirmed routes — the watcher's prompt, File → Reload's question
+    /// — are the other test below: there the user has answered "discard
+    /// any unsaved edits?", and the load wins.
     #[test]
     fn a_background_load_never_flags_a_buffer_with_unsaved_edits() {
         let dir = tempfile::tempdir().unwrap();
@@ -15444,12 +15658,17 @@ mod tests {
     }
 
     /// The confirmed counterpart: the user answered "reload and discard
-    /// any unsaved edits?" (or chose File → Reload) for a background tab
-    /// with unsaved edits, so the load wins — flagged at landing, and
-    /// installed on the next activation over the document's edits, the
-    /// way the prompt promised. Before consent was recorded this was
-    /// declined by the same rule as the silent route, and a Yes on a
-    /// background file silently did nothing.
+    /// any unsaved edits?" for a background tab with unsaved edits, so
+    /// the load wins, the way the prompt promised. Before consent was
+    /// recorded this was declined by the same rule as the silent route,
+    /// and a Yes on a background file silently did nothing.
+    ///
+    /// The edits go as the load lands, with the document that held them,
+    /// not at the tab's next activation: left in the document until
+    /// then, they were what a crash backup saved and what Save All
+    /// wrote, so a restart brought them back and a Save All put them
+    /// over the file just reloaded. Found by the security audit of the
+    /// tab-switch change.
     #[test]
     fn a_confirmed_background_reload_discards_unsaved_edits() {
         let dir = tempfile::tempdir().unwrap();
@@ -15479,13 +15698,16 @@ mod tests {
         let doc0 = shell.tabs[0].scintilla_doc;
         ui.replace_doc_text(doc0, "edited\n");
         ui.doc_dirty.insert(doc0, true);
+        shell.tabs[0].dirty = true;
+        let id0 = shell.tabs[0].id;
+        shell.unsaved_restore_ids.insert(id0);
         shell.active_tab = Some(1);
         shell.bind_active_view(&mut ui);
         std::fs::write(&first, "FIRST v2\n").unwrap();
         assert!(shell.has_unsaved_work(&mut ui, 0), "precondition");
 
         // The user says Yes to the prompt for the background file.
-        shell.confirm_reload(first.clone());
+        shell.confirm_reload(&mut ui, first.clone());
         let deadline = Instant::now() + Duration::from_secs(10);
         while Instant::now() < deadline {
             shell.drain(&mut ui);
@@ -15494,31 +15716,110 @@ mod tests {
             }
             std::thread::sleep(Duration::from_millis(20));
         }
-        assert!(
-            shell.tabs[0].doc_needs_text,
-            "a confirmed reload must flag the buffer, edits or no edits"
+        // The edits go as the load lands, with their document.
+        assert_eq!(
+            ui.released_docs,
+            vec![doc0],
+            "the edited document is released"
         );
-        assert_eq!(shell.tabs[0].text, "FIRST v2\n");
+        let tab = &shell.tabs[0];
+        assert_eq!(tab.scintilla_doc, 0);
+        assert_eq!(tab.text, "FIRST v2\n");
+        assert!(!tab.dirty, "the tab no longer reads modified");
+        assert!(!tab.reload_confirmed, "the landing spends the consent");
+        assert!(!tab.doc_needs_text);
+        assert!(!shell.is_unsaved_restore(id0));
         assert!(
-            shell.tabs[0].reload_confirmed,
-            "consent travels to the activation"
+            !shell.tab_needs_backup(&shell.tabs[0], &mut ui),
+            "a crash backup would bring the discarded edits back"
         );
 
-        // Activation installs the file over the edits, as consented.
+        // Save All keeps the file as reloaded...
+        let errors = shell.save_all(&mut ui);
+        assert!(errors.is_empty(), "{errors:?}");
+        assert_eq!(
+            std::fs::read_to_string(&first).unwrap(),
+            "FIRST v2\n",
+            "Save All wrote the discarded edits over the reloaded file"
+        );
+        // ...and the tab shows it when it is next shown.
         shell.active_tab = Some(0);
         shell.bind_active_view(&mut ui);
         assert_eq!(ui.get_buffer_text(), "FIRST v2\n");
-        assert!(!shell.tabs[0].doc_needs_text);
-        assert!(!shell.tabs[0].reload_confirmed, "consent is spent");
         assert!(!shell.tabs[0].dirty);
-        assert!(!shell.is_unsaved_restore(shell.tabs[0].id));
+    }
+
+    /// The same consent over a background tab that has no document yet
+    /// but carries a recovery marker, so its unsaved work is the marker
+    /// rather than edits in a document. The reload replaced its text and
+    /// left the marker, so the tab kept reading modified and kept a
+    /// backup of a file it now matched. Built by hand: no restore
+    /// produces this state today, since both restore paths bind a
+    /// document at once, so the retirement is defence. Found by the third
+    /// code review of the tab-switch change.
+    #[test]
+    fn a_confirmed_reload_retires_the_recovery_marker_of_a_tab_never_shown() {
+        let dir = tempfile::tempdir().unwrap();
+        let first = dir.path().join("first.txt");
+        let second = dir.path().join("second.txt");
+        std::fs::write(&first, "FIRST\n").unwrap();
+        std::fs::write(&second, "SECOND\n").unwrap();
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+        shell.open_file(first.clone());
+        shell.open_file(second);
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while shell.tabs.iter().any(|t| t.pending_load.is_some()) {
+            assert!(Instant::now() < deadline, "loads did not complete in time");
+            let _ = shell.drain(&mut ui);
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert_eq!(shell.active_tab, Some(1));
+        assert_eq!(shell.tabs[0].scintilla_doc, 0, "precondition: never shown");
+        let id0 = shell.tabs[0].id;
+        shell.unsaved_restore_ids.insert(id0);
+        shell.tabs[0].dirty = true;
+        std::fs::write(&first, "FIRST v2\n").unwrap();
+        assert!(shell.has_unsaved_work(&mut ui, 0), "precondition");
+
+        shell.confirm_reload(&mut ui, first);
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while shell.tabs[0].pending_load.is_some() {
+            assert!(Instant::now() < deadline, "reload did not complete in time");
+            let _ = shell.drain(&mut ui);
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(
+            ui.released_docs.is_empty(),
+            "there was no document to release"
+        );
+        let tab = &shell.tabs[0];
+        assert_eq!(tab.text, "FIRST v2\n");
+        assert!(!tab.dirty, "the tab no longer reads modified");
+        assert!(!tab.reload_confirmed, "the landing spends the consent");
+        assert!(
+            !shell.is_unsaved_restore(id0),
+            "the recovery marker is retired"
+        );
+        assert!(
+            !shell.tab_needs_backup(&shell.tabs[0], &mut ui),
+            "a backup of a buffer that now matches its file"
+        );
+        shell.active_tab = Some(0);
+        shell.bind_active_view(&mut ui);
+        assert_eq!(ui.get_buffer_text(), "FIRST v2\n");
+        assert!(!shell.is_unsaved_restore(id0));
     }
 
     /// Consent covers the buffer as it stood when the prompt was
     /// answered. Work written to the tab while the load is still in
-    /// flight — here a Replace-in-Files into the background document —
-    /// withdraws it, so the landing keeps that work as it would for an
-    /// unconfirmed request.
+    /// flight — here a Replace-in-Files into the background document,
+    /// after the edits the Yes covered were undone back to the save
+    /// point — withdraws it, so the landing keeps that work as it would
+    /// for an unconfirmed request. (A Yes over a buffer with nothing
+    /// unsaved records no consent at all, so this is the one way a write
+    /// can follow a consent over a clean buffer.)
     #[test]
     fn a_write_after_consent_withdraws_it_while_the_reload_is_in_flight() {
         let dir = tempfile::tempdir().unwrap();
@@ -15540,19 +15841,21 @@ mod tests {
             }
             std::thread::sleep(Duration::from_millis(20));
         }
-        // Tab 0 bound and clean, then left in the background.
+        // Tab 0 bound and edited, then left in the background.
         shell.active_tab = Some(0);
         shell.bind_active_view(&mut ui);
         let doc0 = shell.tabs[0].scintilla_doc;
+        ui.doc_dirty.insert(doc0, true);
         shell.active_tab = Some(1);
         shell.bind_active_view(&mut ui);
         std::fs::write(&first, "FIRST v2\n").unwrap();
 
-        // Yes to the prompt for a clean tab...
-        shell.confirm_reload(first.clone());
+        // Yes to the prompt over those edits...
+        shell.confirm_reload(&mut ui, first.clone());
         assert!(shell.tabs[0].reload_confirmed && shell.tabs[0].pending_load.is_some());
-        // ...then, before the read comes back, Replace-in-Files writes
-        // into that document.
+        // ...which the user then undoes back to the save point; and before
+        // the read comes back, Replace-in-Files writes into that document.
+        ui.doc_dirty.insert(doc0, false);
         let out = shell.apply_open_buffer_replacement(
             &mut ui,
             FifJobId::for_test(1),
@@ -15615,7 +15918,7 @@ mod tests {
         // Already dirty when the user consents: a real conversion does
         // not withdraw the consent...
         ui.doc_dirty.insert(doc, true);
-        shell.confirm_reload(path.clone());
+        shell.confirm_reload(&mut ui, path.clone());
         assert!(shell.tabs[0].reload_confirmed && shell.tabs[0].pending_load.is_some());
         assert!(shell.set_buffer_eol_by_id(&mut ui, id as isize, codepp_core::Eol::Lf));
         assert!(
@@ -15644,74 +15947,12 @@ mod tests {
         }
     }
 
-    /// Consent is consumed by the *activation* that shows the outcome,
-    /// not by any bind. `save_all` binds every titled tab as
-    /// bookkeeping to read its text, and its job is to keep unsaved work
-    /// — so a landed, confirmed reload waiting on a background tab must
-    /// not be force-installed by it. Save All writes the edits, which
-    /// retires the pending reload: the save is the later, explicit
-    /// intent, and the tab then shows the saved edits.
-    #[test]
-    fn save_all_does_not_consume_a_pending_reload_consent() {
-        let dir = tempfile::tempdir().unwrap();
-        let first = dir.path().join("first.txt");
-        let second = dir.path().join("second.txt");
-        std::fs::write(&first, "FIRST\n").unwrap();
-        std::fs::write(&second, "SECOND\n").unwrap();
-        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
-        let mut shell = Shell::new(wake).unwrap();
-        let mut ui = FakeUi::default();
-        shell.new_untitled(&mut ui);
-        shell.open_file_replacing_scratch(first.clone(), true);
-        shell.open_file_replacing_scratch(second.clone(), true);
-        let deadline = Instant::now() + Duration::from_secs(10);
-        while Instant::now() < deadline {
-            shell.drain(&mut ui);
-            if shell.tabs.len() == 2 && shell.tabs.iter().all(|t| t.pending_load.is_none()) {
-                break;
-            }
-            std::thread::sleep(Duration::from_millis(20));
-        }
-        shell.active_tab = Some(0);
-        shell.bind_active_view(&mut ui);
-        let doc0 = shell.tabs[0].scintilla_doc;
-        ui.replace_doc_text(doc0, "edited\n");
-        ui.doc_dirty.insert(doc0, true);
-        shell.active_tab = Some(1);
-        shell.bind_active_view(&mut ui);
-        std::fs::write(&first, "FIRST v2\n").unwrap();
-
-        // A confirmed reload lands on the background tab and waits.
-        shell.confirm_reload(first.clone());
-        let deadline = Instant::now() + Duration::from_secs(10);
-        while shell.tabs[0].pending_load.is_some() {
-            assert!(Instant::now() < deadline, "reload did not complete in time");
-            let _ = shell.drain(&mut ui);
-            std::thread::sleep(Duration::from_millis(20));
-        }
-        assert!(
-            shell.tabs[0].doc_needs_text && shell.tabs[0].reload_confirmed,
-            "precondition"
-        );
-
-        // Save All must keep and write the edits, not install the reload.
-        let errors = shell.save_all(&mut ui);
-        assert!(errors.is_empty(), "{errors:?}");
-        assert_eq!(std::fs::read_to_string(&first).unwrap(), "edited\n");
-        assert!(
-            !shell.tabs[0].doc_needs_text,
-            "the save retires the pending reload"
-        );
-        assert!(!shell.tabs[0].reload_confirmed);
-        // And activating it afterwards shows the saved edits.
-        shell.active_tab = Some(0);
-        shell.bind_active_view(&mut ui);
-        assert_eq!(ui.get_buffer_text(), "edited\n");
-    }
-
     /// Consent stays recorded across an activation that happens while
     /// the reload is still in flight: the click binds the stale document
     /// as it is, and the landing that follows still gets to consume it.
+    /// The tab holds crash-recovered work, so the Yes is consent to
+    /// discard something, and the landing installs the file only because
+    /// that consent survived the click.
     #[test]
     fn consent_survives_an_activation_before_the_reload_lands() {
         let dir = tempfile::tempdir().unwrap();
@@ -15730,7 +15971,10 @@ mod tests {
             let _ = shell.drain(&mut ui);
             std::thread::sleep(Duration::from_millis(20));
         }
-        shell.confirm_reload(first);
+        let id0 = shell.tabs[0].id;
+        shell.unsaved_restore_ids.insert(id0);
+        std::fs::write(&first, "FIRST v2\n").unwrap();
+        shell.confirm_reload(&mut ui, first);
         assert!(shell.tabs[0].reload_confirmed);
         assert!(
             shell.tabs[0].pending_load.is_some(),
@@ -15751,11 +15995,201 @@ mod tests {
             let _ = shell.drain(&mut ui);
             std::thread::sleep(Duration::from_millis(20));
         }
-        assert_eq!(ui.get_buffer_text(), "FIRST\n");
+        assert_eq!(ui.get_buffer_text(), "FIRST v2\n");
         assert!(
             !shell.tabs[0].reload_confirmed,
             "consent is spent by the landing"
         );
+        assert!(
+            !shell.is_unsaved_restore(id0),
+            "the recovered work went with it"
+        );
+    }
+
+    /// A Yes to the file-changed prompt over a buffer holding nothing
+    /// unsaved records no consent, so text typed while the reload is
+    /// under way survives the landing. Every Yes used to record consent,
+    /// and the landing then replaced the typed text with the file, with
+    /// no undo — the hole File → Reload of a clean buffer had, on the
+    /// other prompt. Found by the third security audit of the
+    /// tab-switch change.
+    #[test]
+    fn a_yes_over_a_clean_buffer_keeps_text_typed_during_the_reload() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("f.txt");
+        std::fs::write(&path, "on disk\n").unwrap();
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+        shell.open_file(path.clone());
+        drain_until(
+            &mut shell,
+            &mut ui,
+            |u, _| !u.set_text_calls.is_empty(),
+            Duration::from_secs(2),
+        );
+        let doc = shell.tabs[0].scintilla_doc;
+        assert!(!shell.has_unsaved_work(&mut ui, 0), "precondition: clean");
+        std::fs::write(&path, "changed on disk\n").unwrap();
+
+        // Yes over the clean buffer...
+        shell.confirm_reload(&mut ui, path.clone());
+        assert!(
+            shell.tabs[0].pending_load.is_some(),
+            "precondition: in flight"
+        );
+        assert!(
+            !shell.tabs[0].reload_confirmed,
+            "a Yes over nothing unsaved consents to nothing"
+        );
+        // ...then the user types before the read comes back.
+        ui.replace_doc_text(doc, "typed\n");
+        ui.doc_dirty.insert(doc, true);
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while shell.tabs[0].pending_load.is_some() {
+            assert!(Instant::now() < deadline, "reload did not complete in time");
+            let _ = shell.drain(&mut ui);
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert_eq!(
+            ui.get_buffer_text(),
+            "typed\n",
+            "the typed text survives the landing"
+        );
+
+        // The same Yes over that unsaved text is consent to discard it.
+        shell.confirm_reload(&mut ui, path);
+        assert!(shell.tabs[0].reload_confirmed);
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while shell.tabs[0].pending_load.is_some() {
+            assert!(Instant::now() < deadline, "reload did not complete in time");
+            let _ = shell.drain(&mut ui);
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert_eq!(ui.get_buffer_text(), "changed on disk\n");
+    }
+
+    /// A reload that fails spends its consent with it, so the tab is left
+    /// with neither a load in flight nor a consent: the state
+    /// `bind_and_fill` asserts. The file is deleted before the Yes, so
+    /// the load fails every time.
+    #[test]
+    fn a_failed_reload_spends_its_consent() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("gone.txt");
+        std::fs::write(&path, "before\n").unwrap();
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+        shell.open_file(path.clone());
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while shell.tabs[0].pending_load.is_some() {
+            assert!(Instant::now() < deadline, "load did not complete in time");
+            let _ = shell.drain(&mut ui);
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        // The buffer holds an edit, so the Yes is consent.
+        ui.dirty = true;
+        std::fs::remove_file(&path).unwrap();
+        shell.confirm_reload(&mut ui, path);
+        assert!(shell.tabs[0].reload_confirmed, "precondition: consent");
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while shell.tabs[0].pending_load.is_some() {
+            assert!(Instant::now() < deadline, "reload did not fail in time");
+            let _ = shell.drain(&mut ui);
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(
+            !shell.tabs[0].reload_confirmed,
+            "the failed load spends the consent"
+        );
+        shell.bind_active_view(&mut ui);
+    }
+
+    /// A reload's consent exists only while its load is in flight, since
+    /// the landing spends it. A bind that finds one left over asserts in
+    /// debug builds: the consent no longer overrides the unsaved-work
+    /// check there, and its presence means some landing forgot to spend
+    /// it. Debug builds only, as the assertion is.
+    #[cfg(debug_assertions)]
+    #[test]
+    #[should_panic(expected = "a reload's consent outlived its landing")]
+    fn a_bind_refuses_in_debug_a_consent_that_outlived_its_landing() {
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+        shell.tabs = vec![Tab {
+            id: 1,
+            path: Some(PathBuf::from("/tmp/a.txt")),
+            reload_confirmed: true,
+            ..Tab::default()
+        }];
+        shell.active_tab = Some(0);
+        shell.bind_active_view(&mut ui);
+    }
+
+    /// A reload's consent is spent when its load lands, even on a
+    /// background tab whose document was clean then, so an edit made to
+    /// that document after the landing survives the activation that
+    /// shows the tab. The consent used to stay set there, and the
+    /// activation installed the file over the edit with no undo. Found by
+    /// the fourth security audit of the tab-switch change.
+    #[test]
+    fn a_landed_consent_does_not_discard_an_edit_made_after_the_landing() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = dir.path().join("a.txt");
+        let b = dir.path().join("b.txt");
+        std::fs::write(&a, "A v0\n").unwrap();
+        std::fs::write(&b, "B\n").unwrap();
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+        shell.open_file(a.clone());
+        shell.open_file(b);
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while shell.tabs.iter().any(|t| t.pending_load.is_some()) {
+            assert!(Instant::now() < deadline, "loads did not complete in time");
+            let _ = shell.drain(&mut ui);
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        // Give A a document, then put B back in front.
+        assert!(shell.switch_to_tab(0));
+        shell.bind_active_view(&mut ui);
+        let doc_a = shell.tabs[0].scintilla_doc;
+        assert_ne!(doc_a, 0, "precondition: A has a document");
+        assert!(shell.switch_to_tab(1));
+        shell.bind_active_view(&mut ui);
+
+        // A holds an edit when the Yes arrives, so the Yes is consent...
+        ui.doc_dirty.insert(doc_a, true);
+        std::fs::write(&a, "A v1 (external)\n").unwrap();
+        shell.confirm_reload(&mut ui, a);
+        assert!(shell.tabs[0].reload_confirmed, "precondition: consent");
+        // ...but the edit is undone back to the save point before the
+        // load lands, so the landing finds a clean document.
+        ui.doc_dirty.insert(doc_a, false);
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while shell.tabs[0].pending_load.is_some() {
+            assert!(Instant::now() < deadline, "reload did not complete in time");
+            let _ = shell.drain(&mut ui);
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(
+            shell.tabs[0].doc_needs_text,
+            "precondition: the clean document waits to be filled"
+        );
+        assert!(
+            !shell.tabs[0].reload_confirmed,
+            "the landing spends the consent"
+        );
+
+        // An edit reaches A's document after the landing, and showing A
+        // keeps it.
+        ui.replace_doc_text(doc_a, "A v0\nafter the landing\n");
+        ui.doc_dirty.insert(doc_a, true);
+        assert!(shell.switch_to_tab(0));
+        shell.bind_active_view(&mut ui);
+        assert_eq!(ui.get_buffer_text(), "A v0\nafter the landing\n");
     }
 
     /// A load that lands on a **background** tab which already owns a
@@ -16585,10 +17019,9 @@ mod tests {
 
     #[test]
     fn confirm_reload_overwrites_active_tab_in_place() {
-        // Reload via confirm_reload (the same path File→Reload
-        // takes) replaces the active tab's content with the
-        // post-reload bytes — same buffer id, same tab index. No
-        // new tab.
+        // Reload via confirm_reload (the file-changed prompt's Yes)
+        // replaces the active tab's content with the post-reload
+        // bytes — same buffer id, same tab index. No new tab.
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("reload.txt");
         std::fs::write(&path, "first\n").unwrap();
@@ -16608,7 +17041,7 @@ mod tests {
 
         std::fs::write(&path, "second\n").unwrap();
         let calls_before = ui.set_text_calls.len();
-        shell.confirm_reload(path.clone());
+        shell.confirm_reload(&mut ui, path.clone());
         drain_until(
             &mut shell,
             &mut ui,
@@ -16748,6 +17181,83 @@ mod tests {
         // logic fired. (Paths are `None` until the async load completes, so
         // the index, not the path, is what's populated synchronously here.)
         assert_eq!(shell.active_tab, Some(0));
+    }
+
+    /// The recorded-active override is a switch like any other, so the
+    /// last activation a plugin hears names the tab that ends up in
+    /// front. Both files are already open, which is the case nothing
+    /// else announces: there is no load to land and announce it, and
+    /// the UI's rebind afterwards announces nothing.
+    #[test]
+    fn load_npp_session_announces_the_recorded_active_tab() {
+        use codepp_core::npp_session::{NppFile, NppSession, NppSessionDoc, NppView};
+        let dir = tempfile::tempdir().unwrap();
+        let f1 = dir.path().join("a.txt");
+        let f2 = dir.path().join("b.txt");
+        std::fs::write(&f1, "aaa").unwrap();
+        std::fs::write(&f2, "bbb").unwrap();
+
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+        shell.open_file(f1.clone());
+        drain_until(
+            &mut shell,
+            &mut ui,
+            |u, _| u.set_text_calls.len() == 1,
+            Duration::from_secs(2),
+        );
+        shell.open_file(f2.clone());
+        drain_until(
+            &mut shell,
+            &mut ui,
+            |u, _| u.set_text_calls.len() == 2,
+            Duration::from_secs(2),
+        );
+        let _ = shell.take_notifications();
+
+        // Recorded active = a.txt (index 0); the loop leaves b.txt in
+        // front, so the override moves back to a.txt.
+        let doc = NppSessionDoc {
+            session: NppSession {
+                active_view: 0,
+                main_view: NppView {
+                    active_index: 0,
+                    files: vec![
+                        NppFile {
+                            filename: f1.clone(),
+                            ..Default::default()
+                        },
+                        NppFile {
+                            filename: f2.clone(),
+                            ..Default::default()
+                        },
+                    ],
+                },
+                sub_view: None,
+            },
+        };
+        let sess_path = dir.path().join("sess.xml");
+        doc.save_to_xml(&sess_path).unwrap();
+        let report = shell.load_npp_session(&sess_path, false).unwrap();
+        assert!(report.needs_rebind);
+
+        let front = shell.active().expect("a tab is in front");
+        assert_eq!(front.path.as_deref(), Some(f1.as_path()));
+        let front_id = front.id as isize;
+        let last = shell
+            .take_notifications()
+            .into_iter()
+            .filter_map(|n| match n {
+                Notification::BufferActivated { buffer_id } => Some(buffer_id),
+                _ => None,
+            })
+            .next_back();
+        assert_eq!(
+            last,
+            Some(front_id),
+            "plugins must last hear of the tab the session put in front"
+        );
     }
 
     /// An N++ session file is the authority for the records it overwrites,
@@ -18686,16 +19196,182 @@ mod tests {
         let target = dir.path().join("victim.txt");
 
         assert!(
-            shell.save_buffer_as(&mut ui, target.clone()).is_err(),
-            "save-as must refuse a still-loading tab"
+            matches!(
+                shell.save_buffer_as(&mut ui, target.clone()),
+                Err(ShellError::LoadInFlight)
+            ),
+            "save-as must refuse a still-loading tab, and say why"
         );
         assert!(
-            shell.save_active_as_copy(&mut ui, &target).is_err(),
-            "save-a-copy must refuse a still-loading tab"
+            matches!(
+                shell.save_active_as_copy(&mut ui, &target),
+                Err(ShellError::LoadInFlight)
+            ),
+            "save-a-copy must refuse a still-loading tab, and say why"
+        );
+        assert!(
+            matches!(
+                shell.save_current_to_disk(&mut ui),
+                Err(ShellError::LoadInFlight)
+            ),
+            "a save of a fresh open that has not landed is refused as loading, \
+             not answered with Save As for a path it is about to get"
         );
         assert!(
             !target.exists(),
             "nothing may be written while the view holds another buffer"
+        );
+    }
+
+    /// A plugin switches to a tab whose reload is still in flight — which
+    /// no backend rebinds the view onto: the load binds it when it lands
+    /// — and asks for a save. The save takes its path from the active tab
+    /// and its bytes from the view, which still holds the previous tab's
+    /// document, so without a guard b.txt is overwritten with a.txt's
+    /// text. Found by the security audit of the shell's switch rule;
+    /// reproduced identically before it.
+    #[test]
+    fn a_save_refuses_while_the_active_tab_is_reloading() {
+        const NPPM_ACTIVATEDOC: u32 = (0x0400 + 1000) + 28;
+        const NPPM_SAVECURRENTFILE: u32 = (0x0400 + 1000) + 38;
+        let dir = tempfile::tempdir().unwrap();
+        let path_a = dir.path().join("a.txt");
+        let path_b = dir.path().join("b.txt");
+        std::fs::write(&path_a, "aaa").unwrap();
+        std::fs::write(&path_b, "bbb").unwrap();
+
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+        shell.open_file(path_a.clone());
+        drain_until(
+            &mut shell,
+            &mut ui,
+            |u, _| u.set_text_calls.len() == 1,
+            Duration::from_secs(2),
+        );
+        shell.open_file(path_b.clone());
+        drain_until(
+            &mut shell,
+            &mut ui,
+            |u, _| u.set_text_calls.len() == 2,
+            Duration::from_secs(2),
+        );
+        // Back on a.txt, its document bound, as a backend leaves it.
+        assert!(shell.switch_to_tab(0));
+        shell.bind_active_view(&mut ui);
+        assert_eq!(ui.get_buffer_text(), "aaa", "the view holds a.txt");
+
+        // A reload of b.txt that has not landed yet.
+        shell.confirm_reload(&mut ui, path_b.clone());
+        assert!(shell.tabs[1].pending_load.is_some());
+
+        // SAFETY: integer arguments only; no pointer is passed.
+        let switched = unsafe {
+            shell.dispatch_plugin_message(&mut ui, HostHandles::null(), NPPM_ACTIVATEDOC, 0, 1)
+        };
+        assert_eq!(switched, Some(1));
+        assert_eq!(shell.active_tab, Some(1));
+        // SAFETY: as above.
+        let saved = unsafe {
+            shell.dispatch_plugin_message(&mut ui, HostHandles::null(), NPPM_SAVECURRENTFILE, 0, 0)
+        };
+        assert_eq!(
+            saved,
+            Some(0),
+            "the refused save must answer FALSE, so the plugin can tell"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&path_b).unwrap(),
+            "bbb",
+            "a save while b.txt reloads wrote the bound document, a.txt's, over it"
+        );
+        assert!(matches!(
+            shell.save_current_to_disk(&mut ui),
+            Err(ShellError::LoadInFlight)
+        ));
+    }
+
+    /// The `LoadInFlight` guard covers a reload while it is in flight. A
+    /// reload that fails ends it, and the failure arm must bind the view:
+    /// a plugin's switch onto the reloading tab, which no backend rebinds,
+    /// left the view on the previous tab's document, and with the load
+    /// over nothing stopped the next save writing that document over this
+    /// tab's file. Found by the security audit of the guard.
+    #[test]
+    fn a_failed_reload_does_not_leave_the_view_on_another_document() {
+        const NPPM_ACTIVATEDOC: u32 = (0x0400 + 1000) + 28;
+        let dir = tempfile::tempdir().unwrap();
+        let path_a = dir.path().join("a.txt");
+        let path_b = dir.path().join("b.txt");
+        std::fs::write(&path_a, "aaa").unwrap();
+        std::fs::write(&path_b, "bbb").unwrap();
+
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+        shell.open_file(path_a.clone());
+        drain_until(
+            &mut shell,
+            &mut ui,
+            |u, _| u.set_text_calls.len() == 1,
+            Duration::from_secs(2),
+        );
+        shell.open_file(path_b.clone());
+        drain_until(
+            &mut shell,
+            &mut ui,
+            |u, _| u.set_text_calls.len() == 2,
+            Duration::from_secs(2),
+        );
+        assert!(shell.switch_to_tab(0));
+        shell.bind_active_view(&mut ui);
+        assert_eq!(ui.get_buffer_text(), "aaa", "the view holds a.txt");
+
+        // b.txt's reload will fail: the file is gone when the worker reads it.
+        std::fs::remove_file(&path_b).unwrap();
+        shell.confirm_reload(&mut ui, path_b.clone());
+        assert!(shell.tabs[1].pending_load.is_some());
+
+        // A plugin switches to b.txt, which no backend rebinds while it loads.
+        // SAFETY: integer arguments only; no pointer is passed.
+        let switched = unsafe {
+            shell.dispatch_plugin_message(&mut ui, HostHandles::null(), NPPM_ACTIVATEDOC, 0, 1)
+        };
+        assert_eq!(switched, Some(1));
+        assert_eq!(shell.active_tab, Some(1));
+        assert_eq!(ui.get_buffer_text(), "aaa", "the view still holds a.txt");
+
+        // Wait for the loader's own report. Deleting b.txt also makes the
+        // file watcher report "File removed", which can arrive first and
+        // would end the wait before the load has failed.
+        let load_failed = |d: &PendingDialog| matches!(d, PendingDialog::Error { title, .. } if title == "Open failed");
+        let pending = drain_until(
+            &mut shell,
+            &mut ui,
+            |_, p| p.iter().any(load_failed),
+            Duration::from_secs(3),
+        );
+        assert!(
+            pending.iter().any(load_failed),
+            "the failed reload was reported"
+        );
+        assert!(shell.tabs[1].pending_load.is_none(), "the load is over");
+        assert_eq!(shell.active_tab, Some(1), "b.txt stays in front");
+        assert_eq!(
+            ui.current_doc, shell.tabs[1].scintilla_doc,
+            "the view was left on another tab's document"
+        );
+        assert_eq!(
+            ui.get_buffer_text(),
+            "bbb",
+            "the view shows what b.txt held"
+        );
+        assert!(shell.save_current_to_disk(&mut ui).is_ok());
+        assert_eq!(
+            std::fs::read_to_string(&path_b).unwrap(),
+            "bbb",
+            "the save wrote another tab's text over b.txt"
         );
     }
 

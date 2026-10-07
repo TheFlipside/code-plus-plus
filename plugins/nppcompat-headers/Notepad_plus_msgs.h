@@ -437,7 +437,11 @@ typedef struct sessionInfo_ {
 #define NPPM_RELOADFILE                   (NPPMSG + 36)
 /* v1: switch to the buffer whose path is at lParam. */
 #define NPPM_SWITCHTOFILE                 (NPPMSG + 37)
-/* v1: save the active buffer. */
+/* v1: save the active buffer. Returns TRUE if the file was written,
+ *     FALSE if the save was refused or failed: an untitled buffer, a
+ *     file still loading, a write error. Notepad++ documents FALSE for
+ *     a file that does not need saving as well; Code++ writes a buffer
+ *     with no unsaved changes too, and answers TRUE. */
 #define NPPM_SAVECURRENTFILE              (NPPMSG + 38)
 /* v2: save every dirty titled buffer in one batch. Untitled tabs
  *     (no on-disk path) are skipped; per-tab errors are logged but

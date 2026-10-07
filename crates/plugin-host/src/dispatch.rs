@@ -889,7 +889,14 @@ pub trait HostServices {
     /// reloads without asking, which the host honours only for a
     /// buffer holding nothing unsaved (see that method).
     fn reload_file(&mut self, path: Option<PathBuf>, with_alert: bool);
-    fn save_current_file(&mut self);
+    /// Save the active buffer in place. Drives [`NPPM_SAVECURRENTFILE`],
+    /// whose answer is this: `true` if the file was written, `false` if
+    /// the save was refused or failed — an untitled buffer, a file still
+    /// loading, a write error — so a plugin can tell a save that did not
+    /// happen, as Notepad++'s header documents. It documents `FALSE` for
+    /// a file that does not need saving too; Code++ writes that buffer and
+    /// answers `true`.
+    fn save_current_file(&mut self) -> bool;
     fn switch_to_file(&mut self, path: PathBuf) -> bool;
     fn menu_command(&mut self, cmd_id: i32);
     fn make_current_buffer_dirty(&mut self);
@@ -1841,10 +1848,7 @@ pub unsafe fn dispatch_nppm<S: HostServices>(
             }
         }
 
-        NPPM_SAVECURRENTFILE => {
-            services.save_current_file();
-            1
-        }
+        NPPM_SAVECURRENTFILE => isize::from(services.save_current_file()),
 
         NPPM_SAVEALLFILES => {
             // No args. Saves every dirty titled buffer. Untitled
@@ -3388,6 +3392,9 @@ mod tests {
         /// to `true`; tests that exercise the failure path flip
         /// it to simulate `ImageList_ReplaceIcon` returning -1.
         toolbar_icon_succeeds: bool,
+        /// Whether `save_current_file` reports a refused or failed
+        /// save. Defaults to `false`, a save that went through.
+        save_fails: bool,
         /// Parent HWNDs the mock has been asked to create a
         /// plugin-owned Scintilla under, in call order. Stored
         /// as `usize` for the same reason as `modeless_dialogs`
@@ -3506,8 +3513,9 @@ mod tests {
                 if with_alert { " alert" } else { " silent" }
             ));
         }
-        fn save_current_file(&mut self) {
+        fn save_current_file(&mut self) -> bool {
             self.record("save");
+            !self.save_fails
         }
         fn switch_to_file(&mut self, path: PathBuf) -> bool {
             self.record(format!("switch={}", path.display()));
@@ -4096,6 +4104,19 @@ mod tests {
         let mut s = MockServices::default();
         let r = unsafe { dispatch_nppm(&mut s, NPPM_SAVECURRENTFILE, 0, 0) };
         assert_eq!(r, Some(1));
+        assert_eq!(s.calls(), vec!["save"]);
+    }
+
+    /// A save the host refused or could not write answers FALSE, as in
+    /// Notepad++, so a plugin can tell it did not happen.
+    #[test]
+    fn save_current_answers_false_when_nothing_was_saved() {
+        let mut s = MockServices {
+            save_fails: true,
+            ..MockServices::default()
+        };
+        let r = unsafe { dispatch_nppm(&mut s, NPPM_SAVECURRENTFILE, 0, 0) };
+        assert_eq!(r, Some(0));
         assert_eq!(s.calls(), vec!["save"]);
     }
 

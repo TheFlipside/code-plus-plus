@@ -658,31 +658,23 @@ fn connect_tab_strip_signals(tab_strip: &tabs::TabStrip) {
             if tabs::is_suppressed() {
                 return;
             }
-            // Attribute the outgoing buffer's modify bit to the outgoing
-            // tab, while the view is still bound to its document. After
-            // `active_tab` moves it would land on the wrong tab.
-            capture_active_dirty();
-            let moved = with_state(|st| {
-                let idx = num as usize;
-                if idx < st.shell.tabs.len() {
-                    st.shell.active_tab = Some(idx);
-                    true
-                } else {
+            let idx = num as usize;
+            let known = with_state(|st| {
+                let known = idx < st.shell.tabs.len();
+                if !known {
                     // The control and the model disagree. Defensive only —
                     // `sync` keeps them in lockstep — but silently doing
                     // nothing beats binding the view to a tab that is not
                     // there.
                     tracing::warn!(idx, "switch-page for an index Shell does not have");
-                    false
                 }
+                known
             });
-            if moved == Some(true) {
-                rebind_active_view();
-                // No `queue_buffer_activated` here yet, so a user's tab
-                // switch tells the plugins nothing on this backend, where
-                // Win32's selection handler queues `NPPN_BUFFERACTIVATED`
-                // itself. A known gap (DESIGN.md §7.4); the plugin host it
-                // once waited for is ported.
+            // A switch like any other, announced by the shell's rule —
+            // but delivered once GTK has finished switching the page,
+            // not from inside this emission. See `deliver_after_signal`.
+            if known == Some(true) && switch_to(idx) {
+                deliver_after_signal();
             }
         });
     });
@@ -704,10 +696,78 @@ fn connect_tab_strip_signals(tab_strip: &tabs::TabStrip) {
                 // is resynced below: on success it reflects the new order, and
                 // on rejection the relabel-by-index puts the visible order
                 // back where the model says it should be.
-                with_state(|st| st.shell.move_tab(from, num as usize));
+                let moved = with_state(|st| st.shell.move_tab(from, num as usize)) == Some(true);
                 refresh_tab_chrome();
+                // The reorder's `NPPN_DOCORDERCHANGED`, delivered once GTK's
+                // own drag handling is done — see `deliver_after_signal`.
+                if moved {
+                    deliver_after_signal();
+                }
             });
         });
+}
+
+thread_local! {
+    /// Set while a delivery [`deliver_after_signal`] scheduled is waiting.
+    static DELIVERY_AFTER_SIGNAL_QUEUED: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Deliver what a handler queued once GTK has finished the signal the
+/// handler runs in: from a high-priority idle, not inline.
+///
+/// For handlers of the tab strip's `GtkNotebook`, where plugin code must
+/// not run. A `switch-page` handler runs before the notebook's `RUN_LAST`
+/// class handler, which then switches to the page it was emitted for, so
+/// a plugin that switched tabs from its `NPPN_BUFFERACTIVATED` handler
+/// would have the strip put back on the tab the user clicked while the
+/// model moved on. And GTK 3.24's `gtk_notebook_button_press` goes on
+/// using the page after the emission returns, so a plugin that closed it
+/// would leave GTK reading freed memory. `page-reordered` comes from the
+/// same notebook's drag handling.
+///
+/// `Priority::HIGH` runs ahead of pending input and of GTK's redraw, so a
+/// plugin hears of the change before the user can act again — as on
+/// Win32, where it hears from inside the command. Coalesced: one delivery
+/// covers whatever the switches before it queued.
+///
+/// It delivers and does nothing else ([`deliver_queued`]), not a full
+/// [`drain_shell`]: the handler has rebound the view and refreshed the
+/// chrome already, and a drain would refresh it all again. That doubled
+/// what a click on the strip costs, and the cost grows with the number of
+/// tabs: the security audit measured 85 ms of CPU per switch with 150 tabs
+/// open against 51 ms before, and this way it is back to 48.
+fn deliver_after_signal() {
+    if DELIVERY_AFTER_SIGNAL_QUEUED.with(|queued| queued.replace(true)) {
+        return;
+    }
+    glib::idle_add_local_full(glib::Priority::HIGH, || {
+        crate::at_callback_boundary("lib:deliver_after_signal", glib::ControlFlow::Break, || {
+            // Cleared first, so a switch made while plugins are being
+            // told schedules a delivery of its own, and a panic below
+            // cannot leave the flag up for the rest of the session.
+            DELIVERY_AFTER_SIGNAL_QUEUED.with(|queued| queued.set(false));
+            deliver_queued();
+            glib::ControlFlow::Break
+        })
+    });
+}
+
+/// Deliver the notifications the shell has queued, and nothing else: no
+/// worker results applied, no chrome refreshed. The part of
+/// [`drain_shell`] a tab-strip signal needs ([`deliver_after_signal`]).
+///
+/// It holds off where `drain_shell` does. While a nested loop holds the
+/// [`DrainFreeze`] the notifications stay queued, and the freeze's holder
+/// drains when it lets go. Once the quit has begun nothing more is
+/// delivered at all.
+fn deliver_queued() {
+    if DrainFreeze::active() {
+        return;
+    }
+    if QUITTING.with(Cell::get) {
+        return;
+    }
+    plugin::deliver_notifications();
 }
 
 /// Attach the DESIGN.md §8 probes to the Scintilla widget.
@@ -1256,6 +1316,608 @@ mod drain_guard {
     }
 }
 
+/// What a user's gesture queues for the plugins is delivered before the
+/// gesture returns — Win32's behaviour, where every command ends by
+/// delivering — and what a tab-strip signal queues once GTK has finished
+/// the signal. A headless test has no plugin to hear any of it and no
+/// notebook emitting, so the shape is pinned in the source. Measured on
+/// the build before this: a File → New was heard ten seconds later,
+/// naming a buffer no longer in front, and a click on the strip never.
+#[cfg(test)]
+mod gesture_delivery_guard {
+    use crate::source_scan::{
+        block_after, code_only, depth_one_position, fn_body, occurs_at_depth_one,
+        strip_test_modules,
+    };
+
+    fn source(text: &str) -> String {
+        strip_test_modules(&code_only(text))
+    }
+
+    /// Where `needle` sits as a statement of `body` itself, or a panic
+    /// saying `what` went missing.
+    fn statement_at(body: &str, needle: &str, what: &str) -> usize {
+        depth_one_position(body, needle).unwrap_or_else(|| panic!("{what}"))
+    }
+
+    #[test]
+    fn a_switch_captures_the_outgoing_tab_then_goes_through_the_shells_rule() {
+        let lib = source(include_str!("lib.rs"));
+        let body = fn_body(&lib, "switch_to");
+        let capture = body
+            .find("capture_active_dirty();")
+            .expect("`switch_to` no longer captures the outgoing tab's dirty state");
+        let switch = body
+            .find("switch_to_tab(idx)")
+            .expect("`switch_to` no longer switches through the shell's rule");
+        assert!(
+            capture < switch,
+            "the capture must come first: after the switch it attributes the outgoing \
+             buffer's modify bit to the incoming tab"
+        );
+        for name in [
+            "select_tab_by_id",
+            "close_tab_by_id",
+            "connect_tab_strip_signals",
+        ] {
+            let body = fn_body(&lib, name);
+            assert!(
+                body.contains("switch_to(idx)"),
+                "`{name}` no longer switches through `switch_to`"
+            );
+            assert!(
+                !body.contains("active_tab = Some"),
+                "`{name}` moves `active_tab` itself, which announces nothing"
+            );
+        }
+        // Close Multiple closes each tab the way a click on its ✕ does.
+        // A close of the active tab after a bare `active_tab` write would
+        // compile and announce nothing; a loop that ignored the answer
+        // would close on past a Cancel.
+        let many = fn_body(&lib, "close_multiple_documents");
+        assert!(
+            occurs_at_depth_one(
+                &block_after(&many, "if !close_tab_by_id(target_id) {"),
+                "break;"
+            ),
+            "Close Multiple no longer closes through `close_tab_by_id`, or no longer \
+             stops when a close does not happen"
+        );
+        assert!(
+            !many.contains("close_active_tab"),
+            "Close Multiple closes the active tab directly, past the switch"
+        );
+        // The tab strip's ✕ and middle click, likewise.
+        let strip = source(include_str!("tabs.rs"));
+        assert_eq!(
+            strip.matches("crate::close_tab_by_id(id);").count(),
+            2,
+            "the tab's ✕ and its middle click must each close through `close_tab_by_id`"
+        );
+        assert!(
+            !strip.contains("close_active_tab"),
+            "the tab strip closes the active tab directly, past the switch"
+        );
+    }
+
+    #[test]
+    fn the_tab_strip_signals_deliver_after_the_emission() {
+        let lib = source(include_str!("lib.rs"));
+        let signals = fn_body(&lib, "connect_tab_strip_signals");
+        assert_eq!(
+            signals.matches("deliver_after_signal();").count(),
+            2,
+            "`switch-page` and `page-reordered` must each deliver after the emission"
+        );
+        for inline in ["drain_shell", "deliver_notifications", "deliver_queued"] {
+            assert!(
+                !signals.contains(inline),
+                "a tab-strip handler calls `{inline}` inside GtkNotebook's emission, where \
+                 a plugin's switch is undone by the class handler and a close leaves GTK \
+                 using a freed page"
+            );
+        }
+        let idle = fn_body(&lib, "deliver_after_signal");
+        // One idle at a time: a request made while one is queued is
+        // already covered by it. Without the early return, each switch in
+        // a burst would queue a high-priority idle of its own.
+        let check = "if DELIVERY_AFTER_SIGNAL_QUEUED.with(|queued| queued.replace(true)) {";
+        let coalesced = statement_at(
+            &idle,
+            check,
+            "the idle no longer coalesces a request made while one is queued",
+        );
+        assert!(
+            occurs_at_depth_one(&block_after(&idle, check), "return;"),
+            "a request made while an idle is queued must not queue another"
+        );
+        let added = statement_at(
+            &idle,
+            "glib::idle_add_local_full(glib::Priority::HIGH,",
+            "the delivery must run from a high-priority idle, ahead of input and redraw",
+        );
+        assert!(coalesced < added, "the coalescing check must come first");
+        assert!(
+            idle.contains("glib::ControlFlow::Break, ||"),
+            "the boundary's fallback must be `Break`: `Continue` would spin at high \
+             priority for good after a panic"
+        );
+        let cleared = idle
+            .find("queued.set(false)")
+            .expect("the idle no longer clears its flag");
+        let delivered = idle
+            .find("deliver_queued();")
+            .expect("the idle no longer delivers");
+        assert!(
+            cleared < delivered,
+            "the flag must come down before the delivery, so a panic cannot leave it up"
+        );
+        // Deliver, not drain: the handler has refreshed the chrome already,
+        // and a drain would refresh it again on every click, at a cost that
+        // grows with the number of tabs.
+        assert!(
+            !idle.contains("drain_shell"),
+            "the tab-strip idle drains, refreshing the chrome a second time per click"
+        );
+        // Nor anything else: whatever the idle does runs on every click,
+        // so its body is pinned whole, and so is `deliver_queued`'s.
+        let squash = |s: &str| s.split_whitespace().collect::<String>();
+        assert_eq!(
+            squash(&block_after(&idle, "glib::ControlFlow::Break, || {")),
+            "{DELIVERY_AFTER_SIGNAL_QUEUED.with(|queued|queued.set(false));\
+             deliver_queued();glib::ControlFlow::Break}",
+            "the tab-strip idle does more than clear its flag and deliver, on every \
+             click on the strip"
+        );
+        // And it holds off where `drain_shell` does: under a freeze, whose
+        // holder drains when it lets go, and once the quit has begun.
+        let deliver = fn_body(&lib, "deliver_queued");
+        let handed_on = statement_at(
+            &deliver,
+            "plugin::deliver_notifications();",
+            "`deliver_queued` no longer delivers",
+        );
+        for gate in [
+            "if DrainFreeze::active() {",
+            "if QUITTING.with(Cell::get) {",
+        ] {
+            let at = statement_at(
+                &deliver,
+                gate,
+                &format!("`deliver_queued` no longer checks `{gate}` as a statement of its own"),
+            );
+            assert!(
+                occurs_at_depth_one(&block_after(&deliver, gate), "return;"),
+                "`deliver_queued` no longer returns when `{gate}`"
+            );
+            assert!(at < handed_on, "`{gate}` must come before the delivery");
+        }
+        assert_eq!(
+            squash(&deliver),
+            "{ifDrainFreeze::active(){return;}ifQUITTING.with(Cell::get){return;}\
+             plugin::deliver_notifications();}",
+            "`deliver_queued` does more than deliver, on every click on the strip"
+        );
+    }
+
+    /// Every gesture does its work and then delivers what the work
+    /// queued, as a statement of its own. Both orders compile and both
+    /// read naturally, and a drain ahead of the work, or inside the
+    /// borrow that does it, delivers nothing.
+    #[test]
+    fn user_gestures_deliver_what_they_queue() {
+        let menu = source(include_str!("menu.rs"));
+        for (name, work) in [
+            ("on_new", "new_untitled("),
+            ("on_save", "save_active();"),
+            ("on_save_as", "save_active_as();"),
+            ("on_save_all", "save_all("),
+        ] {
+            let body = fn_body(&menu, name);
+            let worked = body
+                .find(work)
+                .unwrap_or_else(|| panic!("`{name}` no longer calls `{work}`"));
+            let drained = statement_at(
+                &body,
+                "drain_shell();",
+                &format!("`{name}` no longer delivers what it queued before returning"),
+            );
+            assert!(worked < drained, "`{name}` drains before it works");
+            assert!(
+                !body.contains("DrainFreeze"),
+                "`{name}` holds a freeze across its own drain, which makes the drain a no-op"
+            );
+        }
+        // Save All delivers what did save before it reports what did not:
+        // the report is a modal, and plugins should not wait on it.
+        let all = fn_body(&menu, "on_save_all");
+        let drained = statement_at(&all, "drain_shell();", "Save All no longer delivers");
+        let gated = all
+            .find("if errors.is_empty() {")
+            .expect("Save All no longer skips the report when nothing failed");
+        let reported = all
+            .find("message_dialog(")
+            .expect("Save All no longer reports its failures");
+        assert!(
+            drained < gated && gated < reported,
+            "Save All must deliver before it reports"
+        );
+        let dedupe = block_after(
+            &fn_body(&menu, "open_paths"),
+            "Some(OpenFileOutcome::SwitchedToExisting(_)) => {",
+        );
+        let rebound = statement_at(
+            &dedupe,
+            "rebind_active_view();",
+            "an open of a file that is already open no longer rebinds the view",
+        );
+        let drained = statement_at(
+            &dedupe,
+            "drain_shell();",
+            "an open of a file that is already open no longer delivers its switch",
+        );
+        assert!(
+            rebound < drained,
+            "an open of an open file delivers before the view is rebound, so a plugin \
+             reading the view is told about one buffer and finds another"
+        );
+        let rows = fn_body(&menu, "populate_open_files_menu");
+        let picked = rows
+            .find("crate::select_tab_by_id(id);")
+            .expect("the open-files switcher no longer selects through `select_tab_by_id`");
+        let drained = rows
+            .find("crate::drain_shell();")
+            .expect("the open-files switcher no longer delivers the switch it made");
+        assert!(picked < drained, "the switcher drains before it switches");
+        let lib = source(include_str!("lib.rs"));
+        let pin = fn_body(&lib, "toggle_pin_by_id");
+        let pinned = pin
+            .find("set_pinned(")
+            .expect("a pin no longer goes through `Shell::set_pinned`");
+        let drained = statement_at(
+            &pin,
+            "drain_shell();",
+            "a pin no longer delivers its NPPN_DOCORDERCHANGED",
+        );
+        assert!(pinned < drained, "a pin drains before it pins");
+        let fif = source(include_str!("fif.rs"));
+        let jump = block_after(&fif, "Some(OpenFileOutcome::SwitchedToExisting(_)) => {");
+        let rebound = statement_at(
+            &jump,
+            "crate::rebind_active_view();",
+            "a Find-in-Files jump onto an open file no longer rebinds the view",
+        );
+        let drained = statement_at(
+            &jump,
+            "crate::drain_shell();",
+            "a Find-in-Files jump onto an open file no longer delivers its switch",
+        );
+        assert!(
+            rebound < drained,
+            "a Find-in-Files jump delivers before the view is rebound"
+        );
+    }
+
+    /// A close prompt's Save goes through the core, which delivers
+    /// nothing: plugin code run between the prompt and the close it gates
+    /// could move the focus, and the close would then announce a tab the
+    /// user was never asked about. The close's own flush delivers it.
+    #[test]
+    fn the_close_prompt_saves_through_the_core() {
+        let lib = source(include_str!("lib.rs"));
+        let prompt = fn_body(&lib, "confirm_discard_active");
+        assert!(
+            prompt.contains("crate::menu::save_active();"),
+            "the close prompt no longer saves through `save_active`"
+        );
+        assert!(
+            !prompt.contains("on_save"),
+            "the close prompt saves through a menu item, which drains mid-close"
+        );
+        let menu = source(include_str!("menu.rs"));
+        let core = fn_body(&menu, "save_active");
+        assert!(
+            core.contains("save_active_as();") && !core.contains("on_save_as"),
+            "the save core no longer routes an untitled buffer through the Save As core"
+        );
+        for body in [core, fn_body(&menu, "save_active_as")] {
+            assert!(
+                !body.contains("drain_shell"),
+                "a save core drains, and the close prompt calls it"
+            );
+        }
+    }
+
+    /// Save As reads the active tab once its chooser returns, so nothing
+    /// may move it while the chooser is up: a worker's drain is held off
+    /// by the freeze, and a plugin's own handler is caught by checking
+    /// the tab before writing. Without both, one buffer's text lands at
+    /// the path the user chose for another. A second look that cannot
+    /// read the state counts as "moved", so it fails closed.
+    #[test]
+    fn save_as_holds_the_freeze_and_looks_again_before_writing() {
+        let menu = source(include_str!("menu.rs"));
+        let body = fn_body(&menu, "save_active_as");
+        let freeze = body
+            .find("let _freeze = crate::DrainFreeze::new();")
+            .expect("Save As no longer holds a freeze for as long as it runs");
+        let noted = body
+            .find("let Some(for_tab) =")
+            .expect("Save As no longer notes the tab it was opened for");
+        let chooser = body
+            .find("choose_save_path(")
+            .expect("Save As no longer runs its chooser");
+        let recheck = "if !crate::active_tab_is(for_tab) {";
+        let checked = body
+            .find(recheck)
+            .expect("Save As no longer looks the tab up again after its chooser");
+        let write = body
+            .find("save_buffer_as(")
+            .expect("Save As no longer writes through the shell");
+        assert!(
+            freeze < chooser && noted < chooser && chooser < checked && checked < write,
+            "freeze and note the tab, run the chooser, look again, then write"
+        );
+        assert!(
+            occurs_at_depth_one(&block_after(&body, recheck), "return;"),
+            "Save As writes even though another tab came to the front"
+        );
+        a_second_look_fails_closed(&source(include_str!("lib.rs")));
+    }
+
+    /// Every second look goes through `active_tab_is`, and it answers
+    /// "moved" when it cannot read the state, so a look that fails acts on
+    /// nothing rather than on whichever tab is in front.
+    fn a_second_look_fails_closed(lib: &str) {
+        let helper = fn_body(lib, "active_tab_is");
+        assert!(
+            helper.contains(".unwrap_or(false)") && !helper.contains("unwrap_or(true)"),
+            "`active_tab_is` must answer false when it cannot read the state"
+        );
+    }
+
+    /// The close prompt's answer is about the tab it named. Plugin code
+    /// runs in the dialog's loop and can move the front, so the answer is
+    /// acted on only if that tab is still in front — after the question,
+    /// and again after a save, whose chooser runs a loop of its own. A
+    /// moved front refuses the close: Don't Save would otherwise discard
+    /// the edits of a buffer nobody asked about.
+    #[test]
+    fn the_close_prompt_looks_again_before_it_acts() {
+        let lib = source(include_str!("lib.rs"));
+        let body = fn_body(&lib, "confirm_discard_active");
+        let recheck = "if !active_tab_is(prompted) {";
+        let asked = statement_at(
+            &body,
+            "let response = save_confirm_dialog(&name);",
+            "the close prompt no longer takes its answer before acting on it",
+        );
+        let looked = statement_at(
+            &body,
+            recheck,
+            "the close prompt no longer looks again after its question",
+        );
+        let acted = statement_at(
+            &body,
+            "match response {",
+            "the close prompt no longer acts on its answer",
+        );
+        assert!(
+            asked < looked && looked < acted,
+            "ask, look again, then act on the answer"
+        );
+        assert!(
+            occurs_at_depth_one(&block_after(&body, recheck), "return false;"),
+            "the close prompt acts although another tab came to the front"
+        );
+        // And a prompt that cannot read the state at all — a re-entrant
+        // call, the borrow already taken — refuses rather than take the
+        // buffer for clean and let the close discard it.
+        assert!(
+            occurs_at_depth_one(
+                &block_after(&body, "let Some(active) = sample else {"),
+                "return false;"
+            ),
+            "the close prompt goes ahead when it cannot read the state"
+        );
+        let save = block_after(&body, "gtk::ResponseType::Yes => {");
+        let saved = statement_at(
+            &save,
+            "crate::menu::save_active();",
+            "the close prompt's Save no longer saves through the core",
+        );
+        let looked = statement_at(
+            &save,
+            recheck,
+            "the close prompt no longer looks again after its save",
+        );
+        let read = save
+            .find("SCI_GETMODIFY")
+            .expect("the close prompt no longer re-reads the modify bit after its save");
+        assert!(
+            saved < looked && looked < read,
+            "save, look again, then trust the modify bit"
+        );
+        assert!(
+            occurs_at_depth_one(&block_after(&save, recheck), "return false;"),
+            "the close prompt's Save trusts a modify bit read from another tab"
+        );
+        a_second_look_fails_closed(&lib);
+    }
+
+    /// A close that did not happen says so. `close_announced_tab` refuses
+    /// when a plugin moved the front from inside the announcement, and a
+    /// close reporting success then would have Close All and Close
+    /// Multiple go on, picking the same tab and prompting about it again.
+    #[test]
+    fn a_close_reports_whether_a_tab_closed() {
+        let lib = source(include_str!("lib.rs"));
+        let body = fn_body(&lib, "close_active_tab");
+        assert!(
+            occurs_at_depth_one(
+                &block_after(&body, "if let Some(Some(doc)) = closed_doc {"),
+                "closed = true;"
+            ),
+            "the close no longer records that the announced tab closed"
+        );
+        assert_eq!(
+            body.matches("closed = true;").count(),
+            1,
+            "the close reports a tab closed outside the one outcome in which it did"
+        );
+        assert!(
+            body.trim_end().ends_with("closed\n}"),
+            "the close no longer answers whether a tab closed"
+        );
+        // Close All stops at a close that did not happen. A `continue`
+        // compiles as well and skips the no-progress check after it, so a
+        // Cancel would ask about the same tab again, and again.
+        let menu = source(include_str!("menu.rs"));
+        assert!(
+            occurs_at_depth_one(
+                &block_after(&fn_body(&menu, "on_close_all"), "if !close_active_tab() {"),
+                "break;"
+            ),
+            "Close All no longer stops when a close does not happen"
+        );
+    }
+
+    /// Both reloads keyed by the file the question named. The watcher's
+    /// prompt asks about any open file, and File → Reload's question runs
+    /// a loop in which plugin code can move the front; a Yes is consent
+    /// to discard that file's edits, and nobody else's.
+    #[test]
+    fn a_reload_goes_to_the_file_it_asked_about() {
+        let lib = source(include_str!("lib.rs"));
+        let prompt = block_after(
+            &fn_body(&lib, "present_dialog"),
+            "PendingDialog::ConfirmReload(path) => {",
+        );
+        // Inside the Yes branch and nowhere else in the arm: hoisted out
+        // of it, a No reloads too.
+        let yes = block_after(&prompt, "if response == gtk::ResponseType::Yes {");
+        assert!(
+            yes.contains("confirm_reload(&mut ui, path.clone())")
+                && prompt.matches("confirm_reload(").count() == 1
+                && !prompt.contains(".active()"),
+            "the reload prompt no longer reloads, on a Yes only, the file it named"
+        );
+        let menu = source(include_str!("menu.rs"));
+        let body = fn_body(&menu, "on_reload");
+        let sampled = body
+            .find("let sample =")
+            .expect("File → Reload no longer reads the path before asking");
+        let frozen = body
+            .find("let _freeze = crate::DrainFreeze::new();")
+            .expect("File → Reload no longer holds a freeze while it asks");
+        let asked = body
+            .find("crate::message_dialog(")
+            .expect("File → Reload no longer asks before discarding edits");
+        let reloaded = body
+            .find("request_reload(path, consent)")
+            .expect("File → Reload no longer reloads the path it read");
+        let drained = statement_at(
+            &body,
+            "drain_shell();",
+            "File → Reload no longer replays what its freeze held back",
+        );
+        assert!(
+            sampled < frozen && frozen < asked && asked < reloaded && reloaded < drained,
+            "read the path, ask under the freeze, reload that path, then drain"
+        );
+        assert_eq!(
+            body.matches(".active()").count(),
+            1,
+            "File → Reload reads the active tab again after its question"
+        );
+        // The answer gates the reload, and only a Yes is consent to
+        // discard: asked whenever there is unsaved work, reloading only on
+        // Yes, and with nothing unsaved reloading unconfirmed, so an edit
+        // typed while the load is under way survives it. Asking and then
+        // reloading anyway, or confirming a reload nobody was asked about,
+        // passes every check above.
+        let squashed: String = body.chars().filter(|c| !c.is_whitespace()).collect();
+        assert!(
+            squashed.contains(
+                "letconsent=ifunsaved{let_freeze=crate::DrainFreeze::new();\
+                 (crate::message_dialog("
+            ) && squashed.contains(
+                ")==gtk::ResponseType::Yes).then_some(codepp_shell::ReloadConsent::Confirmed)}\
+                 else{Some(codepp_shell::ReloadConsent::Unconfirmed)};"
+            ) && squashed.contains(
+                "ifletSome(consent)=consent{with_state(|st|st.shell.request_reload(path,consent));}"
+            ) && !body.contains("confirm_reload("),
+            "File → Reload no longer reloads only on the answer to its question, or confirms \
+             a reload nobody was asked about"
+        );
+        assert_eq!(
+            body.matches("request_reload(").count(),
+            1,
+            "File → Reload requests a reload outside its answer"
+        );
+        // Unsaved work is the live modify bit, the cached one, or a
+        // crash-recovered buffer, which sits at its save point: a reload
+        // over any of them asks first.
+        assert!(
+            squashed.contains(
+                "letlive_dirty=st.editor.send(codepp_scintilla_sys::SCI_GETMODIFY,0,0)!=0;"
+            ) && squashed
+                .contains("letunsaved=live_dirty||t.dirty||st.shell.is_unsaved_restore(t.id);"),
+            "File → Reload no longer counts every kind of unsaved work as unsaved"
+        );
+    }
+
+    /// Save on a file still loading goes to the save, which refuses it as
+    /// still loading, and not to a chooser: the tab has no path yet only
+    /// because its load has not landed.
+    #[test]
+    fn a_save_of_a_file_still_loading_does_not_open_save_as() {
+        let menu = source(include_str!("menu.rs"));
+        let body = fn_body(&menu, "save_active");
+        assert!(
+            body.contains("t.path.is_none() && t.pending_load.is_none()"),
+            "Save treats a file still loading as untitled and opens Save As"
+        );
+    }
+
+    /// Closing a tab that is not in front switches to it, delivers that
+    /// switch before the close begins, and closes only if the tab is still
+    /// in front afterwards: the delivery runs plugin code and applies
+    /// worker results, either of which can move the focus. A second look
+    /// that cannot read the state counts as "moved".
+    #[test]
+    fn a_close_by_id_delivers_its_switch_and_looks_again() {
+        let lib = source(include_str!("lib.rs"));
+        let body = fn_body(&lib, "close_tab_by_id");
+        let switch = block_after(&body, "if !already_active {");
+        let switched = statement_at(&switch, "switch_to(idx);", "the close no longer switches");
+        let drained = statement_at(
+            &switch,
+            "drain_shell();",
+            "the close no longer delivers its switch before closing",
+        );
+        let recheck = "if !active_tab_is(id) {";
+        let looked = statement_at(
+            &switch,
+            recheck,
+            "the close no longer looks the tab up again",
+        );
+        assert!(
+            switched < drained && drained < looked,
+            "switch, deliver, then look again — in that order"
+        );
+        assert!(
+            occurs_at_depth_one(&block_after(&switch, recheck), "return false;"),
+            "a tab no longer in front must not be closed"
+        );
+        a_second_look_fails_closed(&lib);
+        assert!(
+            occurs_at_depth_one(&body, "close_active_tab()"),
+            "the close no longer closes through `close_active_tab`"
+        );
+    }
+}
+
 thread_local! {
     /// Dialogs awaiting presentation. See [`drain_shell`].
     static DIALOG_QUEUE: RefCell<VecDeque<PendingDialog>> =
@@ -1363,17 +2025,36 @@ fn present_dialog(dialog: &PendingDialog) {
                 // forge extra lines that read as part of the official
                 // wording. The Win32 sibling (`show_reload_dialog`)
                 // does the same; DESIGN.md §7.5 requires them to agree.
+                //
+                // The question names what a Yes costs, as the Win32 and
+                // macOS prompts do: over unsaved edits it discards them.
                 &format!(
-                    "{} was modified outside Code++.\n\nReload it?",
+                    "{} was modified outside Code++.\n\n\
+                     Reload it from disk and discard any unsaved edits?",
                     codepp_shell::sanitize_path_for_display(path)
                 ),
             );
             if response == gtk::ResponseType::Yes {
-                // No drain needed here: `reload_active` queues a load
-                // through the same worker every other open uses, and
-                // its wake drains and rebinds the view. Draining
-                // inline would just recurse for nothing.
-                with_state(|st| st.shell.reload_active());
+                // The file the prompt named, not whichever tab is in
+                // front: the watcher asks about any open file, not only
+                // the active one, and a Yes is consent to discard the
+                // unsaved edits of that file. It reloaded the active tab
+                // until Phase 5, so a Yes about b.txt threw away a.txt's
+                // edits and left b.txt stale. Cocoa and Win32 always
+                // reloaded the path.
+                //
+                // The shell decides what the Yes consents to, from what
+                // the buffer holds now: over nothing unsaved it consents
+                // to nothing, so text typed during the load survives it.
+                //
+                // No drain needed here: the reload queues a load through
+                // the same worker every other open uses, and its wake
+                // drains and rebinds the view. Draining inline would just
+                // recurse for nothing.
+                with_state(|st| {
+                    let (shell, mut ui) = st.split();
+                    shell.confirm_reload(&mut ui, path.clone());
+                });
             }
         }
         PendingDialog::Error { title, message } => {
@@ -1950,7 +2631,7 @@ fn confirm_discard_active() -> bool {
             let has_pending_load = tab.pending_load.is_some();
             let dirty = st.editor.send(codepp_scintilla_sys::SCI_GETMODIFY, 0, 0) != 0 || tab.dirty;
             let length = st.editor.send(codepp_scintilla_sys::SCI_GETLENGTH, 0, 0);
-            (name, has_path, has_pending_load, dirty, length)
+            (tab.id, name, has_path, has_pending_load, dirty, length)
         })
     });
     let Some(active) = sample else {
@@ -1959,7 +2640,7 @@ fn confirm_discard_active() -> bool {
         // discarding it.
         return false;
     };
-    let Some((name, has_path, has_pending_load, dirty, length)) = active else {
+    let Some((prompted, name, has_path, has_pending_load, dirty, length)) = active else {
         // No active tab: nothing to guard, and the close is a no-op.
         return true;
     };
@@ -1971,17 +2652,47 @@ fn confirm_discard_active() -> bool {
     if !(dirty && !has_pending_load && (has_path || length > 0)) {
         return true;
     }
-    match save_confirm_dialog(&name) {
+    let response = save_confirm_dialog(&name);
+    // The answer is about the tab the prompt named. The dialog's loop runs
+    // plugin code — a plugin's timer, say — and a switch made there moves
+    // the tab in front, so acting on the answer then would save or close a
+    // buffer nobody asked about: Don't Save would discard its edits. The
+    // close's freeze holds off a worker's drain, not that. Win32 looks
+    // again at the same two places (`active_tab_is`). Refused rather than
+    // asked again: the tab the user answered for is not the one in front,
+    // and a second prompt on top of a plugin's switch would ask about a
+    // close nobody requested.
+    if !active_tab_is(prompted) {
+        tracing::warn!(
+            prompted,
+            "close: the prompted tab is no longer in front after the save prompt; refusing"
+        );
+        return false;
+    }
+    match response {
         // Discard the edits and proceed; the doc is freed on close.
         gtk::ResponseType::No => true,
         gtk::ResponseType::Yes => {
-            // Save via the same path the Save / Save As menu items use: it
-            // saves a titled buffer in place, routes an untitled one
-            // through the Save As chooser, and shows its own sanitized
-            // error dialog on failure. Then re-read the modify bit — a
+            // Save via the core of the Save / Save As menu items: it saves
+            // a titled buffer in place, routes an untitled one through the
+            // Save As chooser, and shows its own sanitized error dialog on
+            // failure. The core, not the menu item, because the item then
+            // delivers what the save queued, and plugin code run here could
+            // move the focus between this prompt and the close it gates;
+            // the close delivers it instead. Then re-read the modify bit — a
             // still-dirty buffer means the save failed or its chooser was
             // cancelled, and the close must abort so nothing is lost.
-            crate::menu::on_save();
+            crate::menu::save_active();
+            // The save can run a chooser, whose loop runs plugin code too:
+            // look again before the modify bit below is taken to describe
+            // the prompted tab.
+            if !active_tab_is(prompted) {
+                tracing::warn!(
+                    prompted,
+                    "close: the prompted tab is no longer in front after the save; refusing"
+                );
+                return false;
+            }
             matches!(
                 with_state(|st| st.editor.send(codepp_scintilla_sys::SCI_GETMODIFY, 0, 0) != 0),
                 Some(false)
@@ -2024,9 +2735,13 @@ fn save_confirm_dialog(name: &str) -> gtk::ResponseType {
 }
 
 /// Close the active tab, releasing its Scintilla document and rebinding
-/// the view. Returns `false` if the user aborted at the save prompt
-/// (Cancel, or a failed/cancelled save) and the tab stayed open; `true`
-/// otherwise. Close All relies on the return value to stop on Cancel.
+/// the view. Returns `true` if a tab was closed, and `false` when none
+/// was: the user aborted at the save prompt (Cancel, or a failed or
+/// cancelled save), the tab the prompt was about left the front while it
+/// was up, or a plugin moved the front from inside
+/// `NPPN_FILEBEFORECLOSE`, so the announced tab was not closed. Close All
+/// and Close Multiple rely on the return value to stop, rather than go on
+/// prompting.
 ///
 /// The release is not optional: documents are reference-counted, and
 /// `SCI_CREATEDOCUMENT` hands back a reference Code++ owns. Dropping the
@@ -2041,7 +2756,7 @@ fn save_confirm_dialog(name: &str) -> gtk::ResponseType {
 /// at that branch for why, and for the refcount hand-off between the
 /// just-released doc and the new tab's document.
 pub(crate) fn close_active_tab() -> bool {
-    let proceed;
+    let mut closed = false;
     {
         // Freeze shell drains for the whole close. The data-loss gate
         // below runs a modal that spins a nested main loop; without this a
@@ -2053,8 +2768,7 @@ pub(crate) fn close_active_tab() -> bool {
 
         // Data-loss gate: prompt before discarding unsaved edits. Cancel
         // (or a failed save) aborts the close entirely.
-        proceed = confirm_discard_active();
-        if proceed {
+        if confirm_discard_active() {
             // Announce the close to plugins first. `NPPN_FILEBEFORECLOSE`
             // is delivered here, with no `with_state` borrow held and the
             // tab still in `shell.tabs`, so a plugin's `beNotified` can
@@ -2077,7 +2791,11 @@ pub(crate) fn close_active_tab() -> bool {
                             .map(|c| c.scintilla_doc)
                     })
                 });
+            // `Some(Some(_))` is the one outcome in which a tab closed:
+            // `close_announced_tab` refuses when a plugin moved the front
+            // from inside the announcement.
             if let Some(Some(doc)) = closed_doc {
+                closed = true;
                 if doc != 0 {
                     with_state(|st| {
                         st.editor
@@ -2115,7 +2833,17 @@ pub(crate) fn close_active_tab() -> bool {
     // was itself nested inside another (a future Close All), an outer
     // freeze is still held and this drain defers to the outer flush.
     drain_shell();
-    proceed
+    closed
+}
+
+/// Whether the tab in front is still the one with buffer id `id`, read
+/// under a fresh borrow: what a caller uses to look again at a tab it
+/// sampled before a nested main loop ran plugin code. `false` when
+/// another tab is in front, when none is, or when the state cannot be
+/// read — every case in which acting on the sample would act on the wrong
+/// buffer. Win32's `active_tab_is`.
+pub(crate) fn active_tab_is(id: i32) -> bool {
+    with_state(|st| st.shell.active().is_some_and(|t| t.id == id)).unwrap_or(false)
 }
 
 /// Snapshot the window's current size + maximized state into the shell's
@@ -2568,37 +3296,72 @@ fn capture_active_dirty() {
     let _ = refresh_active_dirty();
 }
 
+/// Make tab `idx` the active one on the user's behalf and bind the view
+/// to it, returning whether the active buffer changed.
+///
+/// The outgoing tab's dirty state is captured first, while the view is
+/// still bound to its document — see [`capture_active_dirty`]. The switch
+/// itself is [`codepp_shell::Shell::switch_to_tab`]'s, which announces
+/// `NPPN_BUFFERACTIVATED` when the active buffer changes: the one rule
+/// every backend shares. Delivers nothing — the gesture that called it
+/// delivers once it is done, which is what lets a close switch to its tab
+/// and announce that switch before the close begins.
+fn switch_to(idx: usize) -> bool {
+    capture_active_dirty();
+    let changed = with_state(|st| st.shell.switch_to_tab(idx)).unwrap_or(false);
+    rebind_active_view();
+    changed
+}
+
 /// Close the tab with buffer id `id`, wherever it currently sits.
+/// Returns `false` when nothing closed: the tab has gone, the focus moved
+/// off it before its close could begin, or [`close_active_tab`] closed
+/// nothing.
 ///
 /// Keyed on the id rather than on a captured index because the tab
 /// strip's close buttons outlive any particular ordering — see the
-/// `tabs` module docs. Activates the tab first, matching Win32, so that
-/// a future per-tab save prompt appears against the buffer being
-/// closed rather than against whatever was previously in front.
-pub(crate) fn close_tab_by_id(id: i32) {
+/// `tabs` module docs. A tab that is not in front is switched to first,
+/// matching Win32, so the save prompt names the buffer being closed.
+/// That switch is announced like any other, and delivered before the
+/// close begins — Win32's order too, where the selection handler
+/// delivers the activation before the close command runs — so plugins
+/// hear `NPPN_BUFFERACTIVATED` before `NPPN_FILEBEFORECLOSE`, and know
+/// which buffer is in front if the user cancels.
+///
+/// Delivering runs plugin code, and the drain applies whatever workers
+/// have finished, either of which can move the focus. So the tab is
+/// looked up again before the close; one no longer in front is not
+/// closed, rather than closing a tab the user did not click.
+pub(crate) fn close_tab_by_id(id: i32) -> bool {
     let Some(Some(idx)) = with_state(|st| st.shell.tabs.iter().position(|t| t.id == id)) else {
         // The tab went away between the label being built and the
         // click landing. Nothing to close, and nothing wrong.
-        return;
+        return false;
     };
     let already_active = with_state(|st| st.shell.active_tab == Some(idx)).unwrap_or(false);
     if !already_active {
-        capture_active_dirty();
-        with_state(|st| st.shell.active_tab = Some(idx));
-        rebind_active_view();
+        switch_to(idx);
+        drain_shell();
+        if !active_tab_is(id) {
+            tracing::debug!(
+                id,
+                "the tab to close left the front while its switch was delivered"
+            );
+            return false;
+        }
     }
-    close_active_tab();
+    close_active_tab()
 }
 
-/// Switch the active buffer to the tab with `id`, if it still exists.
+/// Switch the active buffer to the tab with `id`, if it still exists —
+/// the open-files switcher's row.
 ///
-/// Behaves exactly like the switch half of [`close_tab_by_id`] (capture the
-/// outgoing dirty bit, move `active_tab`, rebind the view) — id-keyed for
-/// the same reason: the open-files switcher's rows outlive any particular
-/// ordering, so an index captured when the menu was built could address a
-/// different buffer by the time the row is clicked. A no-op if the target is
-/// already active or has since closed. `rebind_active_view` refreshes the
-/// tab strip and title.
+/// Id-keyed for the same reason as [`close_tab_by_id`]: the switcher's
+/// rows outlive any particular ordering, so an index captured when the
+/// menu was built could address a different buffer by the time the row
+/// is clicked. A no-op if the target is already active or has since
+/// closed. `rebind_active_view` refreshes the tab strip and title.
+/// Delivers nothing, like [`switch_to`]: the caller drains.
 pub(crate) fn select_tab_by_id(id: i32) {
     let Some(Some(idx)) = with_state(|st| st.shell.tabs.iter().position(|t| t.id == id)) else {
         return;
@@ -2606,9 +3369,7 @@ pub(crate) fn select_tab_by_id(id: i32) {
     if with_state(|st| st.shell.active_tab == Some(idx)).unwrap_or(false) {
         return;
     }
-    capture_active_dirty();
-    with_state(|st| st.shell.active_tab = Some(idx));
-    rebind_active_view();
+    switch_to(idx);
 }
 
 /// Close the subset of tabs named by `kind` — the "Close Multiple Documents"
@@ -2641,10 +3402,10 @@ pub(crate) fn close_multiple_documents(kind: codepp_shell::CloseMultiKind) {
         let Some(target_id) = target_id else {
             break; // No more targets.
         };
-        // Activate the target so `close_active_tab` prompts for its document,
-        // then close it; Cancel / a failed save aborts the run.
-        select_tab_by_id(target_id);
-        if !close_active_tab() {
+        // The same path as a click on the target's own close button:
+        // switch to it and announce that, then close it. Cancel, a failed
+        // save or a focus moved away by a plugin aborts the run.
+        if !close_tab_by_id(target_id) {
             break;
         }
     }
@@ -2668,6 +3429,9 @@ pub(crate) fn toggle_pin_by_id(id: i32) {
         }
     });
     refresh_tab_chrome();
+    // A pin moves the tab into or out of the pinned cluster: deliver its
+    // `NPPN_DOCORDERCHANGED` before returning.
+    drain_shell();
 }
 
 /// Make the tab strip match `Shell`. Safe and cheap to call often.
@@ -2862,6 +3626,15 @@ mod source_scan {
     /// searched. Only braces count, so a closure without them (`|| f()`)
     /// reads as the block's own depth.
     pub(crate) fn occurs_at_depth_one(block: &str, needle: &str) -> bool {
+        depth_one_position(block, needle).is_some()
+    }
+
+    /// Where `needle` first occurs at brace depth 1 in `block`, measured
+    /// as [`occurs_at_depth_one`] measures it. For asking that one
+    /// statement of a block comes before another, which a plain `find`
+    /// cannot: it would also accept the later statement moved into a
+    /// nested block or a closure.
+    pub(crate) fn depth_one_position(block: &str, needle: &str) -> Option<usize> {
         let bytes = block.as_bytes();
         let mut depth = 0usize;
         let mut i = 0;
@@ -2876,11 +3649,11 @@ mod source_scan {
                 _ => {}
             }
             if depth == 1 && bytes[i..].starts_with(needle.as_bytes()) {
-                return true;
+                return Some(i);
             }
             i += 1;
         }
-        false
+        None
     }
 
     #[test]
@@ -2903,6 +3676,13 @@ mod source_scan {
         );
         let then = block_after(&body, "if a > 0 {");
         assert!(occurs_at_depth_one(&then, "return 1;"));
+        let x = depth_one_position(&body, "x();").expect("a statement of the block");
+        assert!(body[x..].starts_with("x();"));
+        assert_eq!(
+            depth_one_position(&body, "h();"),
+            None,
+            "a closure's call was placed"
+        );
     }
 
     /// This backend's own source, comments and string literals
@@ -3016,6 +3796,16 @@ let msg = \"found scintilla_new() calls\";
         assert_eq!(code_only(sample).matches("scintilla_new()").count(), 1);
         // And it must not swallow real code that follows a string.
         assert!(code_only("let x = \"a\"; scintilla_new();").contains("scintilla_new()"));
+        // Nor code after an escaped backslash, which does not escape the
+        // quote after it.
+        assert!(code_only("let p = \"C:\\\\\"; scintilla_new();").contains("scintilla_new()"));
+        // And an escaped quote does not end the string it sits in.
+        assert_eq!(
+            code_only("let e = \"a \\\"scintilla_new();\\\" b\"; let b = scintilla_new();")
+                .matches("scintilla_new()")
+                .count(),
+            1
+        );
     }
 
     #[test]
@@ -3347,6 +4137,7 @@ mod callback_boundary_source_invariant {
         "timeout_add_seconds_local(",
         "timeout_add_local_once(",
         "idle_add_local_once(",
+        "idle_add_local_full(",
     ];
 
     const BOUNDARY: &str = "crate::at_callback_boundary(";

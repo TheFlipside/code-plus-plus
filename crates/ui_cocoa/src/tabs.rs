@@ -290,10 +290,17 @@ define_class!(
         /// `otherMouseDown:` covers every button past left and right, so
         /// the button number is checked rather than assumed — a mouse
         /// with forward/back buttons must not close tabs.
+        ///
+        /// The close rebuilds the strip, which removes this button, and
+        /// on the way it delivers to plugins and may run a Save prompt —
+        /// all while this method is on the stack. Objective-C dispatch
+        /// does not retain the receiver, so the method holds a reference
+        /// of its own for the call, as [`TabButton::track`] does.
         #[unsafe(method(otherMouseDown:))]
         fn other_mouse_down(&self, event: &NSEvent) {
             crate::at_callback_boundary("TabButton::otherMouseDown:", (), || {
                 if event.buttonNumber() == MIDDLE_BUTTON {
+                    let _me = self.retain();
                     crate::close_tab_by_id(self.ivars().id.get());
                 }
             });
@@ -804,14 +811,16 @@ define_class!(
         /// `ui_gtk`, where the pin lives in a button that swallows the
         /// press before the notebook sees it.
         ///
-        /// `toggle_pin_by_id` resyncs the strip, which deallocates this
-        /// view mid-call for the reason spelled out at the end of
-        /// [`TabButton::track`]. Sound only because it is the last
-        /// statement: nothing here touches `self` afterwards. Keep it
-        /// that way.
+        /// `toggle_pin_by_id` resyncs the strip, which removes this view,
+        /// and then delivers to plugins, all while this method is on the
+        /// stack — the hazard spelled out at the end of
+        /// [`TabButton::track`]. So the method holds a reference of its
+        /// own for the call, as `track` does, and touches nothing of
+        /// `self` after the pin.
         #[unsafe(method(mouseDown:))]
         fn mouse_down(&self, _event: &NSEvent) {
             crate::at_callback_boundary("PinView::mouseDown:", (), || {
+                let _me = self.retain();
                 crate::toggle_pin_by_id(self.ivars().id.get());
             });
         }

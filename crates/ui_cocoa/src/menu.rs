@@ -638,6 +638,9 @@ define_class!(
             crate::at_callback_boundary("menu:selectTab", (), || {
                 if let Some(sender) = sender {
                     crate::select_tab_by_id(sender.tag() as i32);
+                    // The switch's `NPPN_BUFFERACTIVATED`, before
+                    // returning.
+                    crate::drain_shell();
                 }
             });
         }
