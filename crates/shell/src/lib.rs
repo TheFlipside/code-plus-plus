@@ -1188,7 +1188,11 @@ pub struct Tab {
     /// New numbers are assigned in [`Shell::new_untitled`] using
     /// the smallest unused value across all currently-open
     /// untitled tabs, so closing `new 1` then creating a new
-    /// untitled buffer gives `new 1` again.
+    /// untitled buffer gives `new 1` again. A tab typed into while
+    /// its file loaded gets one the same way when the file goes to a
+    /// tab of its own ([`Shell::divert_first_load`]) or never arrives
+    /// ([`Shell::apply_failed_load`]), since it is an untitled buffer
+    /// from then on.
     pub untitled_seq: Option<u32>,
     /// Cached "buffer has unsaved changes" flag for the tab strip's
     /// owner-draw paint. Mirrors Scintilla's `SCI_GETMODIFY` for the
@@ -4253,10 +4257,13 @@ impl Shell {
         // the index by buffer id (rather than the entry-time
         // index) so a mid-loop tab shrink doesn't leave the
         // restore pointing at the wrong tab.
+        // Through `bind_and_fill`, like every other bind: a bare
+        // `activate_tab` gave a tab still on its first load a document the
+        // tab never recorded, which leaked, and whatever was typed into it
+        // was gone when the file landed.
         if let Some(orig_id) = original_active_id {
             if let Some(orig_idx) = self.tabs.iter().position(|t| t.id == orig_id) {
-                let stored_doc = self.tabs[orig_idx].scintilla_doc;
-                ui.activate_tab(orig_idx, stored_doc);
+                self.bind_and_fill(ui, orig_idx);
                 self.active_tab = Some(orig_idx);
             }
         }
@@ -4535,6 +4542,9 @@ impl Shell {
     /// undo history — a dirty or restored buffer would fail that test
     /// too. They are cheap, and each states an independent reason, so a
     /// future change to the pristine test cannot quietly widen this.
+    /// `dirty`, `shadow_unsaved` and the restore marker are read through
+    /// [`Self::marks_unsaved_work`], which `open_file`'s reuse gate reads
+    /// too, so the two cannot drift on what counts as work.
     ///
     /// The two shadow clauses are in that spirit rather than known to
     /// be reachable: every setter of either is gated on something a
@@ -4555,12 +4565,10 @@ impl Shell {
         self.tabs.get(idx).is_some_and(|t| {
             t.path.is_none()
                 && t.pending_load.is_none()
-                && !t.dirty
                 && t.custom_name.is_none()
                 && !t.pinned
                 && !t.doc_needs_text
-                && !t.shadow_unsaved
-                && !self.is_unsaved_restore(t.id)
+                && !self.marks_unsaved_work(t)
         })
     }
 
@@ -4704,11 +4712,23 @@ impl Shell {
         // Some(N)`, rendered as "new N" in the tab strip). Reusing
         // a File→New tab silently replaces it with the opened
         // file — the user's deliberate "I made a new buffer" gets
-        // erased the moment they Open something. Today no internal
-        // path produces a Tab with `path = None && pending_load =
-        // None && untitled_seq = None`, so this branch is
-        // effectively dead, but the guard stays as defense-in-depth
-        // for future paths that might need an internal placeholder.
+        // erased the moment they Open something. One path does
+        // produce a Tab with `path = None && pending_load = None &&
+        // untitled_seq = None`: a buffer restored from its recovery
+        // backup whose `session.xml` record carries no
+        // `untitled_seq`. Code++ writes such a record itself: a session
+        // saved while a file's first load is in flight, by the
+        // autosave or a quit, backs up the loading tab as an untitled
+        // buffer with no number (`tab_needs_backup`). A legacy or
+        // hand-edited file can carry one too. That buffer holds
+        // recovered text, empty or not, under the restore marker, so
+        // the clause refuses a tab whose records mark work
+        // (`marks_unsaved_work`). Before it did, handing such a buffer
+        // a file's load made the landing name it after the file around
+        // the recovered text, and a save then wrote that text over the
+        // file, emptying it when the text was empty. No path is known
+        // to make a clean placeholder today, so the reuse stands as
+        // the rule for one rather than as something a user reaches.
         //
         // `replace_scratch` is the one documented exception: the
         // startup `new 1`, untouched, alone in the workspace, with the
@@ -4721,7 +4741,8 @@ impl Shell {
                 if self.tabs.get(i).is_some_and(|t| {
                     t.path.is_none()
                         && t.pending_load.is_none()
-                        && (t.untitled_seq.is_none() || replace_scratch)
+                        && (replace_scratch
+                            || (t.untitled_seq.is_none() && !self.marks_unsaved_work(t)))
                 }) =>
             {
                 i
@@ -4998,7 +5019,7 @@ impl Shell {
         // marker on a tab with no document, which no restore produces
         // today (both restore paths bind a document at once), as
         // defence.
-        if self.tabs[idx].shadow_unsaved || self.has_unsaved_work(ui, idx) {
+        if self.holds_unsaved_work(ui, idx) {
             return FifEvent::ReplacedInOpenBuffer {
                 job,
                 path,
@@ -5141,7 +5162,7 @@ impl Shell {
             .tabs
             .iter()
             .position(|t| t.path.as_deref() == Some(path.as_path()))
-            .is_some_and(|idx| self.tabs[idx].shadow_unsaved || self.has_unsaved_work(ui, idx));
+            .is_some_and(|idx| self.holds_unsaved_work(ui, idx));
         let consent = if unsaved {
             ReloadConsent::Confirmed
         } else {
@@ -5205,6 +5226,25 @@ impl Shell {
         };
         let (doc, id) = (tab.scintilla_doc, tab.id);
         ui.is_doc_dirty(doc) || self.unsaved_restore_ids.contains(&id)
+    }
+
+    /// [`Self::has_unsaved_work`], or a shadow rewritten in memory and not
+    /// yet installed ([`Tab::shadow_unsaved`]): everything the tab at `idx`
+    /// holds that exists nowhere else, and so what a load, a
+    /// Replace-in-Files pass or the reload prompt's Yes must not replace
+    /// unasked. `has_unsaved_work` leaves the shadow out on purpose,
+    /// because [`Self::bind_and_fill`] asks it whether installing that
+    /// very shadow would clobber edits in the document.
+    fn holds_unsaved_work<U: UiPlatform>(&self, ui: &mut U, idx: usize) -> bool {
+        self.tabs.get(idx).is_some_and(|t| t.shadow_unsaved) || self.has_unsaved_work(ui, idx)
+    }
+
+    /// What the shell's own records say about work in `t`, for the checks
+    /// made without the UI ([`Self::open_file_replacing_scratch`]'s reuse
+    /// gate, [`Self::active_is_lone_untitled_scratch`]): the cached modify
+    /// bit, a shadow rewritten in memory, or the crash-recovery marker.
+    fn marks_unsaved_work(&self, t: &Tab) -> bool {
+        t.dirty || t.shadow_unsaved || self.is_unsaved_restore(t.id)
     }
 
     /// Bind the view to `idx`'s document, creating it and/or filling it
@@ -5531,8 +5571,7 @@ impl Shell {
                     .tabs
                     .get(target_idx)
                     .is_some_and(|t| t.reload_confirmed);
-                let unsaved = self.tabs.get(target_idx).is_some_and(|t| t.shadow_unsaved)
-                    || self.has_unsaved_work(ui, target_idx);
+                let unsaved = self.holds_unsaved_work(ui, target_idx);
                 let keeps_work = unsaved && !confirmed;
                 if unsaved && confirmed {
                     // The consented outcome, but a record all the same:
@@ -5541,6 +5580,12 @@ impl Shell {
                         path = ?self.tabs.get(target_idx).and_then(|t| t.path.as_deref()),
                         "confirmed load discards unsaved work"
                     );
+                }
+                // A first load never gives its file to a tab whose work it
+                // would not install: see `divert_first_load`.
+                if let Some(values) = first_load.filter(|_| keeps_work) {
+                    self.divert_first_load(ui, target_idx, loaded, values, pending);
+                    return;
                 }
                 let Some(tab) = self.tabs.get_mut(target_idx) else {
                     return;
@@ -5752,8 +5797,162 @@ impl Shell {
         }
     }
 
-    /// Unwind a load that failed: restore or remove the tab that was
-    /// waiting on it, surface the error, and close the plugin
+    /// A first load that lands on a tab holding unsaved work it would not
+    /// install: the work stays where it is, as an untitled buffer, and the
+    /// file opens in a tab of its own beside it. The other half of the
+    /// landing in [`Self::apply_load_result`], a separate method so that one
+    /// stays inside clippy's `too_many_lines` gate.
+    ///
+    /// **The work was there before the file arrived.** The `new 1` scratch a
+    /// file is opened into stays bound to the view until the file lands, and
+    /// so does a fresh tab shown while its file loads
+    /// ([`Self::bind_active_view`] gives it an empty document): both can be
+    /// typed into. The landing used to keep that work, as it keeps unsaved
+    /// work over a reload, and give the tab the file's path all the same, so
+    /// the tab named the file and held text that was never in it, and the
+    /// next save wrote that text over the file. Found by the security audit
+    /// of the reload-language change.
+    ///
+    /// **The front does not move.** The user was typing in this tab when the
+    /// file arrived, and switching the view under them would send their next
+    /// keystrokes into the file. The file's tab opens right after this one,
+    /// in the background, and is filled when it is first shown, as a
+    /// background load is; `NPPN_FILEOPENED` names it. If this tab is in
+    /// front, the view is bound to it here, because nothing else may have
+    /// done so: a plugin can switch to a tab whose load is in flight without
+    /// a rebind, and a view left on another tab's document would let Save As
+    /// write that document under this tab's new name.
+    ///
+    /// The tab gets an untitled number if it never had one (the fresh tab),
+    /// so it reads `new N` like any untitled buffer, and keeps its language.
+    /// A language or pin requested while the file loaded was asked of the
+    /// tab the file was loading into, so it goes with the file — Load
+    /// Session pins the tabs it opens that way — and the tab gives up such a
+    /// pin. It keeps such a language, which the typed text is shown in, so
+    /// a language picked for that text reaches the file's tab as well.
+    /// Otherwise the file's tab takes what a first load sets.
+    ///
+    /// With [`MAX_OPEN_TABS`] tabs already open there is no room for the
+    /// file's tab, and the open fails the way a refused one does: an error,
+    /// `NPPN_FILELOADFAILED`, and the file no longer watched unless another
+    /// tab holds it. The tab is otherwise left as it is, a pin requested
+    /// during the load included, since no file took the pin.
+    fn divert_first_load<U: UiPlatform>(
+        &mut self,
+        ui: &mut U,
+        idx: usize,
+        loaded: codepp_core::file::LoadedFile,
+        (lang, pinned): (LangType, bool),
+        pending: &mut Vec<PendingDialog>,
+    ) {
+        let seq = self.next_untitled_seq();
+        let Some(kept) = self.tabs.get_mut(idx) else {
+            return;
+        };
+        // Only a first load diverts, and a load kept off unsaved work
+        // carried no consent to discard it.
+        debug_assert!(kept.path.is_none(), "only a first load diverts");
+        debug_assert!(!kept.reload_confirmed, "a diverted load carried no consent");
+        kept.pending_load = None;
+        if kept.untitled_seq.is_none() {
+            kept.untitled_seq = Some(seq);
+        }
+        let lang = if kept.lang_requested_during_load == Some(loaded.id) {
+            kept.lang
+        } else {
+            lang
+        };
+        let pin_moves = kept.pin_requested_during_load == Some(loaded.id);
+        let pinned = if pin_moves { kept.pinned } else { pinned };
+        let kept_id = kept.id;
+        if self.active_tab == Some(idx) {
+            self.bind_active_view(ui);
+        }
+        if self.tabs.len() >= MAX_OPEN_TABS {
+            tracing::warn!(
+                cap = MAX_OPEN_TABS,
+                path = ?loaded.path,
+                "open refused: tab cap reached"
+            );
+            let held = self
+                .tabs
+                .iter()
+                .any(|t| t.path.as_deref() == Some(loaded.path.as_path()));
+            if !held {
+                if let Err(e) = self.file_watcher.unwatch(&loaded.path) {
+                    tracing::debug!(error = ?e, path = ?loaded.path, "failed to unwatch a file whose open was refused");
+                }
+            }
+            pending.push(PendingDialog::Error {
+                title: "Open failed".to_string(),
+                message: format!(
+                    "{}: {MAX_OPEN_TABS} tabs are already open",
+                    sanitize_path_for_display(&loaded.path)
+                ),
+            });
+            self.pending_notifications
+                .push(Notification::FileLoadFailed);
+            return;
+        }
+        tracing::warn!(
+            path = ?loaded.path,
+            "file landed on a tab holding unsaved work; keeping the work untitled and opening the file beside it"
+        );
+        if pin_moves {
+            self.tabs[idx].pinned = false;
+        }
+        let id = self.allocate_buffer_id();
+        let codepp_core::file::LoadedFile {
+            path,
+            text,
+            encoding,
+            eol,
+            byte_len,
+            ..
+        } = loaded;
+        let new_idx = idx + 1;
+        self.tabs.insert(
+            new_idx,
+            Tab {
+                id,
+                path: Some(path),
+                encoding,
+                eol,
+                byte_len,
+                text,
+                lang,
+                pinned,
+                ..Tab::default()
+            },
+        );
+        if let Some(active) = self.active_tab.as_mut() {
+            if *active >= new_idx {
+                *active += 1;
+            }
+        }
+        self.session.active = self.active_tab;
+        self.pending_notifications.push(Notification::FileOpened {
+            buffer_id: id as isize,
+        });
+        // Inserted before other tabs, the file's tab moves them along, which
+        // plugins re-read on `NPPN_DOCORDERCHANGED` as they do after a move.
+        // A tab added at the end, as an open adds one, moves nothing.
+        if new_idx + 1 < self.tabs.len() {
+            self.pending_notifications
+                .push(Notification::DocOrderChanged);
+        }
+        // Either tab may now sit on the wrong side of the pinned cluster: this
+        // one if it gave up a pin, the file's if it took one. Each repair
+        // moves only its own tab, so both are found again by id.
+        for moved in [kept_id, id] {
+            if let Some(i) = self.tabs.iter().position(|t| t.id == moved) {
+                self.repair_restored_pin_placement(i);
+            }
+        }
+    }
+
+    /// Unwind a load that failed: hand back, keep or remove the tab that
+    /// was waiting on it, surface the error, and close the plugin
     /// notification pairing that [`Self::open_file`] opened.
     ///
     /// The failed half of [`Self::apply_load_result`], a separate method
@@ -5813,9 +6012,11 @@ impl Shell {
         // holds its own reference, so a bound document only drops 2→1
         // here and is freed by the view's next real rebind, after the
         // incoming document has been allocated (see the trait docs).
-        // That is the rebind further down when the failed tab was in
-        // front; otherwise the view goes on showing the document until
-        // whatever moved the front away from the tab binds its own.
+        // That is the rebind further down, which runs whenever the
+        // failed tab was in front or had a document: a tab shown while
+        // its file loaded can still be in the view after another open
+        // took the front, and leaving the view there kept it on a
+        // document no tab owns.
         let borrowed_an_existing_tab = self.loads_onto_existing_tabs.remove(&err.id);
         let target = self
             .tabs
@@ -5823,7 +6024,31 @@ impl Shell {
             .position(|t| t.pending_load == Some(err.id));
         if let Some(idx) = target {
             let is_fresh = !borrowed_an_existing_tab && self.tabs[idx].path.is_none();
-            if is_fresh {
+            // A fresh tab can hold work of its own, though: shown while its
+            // file loaded, it was given an empty document, which can be
+            // typed into. That work is not the file's, and removing the tab
+            // would release its document with it, so such a tab stays, as an
+            // untitled buffer — what a landing does with it
+            // (`divert_first_load`). Until the security audit of that change,
+            // a failed open discarded the text.
+            let holds_work = is_fresh && self.holds_unsaved_work(ui, idx);
+            if holds_work {
+                let seq = self.next_untitled_seq();
+                let tab = &mut self.tabs[idx];
+                // Consent travels with a reload, which finds its tab by
+                // path; a fresh tab has none to be found by.
+                debug_assert!(
+                    !tab.reload_confirmed,
+                    "a fresh tab carries no reload consent"
+                );
+                tab.pending_load = None;
+                if tab.untitled_seq.is_none() {
+                    tab.untitled_seq = Some(seq);
+                }
+                if self.active_tab == Some(idx) {
+                    self.bind_active_view(ui);
+                }
+            } else if is_fresh {
                 let doomed_doc = self.tabs[idx].scintilla_doc;
                 if doomed_doc != 0 {
                     ui.release_doc(doomed_doc);
@@ -5858,7 +6083,19 @@ impl Shell {
                 // takes the path from the active tab, the next
                 // save writes one buffer's bytes over another
                 // file.
-                if was_active {
+                //
+                // A removed tab that was *not* in front can still
+                // be the one the view shows, if it had a document:
+                // an open moves the front when it is asked for and
+                // the view only when its file lands, so a tab shown
+                // while its file loaded stays in the view after a
+                // second open takes the front. Its document was
+                // just released, so the view would go on showing a
+                // document no tab owns, and what the user typed
+                // there was gone once the other file landed. Found
+                // by the security audit of the change that keeps a
+                // loading tab's typed work; older than it.
+                if was_active || doomed_doc != 0 {
                     self.bind_active_view(ui);
                 }
                 // Removing the last tab would leave the
@@ -16540,6 +16777,14 @@ mod tests {
             let before = shell.tabs.len();
 
             shell.open_file_replacing_scratch(path.clone(), *pristine);
+            // Checked before the landing: a first load that finds work in
+            // its tab opens the file beside it anyway, so the end state no
+            // longer tells a refused reuse from a reuse that was diverted.
+            assert_eq!(
+                shell.tabs.len(),
+                before + 1,
+                "{label}: the open loaded into the scratch, not a tab of its own"
+            );
             drain_until(
                 &mut shell,
                 &mut ui,
@@ -17362,7 +17607,7 @@ mod tests {
         ui.dirty = true;
         std::fs::write(&path, "reloaded\n").unwrap();
         let (texts, langs) = (ui.set_text_calls.len(), ui.apply_lang_calls.len());
-        shell.request_reload(path, ReloadConsent::Unconfirmed);
+        shell.request_reload(path.clone(), ReloadConsent::Unconfirmed);
         drain_until_loads_settle(&mut shell, &mut ui);
         assert_eq!(
             ui.set_text_calls.len(),
@@ -17373,6 +17618,16 @@ mod tests {
         // The declined landing re-applies the lexer to the view it leaves
         // as it was, which is also the witness that it happened.
         assert_eq!(ui.apply_lang_calls[langs..], [L_PYTHON]);
+        // And it opens nothing beside the tab: only a first load hands its
+        // file to a tab of its own (`divert_first_load`).
+        assert_eq!(
+            shell
+                .tabs
+                .iter()
+                .map(|t| (t.path.clone(), t.untitled_seq))
+                .collect::<Vec<_>>(),
+            [(Some(path), None)]
+        );
     }
 
     /// A language picked while the file was still loading was applied and
@@ -17863,6 +18118,805 @@ mod tests {
             "precondition: the reload failed and the tab kept its text"
         );
         assert_eq!(tab_order(&shell, &paths), [(1, true), (0, false)]);
+    }
+
+    /// Typing into `new 1` while a file opened into it is still loading
+    /// used to end with the tab named after the file and holding the typed
+    /// text, so the next save wrote that text over the file. The text now
+    /// stays in `new 1`, which keeps the front and the view, and the file
+    /// opens beside it, filled when it is shown.
+    #[test]
+    fn typing_into_the_scratch_while_a_file_loads_into_it_keeps_both() {
+        use codepp_core::lang::L_RUST;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("file.rs");
+        std::fs::write(&path, "on disk\n").unwrap();
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+        shell.new_untitled(&mut ui);
+        let (scratch_id, scratch_doc) = (shell.tabs[0].id, shell.tabs[0].scintilla_doc);
+        assert_eq!(
+            shell.open_file_replacing_scratch(path.clone(), true),
+            OpenFileOutcome::Loading
+        );
+        assert_eq!(shell.tabs.len(), 1, "precondition: the open reuses new 1");
+        let _ = shell.take_notifications();
+        // Typed into new 1, which the view still shows.
+        ui.buffer_text = "typed\n".to_string();
+        ui.doc_dirty.insert(scratch_doc, true);
+
+        drain_until_loads_settle(&mut shell, &mut ui);
+        assert_eq!(shell.tabs.len(), 2);
+        let kept = &shell.tabs[0];
+        assert_eq!(
+            (kept.id, kept.path.as_deref(), kept.untitled_seq),
+            (scratch_id, None, Some(1))
+        );
+        assert_eq!(shell.active_tab, Some(0), "the front stays with the typing");
+        assert_eq!(ui.get_buffer_text(), "typed\n", "and so does the view");
+        let opened = &shell.tabs[1];
+        assert_eq!(
+            (
+                opened.path.as_deref(),
+                opened.scintilla_doc,
+                opened.text.as_str(),
+                opened.lang
+            ),
+            (Some(path.as_path()), 0, "on disk\n", L_RUST)
+        );
+        let opened_id = opened.id as isize;
+        let queued = shell.take_notifications();
+        assert!(
+            matches!(
+                queued.as_slice(),
+                [Notification::FileOpened { buffer_id }] if *buffer_id == opened_id
+            ),
+            "{queued:?}"
+        );
+
+        // Ctrl+S on new 1 has no path to write to; the file's tab, once
+        // shown, holds the file.
+        assert!(matches!(
+            shell.save_current_to_disk(&mut ui),
+            Err(ShellError::NoActivePath)
+        ));
+        assert!(shell.switch_to_tab(1));
+        shell.bind_active_view(&mut ui);
+        assert_eq!(ui.get_buffer_text(), "on disk\n");
+        shell.save_current_to_disk(&mut ui).unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "on disk\n");
+    }
+
+    /// The file's tab carries what the loader read, as a first load's tab
+    /// does: a UTF-16 file with CRLF endings landing beside typed work would
+    /// otherwise be saved back as UTF-8 with LF.
+    #[test]
+    fn the_files_tab_keeps_the_encoding_and_endings_it_was_read_with() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("wide.txt");
+        let mut bytes = vec![0xFF, 0xFE];
+        for unit in "one\r\ntwo\r\n".encode_utf16() {
+            bytes.extend_from_slice(&unit.to_le_bytes());
+        }
+        std::fs::write(&path, &bytes).unwrap();
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+        shell.new_untitled(&mut ui);
+        let scratch_doc = shell.tabs[0].scintilla_doc;
+        shell.open_file_replacing_scratch(path.clone(), true);
+        ui.buffer_text = "typed\n".to_string();
+        ui.doc_dirty.insert(scratch_doc, true);
+
+        drain_until_loads_settle(&mut shell, &mut ui);
+        let opened = &shell.tabs[1];
+        assert_eq!(opened.path.as_deref(), Some(path.as_path()));
+        assert_eq!(
+            (opened.encoding.clone(), opened.eol, opened.byte_len),
+            (Encoding::Utf16LeBom, Eol::CrLf, bytes.len() as u64)
+        );
+    }
+
+    /// The same through a fresh tab shown while its file loads: it gets an
+    /// empty document, which can be typed into. It becomes `new 1` holding
+    /// the text and keeps the front; the file's tab takes the pin the
+    /// session recorded for it, in the pinned cluster.
+    #[test]
+    fn typing_into_a_tab_shown_while_its_file_loads_keeps_both() {
+        let (mut shell, mut ui, dir, _paths) = open_settled(&["a.txt"]);
+        let late = dir.path().join("late.txt");
+        std::fs::write(&late, "late\n").unwrap();
+        shell.session.tabs.push(codepp_core::session::Tab {
+            path: Some(late.clone()),
+            pinned: true,
+            ..codepp_core::session::Tab::default()
+        });
+        shell.open_file(late.clone());
+        let loading = shell.active_tab.expect("the open is in front");
+        let loading_id = shell.tabs[loading].id;
+        // Shown while it loads.
+        shell.bind_active_view(&mut ui);
+        let doc = shell.tabs[loading].scintilla_doc;
+        assert_ne!(doc, 0, "precondition: the tab was given a document");
+        ui.buffer_text = "typed\n".to_string();
+        ui.doc_dirty.insert(doc, true);
+
+        drain_until_loads_settle(&mut shell, &mut ui);
+        assert_eq!(shell.tabs.len(), 3);
+        assert_eq!(shell.tabs[0].path.as_deref(), Some(late.as_path()));
+        assert!(shell.tabs[0].pinned);
+        let kept = shell.active().expect("a tab is in front");
+        assert_eq!(
+            (kept.id, kept.path.as_deref(), kept.untitled_seq),
+            (loading_id, None, Some(1))
+        );
+        assert_eq!(ui.get_buffer_text(), "typed\n");
+    }
+
+    /// When the tab the file was loading into is not in front, the file's
+    /// tab still opens right beside it, so the strip keeps the order the
+    /// opens were asked for in. Inserted before b's tab, it moves that tab
+    /// along, which plugins hear as a reorder.
+    #[test]
+    fn a_file_landing_on_typed_work_opens_beside_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let (a, b) = (dir.path().join("a.txt"), dir.path().join("b.txt"));
+        std::fs::write(&a, "a\n").unwrap();
+        std::fs::write(&b, "b\n").unwrap();
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+        shell.new_untitled(&mut ui);
+        let scratch_doc = shell.tabs[0].scintilla_doc;
+        shell.open_file_replacing_scratch(a.clone(), true);
+        ui.buffer_text = "typed\n".to_string();
+        ui.doc_dirty.insert(scratch_doc, true);
+        shell.open_file(b.clone());
+        let _ = shell.take_notifications();
+
+        drain_until_loads_settle(&mut shell, &mut ui);
+        let queued = shell.take_notifications();
+        let reorders = queued
+            .iter()
+            .filter(|n| matches!(n, Notification::DocOrderChanged))
+            .count();
+        assert_eq!(reorders, 1, "the tab inserted before b's moved b along");
+        let a_id = shell.tabs[1].id as isize;
+        let opened = queued
+            .iter()
+            .position(|n| matches!(n, Notification::FileOpened { buffer_id } if *buffer_id == a_id))
+            .expect("a's tab is announced");
+        assert!(
+            matches!(queued.get(opened + 1), Some(Notification::DocOrderChanged)),
+            "the reorder follows the file's tab: {queued:?}"
+        );
+        assert_eq!(
+            shell
+                .tabs
+                .iter()
+                .map(|t| t.path.clone())
+                .collect::<Vec<_>>(),
+            [None, Some(a.clone()), Some(b.clone())]
+        );
+        assert_eq!(
+            shell.active().and_then(|t| t.path.as_deref()),
+            Some(b.as_path())
+        );
+        assert_eq!(
+            (shell.tabs[1].scintilla_doc, shell.tabs[1].text.as_str()),
+            (0, "a\n")
+        );
+        assert!(shell.switch_to_tab(1));
+        shell.bind_active_view(&mut ui);
+        assert_eq!(ui.get_buffer_text(), "a\n");
+    }
+
+    /// The file's tab is inserted in front of tabs that may hold the front,
+    /// and the session's record of the active tab has to follow the shift,
+    /// or the next start restores a different tab in front.
+    #[test]
+    fn the_session_follows_the_tab_in_front_past_the_files_new_tab() {
+        let dir = tempfile::tempdir().unwrap();
+        let (a, b) = (dir.path().join("a.txt"), dir.path().join("b.txt"));
+        std::fs::write(&a, "a\n").unwrap();
+        std::fs::write(&b, "b\n").unwrap();
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+        shell.new_untitled(&mut ui);
+        let scratch_doc = shell.tabs[0].scintilla_doc;
+        shell.open_file_replacing_scratch(a, true);
+        ui.buffer_text = "typed\n".to_string();
+        ui.doc_dirty.insert(scratch_doc, true);
+        shell.open_file(b);
+
+        drain_until_loads_settle(&mut shell, &mut ui);
+        assert_eq!((shell.active_tab, shell.session.active), (Some(2), Some(2)));
+    }
+
+    /// Load Session pins the tabs it opens while their files load, and a
+    /// typed-into `new 1` a file was loading into gives that pin to the
+    /// file's tab rather than keeping it on the untitled buffer.
+    #[test]
+    fn load_session_into_a_typed_scratch_gives_its_pin_to_the_file() {
+        use codepp_core::npp_session::{NppFile, NppSession, NppSessionDoc, NppView, YesNo};
+        let dir = tempfile::tempdir().unwrap();
+        let (one, two) = (dir.path().join("one.txt"), dir.path().join("two.txt"));
+        std::fs::write(&one, "1\n").unwrap();
+        std::fs::write(&two, "2\n").unwrap();
+        let doc = NppSessionDoc {
+            session: NppSession {
+                active_view: 0,
+                main_view: NppView {
+                    active_index: 0,
+                    files: vec![
+                        NppFile {
+                            filename: one.clone(),
+                            tab_pinned: YesNo::Yes,
+                            ..Default::default()
+                        },
+                        NppFile {
+                            filename: two.clone(),
+                            ..Default::default()
+                        },
+                    ],
+                },
+                sub_view: None,
+            },
+        };
+        let sess_path = dir.path().join("sess.xml");
+        doc.save_to_xml(&sess_path).unwrap();
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+        shell.new_untitled(&mut ui);
+        let (scratch_id, scratch_doc) = (shell.tabs[0].id, shell.tabs[0].scintilla_doc);
+        shell.load_npp_session(&sess_path, true).unwrap();
+        assert!(
+            shell.tabs[0].pinned,
+            "precondition: Load Session pinned new 1"
+        );
+        ui.buffer_text = "typed\n".to_string();
+        ui.doc_dirty.insert(scratch_doc, true);
+
+        drain_until_loads_settle(&mut shell, &mut ui);
+        assert_eq!(
+            shell
+                .tabs
+                .iter()
+                .map(|t| (t.path.clone(), t.pinned))
+                .collect::<Vec<_>>(),
+            [(Some(one), true), (None, false), (Some(two), false)]
+        );
+        assert_eq!(shell.active().map(|t| t.id), Some(scratch_id));
+    }
+
+    /// Let the watcher report anything still in flight from before a
+    /// test's own write, and throw it away, as the watcher's own tests do:
+    /// some backends report a write made just before a watch started,
+    /// which would fail a check for no event, or satisfy a check for one
+    /// that the code under test did not cause.
+    fn drain_stale_watch_events(shell: &Shell) {
+        std::thread::sleep(Duration::from_millis(200));
+        while shell.change_rx.try_recv().is_ok() {}
+    }
+
+    /// With the tab cap reached there is no room for the file's own tab:
+    /// the open fails as a refused open does, and the work stays. The
+    /// tab is in front here but not shown — a plugin switched to it while
+    /// it loaded, which rebinds nothing — and the view has to end on it,
+    /// or a Save As would write another tab's document under its name.
+    /// The refused file stops being watched.
+    #[test]
+    fn a_file_landing_on_typed_work_at_the_tab_cap_fails_the_open() {
+        let dir = tempfile::tempdir().unwrap();
+        // A bidi override in the name, which the error has to show sanitized.
+        let path = dir.path().join("f\u{202E}txt.exe");
+        std::fs::write(&path, "f\n").unwrap();
+        let mut shell = shell_with_synthetic_tabs(MAX_OPEN_TABS, Some(0));
+        let mut ui = FakeUi::default();
+        shell.tabs[0].path = None;
+        shell.tabs[0].pending_load = Some(901);
+        // Pinned while the file loaded, as Load Session pins.
+        shell.tabs[0].pinned = true;
+        shell.tabs[0].pin_requested_during_load = Some(901);
+        let typed_doc = ui.activate_tab(0, 0);
+        shell.tabs[0].scintilla_doc = typed_doc;
+        ui.doc_dirty.insert(typed_doc, true);
+        let other_doc = ui.activate_tab(5, 0);
+        shell.tabs[5].scintilla_doc = other_doc;
+        assert_ne!(
+            ui.current_doc, typed_doc,
+            "precondition: another tab is shown"
+        );
+        let loaded = codepp_core::file::LoadedFile {
+            id: 901,
+            path: path.clone(),
+            text: "f\n".to_string(),
+            encoding: Encoding::Utf8,
+            eol: Eol::Lf,
+            byte_len: 2,
+        };
+        let mut pending = Vec::new();
+
+        shell.apply_load_result(&mut ui, Ok(loaded), &mut pending);
+        assert_eq!(shell.tabs.len(), MAX_OPEN_TABS);
+        let kept = &shell.tabs[0];
+        assert_eq!((kept.path.as_deref(), kept.pending_load), (None, None));
+        assert!(kept.untitled_seq.is_some());
+        assert!(kept.pinned, "no file took the pin, so the tab keeps it");
+        assert_eq!(ui.current_doc, typed_doc, "the view shows the tab in front");
+        assert!(matches!(
+            pending.as_slice(),
+            [PendingDialog::Error { title, message }]
+                if title == "Open failed" && !message.contains('\u{202E}')
+        ));
+        let queued = shell.take_notifications();
+        assert!(queued
+            .iter()
+            .any(|n| matches!(n, Notification::FileLoadFailed)));
+        assert!(!queued.iter().any(|n| matches!(
+            n,
+            Notification::FileOpened { .. } | Notification::DocOrderChanged
+        )));
+        drain_stale_watch_events(&shell);
+        std::fs::write(&path, "changed\n").unwrap();
+        assert!(
+            shell
+                .change_rx
+                .recv_timeout(Duration::from_secs(1))
+                .is_err(),
+            "the refused file is still watched"
+        );
+    }
+
+    /// The same view as at the cap, with room for the file's tab: a plugin
+    /// switched back to the loading tab without a rebind, so the view shows
+    /// another tab's document when the file lands. The tab stays in front,
+    /// so the view has to end on it, or a Save As would write that other
+    /// document under its name.
+    #[test]
+    fn the_kept_tab_is_shown_when_a_plugin_switched_to_it_without_a_rebind() {
+        let (mut shell, mut ui, dir, _paths) = open_settled(&["a.txt"]);
+        let late = dir.path().join("late.txt");
+        std::fs::write(&late, "late\n").unwrap();
+        shell.open_file(late);
+        let loading = shell.active_tab.expect("the open is in front");
+        let id = shell.tabs[loading].id;
+        shell.bind_active_view(&mut ui);
+        let doc = shell.tabs[loading].scintilla_doc;
+        ui.buffer_text = "typed\n".to_string();
+        ui.doc_dirty.insert(doc, true);
+        assert!(shell.switch_to_tab(0));
+        shell.bind_active_view(&mut ui);
+        assert!(shell.switch_to_tab(loading));
+        assert_ne!(
+            ui.current_doc, doc,
+            "precondition: another document is shown"
+        );
+
+        drain_until_loads_settle(&mut shell, &mut ui);
+        assert_eq!(shell.tabs.len(), 3, "the file opened beside the tab");
+        assert_eq!(shell.active().map(|t| t.id), Some(id));
+        assert_eq!(ui.current_doc, doc, "the view shows the tab in front");
+        assert_eq!(ui.get_buffer_text(), "typed\n");
+    }
+
+    /// The other side of the cap's unwatch: a file another tab holds stays
+    /// watched for that tab.
+    #[test]
+    fn a_refused_open_keeps_watching_a_file_another_tab_holds() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("f.txt");
+        std::fs::write(&path, "f\n").unwrap();
+        let mut shell = shell_with_synthetic_tabs(MAX_OPEN_TABS, Some(0));
+        let mut ui = FakeUi::default();
+        shell.tabs[1].path = Some(path.clone());
+        shell.tabs[0].path = None;
+        shell.tabs[0].pending_load = Some(901);
+        let typed_doc = ui.activate_tab(0, 0);
+        shell.tabs[0].scintilla_doc = typed_doc;
+        ui.doc_dirty.insert(typed_doc, true);
+        let loaded = codepp_core::file::LoadedFile {
+            id: 901,
+            path: path.clone(),
+            text: "f\n".to_string(),
+            encoding: Encoding::Utf8,
+            eol: Eol::Lf,
+            byte_len: 2,
+        };
+
+        shell.apply_load_result(&mut ui, Ok(loaded), &mut Vec::new());
+        assert_eq!(shell.tabs.len(), MAX_OPEN_TABS, "precondition: refused");
+        drain_stale_watch_events(&shell);
+        std::fs::write(&path, "changed\n").unwrap();
+        assert!(
+            shell.change_rx.recv_timeout(Duration::from_secs(5)).is_ok(),
+            "the other tab's file is no longer watched"
+        );
+    }
+
+    /// One tab below the cap there is still room, and the file opens beside
+    /// the work in the last place.
+    #[test]
+    fn a_file_landing_on_typed_work_one_below_the_cap_opens_beside_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("f.txt");
+        std::fs::write(&path, "f\n").unwrap();
+        let mut shell = shell_with_synthetic_tabs(MAX_OPEN_TABS - 1, Some(0));
+        let mut ui = FakeUi::default();
+        shell.tabs[0].path = None;
+        shell.tabs[0].pending_load = Some(901);
+        let typed_doc = ui.activate_tab(0, 0);
+        shell.tabs[0].scintilla_doc = typed_doc;
+        ui.doc_dirty.insert(typed_doc, true);
+        let loaded = codepp_core::file::LoadedFile {
+            id: 901,
+            path: path.clone(),
+            text: "f\n".to_string(),
+            encoding: Encoding::Utf8,
+            eol: Eol::Lf,
+            byte_len: 2,
+        };
+        let mut pending = Vec::new();
+
+        shell.apply_load_result(&mut ui, Ok(loaded), &mut pending);
+        assert!(pending.is_empty(), "{} dialogs", pending.len());
+        assert_eq!(shell.tabs.len(), MAX_OPEN_TABS);
+        assert_eq!(shell.tabs[1].path.as_deref(), Some(path.as_path()));
+    }
+
+    /// The file's own tab watches the file, as any opened file's tab does.
+    #[test]
+    fn the_files_tab_is_watched_once_it_opens_beside_typed_work() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("file.txt");
+        std::fs::write(&path, "on disk\n").unwrap();
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+        shell.new_untitled(&mut ui);
+        let scratch_doc = shell.tabs[0].scintilla_doc;
+        shell.open_file_replacing_scratch(path.clone(), true);
+        ui.buffer_text = "typed\n".to_string();
+        ui.doc_dirty.insert(scratch_doc, true);
+        drain_until_loads_settle(&mut shell, &mut ui);
+        assert_eq!(
+            shell.tabs.len(),
+            2,
+            "precondition: the file opened beside the work"
+        );
+
+        drain_stale_watch_events(&shell);
+        std::fs::write(&path, "changed\n").unwrap();
+        assert!(
+            shell.change_rx.recv_timeout(Duration::from_secs(5)).is_ok(),
+            "the file's tab is not watched"
+        );
+    }
+
+    /// A load that never arrives took the same work: a fresh tab shown and
+    /// typed into while its file loaded was removed when the load failed,
+    /// and its document released with the text. It stays now, as `new N`.
+    /// Here a plugin has switched back to it without a rebind, so the view
+    /// shows another tab's document; it has to end on this one, the tab in
+    /// front, or a Save As would write that document under its name.
+    #[test]
+    fn a_failed_open_keeps_what_was_typed_into_its_tab() {
+        let (mut shell, mut ui, dir, _paths) = open_settled(&["a.txt"]);
+        shell.open_file(dir.path().join("missing.txt"));
+        let loading = shell.active_tab.expect("the open is in front");
+        let id = shell.tabs[loading].id;
+        shell.bind_active_view(&mut ui);
+        let doc = shell.tabs[loading].scintilla_doc;
+        ui.buffer_text = "typed\n".to_string();
+        ui.doc_dirty.insert(doc, true);
+        assert!(shell.switch_to_tab(0));
+        shell.bind_active_view(&mut ui);
+        assert!(shell.switch_to_tab(loading));
+        assert_ne!(
+            ui.current_doc, doc,
+            "precondition: another document is shown"
+        );
+        let _ = shell.take_notifications();
+
+        drain_until_loads_settle(&mut shell, &mut ui);
+        let kept = shell
+            .tabs
+            .iter()
+            .find(|t| t.id == id)
+            .expect("the tab is kept");
+        assert_eq!(
+            (kept.path.as_deref(), kept.untitled_seq, kept.scintilla_doc),
+            (None, Some(1), doc)
+        );
+        assert!(ui.released_docs.is_empty(), "its document is not released");
+        assert_eq!(shell.active().map(|t| t.id), Some(id));
+        assert_eq!(ui.current_doc, doc, "the view shows the tab in front");
+        assert_eq!(ui.get_buffer_text(), "typed\n");
+        assert!(shell
+            .take_notifications()
+            .iter()
+            .any(|n| matches!(n, Notification::FileLoadFailed)));
+    }
+
+    /// A fresh tab shown while its file loads, whose load then fails while a
+    /// second open has the front, is removed and its document released.
+    /// The view still showed that document, because the second open moved
+    /// the front and not the view; it now ends on the tab in front, so what
+    /// the user types next goes into that tab's document, which the second
+    /// file then lands on and keeps as typed work.
+    #[test]
+    fn a_failed_open_behind_the_front_does_not_leave_the_view_on_its_document() {
+        let (mut shell, mut ui, dir, paths) = open_settled(&["a.txt"]);
+        let (missing, b) = (dir.path().join("missing.txt"), dir.path().join("b.txt"));
+        std::fs::write(&b, "b\n").unwrap();
+        shell.open_file(missing.clone());
+        let failing = shell.active_tab.expect("the open is in front");
+        let failing_req = shell.tabs[failing].pending_load.expect("loading");
+        shell.bind_active_view(&mut ui);
+        let failing_doc = shell.tabs[failing].scintilla_doc;
+        shell.open_file(b.clone());
+        let landing_req = shell
+            .active()
+            .and_then(|t| t.pending_load)
+            .expect("loading");
+        assert_eq!(
+            ui.current_doc, failing_doc,
+            "precondition: the view is behind the front"
+        );
+        let mut pending = Vec::new();
+
+        let error = codepp_core::file::LoadError {
+            id: failing_req,
+            path: missing,
+            error: codepp_core::file::LoadErrorKind::Io(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "gone",
+            )),
+        };
+        shell.apply_load_result(&mut ui, Err(error), &mut pending);
+        assert!(ui.released_docs.contains(&failing_doc));
+        let front_doc = shell.active().map(|t| t.scintilla_doc);
+        assert_ne!(
+            ui.current_doc, failing_doc,
+            "the view shows a released document"
+        );
+        assert_eq!(
+            Some(ui.current_doc),
+            front_doc,
+            "the view shows the tab in front"
+        );
+
+        ui.buffer_text = "typed\n".to_string();
+        ui.doc_dirty.insert(ui.current_doc, true);
+        let loaded = codepp_core::file::LoadedFile {
+            id: landing_req,
+            path: b.clone(),
+            text: "b\n".to_string(),
+            encoding: Encoding::Utf8,
+            eol: Eol::Lf,
+            byte_len: 2,
+        };
+        shell.apply_load_result(&mut ui, Ok(loaded), &mut pending);
+        assert_eq!(
+            shell
+                .tabs
+                .iter()
+                .map(|t| (t.path.clone(), t.untitled_seq.is_some()))
+                .collect::<Vec<_>>(),
+            [
+                (Some(paths[0].clone()), false),
+                (None, true),
+                (Some(b), false)
+            ]
+        );
+        assert_eq!(ui.get_buffer_text(), "typed\n");
+    }
+
+    /// Only a fresh tab is kept as an untitled buffer when its load fails. A
+    /// reload of a titled tab holding unsaved edits that fails leaves the
+    /// tab named after its file, with no untitled number: one would name
+    /// its recovery backup `new N` and hold the number from other buffers.
+    #[test]
+    fn a_failed_reload_of_unsaved_edits_leaves_the_tab_titled() {
+        let (mut shell, mut ui, _dir, paths) = open_settled(&["a.txt"]);
+        let doc = shell.tabs[0].scintilla_doc;
+        assert_ne!(doc, 0, "precondition: the tab has a document");
+        ui.doc_dirty.insert(doc, true);
+        std::fs::remove_file(&paths[0]).unwrap();
+        shell.request_reload(paths[0].clone(), ReloadConsent::Confirmed);
+
+        drain_until_loads_settle(&mut shell, &mut ui);
+        assert_eq!(
+            shell
+                .tabs
+                .iter()
+                .map(|t| (t.path.clone(), t.untitled_seq))
+                .collect::<Vec<_>>(),
+            [(Some(paths[0].clone()), None)]
+        );
+    }
+
+    /// A language picked while the file loads was asked of the tab the file
+    /// was loading into, so the file's tab takes it rather than the one its
+    /// extension gives; the typed-into tab keeps the language it shows.
+    #[test]
+    fn a_language_picked_while_the_file_loads_goes_with_the_file() {
+        use codepp_core::lang::L_PYTHON;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("file.rs");
+        std::fs::write(&path, "on disk\n").unwrap();
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+        shell.new_untitled(&mut ui);
+        let scratch_doc = shell.tabs[0].scintilla_doc;
+        shell.open_file_replacing_scratch(path.clone(), true);
+        ui.buffer_text = "typed\n".to_string();
+        ui.doc_dirty.insert(scratch_doc, true);
+        assert!(shell.set_active_lang(&mut ui, L_PYTHON));
+
+        drain_until_loads_settle(&mut shell, &mut ui);
+        assert_eq!(
+            shell
+                .tabs
+                .iter()
+                .map(|t| (t.path.clone(), t.lang))
+                .collect::<Vec<_>>(),
+            [(None, L_PYTHON), (Some(path), L_PYTHON)]
+        );
+    }
+
+    /// A buffer restored from its backup without an untitled number holds
+    /// recovered work, not a placeholder, so an open does not load into
+    /// it: the file gets a tab of its own from the start.
+    #[test]
+    fn an_open_does_not_load_into_a_restored_buffer_without_a_number() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("file.txt");
+        std::fs::write(&path, "on disk\n").unwrap();
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+        let idx = shell.restore_untitled_with_text(
+            &mut ui,
+            None,
+            "recovered\n".to_string(),
+            0,
+            Encoding::Utf8,
+            Eol::Lf,
+            false,
+            None,
+            None,
+            false,
+        );
+        let restored = shell.tabs[idx].id;
+
+        assert_eq!(shell.open_file(path.clone()), OpenFileOutcome::Loading);
+        assert_eq!(shell.tabs.len(), 2, "the file gets a tab of its own");
+        drain_until_loads_settle(&mut shell, &mut ui);
+        let kept = shell.tabs.iter().find(|t| t.id == restored).unwrap();
+        assert_eq!((kept.path.as_deref(), kept.untitled_seq), (None, None));
+        assert!(shell.is_unsaved_restore(restored));
+    }
+
+    /// The same for a placeholder caught in any of the states that mark
+    /// work: modified, holding a rewritten shadow, or carrying the restore
+    /// marker. Each refuses the reuse on its own; an untouched placeholder
+    /// is still reused.
+    #[test]
+    fn an_open_does_not_load_into_a_placeholder_holding_work() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("file.txt");
+        std::fs::write(&path, "on disk\n").unwrap();
+        for (state, reused) in [
+            ("untouched", true),
+            ("dirty", false),
+            ("shadow", false),
+            ("restored", false),
+        ] {
+            let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+            let mut shell = Shell::new(wake).unwrap();
+            let id = shell.allocate_buffer_id();
+            shell.tabs.push(Tab {
+                id,
+                dirty: state == "dirty",
+                shadow_unsaved: state == "shadow",
+                ..Tab::default()
+            });
+            shell.active_tab = Some(0);
+            if state == "restored" {
+                shell.unsaved_restore_ids.insert(id);
+            }
+            assert_eq!(shell.open_file(path.clone()), OpenFileOutcome::Loading);
+            assert_eq!(
+                (shell.tabs.len() == 1, shell.tabs[0].pending_load.is_some()),
+                (reused, reused),
+                "{state}"
+            );
+        }
+    }
+
+    /// Typed work that was pinned while its file loaded gives the pin to the
+    /// file, and leaves the pinned cluster: here a tab pinned after it
+    /// would otherwise end up behind an unpinned tab.
+    #[test]
+    fn typed_work_giving_up_its_pin_leaves_the_pinned_cluster() {
+        let (mut shell, mut ui, dir, paths) = open_settled(&["a.txt", "x.txt"]);
+        let late = dir.path().join("late.txt");
+        std::fs::write(&late, "late\n").unwrap();
+        shell.open_file(late.clone());
+        let loading = shell.active_tab.expect("the open is in front");
+        let id = shell.tabs[loading].id;
+        shell.bind_active_view(&mut ui);
+        let doc = shell.tabs[loading].scintilla_doc;
+        ui.buffer_text = "typed\n".to_string();
+        ui.doc_dirty.insert(doc, true);
+        assert!(shell.set_pinned(loading, true));
+        let x = shell
+            .tabs
+            .iter()
+            .position(|t| t.path.as_deref() == Some(paths[1].as_path()))
+            .unwrap();
+        assert!(shell.set_pinned(x, true));
+        assert_eq!(
+            shell
+                .tabs
+                .iter()
+                .map(|t| (t.path.clone(), t.pinned))
+                .collect::<Vec<_>>(),
+            [
+                (None, true),
+                (Some(paths[1].clone()), true),
+                (Some(paths[0].clone()), false)
+            ],
+            "precondition: both pinned in front"
+        );
+
+        drain_until_loads_settle(&mut shell, &mut ui);
+        assert_eq!(
+            shell
+                .tabs
+                .iter()
+                .map(|t| (t.path.clone(), t.pinned))
+                .collect::<Vec<_>>(),
+            [
+                (Some(late), true),
+                (Some(paths[1].clone()), true),
+                (None, false),
+                (Some(paths[0].clone()), false)
+            ]
+        );
+        assert_eq!(shell.active().map(|t| t.id), Some(id));
+    }
+
+    /// Save All ends by putting the view back on the tab that was in
+    /// front, and when that tab was still on its first load it gave it a
+    /// document the tab never recorded: leaked, and whatever was typed into
+    /// it lost when the file landed. The tab records it now, so a typing
+    /// there is kept like any other.
+    #[test]
+    fn save_all_records_the_document_it_gives_a_loading_tab() {
+        let (mut shell, mut ui, dir, _paths) = open_settled(&["a.txt"]);
+        let late = dir.path().join("late.txt");
+        std::fs::write(&late, "late\n").unwrap();
+        shell.open_file(late);
+        let loading = shell.active_tab.expect("the open is in front");
+        assert_eq!(shell.tabs[loading].scintilla_doc, 0, "precondition");
+
+        assert!(shell.save_all(&mut ui).is_empty());
+        let doc = shell.tabs[loading].scintilla_doc;
+        assert_ne!(doc, 0);
+        assert_eq!(ui.current_doc, doc, "the view shows the tab's own document");
+        ui.buffer_text = "typed\n".to_string();
+        ui.doc_dirty.insert(doc, true);
+        drain_until_loads_settle(&mut shell, &mut ui);
+        assert!(shell
+            .tabs
+            .iter()
+            .any(|t| t.path.is_none() && t.scintilla_doc == doc));
     }
 
     /// Helper: build a `Shell` with `n` synthetic tabs and a chosen
