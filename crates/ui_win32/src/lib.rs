@@ -5093,11 +5093,11 @@ unsafe fn handle_close_active_tab_inner(hwnd: HWND) -> CloseOutcome {
                     // dialog. `run_save_as_flow` shows its own
                     // error dialog on failure (so we don't
                     // double-prompt) and updates the tab's path
-                    // on success. After it returns, re-read
-                    // the dirty bit: if the user cancelled the
-                    // GetSaveFileNameW dialog or the save
-                    // itself failed, the buffer is still dirty
-                    // and we must abort the close.
+                    // on success. After it returns, look at the
+                    // buffer again: if the user cancelled the
+                    // GetSaveFileNameW dialog or the save itself
+                    // failed, it still holds unsaved work and we
+                    // must abort the close.
                     unsafe { run_save_as_flow(hwnd) };
                     // Its chooser pumps too; same re-check as after
                     // the prompt, before the dirty re-read below is
@@ -5109,8 +5109,17 @@ unsafe fn handle_close_active_tab_inner(hwnd: HWND) -> CloseOutcome {
                         );
                         return CloseOutcome::Aborted;
                     }
+                    // The dirty bit alone is not enough. A buffer
+                    // restored from its recovery backup sits at its
+                    // save point, its unsaved state held in the shell's
+                    // restore marker, which only a Save As that wrote it
+                    // releases: read by the bit alone, it was taken for
+                    // saved after a cancelled chooser or a failed write,
+                    // and closed with its text lost. `ui_gtk`'s and
+                    // `ui_cocoa`'s close prompts read both.
                     let still_dirty = if let Some(state) = unsafe { state_from_hwnd(hwnd) } {
                         state.editor.send(SCI_GETMODIFY, 0, 0) != 0
+                            || state.shell.is_unsaved_restore(prompted_id)
                     } else {
                         return CloseOutcome::Aborted;
                     };
@@ -31083,10 +31092,17 @@ mod drain_freeze_guards {
     //! a headless test — a modal pump dispatching a worker wake needs a
     //! real window and a real worker — and both compile either way, so
     //! they are pinned in the source like the plugin re-entry rules.
+    //! The module also holds the close's other guards against what its
+    //! modal pumps can do: the re-checks of the prompted tab, and the
+    //! reading of the buffer after a Save As.
     //! Each scan matches the construct, not a mention of it in a
-    //! comment (`code_only`), the lesson DESIGN.md §7.2 records.
+    //! comment (`code_only`, or `code_without_strings` where a quoted
+    //! copy in a string could stand in), the lesson DESIGN.md §7.2
+    //! records.
 
-    use super::plugin_reentry_guards::{block_after, code_only, fn_body, production_src};
+    use super::plugin_reentry_guards::{
+        block_after, code_only, code_without_strings, fn_body, production_src,
+    };
 
     /// The close takes the freeze before it samples the tab it will
     /// prompt about, so nothing can move `active_tab` between the
@@ -31253,6 +31269,77 @@ mod drain_freeze_guards {
             "`run_save_as_flow` must re-check the sampled tab between its chooser and its \
              write, or a nested close during the chooser puts another buffer's contents at \
              the chosen path"
+        );
+    }
+
+    /// After an untitled tab's Save As, the close goes on only if the
+    /// buffer holds no unsaved work: neither the dirty bit set nor the
+    /// restore marker. A buffer restored from its recovery backup sits at
+    /// its save point with its unsaved state in that marker, so read by
+    /// the bit alone it was taken for saved after a cancelled chooser,
+    /// and closed with its text lost. The re-read and the abort it feeds
+    /// are pinned whole, about the prompted tab, as the first reading
+    /// after the Save As. The scan runs on code with string contents
+    /// removed, so a quoted copy in a log line cannot stand in, and the
+    /// function may hold no block comment, which the scanner keeps.
+    #[test]
+    fn the_close_takes_a_recovered_buffer_for_unsaved_after_save_as() {
+        let body =
+            code_without_strings(&fn_body(production_src(), "handle_close_active_tab_inner"));
+        assert!(
+            !body.contains("/*"),
+            "a block comment in the close could hold a copy of what this guard pins"
+        );
+        let squashed: String = body.split_whitespace().collect();
+        assert_eq!(
+            squashed.matches("letstill_dirty=").count(),
+            1,
+            "a second `still_dirty` in the close could stand in for the one this guard pins"
+        );
+        let save_as = squashed
+            .find("run_save_as_flow(hwnd)")
+            .expect("the close no longer routes an untitled tab through Save As");
+        let reread = squashed[save_as..]
+            .find("letstill_dirty=")
+            .expect("the close no longer reads the buffer again after Save As")
+            + save_as;
+        assert!(
+            squashed[reread..].starts_with(
+                "letstill_dirty=ifletSome(state)=unsafe{state_from_hwnd(hwnd)}{\
+                 state.editor.send(SCI_GETMODIFY,0,0)!=0\
+                 ||state.shell.is_unsaved_restore(prompted_id)\
+                 }else{returnCloseOutcome::Aborted;};\
+                 ifstill_dirty{returnCloseOutcome::Aborted;}"
+            ),
+            "the close goes on after Save As without asking whether the buffer still holds \
+             unsaved work, by the dirty bit and the restore marker both"
+        );
+    }
+
+    /// A titled tab's Save writes in place, and a write that fails must
+    /// stop the close: the buffer is then the only copy of the edits,
+    /// and for one restored from its recovery backup the only copy of
+    /// the recovered text. The error is carried out of the save, shown,
+    /// and ends the close, pinned whole.
+    #[test]
+    fn the_close_stops_when_a_titled_tab_fails_to_save() {
+        let body =
+            code_without_strings(&fn_body(production_src(), "handle_close_active_tab_inner"));
+        let squashed: String = body.split_whitespace().collect();
+        assert!(
+            squashed.contains(
+                "matchshell.save_current_to_disk(&mutui){Ok(())=>None,\
+                 Err(e)=>Some(e.to_string()),}"
+            ),
+            "the close no longer carries a failed in-place save's error out of the save"
+        );
+        assert!(
+            squashed.contains(
+                "ifletSome(msg)=save_error{\
+                 show_error_dialog(hwnd,,&DialogText::sanitized(&msg));\
+                 returnCloseOutcome::Aborted;}"
+            ),
+            "the close goes on after a titled tab's save failed"
         );
     }
 
