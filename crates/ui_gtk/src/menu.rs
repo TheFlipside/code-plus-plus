@@ -1479,10 +1479,10 @@ pub(crate) fn refresh_edit_menu() {
 
 #[cfg(test)]
 mod begin_end_select_step_tests {
-    //! Exhaustive coverage of [`resolve_begin_end_step`]. Runs on every
-    //! CI runner — no GTK display, no editor widget, no `with_state` —
-    //! so a regression in the state machine is caught even from the
-    //! Windows runner.
+    //! Exhaustive coverage of [`resolve_begin_end_step`]. Needs no GTK
+    //! display, no editor widget and no `with_state`, so a regression in
+    //! the state machine is caught by every Linux test run, display or
+    //! none. Linux is the only target the crate builds for.
     use super::{resolve_begin_end_step, SelectMarkMode, SelectStep};
 
     const TAB: i32 = 5;
@@ -2732,24 +2732,38 @@ fn on_save_as() {
 /// Save the active buffer to a path the user picks, and report a failure.
 /// Delivers nothing; see [`save_active`] for why the close gate needs that.
 ///
-/// The chooser spins a nested main loop, and two things can move the
-/// active tab while it is up: a drain run by a worker's wake, and a
-/// plugin's own handler. `save_buffer_as` reads the active tab *after*
-/// the chooser returns, so either would put one buffer's text at the path
-/// the user chose for another. The [`crate::DrainFreeze`] stops the
-/// first, as Cocoa's Save As does; the second is caught by checking that
-/// the tab in front is still the one the chooser was opened for, as
+/// The chooser spins a nested main loop, and three things can move the
+/// active tab while it is up: a drain run by a worker's wake, a plugin's
+/// own handler, and a file dropped on the window, which still arrives
+/// under the modal chooser. `save_buffer_as` reads the active tab *after*
+/// the chooser returns, so any of them would put one buffer's text at the
+/// path the user chose for another. The [`crate::DrainFreeze`] stops the
+/// first, as Cocoa's Save As does; the other two are caught by checking
+/// that the tab in front is still the one the chooser was opened for, as
 /// Win32's `run_save_as_flow` does, and writing nothing if it is not.
+/// The refusal is shown to the user, not only logged: they picked a path,
+/// and would otherwise find nothing there with no word why.
 fn save_active_as() {
     let _freeze = crate::DrainFreeze::new();
-    let Some(for_tab) = with_state(|st| st.shell.active().map(|t| t.id)).flatten() else {
+    // The name is noted with the id: by the time the refusal is reported,
+    // the tab may have closed and taken its name with it.
+    let Some((for_tab, name)) = with_state(|st| {
+        st.shell
+            .active()
+            .map(|t| (t.id, codepp_shell::tab_display_name(t)))
+    })
+    .flatten() else {
         return;
     };
     let Some(path) = choose_save_path("Save As") else {
         return;
     };
     if !crate::active_tab_is(for_tab) {
-        tracing::warn!("Save As abandoned: another tab came to the front while the chooser was up");
+        tracing::warn!(
+            for_tab,
+            "Save As abandoned: the tab the chooser was opened for is no longer in front"
+        );
+        report_save_as_refused(for_tab, &name, &path);
         return;
     }
     let result = with_state(|st| {
@@ -2770,6 +2784,132 @@ fn save_active_as() {
         );
     }
     refresh_tab_chrome();
+}
+
+/// Tell the user that [`save_active_as`] wrote nothing, because the tab
+/// its chooser was opened for is no longer the one in front. A warning,
+/// not an error: nothing failed. The save was refused on purpose, so that
+/// one buffer's text could not land at the path chosen for another.
+fn report_save_as_refused(for_tab: i32, name: &str, path: &Path) {
+    // Whether the tab is still open decides the advice: switching back to
+    // a tab that has closed is not something the user can do. A read that
+    // fails answers "still open", which sends the user to look for their
+    // work rather than telling them it is gone.
+    let still_open = with_state(|st| st.shell.tabs.iter().any(|t| t.id == for_tab)).unwrap_or(true);
+    crate::message_dialog(
+        gtk::MessageType::Warning,
+        gtk::ButtonsType::Ok,
+        SAVE_AS_REFUSED_TITLE,
+        &save_as_refused_text(name, path, still_open),
+    );
+}
+
+/// The headline of [`report_save_as_refused`]'s warning. A constant
+/// rather than a literal at the call so the unit tests can pin it with
+/// the rest of the wording: the source guards strip string literals.
+const SAVE_AS_REFUSED_TITLE: &str = "Nothing was saved";
+
+/// The body of [`report_save_as_refused`]'s warning.
+///
+/// Both the name and the path are sanitized here. A file or folder name
+/// can carry line breaks and bidi controls, and the dialog's secondary
+/// text renders them as real lines and reordered text. The name is
+/// `tab_display_name`'s, so already sanitized, and a second pass changes
+/// nothing; it is made here so that no caller can hand this a raw name.
+/// The paragraph break is added after sanitizing, which would otherwise
+/// replace it.
+///
+/// Every paragraph opens with fixed English. GTK lays a paragraph out in
+/// the direction of its first letter, so one opening with a name that
+/// starts with a Hebrew or Arabic letter would run right to left.
+fn save_as_refused_text(name: &str, path: &Path, still_open: bool) -> String {
+    let name = codepp_shell::sanitize_str_for_display(name);
+    let path = codepp_shell::sanitize_path_for_display(path);
+    if still_open {
+        format!(
+            "Another tab came to the front while the Save As dialog was open, \
+             so '{name}' was not saved to {path}.\n\n\
+             Switch back to '{name}' and choose Save As again."
+        )
+    } else {
+        format!(
+            "The tab '{name}' was closed while the Save As dialog was open, \
+             so nothing was saved to {path}."
+        )
+    }
+}
+
+#[cfg(test)]
+mod save_as_refused_tests {
+    //! The words [`super::report_save_as_refused`] shows. Pure, so they
+    //! need no display and run with the crate's other tests on Linux, the
+    //! only target the crate builds for.
+    use super::{save_as_refused_text, SAVE_AS_REFUSED_TITLE};
+    use std::path::Path;
+
+    #[test]
+    fn the_headline_says_nothing_was_saved() {
+        assert_eq!(SAVE_AS_REFUSED_TITLE, "Nothing was saved");
+    }
+
+    #[test]
+    fn a_tab_still_open_is_named_with_the_path_and_the_way_back() {
+        assert_eq!(
+            save_as_refused_text("new 1", Path::new("/home/u/notes.txt"), true),
+            "Another tab came to the front while the Save As dialog was open, \
+             so 'new 1' was not saved to /home/u/notes.txt.\n\n\
+             Switch back to 'new 1' and choose Save As again."
+        );
+    }
+
+    #[test]
+    fn a_tab_that_has_closed_is_not_one_to_switch_back_to() {
+        assert_eq!(
+            save_as_refused_text("new 1", Path::new("/home/u/notes.txt"), false),
+            "The tab 'new 1' was closed while the Save As dialog was open, \
+             so nothing was saved to /home/u/notes.txt."
+        );
+    }
+
+    /// A line break in a file or folder name would forge a line of its own
+    /// in the dialog, and a bidi override would reorder what follows it.
+    /// Only the paragraph break the text adds itself may survive. The name
+    /// is tried too, although callers pass one already sanitized: this is
+    /// the last step before the dialog.
+    #[test]
+    fn neither_name_nor_path_can_forge_lines_or_reorder_the_text() {
+        let name = "n\nForged line\u{202E}txt.exe";
+        let path = Path::new("/tmp/a\nYour files were deleted./\u{202E}txt.exe");
+        for (still_open, breaks) in [(true, 2), (false, 0)] {
+            let text = save_as_refused_text(name, path, still_open);
+            assert_eq!(text.matches('\n').count(), breaks, "{text:?}");
+            assert!(!text.contains('\u{202E}'), "{text:?}");
+            assert!(
+                text.contains("'n\u{FFFD}Forged line\u{FFFD}txt.exe'"),
+                "{text:?}"
+            );
+            assert!(
+                text.contains("/tmp/a\u{FFFD}Your files were deleted./\u{FFFD}txt.exe"),
+                "{text:?}"
+            );
+        }
+    }
+
+    /// GTK lays a paragraph out in the direction of its first letter, so
+    /// none may open with the name: one starting with a Hebrew letter, as
+    /// here, would turn the whole paragraph right to left.
+    #[test]
+    fn every_paragraph_opens_with_fixed_text() {
+        for still_open in [true, false] {
+            let text = save_as_refused_text("\u{5D0}\u{5D1}.txt", Path::new("/tmp/x"), still_open);
+            for paragraph in text.split("\n\n") {
+                assert!(
+                    paragraph.starts_with(|c: char| c.is_ascii_alphabetic()),
+                    "{paragraph:?}"
+                );
+            }
+        }
+    }
 }
 
 /// File → Save Session… — write every path-bound open tab to a

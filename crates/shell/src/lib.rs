@@ -18660,6 +18660,101 @@ mod tests {
         );
     }
 
+    /// The same release for a restored file saved in place, and only once
+    /// the write has happened. A close prompt lets a recovered buffer go
+    /// after its Save only when this hold is gone (`ui_gtk`'s
+    /// `confirm_discard_active`, Cocoa's `active_dirty`): released by a
+    /// failed write, the buffer would close with its text lost; never
+    /// released, a buffer that saved could not be closed at all.
+    #[test]
+    fn saving_a_restored_file_in_place_releases_the_hold_only_once_written() {
+        let dir = tempfile::tempdir().unwrap();
+        let folder = dir.path().join("not-yet");
+
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+
+        shell.restore_dirty_with_text(
+            &mut ui,
+            folder.join("recovered.txt"),
+            "recovered edits".into(),
+            0,
+            Encoding::Utf8,
+            Eol::Lf,
+            false,
+            false,
+            None,
+            false,
+        );
+        let id = shell.tabs[shell.active_tab.unwrap()].id;
+        assert!(
+            shell.is_unsaved_restore(id),
+            "precondition: unsaved on restore"
+        );
+        ui.buffer_text = "recovered edits".to_string();
+
+        // The file's folder does not exist, so the write fails.
+        assert!(
+            shell.save_current_to_disk(&mut ui).is_err(),
+            "precondition: the write fails"
+        );
+        assert!(
+            shell.is_unsaved_restore(id),
+            "a failed write must keep the recovered buffer marked unsaved"
+        );
+
+        std::fs::create_dir(&folder).unwrap();
+        shell.save_current_to_disk(&mut ui).unwrap();
+        assert!(
+            !shell.is_unsaved_restore(id),
+            "a save that wrote the file must release the hold"
+        );
+        assert_eq!(
+            std::fs::read_to_string(folder.join("recovered.txt")).unwrap(),
+            "recovered edits"
+        );
+    }
+
+    /// The failure half for Save As, which is what a close prompt's Save
+    /// runs for an untitled recovered buffer: a write that fails keeps
+    /// the hold, so the prompt refuses the close rather than lose the
+    /// only copy.
+    #[test]
+    fn a_failed_save_as_keeps_a_restored_buffer_marked_unsaved() {
+        let dir = tempfile::tempdir().unwrap();
+
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+
+        shell.restore_untitled_with_text(
+            &mut ui,
+            Some(1),
+            "recovered".into(),
+            0,
+            Encoding::Utf8,
+            Eol::Lf,
+            false,
+            None,
+            None,
+            false,
+        );
+        let id = shell.tabs[shell.active_tab.unwrap()].id;
+        ui.buffer_text = "recovered".to_string();
+
+        // The chosen file's folder does not exist, so the write fails.
+        let unwritable = dir.path().join("not-yet").join("recovered.txt");
+        assert!(
+            shell.save_buffer_as(&mut ui, unwritable).is_err(),
+            "precondition: the write fails"
+        );
+        assert!(
+            shell.is_unsaved_restore(id),
+            "a failed Save As must keep the recovered buffer marked unsaved"
+        );
+    }
+
     /// A failed load that removes the active tab must leave the view
     /// bound to whatever tab becomes active in its place.
     ///

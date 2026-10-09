@@ -1663,7 +1663,7 @@ mod gesture_delivery_guard {
             .find("let _freeze = crate::DrainFreeze::new();")
             .expect("Save As no longer holds a freeze for as long as it runs");
         let noted = body
-            .find("let Some(for_tab) =")
+            .find("let Some((for_tab, name)) =")
             .expect("Save As no longer notes the tab it was opened for");
         let chooser = body
             .find("choose_save_path(")
@@ -1686,11 +1686,69 @@ mod gesture_delivery_guard {
         a_second_look_fails_closed(&source(include_str!("lib.rs")));
     }
 
-    /// Every second look goes through `active_tab_is`, and it answers
-    /// "moved" when it cannot read the state, so a look that fails acts on
-    /// nothing rather than on whichever tab is in front.
+    /// A refused Save As says so before it returns: the user picked a
+    /// path, and a refusal that is only logged leaves them to find nothing
+    /// there. The warning is a display sink, so its text is
+    /// `save_as_refused_text`'s, which sanitizes the name and the path
+    /// (its unit tests pin that), and the name it is given is
+    /// `tab_display_name`'s, noted with the id before the chooser runs.
+    /// The refusal does nothing else, since anything more would act for a
+    /// tab no longer in front, and it is reported from one place, so a
+    /// Save from the close prompt shows it once. Both bodies are pinned
+    /// whole: a check for one call is met by that call beside a wrong one.
+    #[test]
+    fn a_refused_save_as_says_so_in_sanitized_words() {
+        let squash = |s: &str| s.split_whitespace().collect::<String>();
+        let menu = source(include_str!("menu.rs"));
+        let body = fn_body(&menu, "save_active_as");
+        let noted = body
+            .find("let Some((for_tab, name)) =")
+            .expect("Save As no longer notes the tab and its name");
+        let chooser = body
+            .find("choose_save_path(")
+            .expect("Save As no longer runs its chooser");
+        assert!(
+            noted < chooser,
+            "Save As notes the tab only after its chooser has run"
+        );
+        assert!(
+            squash(&body[noted..chooser]).contains("(t.id,codepp_shell::tab_display_name(t))"),
+            "Save As notes a name other than `tab_display_name`'s, the sanitized one"
+        );
+        assert_eq!(
+            squash(&block_after(&body, "if !crate::active_tab_is(for_tab) {")),
+            "{tracing::warn!(for_tab,);report_save_as_refused(for_tab,&name,&path);return;}",
+            "a refused Save As must log, say so and return, and do nothing else for a tab \
+             no longer in front"
+        );
+        assert_eq!(
+            menu.matches("report_save_as_refused(").count(),
+            2,
+            "the refusal must be reported from exactly one place"
+        );
+        assert_eq!(
+            squash(&fn_body(&menu, "report_save_as_refused")),
+            "{letstill_open=with_state(|st|st.shell.tabs.iter().any(|t|t.id==for_tab))\
+             .unwrap_or(true);crate::message_dialog(gtk::MessageType::Warning,\
+             gtk::ButtonsType::Ok,SAVE_AS_REFUSED_TITLE,\
+             &save_as_refused_text(name,path,still_open),);}",
+            "the refusal's warning must take its text from `save_as_refused_text` and choose \
+             its wording by whether the tab is still open, reading \"still open\" when the \
+             state cannot be read"
+        );
+    }
+
+    /// Every second look goes through `active_tab_is`, which compares the
+    /// tab in front with the id it is given and answers "moved" when it
+    /// cannot read the state, so a look that fails acts on nothing rather
+    /// than on whichever tab is in front.
     fn a_second_look_fails_closed(lib: &str) {
         let helper = fn_body(lib, "active_tab_is");
+        let squashed: String = helper.split_whitespace().collect();
+        assert!(
+            squashed.contains("is_some_and(|t|t.id==id)"),
+            "`active_tab_is` must compare the tab in front with the id it is given"
+        );
         assert!(
             helper.contains(".unwrap_or(false)") && !helper.contains("unwrap_or(true)"),
             "`active_tab_is` must answer false when it cannot read the state"
@@ -1764,6 +1822,48 @@ mod gesture_delivery_guard {
             "the close prompt's Save trusts a modify bit read from another tab"
         );
         a_second_look_fails_closed(&lib);
+    }
+
+    /// After its Save, the close prompt goes on only if the buffer holds
+    /// no unsaved work: neither the modify bit set nor the restore marker.
+    /// A buffer restored from its recovery backup sits at its save point
+    /// with its unsaved state in that marker, so read by the bit alone it
+    /// was taken for saved after a cancelled chooser, and closed with its
+    /// text lost. The arm's value is pinned whole: both reads, joined by
+    /// "or", about the prompted tab. Every other way out of the arm
+    /// refuses: its only `return` is `return false`, it has no `break`,
+    /// `continue` or `?` to leave by, and there is one Save arm, so none
+    /// placed ahead of it can let the close go on first.
+    #[test]
+    fn the_close_prompt_takes_a_recovered_buffer_for_unsaved_after_its_save() {
+        let squash = |s: &str| s.split_whitespace().collect::<String>();
+        let lib = source(include_str!("lib.rs"));
+        let body = fn_body(&lib, "confirm_discard_active");
+        let save = squash(&block_after(&body, "gtk::ResponseType::Yes => {"));
+        assert!(
+            save.ends_with(
+                "matches!(with_state(|st|{st.editor.send(codepp_scintilla_sys::SCI_GETMODIFY,\
+                 0,0)!=0||st.shell.is_unsaved_restore(prompted)}),Some(false))}"
+            ),
+            "the close prompt's Save goes on without asking whether the buffer still holds \
+             unsaved work, by the modify bit and the restore marker both"
+        );
+        assert_eq!(
+            save.matches("return").count(),
+            save.matches("returnfalse;").count(),
+            "the close prompt's Save has a way out other than refusing and the reading"
+        );
+        for exit in ["break", "continue", "?", "'"] {
+            assert!(
+                !save.contains(exit),
+                "the close prompt's Save can leave by `{exit}` without the reading"
+            );
+        }
+        assert_eq!(
+            body.matches("ResponseType::Yes").count(),
+            1,
+            "a second Save arm could let the close go on before this one reads the buffer"
+        );
     }
 
     /// A close that did not happen says so. `close_announced_tab` refuses
@@ -2704,13 +2804,13 @@ fn confirm_discard_active() -> bool {
             // failure. The core, not the menu item, because the item then
             // delivers what the save queued, and plugin code run here could
             // move the focus between this prompt and the close it gates;
-            // the close delivers it instead. Then re-read the modify bit — a
-            // still-dirty buffer means the save failed or its chooser was
-            // cancelled, and the close must abort so nothing is lost.
+            // the close delivers it instead. Then look at the buffer again:
+            // unsaved work still there means the save failed or its chooser
+            // was cancelled, and the close must abort so nothing is lost.
             crate::menu::save_active();
             // The save can run a chooser, whose loop runs plugin code too:
-            // look again before the modify bit below is taken to describe
-            // the prompted tab.
+            // look again before the reading below is taken to describe the
+            // prompted tab.
             if !active_tab_is(prompted) {
                 tracing::warn!(
                     prompted,
@@ -2718,8 +2818,18 @@ fn confirm_discard_active() -> bool {
                 );
                 return false;
             }
+            // The modify bit alone is not enough. A buffer restored from
+            // its recovery backup sits at its save point, its unsaved state
+            // held in the shell's restore marker, which only a save that
+            // wrote it releases: read by the bit alone, it was taken for
+            // saved after a cancelled chooser or a failed write, and closed
+            // with its text lost. Cocoa's close prompt reads both
+            // (`active_dirty`).
             matches!(
-                with_state(|st| st.editor.send(codepp_scintilla_sys::SCI_GETMODIFY, 0, 0) != 0),
+                with_state(|st| {
+                    st.editor.send(codepp_scintilla_sys::SCI_GETMODIFY, 0, 0) != 0
+                        || st.shell.is_unsaved_restore(prompted)
+                }),
                 Some(false)
             )
         }

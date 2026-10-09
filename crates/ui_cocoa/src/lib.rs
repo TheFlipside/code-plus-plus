@@ -3699,8 +3699,9 @@ fn confirm_discard_active() -> bool {
             // `is_unsaved_restore`, which is the right pair here: a
             // successful save also clears the restore id, so a recovered
             // buffer closes once it has a real copy on disk and not
-            // before. `ui_gtk` re-reads `SCI_GETMODIFY` at this point for
-            // the same reason, without the restore half.
+            // before. `ui_gtk` reads the same pair at this point; it read
+            // the modify bit alone until Phase 5, and closed a recovered
+            // buffer whose Save was cancelled.
             //
             // `None` — the state was unreachable — deliberately aborts
             // the close rather than assuming clean.
