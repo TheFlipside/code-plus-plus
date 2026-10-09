@@ -1150,11 +1150,37 @@ pub struct Tab {
     /// unsaved-work check alone. Cleared, too, when the load fails or a
     /// later request replaces it.
     pub reload_confirmed: bool,
-    /// N++-compatible `LangType` for this buffer. Phase 4 m1 derives
-    /// it from the path extension on first load; later milestones
-    /// expose `NPPM_SETBUFFERLANGTYPE` so plugins can override. New
-    /// (unsaved) tabs and unrecognised extensions default to `L_TEXT`.
+    /// N++-compatible `LangType` for this buffer. The tab's first load
+    /// sets it from what the session recorded for the file, or else
+    /// from the extension; a reload keeps it. The Language menu and a
+    /// plugin's `NPPM_SETBUFFERLANGTYPE` change it through
+    /// [`Shell::set_tab_lang`], a Save As re-detects it from the new
+    /// extension, and a buffer restored from a recovery backup takes
+    /// the one its session record carries. New (unsaved) tabs and
+    /// unrecognised extensions default to `L_TEXT`.
     pub lang: LangType,
+    /// The load that was in flight when a language was last requested
+    /// for this tab through [`Shell::set_tab_lang`], or `None` if no
+    /// load was.
+    ///
+    /// A first load sets [`Self::lang`] from the session or the
+    /// extension unless this names that load: a language asked for while
+    /// the file was still loading was applied, and announced to the
+    /// plugins, when it was asked for, and the landing keeps it. Before,
+    /// the landing replaced it without a word. Recorded even when the
+    /// request changed nothing, because until the first load lands the
+    /// tab's language is a placeholder — Normal Text for a fresh tab, and
+    /// whatever the `new 1` scratch had for one a file is opened into: a
+    /// plugin that opens a `.rs` file and at once asks for Normal Text is
+    /// asking for exactly that. The flip side is that a plugin asking for
+    /// the buffer's language in that window is told the placeholder, so
+    /// one that reads it and writes it back keeps the placeholder.
+    ///
+    /// Compared against the landing load's id rather than cleared when a
+    /// load ends: request ids are never reused, so a record left by an
+    /// earlier load — one that failed, say — can never match a later
+    /// one, and no path that ends a load has to remember this field.
+    pub lang_requested_during_load: Option<RequestId>,
     /// Per-tab untitled sequence number — `Some(N)` for buffers
     /// created by File→New that haven't been saved yet, rendered
     /// in the tab strip as `"new N"`. Cleared (`= None`) by
@@ -1195,10 +1221,19 @@ pub struct Tab {
     /// be moved by drag; unpinned tabs occupy the slots to their
     /// right. `Shell` enforces the "pinned-before-unpinned"
     /// invariant across `move_tab` / `set_pinned` /
-    /// `close_active_tab` so no code path can leave the vector in
-    /// a state that violates it. Round-trips through `session.xml`
-    /// via [`codepp_core::Tab::pinned`].
+    /// `close_active_tab`, and a load's landing repairs it around the
+    /// tab it lands on ([`Shell::repair_restored_pin_placement`]).
+    /// One gap is known: while a session restore still has tabs
+    /// loading, `set_pinned`'s placement can leave an unpinned tab in
+    /// front of a pinned one (DESIGN.md §7.4). Round-trips through
+    /// `session.xml` via [`codepp_core::Tab::pinned`].
     pub pinned: bool,
+    /// [`Self::lang_requested_during_load`] for the pin: the load that
+    /// was in flight when [`Shell::set_pinned`] was last called for this
+    /// tab. The tab's first load applies the pin the session recorded
+    /// for the file unless this names that load; a reload never changes
+    /// the pin.
+    pub pin_requested_during_load: Option<RequestId>,
 }
 
 impl Default for Tab {
@@ -1216,10 +1251,12 @@ impl Default for Tab {
             shadow_unsaved: false,
             reload_confirmed: false,
             lang: L_TEXT,
+            lang_requested_during_load: None,
             untitled_seq: None,
             dirty: false,
             custom_name: None,
             pinned: false,
+            pin_requested_during_load: None,
         }
     }
 }
@@ -1554,13 +1591,25 @@ pub fn pick_next_close_target(tabs: &[Tab], kind: CloseMultiKind, keeper_id: i32
     }
 }
 
+/// Whether `tab`'s pin is settled, for the landing repairs below: it is,
+/// unless the tab's first load is still in flight. Until that load lands
+/// its pin is provisional — unpinned unless one was set on it since — and
+/// the landing may still apply the one the session recorded. A tab that is
+/// only *reloading* already has a path, and a reload never changes the
+/// pin, so it counts as settled — otherwise a pinned tab landing behind an
+/// unpinned one that is reloading would be left there, for good if the
+/// reload then fails, since a failed load repairs nothing.
+fn pin_is_settled(tab: &Tab) -> bool {
+    tab.pending_load.is_none() || tab.path.is_some()
+}
+
 /// Where a just-pinned tab at `idx` must move so the pinned-before-unpinned
 /// invariant holds, or `None` if it is already correctly placed. Used to
 /// repair the placement after a load restores a pin (see
 /// [`Shell::apply_load_result`]).
 ///
-/// Only *settled* (fully loaded, `pending_load.is_none()`) unpinned tabs count
-/// as blockers. This is the crux: during a full session restore the pinned
+/// Only *settled* unpinned tabs ([`pin_is_settled`]) count as blockers.
+/// This is the crux: during a full session restore the pinned
 /// tabs are pushed pinned-first but their flags are set incrementally as their
 /// async loads complete, so a not-yet-loaded pinned tab looks unpinned. Gating
 /// on "settled" means those in-flight tabs are neither treated as blockers nor
@@ -1570,10 +1619,29 @@ pub fn pick_next_close_target(tabs: &[Tab], kind: CloseMultiKind, keeper_id: i32
 /// mid-session open of a pinned file whose tab was pushed at the end.
 #[must_use]
 fn pinned_restore_target(tabs: &[Tab], idx: usize) -> Option<usize> {
-    let first_settled_unpinned = tabs
-        .iter()
-        .position(|t| !t.pinned && t.pending_load.is_none())?;
+    let first_settled_unpinned = tabs.iter().position(|t| !t.pinned && pin_is_settled(t))?;
     (first_settled_unpinned < idx).then_some(first_settled_unpinned)
+}
+
+/// The mirror of [`pinned_restore_target`]: where a tab at `idx` that a
+/// load has just left *unpinned* must move so the pinned-before-unpinned
+/// invariant holds — behind the last settled pinned tab, when one follows
+/// it — or `None` if it is already correctly placed.
+///
+/// Loads land in the order they were requested — the loader is one
+/// worker over a queue — but the strip can be rearranged while a load is
+/// in flight. A tab still loading reads unpinned until it lands, so
+/// during a session restore it can be dragged to the front, or pinned and
+/// unpinned again ([`Tab::pin_requested_during_load`] keeps the cleared
+/// pin), and either moves it ahead of restored pinned tabs requested
+/// before it. Those land first, and each one's repair passes over it,
+/// since a tab still on its first load is not settled; then it lands
+/// unpinned in front of them. So each repair has to cover the direction
+/// the tab it repairs can be wrong in.
+#[must_use]
+fn unpinned_restore_target(tabs: &[Tab], idx: usize) -> Option<usize> {
+    let last_settled_pinned = tabs.iter().rposition(|t| t.pinned && pin_is_settled(t))?;
+    (last_settled_pinned > idx).then_some(last_settled_pinned)
 }
 
 /// Whether the "Close Multiple Documents" entry for `kind` should be enabled,
@@ -2856,11 +2924,20 @@ impl Shell {
     /// change queues `NPPN_DOCORDERCHANGED` so plugins tracking
     /// buffer order re-sync from `NPPM_GETOPENFILENAMES`; the
     /// idempotent no-op path does not.
+    ///
+    /// For a tab that exists, the request is recorded against its load in
+    /// flight, if it has one, whether or not it changes anything, so that
+    /// load's landing keeps the pin rather than applying the one the
+    /// session recorded for the file ([`Tab::pin_requested_during_load`]).
     pub fn set_pinned(&mut self, idx: usize, want: bool) -> bool {
-        if idx >= self.tabs.len() || self.tabs[idx].pinned == want {
+        let Some(tab) = self.tabs.get_mut(idx) else {
+            return false;
+        };
+        tab.pin_requested_during_load = tab.pending_load;
+        if tab.pinned == want {
             return false;
         }
-        self.tabs[idx].pinned = want;
+        tab.pinned = want;
         // Compute the target slot for the moved tab, expressed in
         // terms of the vector state AFTER `tabs.remove(idx)` runs.
         // The remove-then-insert model means the target must land
@@ -2909,29 +2986,43 @@ impl Shell {
         true
     }
 
-    /// Repair the pinned-before-unpinned invariant after a load restores a pin
-    /// onto the tab at `target_idx` (see [`Self::apply_load_result`]). Moves the tab
-    /// to the end of the pinned prefix and adjusts `active_tab`, but ONLY if it
-    /// is actually misplaced per [`pinned_restore_target`] — which ignores
-    /// still-loading tabs, so a full session restore (whose pinned tabs are
-    /// pushed pinned-first and load asynchronously) is untouched. A no-op
-    /// unless the tab is a mid-session open pushed at the end of the strip.
+    /// Repair the pinned-before-unpinned invariant around the tab at
+    /// `target_idx` once a load has landed on it (see
+    /// [`Self::apply_load_result`]). A pinned tab moves to the end of the
+    /// pinned prefix, an unpinned one behind the last pinned tab, and
+    /// `active_tab` follows — but ONLY if the tab is actually misplaced per
+    /// [`pinned_restore_target`] or [`unpinned_restore_target`], both of
+    /// which ignore tabs still on their first load ([`pin_is_settled`]),
+    /// so a full session restore (whose
+    /// pinned tabs are pushed pinned-first and load asynchronously) is
+    /// untouched. A no-op unless the tab is a mid-session open of a pinned
+    /// file pushed at the end of the strip, or a tab that lands unpinned
+    /// after a settled pinned tab behind it: one moved ahead of the tabs
+    /// requested before it while it loaded (see [`unpinned_restore_target`]),
+    /// or one `set_pinned` misplaced while a restore was still loading
+    /// tabs (DESIGN.md §7.4), which this heals the next time it lands.
     fn repair_restored_pin_placement(&mut self, target_idx: usize) {
-        // Only a pinned tab needs cluster placement; an unpinned tab freshly
-        // opened at the end is already correctly after the pinned prefix.
-        if !self.tabs.get(target_idx).is_some_and(|t| t.pinned) {
-            return;
-        }
-        let Some(target) = pinned_restore_target(&self.tabs, target_idx) else {
+        let Some(landed) = self.tabs.get(target_idx) else {
             return;
         };
-        // `pinned_restore_target` only ever returns `target < target_idx`, so
-        // this is a left move: elements in `[target, target_idx)` shift right.
+        let target = if landed.pinned {
+            pinned_restore_target(&self.tabs, target_idx)
+        } else {
+            unpinned_restore_target(&self.tabs, target_idx)
+        };
+        let Some(target) = target else {
+            return;
+        };
+        // A left move for a pinned tab and a right move for an unpinned
+        // one; removing and re-inserting shifts the tabs in between by one
+        // the other way, which is what the active index does too.
         let tab = self.tabs.remove(target_idx);
         self.tabs.insert(target, tab);
         if let Some(active) = self.active_tab.as_mut() {
             if *active == target_idx {
                 *active = target;
+            } else if target_idx < *active && *active <= target {
+                *active -= 1;
             } else if target <= *active && *active < target_idx {
                 *active += 1;
             }
@@ -5380,27 +5471,37 @@ impl Shell {
                     tracing::warn!(error = ?e, path = ?loaded.path, "failed to watch file");
                 }
 
+                // Whether this load *gives* the tab its path, as opposed
+                // to reloading a tab that already had one. It decides
+                // whether the untitled identity is dropped and whether
+                // the session's language and pin apply (both below).
+                let gained_a_path = self.tabs.get(target_idx).is_some_and(|t| t.path.is_none());
+
                 // Single by-path lookup covering every attribute the
                 // load path pulls from the persisted session:
                 // caret position, the user's Language-menu override,
                 // and the pin state. Rebuilding the find call per
                 // attribute (an earlier shape of this code) had the
                 // same shape three times and pushed the function
-                // over clippy's `too_many_lines` gate.
+                // over clippy's `too_many_lines` gate. The caret is
+                // applied by a reload too, which puts it where the
+                // session had it or at the start (DESIGN.md §7.4 tracks
+                // keeping it where it was).
                 let stored = self
                     .session
                     .tabs
                     .iter()
                     .find(|t| t.path.as_deref() == Some(loaded.path.as_path()));
                 let cursor = stored.map_or(0, |t| t.cursor);
-                let stored_lang_override = stored.and_then(|t| {
-                    Self::resolve_persisted_lang(t.lang, t.udl.as_deref(), &self.udl_registry)
+                // The language and pin a first load sets, resolved before
+                // the `&mut tab` borrow below so the UDL-registry read (a
+                // separate field) can't conflict with it. A reload sets
+                // neither, so it resolves neither — and does not repeat
+                // `resolve_persisted_lang`'s warning about a UDL that is no
+                // longer installed on every reload.
+                let first_load = gained_a_path.then(|| {
+                    Self::first_load_lang_and_pin(stored, &loaded.path, &self.udl_registry)
                 });
-                let stored_pinned = stored.is_some_and(|t| t.pinned);
-                // Resolve the lang before the `&mut tab` borrow below so the
-                // UDL-registry read (a separate field) can't conflict with it.
-                let resolved_lang = stored_lang_override
-                    .unwrap_or_else(|| Self::detect_lang(&loaded.path, &self.udl_registry));
 
                 // Write the tab fields first so any UI calls below
                 // observe a tab in its post-load state. The borrow
@@ -5444,11 +5545,6 @@ impl Shell {
                 let Some(tab) = self.tabs.get_mut(target_idx) else {
                     return;
                 };
-                // Whether this load *gave* the tab its path, as opposed
-                // to reloading a tab that already had one. Read before
-                // the assignment below, and used to decide whether the
-                // untitled identity should be dropped.
-                let gained_a_path = tab.path.is_none();
                 tab.pending_load = None;
                 tab.path = Some(loaded.path.clone());
                 // A tab that was untitled and now has a file is no
@@ -5493,20 +5589,39 @@ impl Shell {
                     // Consumed, or discarded with consent, either way.
                     tab.shadow_unsaved = false;
                 }
-                // Lang resolution: persisted Language-menu override
-                // wins; extension-based auto-detection (built-in lexers
-                // plus UDL `ext=` associations) is the fallback. Plugins
-                // may still override later via `NPPM_SETBUFFERLANGTYPE`.
-                tab.lang = resolved_lang;
-                // Restore the persisted pin state. For a full session restore
-                // the tab vector is already assembled pinned-first, so setting
-                // the flag alone keeps the invariant; for a single mid-session
-                // open of a pinned file the tab was pushed at the *end*, so the
-                // flag alone would leave it outside the pinned cluster (stuck
-                // right of the unpinned tabs, and unmovable because it's
-                // pinned). `repair_restored_pin_placement` below relocates it —
-                // a no-op in the restore case (see `pinned_restore_target`).
-                tab.pinned = stored_pinned;
+                // **A reload keeps the tab's language and pin; only a first
+                // load sets them**, and not even a first load replaces one
+                // requested while it was in flight
+                // (`Tab::lang_requested_during_load`,
+                // `Tab::pin_requested_during_load`). The language is the
+                // persisted Language-menu override, else extension-based
+                // auto-detection (built-in lexers plus UDL `ext=`
+                // associations). `self.session.tabs` is the session read at
+                // startup or by Load Session, and nothing refreshes it
+                // during a session, so a reload that applied it put back
+                // what the file had then: a pick made since was undone with
+                // no word to the plugins, and an undone pin could leave an
+                // unpinned tab inside the pinned cluster. Notepad++ keeps a
+                // buffer's language across a reload, as read from its
+                // source; that is not yet measured (DESIGN.md §7.4).
+                //
+                // The pin follows the same rule. For a full session restore
+                // the tab vector is already assembled pinned-first, so
+                // setting the flag alone keeps the invariant; for a single
+                // mid-session open of a pinned file the tab was pushed at the
+                // *end*, so the flag alone would leave it outside the pinned
+                // cluster (stuck right of the unpinned tabs, and unmovable
+                // because it's pinned). `repair_restored_pin_placement` below
+                // relocates it — a no-op in the restore case (see
+                // `pinned_restore_target`).
+                if let Some((lang, pinned)) = first_load {
+                    if tab.lang_requested_during_load != Some(loaded.id) {
+                        tab.lang = lang;
+                    }
+                    if tab.pin_requested_during_load != Some(loaded.id) {
+                        tab.pinned = pinned;
+                    }
+                }
                 let stored_doc = tab.scintilla_doc;
                 let buffer_id = tab.id as isize;
                 // What the active branch does with the view: install the
@@ -6259,6 +6374,24 @@ impl Shell {
         Some(LangType(id))
     }
 
+    /// The language and pin a tab's first load of `path` sets: what the
+    /// session read at startup or by Load Session recorded for the file
+    /// (`stored`), or else, for the language, the extension
+    /// ([`Self::detect_lang`]). A reload sets neither; see
+    /// [`Self::apply_load_result`]. An associated function over the
+    /// registry it reads, so the landing can call it while it holds a
+    /// borrow of the session.
+    fn first_load_lang_and_pin(
+        stored: Option<&codepp_core::session::Tab>,
+        path: &Path,
+        registry: &codepp_udl::UdlRegistry,
+    ) -> (LangType, bool) {
+        let lang = stored
+            .and_then(|t| Self::resolve_persisted_lang(t.lang, t.udl.as_deref(), registry))
+            .unwrap_or_else(|| Self::detect_lang(path, registry));
+        (lang, stored.is_some_and(|t| t.pinned))
+    }
+
     /// Set the **active** tab's syntax-highlighting language from a
     /// Language menu. The GTK and Cocoa menus call this; Win32's sends
     /// `NPPM_SETBUFFERLANGTYPE` through [`Self::dispatch_plugin_message`]
@@ -6268,10 +6401,12 @@ impl Shell {
     ///
     /// Returns `true` on a real change. The caller must then deliver the
     /// queued notification once its borrow on the state has ended, so a
-    /// plugin's `beNotified` can call back into `NPPM_*`. Returns `false`,
-    /// having done nothing, on a same-value no-op (so a re-click of the
-    /// active language neither re-styles nor flickers the chrome) or with
-    /// no active tab. The new language persists to `session.xml` on the
+    /// plugin's `beNotified` can call back into `NPPM_*`. Returns `false`
+    /// with no active tab, and on a same-value no-op, which re-styles,
+    /// repaints and announces nothing (so a re-click of the active
+    /// language does not flicker the chrome) but is still recorded
+    /// against a load in flight (see [`Self::set_tab_lang`]). The new
+    /// language persists to `session.xml` on the
     /// next save — the tab's `lang` is written whenever it differs from
     /// the extension default.
     #[must_use = "true means NPPN_LANGCHANGED is queued; deliver it with no state borrow held"]
@@ -6288,9 +6423,11 @@ impl Shell {
     /// menus, and [`HostServices::set_buffer_lang_type`] from plugins'
     /// `NPPM_SETBUFFERLANGTYPE` / `NPPM_SETCURRENTLANGTYPE` and from
     /// Win32's Language menu. The GTK and Cocoa menus once did this with
-    /// a copy of their own, and theirs never told the plugins. A load, a
-    /// reload and a Save As set the language from the file instead, and
-    /// announce no language change (DESIGN.md §7.4).
+    /// a copy of their own, and theirs never told the plugins. A tab's
+    /// first load sets its language from the file instead, unless one was
+    /// requested here while the file was loading, and a Save As
+    /// re-detects it from the new extension; neither announces a change
+    /// (DESIGN.md §7.4). A reload keeps it.
     ///
     /// On a real change it records the language and, if the tab is the
     /// active one, re-lexes the editor and repaints the status bar. The
@@ -6299,14 +6436,17 @@ impl Shell {
     /// then queues `NPPN_LANGCHANGED`, which the caller delivers once its
     /// borrow on the state has ended. Returns whether anything changed.
     ///
-    /// A same-language set does nothing: re-applying the lexer flickers
-    /// the visible buffer, and a notification for a change that did not
-    /// happen would mislead a plugin that logs them. An index with no tab
-    /// does nothing either.
+    /// A same-language set changes and announces nothing: re-applying the
+    /// lexer flickers the visible buffer, and a notification for a change
+    /// that did not happen would mislead a plugin that logs them. It is
+    /// still recorded against the tab's load in flight, if it has one,
+    /// so that load's landing keeps it ([`Tab::lang_requested_during_load`]).
+    /// An index with no tab does nothing.
     fn set_tab_lang<U: UiPlatform>(&mut self, ui: &mut U, idx: usize, lang: LangType) -> bool {
         let Some(tab) = self.tabs.get_mut(idx) else {
             return false;
         };
+        tab.lang_requested_during_load = tab.pending_load;
         if tab.lang == lang {
             return false;
         }
@@ -7455,6 +7595,7 @@ impl Shell {
             shadow_unsaved: false,
             reload_confirmed: false,
             lang: resolved_lang,
+            lang_requested_during_load: None,
             untitled_seq,
             // A restored untitled buffer has never been written to a
             // real file — only to its recovery backup — so it is still
@@ -7466,6 +7607,7 @@ impl Shell {
             dirty: true,
             custom_name,
             pinned,
+            pin_requested_during_load: None,
         });
         self.active_tab = Some(new_idx);
         // Bind a fresh Scintilla document; matches `new_untitled`'s
@@ -7584,6 +7726,7 @@ impl Shell {
             shadow_unsaved: false,
             reload_confirmed: false,
             lang,
+            lang_requested_during_load: None,
             untitled_seq: None,
             // Backup-restored buffers carry edits the user never
             // committed to disk — paint them as dirty (red icon)
@@ -7595,6 +7738,7 @@ impl Shell {
             dirty: true,
             custom_name: None,
             pinned,
+            pin_requested_during_load: None,
         });
         self.active_tab = Some(new_idx);
         let new_doc = ui.activate_tab(new_idx, 0);
@@ -8671,10 +8815,10 @@ impl<U: UiPlatform> HostServices for HostBridge<'_, U> {
         // nothing changed". Otherwise TRUE: the buffer is now in the
         // requested language, whether or not it already was. The change
         // itself — re-lexing the active tab, queueing NPPN_LANGCHANGED,
-        // nothing at all for a same-language set — is
-        // `Shell::set_tab_lang`'s, which the GTK and Cocoa Language menus
-        // reach too. The notification is delivered later, with no borrow
-        // held, like the other lifecycle ones.
+        // for a same-language set only a record against the buffer's
+        // load in flight — is `Shell::set_tab_lang`'s, which the GTK and
+        // Cocoa Language menus reach too. The notification is delivered
+        // later, with no borrow held, like the other lifecycle ones.
         let Some(idx) = self.shell.tabs.iter().position(|t| t.id as isize == id) else {
             return false;
         };
@@ -10170,7 +10314,8 @@ mod close_multi_tests {
     //! document and risk a 0-byte overwrite on a "Save changes?" Yes.
 
     use super::{
-        close_multi_enabled, pick_next_close_target, pinned_restore_target, CloseMultiKind, Tab,
+        close_multi_enabled, pick_next_close_target, pinned_restore_target,
+        unpinned_restore_target, CloseMultiKind, Tab,
     };
 
     fn mk(id: i32) -> Tab {
@@ -10421,6 +10566,51 @@ mod close_multi_tests {
         // idx 2 (just after the two-tab pinned prefix, before the unpinned).
         let tabs = vec![mk_pinned(1), mk_pinned(2), mk(3), mk_pinned(4)];
         assert_eq!(pinned_restore_target(&tabs, 3), Some(2));
+    }
+
+    #[test]
+    fn unpinned_restore_target_moves_behind_the_last_settled_pinned_tab() {
+        // [just-unpinned(1), pinned(2), pinned(3), unpinned(4)]: the tab at
+        // idx 0 belongs behind both pinned tabs, at idx 2.
+        let tabs = vec![mk(1), mk_pinned(2), mk_pinned(3), mk(4)];
+        assert_eq!(unpinned_restore_target(&tabs, 0), Some(2));
+    }
+
+    #[test]
+    fn unpinned_restore_target_none_when_no_pinned_tab_follows() {
+        // Already behind the pinned prefix, and the ordinary case: a fresh
+        // unpinned open pushed at the end.
+        let tabs = vec![mk_pinned(1), mk(2), mk(3)];
+        assert_eq!(unpinned_restore_target(&tabs, 1), None);
+        assert_eq!(unpinned_restore_target(&tabs, 2), None);
+    }
+
+    #[test]
+    fn a_reloading_tab_counts_as_settled_both_ways() {
+        // A tab that already has its file keeps its pin across a reload,
+        // so a reload in flight does not make it a placeholder: a pinned
+        // tab landing behind an unpinned one that is reloading moves in
+        // front of it, and an unpinned tab landing in front of a pinned one
+        // that is reloading moves behind it.
+        let reloading = |id, pinned| Tab {
+            path: Some(std::path::PathBuf::from(format!("/tmp/r{id}.txt"))),
+            pinned,
+            ..mk_pending(id)
+        };
+        let tabs = vec![reloading(1, false), mk_pinned(2)];
+        assert_eq!(pinned_restore_target(&tabs, 1), Some(0));
+        let tabs = vec![mk(1), reloading(2, true)];
+        assert_eq!(unpinned_restore_target(&tabs, 0), Some(1));
+    }
+
+    #[test]
+    fn unpinned_restore_target_ignores_still_loading_tabs() {
+        // A tab still loading behind it is not a settled pinned tab, even
+        // when its pin was set while it loaded: its own landing repairs it.
+        let mut loading_pinned = mk_pending(2);
+        loading_pinned.pinned = true;
+        let tabs = vec![mk(1), loading_pinned, mk(3)];
+        assert_eq!(unpinned_restore_target(&tabs, 0), None);
     }
 
     #[test]
@@ -17057,6 +17247,624 @@ mod tests {
         assert!(ui.set_text_calls.last().unwrap().0.contains("second"));
     }
 
+    /// Drain until no tab has a load in flight, failing the test after
+    /// ten seconds.
+    fn drain_until_loads_settle(shell: &mut Shell, ui: &mut FakeUi) {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            shell.drain(ui);
+            if shell.tabs.iter().all(|t| t.pending_load.is_none()) {
+                return;
+            }
+            assert!(Instant::now() < deadline, "the loads did not settle");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+
+    /// Open `path` and let it land, pick Python for it from the Language
+    /// menu, change the file on disk and reload it. `session_lang` is what
+    /// the session read at startup recorded for the file, if anything.
+    /// Returns the shell and the fixture once the reload has landed, and
+    /// the number of `apply_lang` calls made before it was requested.
+    fn reload_after_a_python_pick(
+        path: &Path,
+        session_lang: Option<LangType>,
+    ) -> (Shell, FakeUi, usize) {
+        use codepp_core::lang::L_PYTHON;
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+        if let Some(lang) = session_lang {
+            shell.session.tabs.push(codepp_core::session::Tab {
+                path: Some(path.to_path_buf()),
+                lang: Some(lang.as_npp_id()),
+                ..codepp_core::session::Tab::default()
+            });
+        }
+        shell.open_file(path.to_path_buf());
+        drain_until_loads_settle(&mut shell, &mut ui);
+        if let Some(lang) = session_lang {
+            assert_eq!(shell.tabs[0].lang, lang, "precondition: from the session");
+        }
+        assert!(shell.set_active_lang(&mut ui, L_PYTHON), "precondition");
+        let _ = shell.take_notifications();
+
+        std::fs::write(path, "reloaded\n").unwrap();
+        let langs_before = ui.apply_lang_calls.len();
+        shell.request_reload(path.to_path_buf(), ReloadConsent::Unconfirmed);
+        drain_until_loads_settle(&mut shell, &mut ui);
+        assert_eq!(
+            ui.set_text_calls.last().map(|c| c.0.as_str()),
+            Some("reloaded\n"),
+            "precondition: the reload landed"
+        );
+        (shell, ui, langs_before)
+    }
+
+    /// A reload set the language from the session read at startup, or
+    /// else from the extension, so a pick made since was undone and no
+    /// plugin was told (DESIGN.md §7.4). Here the extension's Rust came
+    /// back.
+    #[test]
+    fn a_reload_keeps_a_language_picked_since_the_file_was_opened() {
+        use codepp_core::lang::L_PYTHON;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("pick.rs");
+        std::fs::write(&path, "fn main() {}\n").unwrap();
+
+        let (mut shell, ui, langs_before) = reload_after_a_python_pick(&path, None);
+        assert_eq!(shell.tabs[0].lang, L_PYTHON);
+        assert_eq!(
+            ui.apply_lang_calls[langs_before..],
+            [L_PYTHON],
+            "the view keeps the picked lexer"
+        );
+        assert_eq!(ui.status_calls.last().map(|s| s.0), Some(L_PYTHON));
+        assert!(
+            !shell
+                .take_notifications()
+                .iter()
+                .any(|n| matches!(n, Notification::LangChanged { .. })),
+            "nothing changed language, so nothing is announced"
+        );
+    }
+
+    /// The same, where the session read at startup recorded a language
+    /// for the file: C++, picked in an earlier session.
+    #[test]
+    fn a_reload_keeps_a_pick_over_the_language_the_session_recorded() {
+        use codepp_core::lang::{L_CPP, L_PYTHON};
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("pick.rs");
+        std::fs::write(&path, "fn main() {}\n").unwrap();
+
+        let (shell, _, _) = reload_after_a_python_pick(&path, Some(L_CPP));
+        assert_eq!(shell.tabs[0].lang, L_PYTHON);
+    }
+
+    /// The extension's language came back even when the reload itself was
+    /// declined to keep unsaved edits: the buffer kept its text and lost
+    /// its language.
+    #[test]
+    fn a_declined_reload_keeps_the_language_too() {
+        use codepp_core::lang::L_PYTHON;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("edited.rs");
+        std::fs::write(&path, "fn main() {}\n").unwrap();
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+        shell.open_file(path.clone());
+        drain_until_loads_settle(&mut shell, &mut ui);
+        assert!(shell.set_active_lang(&mut ui, L_PYTHON));
+        // Unsaved edits in the document, and a reload with no consent to
+        // discard them.
+        ui.dirty = true;
+        std::fs::write(&path, "reloaded\n").unwrap();
+        let (texts, langs) = (ui.set_text_calls.len(), ui.apply_lang_calls.len());
+        shell.request_reload(path, ReloadConsent::Unconfirmed);
+        drain_until_loads_settle(&mut shell, &mut ui);
+        assert_eq!(
+            ui.set_text_calls.len(),
+            texts,
+            "precondition: the reload was declined"
+        );
+        assert_eq!(shell.tabs[0].lang, L_PYTHON);
+        // The declined landing re-applies the lexer to the view it leaves
+        // as it was, which is also the witness that it happened.
+        assert_eq!(ui.apply_lang_calls[langs..], [L_PYTHON]);
+    }
+
+    /// A language picked while the file was still loading was applied and
+    /// announced when it was picked; the landing then replaced it with the
+    /// extension's, and told nobody.
+    #[test]
+    fn a_first_load_keeps_a_language_picked_while_it_was_in_flight() {
+        use codepp_core::lang::L_PYTHON;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("early.rs");
+        std::fs::write(&path, "fn main() {}\n").unwrap();
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+        shell.open_file(path);
+        assert!(shell.set_active_lang(&mut ui, L_PYTHON));
+        assert!(
+            shell
+                .take_notifications()
+                .iter()
+                .any(|n| matches!(n, Notification::LangChanged { .. })),
+            "precondition: the pick was announced"
+        );
+
+        drain_until_loads_settle(&mut shell, &mut ui);
+        assert_eq!(shell.tabs[0].lang, L_PYTHON);
+        assert_eq!(ui.apply_lang_calls.last(), Some(&L_PYTHON));
+        assert_eq!(ui.status_calls.last().map(|s| s.0), Some(L_PYTHON));
+        assert!(!shell
+            .take_notifications()
+            .iter()
+            .any(|n| matches!(n, Notification::LangChanged { .. })));
+    }
+
+    /// The plugin route, with a request that changes nothing when it is
+    /// made: a loading tab reads Normal Text, so a plugin that opens a
+    /// `.rs` file and at once asks for Normal Text is told TRUE and
+    /// nothing is announced. It still gets Normal Text, not the Rust the
+    /// extension gives.
+    #[test]
+    fn a_first_load_keeps_a_same_language_request_made_while_it_was_in_flight() {
+        use codepp_core::lang::L_TEXT;
+        use codepp_plugin_host::dispatch::NPPM_SETBUFFERLANGTYPE;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("plain.rs");
+        std::fs::write(&path, "fn main() {}\n").unwrap();
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+        shell.open_file(path);
+        assert_eq!(shell.tabs[0].lang, L_TEXT, "precondition: the placeholder");
+        let id = shell.tabs[0].id as usize;
+        let _ = shell.take_notifications();
+        // SAFETY: a real dispatch shape — id in wparam, LangType in
+        // lparam — with no pointer arguments to dereference.
+        let r = unsafe {
+            shell.dispatch_plugin_message(
+                &mut ui,
+                HostHandles::null(),
+                NPPM_SETBUFFERLANGTYPE,
+                id,
+                L_TEXT.as_npp_id() as isize,
+            )
+        };
+        assert_eq!(r, Some(1));
+        assert!(shell.take_notifications().is_empty());
+
+        drain_until_loads_settle(&mut shell, &mut ui);
+        assert_eq!(shell.tabs[0].lang, L_TEXT);
+    }
+
+    /// A language picked while a load ran is kept by that load's landing
+    /// and by no other. Here the load onto the `new 1` scratch fails, so
+    /// the scratch keeps the pick; a file opened into it afterwards still
+    /// takes its own language.
+    #[test]
+    fn a_language_picked_during_a_failed_load_does_not_follow_the_next_file() {
+        use codepp_core::lang::{L_PYTHON, L_RUST};
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("missing.rs");
+        let good = dir.path().join("good.rs");
+        std::fs::write(&good, "fn main() {}\n").unwrap();
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+        shell.new_untitled(&mut ui);
+        shell.open_file_replacing_scratch(missing, true);
+        assert!(shell.set_active_lang(&mut ui, L_PYTHON));
+        drain_until_loads_settle(&mut shell, &mut ui);
+        assert!(
+            shell.tabs.len() == 1 && shell.tabs[0].path.is_none(),
+            "precondition: the load failed and the scratch is back"
+        );
+        assert_eq!(shell.tabs[0].lang, L_PYTHON);
+
+        shell.open_file_replacing_scratch(good.clone(), true);
+        drain_until_loads_settle(&mut shell, &mut ui);
+        assert!(
+            shell.tabs.len() == 1 && shell.tabs[0].path.as_deref() == Some(good.as_path()),
+            "precondition: the file was opened into the scratch"
+        );
+        assert_eq!(shell.tabs[0].lang, L_RUST);
+    }
+
+    /// And a language picked for the `new 1` scratch before a file is
+    /// opened into it was for the scratch, not for the file.
+    #[test]
+    fn a_language_picked_for_the_scratch_does_not_follow_a_file_opened_into_it() {
+        use codepp_core::lang::{L_PYTHON, L_RUST};
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("file.rs");
+        std::fs::write(&path, "fn main() {}\n").unwrap();
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+        shell.new_untitled(&mut ui);
+        assert!(shell.set_active_lang(&mut ui, L_PYTHON));
+        shell.open_file_replacing_scratch(path.clone(), true);
+        drain_until_loads_settle(&mut shell, &mut ui);
+        assert!(
+            shell.tabs.len() == 1 && shell.tabs[0].path.as_deref() == Some(path.as_path()),
+            "precondition: the file was opened into the scratch"
+        );
+        assert_eq!(shell.tabs[0].lang, L_RUST);
+    }
+
+    /// Open each name in `names` from a fresh directory and let every load
+    /// land. Returns the shell, the fixture, the directory and the paths.
+    fn open_settled(names: &[&str]) -> (Shell, FakeUi, tempfile::TempDir, Vec<PathBuf>) {
+        let dir = tempfile::tempdir().unwrap();
+        let paths: Vec<PathBuf> = names
+            .iter()
+            .map(|name| {
+                let p = dir.path().join(name);
+                std::fs::write(&p, name).unwrap();
+                p
+            })
+            .collect();
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+        for p in &paths {
+            shell.open_file(p.clone());
+        }
+        drain_until_loads_settle(&mut shell, &mut ui);
+        (shell, ui, dir, paths)
+    }
+
+    /// Each tab in strip order, as the index into `paths` of the file it
+    /// holds and whether it is pinned.
+    fn tab_order(shell: &Shell, paths: &[PathBuf]) -> Vec<(usize, bool)> {
+        shell
+            .tabs
+            .iter()
+            .map(|t| {
+                let which = paths
+                    .iter()
+                    .position(|p| t.path.as_deref() == Some(p.as_path()))
+                    .expect("every tab holds one of the paths");
+                (which, t.pinned)
+            })
+            .collect()
+    }
+
+    /// Change `path` on disk and reload it with no consent asked, then
+    /// check that the reload landed: the tab holds the new text.
+    fn reload_changed(shell: &mut Shell, ui: &mut FakeUi, path: &Path) {
+        std::fs::write(path, "changed on disk\n").unwrap();
+        shell.request_reload(path.to_path_buf(), ReloadConsent::Unconfirmed);
+        drain_until_loads_settle(shell, ui);
+        let tab = shell
+            .tabs
+            .iter()
+            .find(|t| t.path.as_deref() == Some(path))
+            .expect("the tab is still open");
+        assert_eq!(
+            tab.text, "changed on disk\n",
+            "precondition: the reload landed"
+        );
+    }
+
+    /// The pin has the language's bug: a reload applied the pin the
+    /// session read at startup recorded for the file, here none. The tab
+    /// pinned since came back unpinned *in front of* a pinned tab,
+    /// breaking the pinned-before-unpinned invariant.
+    #[test]
+    fn a_reload_keeps_a_pin_set_since_the_file_was_opened() {
+        let (mut shell, mut ui, _dir, paths) = open_settled(&["a.txt", "b.txt", "c.txt"]);
+        assert!(shell.set_pinned(0, true));
+        assert!(shell.set_pinned(1, true));
+
+        reload_changed(&mut shell, &mut ui, &paths[0]);
+        assert_eq!(
+            tab_order(&shell, &paths),
+            [(0, true), (1, true), (2, false)]
+        );
+    }
+
+    /// And the other way round: the session read at startup pinned the
+    /// file, the user unpinned it since, and the reload pinned it again.
+    #[test]
+    fn a_reload_keeps_an_unpin_made_since_the_file_was_opened() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths: Vec<PathBuf> = ["a.txt", "b.txt"]
+            .iter()
+            .map(|name| {
+                let p = dir.path().join(name);
+                std::fs::write(&p, name).unwrap();
+                p
+            })
+            .collect();
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+        shell.session.tabs.push(codepp_core::session::Tab {
+            path: Some(paths[0].clone()),
+            pinned: true,
+            ..codepp_core::session::Tab::default()
+        });
+        for p in &paths {
+            shell.open_file(p.clone());
+        }
+        drain_until_loads_settle(&mut shell, &mut ui);
+        assert_eq!(
+            tab_order(&shell, &paths),
+            [(0, true), (1, false)],
+            "precondition: the session pinned a.txt"
+        );
+        assert!(shell.set_pinned(0, false));
+        assert!(shell.set_pinned(1, true));
+        assert_eq!(tab_order(&shell, &paths), [(1, true), (0, false)]);
+
+        reload_changed(&mut shell, &mut ui, &paths[0]);
+        assert_eq!(tab_order(&shell, &paths), [(1, true), (0, false)]);
+    }
+
+    /// A pin set while the file was still loading was undone by the
+    /// landing, which applied what the session recorded for the file:
+    /// nothing.
+    #[test]
+    fn a_first_load_keeps_a_pin_set_while_it_was_in_flight() {
+        let (mut shell, mut ui, dir, mut paths) = open_settled(&["a.txt"]);
+        let late = dir.path().join("late.txt");
+        std::fs::write(&late, "late").unwrap();
+        paths.push(late.clone());
+        shell.open_file(late);
+        let loading = shell.active_tab.expect("the open is active");
+        assert!(shell.tabs[loading].pending_load.is_some(), "precondition");
+        assert!(shell.set_pinned(loading, true));
+
+        drain_until_loads_settle(&mut shell, &mut ui);
+        assert_eq!(tab_order(&shell, &paths), [(1, true), (0, false)]);
+    }
+
+    /// A request that changes nothing when it is made still counts, as it
+    /// does for the language: the session pinned the file, the tab reads
+    /// unpinned while it loads, and asking for it unpinned then keeps it
+    /// so.
+    #[test]
+    fn a_first_load_keeps_an_unpin_requested_while_it_was_in_flight() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("a.txt");
+        std::fs::write(&path, "a").unwrap();
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+        shell.session.tabs.push(codepp_core::session::Tab {
+            path: Some(path.clone()),
+            pinned: true,
+            ..codepp_core::session::Tab::default()
+        });
+        shell.open_file(path);
+        assert!(!shell.set_pinned(0, false), "precondition: a no-op");
+
+        drain_until_loads_settle(&mut shell, &mut ui);
+        assert!(!shell.tabs[0].pinned);
+    }
+
+    /// A pin requested while a load ran is kept by that load's landing and
+    /// by no other: the twin of the language test. The request here is
+    /// made during a load onto the `new 1` scratch that fails, and the file
+    /// opened into the scratch afterwards still takes the pin the session
+    /// recorded for it.
+    #[test]
+    fn a_pin_requested_during_a_failed_load_does_not_follow_the_next_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("missing.txt");
+        let good = dir.path().join("good.txt");
+        std::fs::write(&good, "good").unwrap();
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+        shell.session.tabs.push(codepp_core::session::Tab {
+            path: Some(good.clone()),
+            pinned: true,
+            ..codepp_core::session::Tab::default()
+        });
+        shell.new_untitled(&mut ui);
+        shell.open_file_replacing_scratch(missing, true);
+        assert!(!shell.set_pinned(0, false), "precondition: a no-op");
+        drain_until_loads_settle(&mut shell, &mut ui);
+        assert!(
+            shell.tabs.len() == 1 && shell.tabs[0].path.is_none(),
+            "precondition: the load failed and the scratch is back"
+        );
+
+        shell.open_file_replacing_scratch(good.clone(), true);
+        drain_until_loads_settle(&mut shell, &mut ui);
+        assert!(
+            shell.tabs.len() == 1 && shell.tabs[0].path.as_deref() == Some(good.as_path()),
+            "precondition: the file was opened into the scratch"
+        );
+        assert!(shell.tabs[0].pinned);
+    }
+
+    /// Restore two tabs, both still loading, both pinned by the session:
+    /// `p.txt` in front of `o.txt`, with the buffer `active_id` active. Pin
+    /// `o.txt` and clear the pin again while it loads, which moves it to the
+    /// front, then land `p.txt` and `o.txt` in that order; `o.txt`'s landing
+    /// keeps the cleared pin over the session's.
+    /// Returns the strip as `(id, pinned)`, the active buffer's id and
+    /// whether the second landing queued `NPPN_DOCORDERCHANGED`.
+    fn land_pinned_then_unpinned(active_id: i32) -> (Vec<(i32, bool)>, Option<i32>, bool) {
+        fn land(shell: &mut Shell, ui: &mut FakeUi, id: RequestId, path: &Path) {
+            let loaded = codepp_core::file::LoadedFile {
+                id,
+                path: path.to_path_buf(),
+                text: String::new(),
+                encoding: Encoding::Utf8,
+                eol: Eol::Lf,
+                byte_len: 0,
+            };
+            shell.apply_load_result(ui, Ok(loaded), &mut Vec::new());
+        }
+        let strip = |shell: &Shell| -> Vec<(i32, bool)> {
+            shell.tabs.iter().map(|t| (t.id, t.pinned)).collect()
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let (pinned_path, other_path) = (dir.path().join("p.txt"), dir.path().join("o.txt"));
+        std::fs::write(&pinned_path, "p").unwrap();
+        std::fs::write(&other_path, "o").unwrap();
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+        for path in [&pinned_path, &other_path] {
+            shell.session.tabs.push(codepp_core::session::Tab {
+                path: Some(path.clone()),
+                pinned: true,
+                ..codepp_core::session::Tab::default()
+            });
+        }
+        shell.tabs = vec![
+            Tab {
+                id: 1,
+                pending_load: Some(901),
+                ..Tab::default()
+            },
+            Tab {
+                id: 2,
+                pending_load: Some(902),
+                ..Tab::default()
+            },
+        ];
+        shell.active_tab = shell.tabs.iter().position(|t| t.id == active_id);
+        assert!(shell.set_pinned(1, true));
+        assert!(shell.set_pinned(0, false));
+        assert_eq!(
+            strip(&shell),
+            [(2, false), (1, false)],
+            "precondition: the pin moved o.txt to the front"
+        );
+
+        land(&mut shell, &mut ui, 901, &pinned_path);
+        assert_eq!(
+            strip(&shell),
+            [(2, false), (1, true)],
+            "precondition: p.txt landed pinned, behind o.txt still loading"
+        );
+        let _ = shell.take_notifications();
+        land(&mut shell, &mut ui, 902, &other_path);
+        let active = shell
+            .active_tab
+            .and_then(|i| shell.tabs.get(i))
+            .map(|t| t.id);
+        let reordered = shell
+            .take_notifications()
+            .iter()
+            .any(|n| matches!(n, Notification::DocOrderChanged));
+        (strip(&shell), active, reordered)
+    }
+
+    /// Loads land in the order they were requested, but a tab pinned and
+    /// unpinned again while it loads has moved in the strip, ahead of a
+    /// restored pinned tab requested before it. That tab lands first, and
+    /// its repair passes over the other as still loading; the other then
+    /// lands unpinned in front of it — its landing keeps the cleared pin —
+    /// and moves itself behind it. The landings are fed straight to
+    /// `apply_load_result`, so the test sets both the strip and the order
+    /// it depends on, and each tab is active in turn because the move
+    /// shifts the other one.
+    #[test]
+    fn a_tab_that_lands_unpinned_moves_behind_a_pinned_tab_that_landed_first() {
+        for active_id in [1, 2] {
+            let (strip, active, reordered) = land_pinned_then_unpinned(active_id);
+            assert_eq!(strip, [(1, true), (2, false)], "active buffer {active_id}");
+            assert_eq!(
+                active,
+                Some(active_id),
+                "the active index follows its buffer"
+            );
+            assert!(reordered, "the move is announced as a reorder");
+        }
+    }
+
+    /// The other way a loading tab gets ahead of tabs requested before it:
+    /// a drag. Restored tabs read unpinned until they land, so while a
+    /// session restore is still loading the last of them can be dragged to
+    /// the front. The pinned ones then land behind it, in request order,
+    /// and their repair passes over it as still loading; when it lands it
+    /// has to move itself. Real loads, since the order they land in is the
+    /// loader's.
+    #[test]
+    fn a_tab_dragged_ahead_while_loading_lands_behind_the_pinned_tabs() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths: Vec<PathBuf> = ["a.txt", "b.txt", "c.txt"]
+            .iter()
+            .map(|name| {
+                let p = dir.path().join(name);
+                std::fs::write(&p, name).unwrap();
+                p
+            })
+            .collect();
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+        for p in &paths[..2] {
+            shell.session.tabs.push(codepp_core::session::Tab {
+                path: Some(p.clone()),
+                pinned: true,
+                ..codepp_core::session::Tab::default()
+            });
+        }
+        for p in &paths {
+            shell.open_file(p.clone());
+        }
+        assert!(
+            shell.move_tab(2, 0),
+            "precondition: nothing reads pinned while it loads"
+        );
+
+        drain_until_loads_settle(&mut shell, &mut ui);
+        assert_eq!(
+            tab_order(&shell, &paths),
+            [(0, true), (1, true), (2, false)]
+        );
+    }
+
+    /// A pinned file landing behind an unpinned tab that is reloading: a
+    /// reload does not change the reloading tab's pin, so it is settled,
+    /// and the landing moves the pinned tab in front of it. Before, the
+    /// pinned tab stayed behind, and for good once the reload failed, as
+    /// it does here: a failed load repairs nothing. Deterministic, since
+    /// loads land in the order they were requested.
+    #[test]
+    fn a_pinned_tab_landing_behind_a_reloading_tab_moves_in_front() {
+        let (mut shell, mut ui, dir, mut paths) = open_settled(&["u.txt"]);
+        let pinned = dir.path().join("p.txt");
+        std::fs::write(&pinned, "p").unwrap();
+        paths.push(pinned.clone());
+        shell.session.tabs.push(codepp_core::session::Tab {
+            path: Some(pinned.clone()),
+            pinned: true,
+            ..codepp_core::session::Tab::default()
+        });
+        shell.open_file(pinned);
+        // Requested after the open, so it lands after it; the file is
+        // gone, so it fails.
+        std::fs::remove_file(&paths[0]).unwrap();
+        shell.request_reload(paths[0].clone(), ReloadConsent::Unconfirmed);
+        drain_until_loads_settle(&mut shell, &mut ui);
+        assert_eq!(
+            shell
+                .tabs
+                .iter()
+                .find(|t| t.path.as_deref() == Some(paths[0].as_path()))
+                .map(|t| t.text.as_str()),
+            Some("u.txt"),
+            "precondition: the reload failed and the tab kept its text"
+        );
+        assert_eq!(tab_order(&shell, &paths), [(1, true), (0, false)]);
+    }
+
     /// Helper: build a `Shell` with `n` synthetic tabs and a chosen
     /// active index, suitable for `move_tab` unit tests that don't
     /// need any of the loader/file-watcher machinery.
@@ -17101,6 +17909,72 @@ mod tests {
         shell.repair_restored_pin_placement(2); // tab at idx 2 is unpinned
         assert_eq!(shell.active_tab, Some(2));
         assert_eq!(shell.tabs[2].id, 3, "unmoved");
+    }
+
+    /// Every strip of up to five tabs, each settled pinned, settled
+    /// unpinned, on its first load, or reloading pinned or unpinned; every
+    /// settled tab as the one that just landed; every tab active. Whatever
+    /// the repair does:
+    /// * the buffer that was active stays active — a wrong index here
+    ///   points the active tab at a buffer the view does not show, and the
+    ///   next save writes one buffer over another's file;
+    /// * every other tab keeps its order, and the session's active index
+    ///   follows;
+    /// * a reorder is announced exactly when the landed tab moved;
+    /// * the landed tab ends with no settled tab on the wrong side of it.
+    #[test]
+    fn the_landing_repair_keeps_the_active_buffer_and_settles_the_landed_tab() {
+        const STATES: u32 = 5;
+        let tab = |id: i32, state: u32| Tab {
+            id,
+            path: (state != 2).then(|| PathBuf::from(format!("/tmp/t{id}.txt"))),
+            pending_load: (state >= 2).then_some(1),
+            pinned: state == 1 || state == 4,
+            ..Tab::default()
+        };
+        let mut shell = shell_with_synthetic_tabs(0, None);
+        for n in 1..=5usize {
+            for code in 0..STATES.pow(n as u32) {
+                let states: Vec<u32> = (0..n as u32)
+                    .map(|i| code / STATES.pow(i) % STATES)
+                    .collect();
+                for landed in (0..n).filter(|&i| states[i] < 2) {
+                    for active in 0..n {
+                        shell.tabs = (0..n).map(|i| tab(i as i32 + 1, states[i])).collect();
+                        shell.active_tab = Some(active);
+                        shell.session.active = Some(active);
+                        let _ = shell.take_notifications();
+                        let before: Vec<i32> = shell.tabs.iter().map(|t| t.id).collect();
+                        let landed_id = before[landed];
+                        let case = format!("states {states:?}, landed {landed}, active {active}");
+
+                        shell.repair_restored_pin_placement(landed);
+
+                        let after: Vec<i32> = shell.tabs.iter().map(|t| t.id).collect();
+                        assert_eq!(shell.active().map(|t| t.id), Some(before[active]), "{case}");
+                        assert_eq!(shell.session.active, shell.active_tab, "{case}");
+                        let others = |ids: &[i32]| -> Vec<i32> {
+                            ids.iter().copied().filter(|&id| id != landed_id).collect()
+                        };
+                        assert_eq!(others(&after), others(&before), "{case}");
+                        let moved = after != before;
+                        let announced = shell
+                            .take_notifications()
+                            .iter()
+                            .any(|n| matches!(n, Notification::DocOrderChanged));
+                        assert_eq!(announced, moved, "{case}");
+                        let at = after.iter().position(|&id| id == landed_id).unwrap();
+                        let (front, back) = shell.tabs.split_at(at);
+                        let wrong_side = if shell.tabs[at].pinned {
+                            front.iter().any(|t| !t.pinned && pin_is_settled(t))
+                        } else {
+                            back[1..].iter().any(|t| t.pinned && pin_is_settled(t))
+                        };
+                        assert!(!wrong_side, "{case}: landed at {at} in {after:?}");
+                    }
+                }
+            }
+        }
     }
 
     #[test]
