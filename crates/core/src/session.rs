@@ -509,6 +509,37 @@ fn is_default_view(v: &ViewSettings) -> bool {
     *v == ViewSettings::default()
 }
 
+/// Hard cap on the size of a session file [`Session::read_from`] will read,
+/// the same as the Notepad++ session reader's. It bounds what a plugin can
+/// make the host read on the UI thread by naming a file (`NPPM_LOADSESSION`,
+/// `NPPM_GETNBSESSIONFILES`, `NPPM_GETSESSIONFILES`). It bounds the read, not
+/// the parse: 8 MiB of empty records, crafted, takes about 0.9 s and 230 MB
+/// to parse (measured, release build).
+///
+/// A `session.xml` over it is refused like a corrupt one, and the editor
+/// starts with an empty session, so the cap sits well above what Code++
+/// writes: a record per open tab, at most 1024, each a path and a few
+/// attributes. Even with every path as long as Linux opens, 4096 bytes, that
+/// comes to under 5 MiB. Only names Code++ does not bound, a User Defined
+/// Language's or a rename label, could make a session that large, and
+/// [`Session::save_to_xml`] refuses to write one, so Code++ never writes a
+/// `session.xml` it would refuse.
+pub const MAX_SESSION_FILE_BYTES: u64 = 8 * 1024 * 1024;
+
+/// At most this many characters of a parse error are shown.
+const PARSE_ERROR_MAX_CHARS: usize = 300;
+
+/// What a parse error says, cut to [`PARSE_ERROR_MAX_CHARS`]: quick-xml
+/// quotes the text it could not make sense of, which can be the whole file,
+/// and the message ends up in a dialog.
+pub(crate) fn parse_error_text(e: &quick_xml::DeError) -> String {
+    let text = e.to_string();
+    match text.char_indices().nth(PARSE_ERROR_MAX_CHARS) {
+        Some((cut, _)) => format!("{}…", &text[..cut]),
+        None => text,
+    }
+}
+
 /// Errors from reading or writing `session.xml`.
 #[derive(Debug)]
 pub enum SessionError {
@@ -520,14 +551,23 @@ pub enum SessionError {
     /// Serialization to XML failed (extremely rare — usually only on
     /// non-UTF-8 content in attributes, which we don't produce).
     Serialize(quick_xml::SeError),
+    /// The file exceeds [`MAX_SESSION_FILE_BYTES`] and was refused before
+    /// being parsed.
+    TooLarge {
+        /// The byte cap that was exceeded.
+        limit: u64,
+    },
 }
 
 impl std::fmt::Display for SessionError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             SessionError::Io(e) => write!(f, "session I/O error: {e}"),
-            SessionError::Parse(e) => write!(f, "session parse error: {e}"),
+            SessionError::Parse(e) => write!(f, "session parse error: {}", parse_error_text(e)),
             SessionError::Serialize(e) => write!(f, "session serialize error: {e}"),
+            SessionError::TooLarge { limit } => {
+                write!(f, "session file exceeds the {limit}-byte size limit")
+            }
         }
     }
 }
@@ -547,25 +587,37 @@ impl Session {
         Session::default()
     }
 
-    /// Read `session.xml` from `path`. A missing file is **not** an
-    /// error — it returns an empty `Session`, matching the "first
-    /// launch, nothing to restore" UX.
+    /// Read a session in Code++'s own format from `reader`: `session.xml`,
+    /// or a session file a plugin names. Opening the file is the caller's.
+    /// The shell opens it with `codepp_platform::open_regular_file`, because
+    /// a plain `File::open` of a named pipe waits for a writer. It reads a
+    /// missing `session.xml` as an empty session, as on a first launch. An
+    /// empty or blank file is an empty session too.
     ///
     /// # Errors
     ///
-    /// Returns `SessionError::Io` on any read failure other than
-    /// "not found"; returns `SessionError::Parse` when the bytes
-    /// are present but don't deserialise into the
-    /// `Session`/`Tab` shape (e.g. corrupt or hand-edited
-    /// session.xml).
-    pub fn load_from_xml(path: &Path) -> Result<Self, SessionError> {
-        let contents = match std::fs::read_to_string(path) {
-            Ok(s) => s,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                return Ok(Session::default());
-            }
-            Err(e) => return Err(SessionError::Io(e)),
-        };
+    /// Returns `SessionError::Io` on a read failure or on bytes that are
+    /// not UTF-8, `SessionError::TooLarge` past [`MAX_SESSION_FILE_BYTES`],
+    /// and `SessionError::Parse` when the bytes don't deserialise into the
+    /// `Session`/`Tab` shape (a corrupt or hand-edited file).
+    pub fn read_from(reader: impl std::io::Read) -> Result<Self, SessionError> {
+        Self::read_within(reader, MAX_SESSION_FILE_BYTES)
+    }
+
+    /// [`Self::read_from`] with the cap passed in, so that the tests reach
+    /// its boundary with a few bytes.
+    fn read_within(reader: impl std::io::Read, cap: u64) -> Result<Self, SessionError> {
+        use std::io::Read;
+        // Bounded by the read itself rather than by a length looked up
+        // first: a file can grow between the two.
+        let mut bytes = Vec::new();
+        reader.take(cap.saturating_add(1)).read_to_end(&mut bytes)?;
+        if bytes.len() as u64 > cap {
+            return Err(SessionError::TooLarge { limit: cap });
+        }
+        let contents = String::from_utf8(bytes).map_err(|e| {
+            SessionError::Io(std::io::Error::new(std::io::ErrorKind::InvalidData, e))
+        })?;
         if contents.trim().is_empty() {
             return Ok(Session::default());
         }
@@ -593,12 +645,24 @@ impl Session {
     /// # Errors
     ///
     /// Returns `SessionError::Serialize` if quick-xml fails to
-    /// emit the document; `SessionError::Io` on parent-directory
-    /// creation, temp-file creation/write/sync, or the final
-    /// atomic rename failing.
+    /// emit the document; `SessionError::TooLarge`, writing nothing, for
+    /// a document over [`MAX_SESSION_FILE_BYTES`]; `SessionError::Io` on
+    /// parent-directory creation, temp-file creation/write/sync, or the
+    /// final atomic rename failing.
     pub fn save_to_xml(&self, path: &Path) -> Result<(), SessionError> {
+        self.save_within(path, MAX_SESSION_FILE_BYTES)
+    }
+
+    /// [`Self::save_to_xml`] with the cap passed in, so that the tests reach
+    /// its boundary with a small session.
+    fn save_within(&self, path: &Path, cap: u64) -> Result<(), SessionError> {
         let mut xml = String::from("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
         quick_xml::se::to_writer(&mut xml, self).map_err(SessionError::Serialize)?;
+        // A session the reader would refuse is not written, and the file on
+        // disk stays as it was ([`MAX_SESSION_FILE_BYTES`]).
+        if xml.len() as u64 > cap {
+            return Err(SessionError::TooLarge { limit: cap });
+        }
 
         // Ensure the parent directory exists (first-run case where
         // %APPDATA%\Code++ has not been created yet). The
@@ -625,6 +689,12 @@ impl Session {
 mod tests {
     use super::*;
 
+    /// Open `path` and read the session in it, as the shell does with its
+    /// own opener.
+    fn read_file(path: &Path) -> Result<Session, SessionError> {
+        Session::read_from(std::fs::File::open(path)?)
+    }
+
     fn temp_session_path() -> (tempfile::TempDir, PathBuf) {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("session.xml");
@@ -632,20 +702,11 @@ mod tests {
     }
 
     #[test]
-    fn load_missing_file_returns_empty_session() {
-        let (_dir, path) = temp_session_path();
-        // File doesn't exist yet.
-        let session = Session::load_from_xml(&path).unwrap();
-        assert!(session.tabs.is_empty());
-        assert_eq!(session.active, None);
-    }
-
-    #[test]
     fn round_trip_empty_session() {
         let (_dir, path) = temp_session_path();
         let session = Session::default();
         session.save_to_xml(&path).unwrap();
-        let loaded = Session::load_from_xml(&path).unwrap();
+        let loaded = read_file(&path).unwrap();
         assert_eq!(session, loaded);
     }
 
@@ -688,7 +749,7 @@ mod tests {
             ],
         };
         session.save_to_xml(&path).unwrap();
-        let loaded = Session::load_from_xml(&path).unwrap();
+        let loaded = read_file(&path).unwrap();
         assert_eq!(session, loaded);
     }
 
@@ -717,7 +778,7 @@ mod tests {
             }],
         };
         session.save_to_xml(&path).unwrap();
-        let loaded = Session::load_from_xml(&path).unwrap();
+        let loaded = read_file(&path).unwrap();
         assert_eq!(session, loaded);
     }
 
@@ -749,7 +810,7 @@ mod tests {
             }],
         };
         session.save_to_xml(&path).unwrap();
-        let loaded = Session::load_from_xml(&path).unwrap();
+        let loaded = read_file(&path).unwrap();
         assert_eq!(session, loaded);
     }
 
@@ -808,7 +869,7 @@ mod tests {
             ],
         };
         session.save_to_xml(&path).unwrap();
-        let loaded = Session::load_from_xml(&path).unwrap();
+        let loaded = read_file(&path).unwrap();
         assert_eq!(session, loaded);
     }
 
@@ -842,7 +903,7 @@ mod tests {
             }],
         };
         session.save_to_xml(&path).unwrap();
-        let loaded = Session::load_from_xml(&path).unwrap();
+        let loaded = read_file(&path).unwrap();
         assert_eq!(session, loaded);
         assert_eq!(loaded.tabs[0].custom_name.as_deref(), Some("release notes"));
     }
@@ -881,7 +942,7 @@ mod tests {
             }],
         };
         session.save_to_xml(&path).unwrap();
-        let loaded = Session::load_from_xml(&path).unwrap();
+        let loaded = read_file(&path).unwrap();
         assert_eq!(session, loaded);
         assert_eq!(loaded.tabs[0].lang, Some(81));
     }
@@ -914,7 +975,7 @@ mod tests {
             }],
         };
         session.save_to_xml(&path).unwrap();
-        let loaded = Session::load_from_xml(&path).unwrap();
+        let loaded = read_file(&path).unwrap();
         assert_eq!(session, loaded);
         assert!(loaded.tabs[0].pinned, "pinned=true must round-trip");
     }
@@ -953,7 +1014,7 @@ mod tests {
             !xml.contains("pinned"),
             "pinned=false must be elided from the wire; got:\n{xml}"
         );
-        let loaded = Session::load_from_xml(&path).unwrap();
+        let loaded = read_file(&path).unwrap();
         assert!(!loaded.tabs[0].pinned);
     }
 
@@ -966,7 +1027,7 @@ mod tests {
         let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
 <session active="0"><tab path="hello.txt" cursor="0" encoding="UTF-8" eol="LF"/></session>"#;
         std::fs::write(&path, xml).unwrap();
-        let loaded = Session::load_from_xml(&path).unwrap();
+        let loaded = read_file(&path).unwrap();
         assert_eq!(loaded.tabs.len(), 1);
         assert!(
             !loaded.tabs[0].pinned,
@@ -983,7 +1044,7 @@ mod tests {
         let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
 <session active="0"><tab path="hello.txt" cursor="0" encoding="UTF-8" eol="LF"/></session>"#;
         std::fs::write(&path, xml).unwrap();
-        let loaded = Session::load_from_xml(&path).unwrap();
+        let loaded = read_file(&path).unwrap();
         assert_eq!(loaded.tabs.len(), 1);
         assert_eq!(loaded.tabs[0].lang, None);
         assert_eq!(loaded.tabs[0].udl, None);
@@ -1014,7 +1075,7 @@ mod tests {
         assert!(raw.contains(UDL_ATTR), "{raw}");
         assert!(!raw.contains("lang="), "a UDL tab writes no @lang: {raw}");
 
-        let loaded = Session::load_from_xml(&path).unwrap();
+        let loaded = read_file(&path).unwrap();
         assert_eq!(
             loaded.tabs[0].udl.as_deref(),
             Some("Markdown (preinstalled)")
@@ -1032,7 +1093,7 @@ mod tests {
         let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
 <session active="0"><tab path="hello.txt" cursor="0" encoding="UTF-8" eol="LF"/></session>"#;
         std::fs::write(&path, xml).unwrap();
-        let loaded = Session::load_from_xml(&path).unwrap();
+        let loaded = read_file(&path).unwrap();
         assert_eq!(loaded.tabs.len(), 1);
         assert_eq!(
             loaded.tabs[0].path.as_deref(),
@@ -1064,7 +1125,7 @@ mod tests {
             tabs: vec![],
         };
         session.save_to_xml(&path).unwrap();
-        let loaded = Session::load_from_xml(&path).unwrap();
+        let loaded = read_file(&path).unwrap();
         assert_eq!(session, loaded);
     }
 
@@ -1088,7 +1149,7 @@ mod tests {
             tabs: vec![],
         };
         session.save_to_xml(&path).unwrap();
-        let loaded = Session::load_from_xml(&path).unwrap();
+        let loaded = read_file(&path).unwrap();
         assert_eq!(session, loaded);
     }
 
@@ -1103,7 +1164,7 @@ mod tests {
         let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
 <session active="0"><window width="1024" height="768" maximized="true"/></session>"#;
         std::fs::write(&path, xml).unwrap();
-        let loaded = Session::load_from_xml(&path).unwrap();
+        let loaded = read_file(&path).unwrap();
         let g = loaded.window.expect("window element should parse");
         assert_eq!(g.width, Some(1024));
         assert_eq!(g.height, Some(768));
@@ -1122,7 +1183,7 @@ mod tests {
         let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
 <session active="0"><tab path="hello.txt" cursor="0" encoding="UTF-8" eol="LF"/></session>"#;
         std::fs::write(&path, xml).unwrap();
-        let loaded = Session::load_from_xml(&path).unwrap();
+        let loaded = read_file(&path).unwrap();
         assert_eq!(loaded.active, Some(0));
         assert_eq!(loaded.window, None);
         assert_eq!(loaded.tabs.len(), 1);
@@ -1174,7 +1235,7 @@ mod tests {
             tabs: vec![],
         };
         session.save_to_xml(&path).unwrap();
-        let loaded = Session::load_from_xml(&path).unwrap();
+        let loaded = read_file(&path).unwrap();
         assert_eq!(session, loaded);
         let ws = loaded.workspace.expect("workspace should round-trip");
         assert_eq!(
@@ -1213,7 +1274,7 @@ mod tests {
             !xml.contains("visible"),
             "visible=false must be elided from the wire; got:\n{xml}"
         );
-        let loaded = Session::load_from_xml(&path).unwrap();
+        let loaded = read_file(&path).unwrap();
         assert!(!loaded.workspace.unwrap().visible);
     }
 
@@ -1244,7 +1305,7 @@ mod tests {
             !xml.contains(" root="),
             "root=None must be elided from the wire; got:\n{xml}"
         );
-        let loaded = Session::load_from_xml(&path).unwrap();
+        let loaded = read_file(&path).unwrap();
         assert_eq!(loaded.workspace.unwrap().root, None);
     }
 
@@ -1258,7 +1319,7 @@ mod tests {
         let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
 <session active="0"><tab path="hello.txt" cursor="0" encoding="UTF-8" eol="LF"/></session>"#;
         std::fs::write(&path, xml).unwrap();
-        let loaded = Session::load_from_xml(&path).unwrap();
+        let loaded = read_file(&path).unwrap();
         assert_eq!(loaded.workspace, None);
         // Tabs still parse cleanly — the added field doesn't
         // disturb any pre-existing round-trip.
@@ -1303,7 +1364,7 @@ mod tests {
     fn malformed_xml_returns_parse_error() {
         let (_dir, path) = temp_session_path();
         std::fs::write(&path, b"<not-a-session-file>").unwrap();
-        let err = Session::load_from_xml(&path).unwrap_err();
+        let err = read_file(&path).unwrap_err();
         assert!(matches!(err, SessionError::Parse(_)));
     }
 
@@ -1311,8 +1372,115 @@ mod tests {
     fn empty_file_treated_as_empty_session() {
         let (_dir, path) = temp_session_path();
         std::fs::write(&path, b"").unwrap();
-        let session = Session::load_from_xml(&path).unwrap();
+        let session = read_file(&path).unwrap();
         assert!(session.tabs.is_empty());
+    }
+
+    /// A file over the cap is refused before it is parsed, and one of
+    /// exactly the cap is read: blank, it is an empty session.
+    #[test]
+    fn a_file_over_the_cap_is_refused_and_one_at_it_is_read() {
+        use std::io::Read;
+        let blank = |len| Session::read_within(std::io::repeat(b' ').take(len), 4);
+        let err = blank(5).unwrap_err();
+        assert!(
+            matches!(err, SessionError::TooLarge { limit: 4 }),
+            "{err:?}"
+        );
+        assert_eq!(
+            err.to_string(),
+            "session file exceeds the 4-byte size limit"
+        );
+        assert!(blank(4).unwrap().tabs.is_empty());
+    }
+
+    /// [`Session::read_from`]'s cap is [`MAX_SESSION_FILE_BYTES`].
+    #[test]
+    fn read_from_refuses_a_file_one_byte_over_max_session_file_bytes() {
+        use std::io::Read;
+        let err =
+            Session::read_from(std::io::repeat(b' ').take(MAX_SESSION_FILE_BYTES + 1)).unwrap_err();
+        assert!(
+            matches!(err, SessionError::TooLarge { limit } if limit == MAX_SESSION_FILE_BYTES),
+            "{err:?}"
+        );
+    }
+
+    /// A session the reader would refuse is not written: the file on disk
+    /// stays as it was. One of exactly the cap is written, and read back.
+    #[test]
+    fn a_session_over_the_cap_is_not_written() {
+        let (_dir, path) = temp_session_path();
+        std::fs::write(&path, "before").unwrap();
+        let session = Session {
+            tabs: vec![Tab {
+                path: Some(PathBuf::from("/w/a.rs")),
+                ..Tab::default()
+            }],
+            ..Session::default()
+        };
+        let mut xml = String::from("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
+        quick_xml::se::to_writer(&mut xml, &session).unwrap();
+        let len = xml.len() as u64;
+        let err = session.save_within(&path, len - 1).unwrap_err();
+        assert!(
+            matches!(err, SessionError::TooLarge { limit } if limit == len - 1),
+            "{err:?}"
+        );
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "before");
+        session.save_within(&path, len).unwrap();
+        assert_eq!(
+            Session::read_within(std::fs::File::open(&path).unwrap(), len).unwrap(),
+            session
+        );
+    }
+
+    /// [`Session::save_to_xml`]'s cap is [`MAX_SESSION_FILE_BYTES`].
+    #[test]
+    fn save_to_xml_refuses_a_session_over_max_session_file_bytes() {
+        let (_dir, path) = temp_session_path();
+        let session = Session {
+            tabs: vec![Tab {
+                path: Some(PathBuf::from(
+                    "a".repeat(usize::try_from(MAX_SESSION_FILE_BYTES).unwrap()),
+                )),
+                ..Tab::default()
+            }],
+            ..Session::default()
+        };
+        let err = session.save_to_xml(&path).unwrap_err();
+        assert!(
+            matches!(err, SessionError::TooLarge { limit } if limit == MAX_SESSION_FILE_BYTES),
+            "{err:?}"
+        );
+        assert!(!path.exists());
+    }
+
+    /// A parse error is cut short when shown: quick-xml quotes the text it
+    /// could not make sense of, which can be the whole file.
+    #[test]
+    fn a_parse_error_is_cut_short_when_shown() {
+        let text = "x".repeat(10_000);
+        let err = Session::read_from(text.as_bytes()).unwrap_err();
+        assert!(matches!(err, SessionError::Parse(_)), "{err:?}");
+        let shown = err.to_string();
+        assert!(
+            shown.chars().count() < 400,
+            "{} characters",
+            shown.chars().count()
+        );
+        assert!(shown.ends_with('…'), "{shown}");
+    }
+
+    /// Bytes that are not UTF-8 are an I/O error, as `read_to_string`
+    /// reports them, rather than decoded lossily.
+    #[test]
+    fn bytes_that_are_not_utf8_are_an_error() {
+        let err = Session::read_from(&b"<session>\xff</session>"[..]).unwrap_err();
+        assert!(
+            matches!(&err, SessionError::Io(e) if e.kind() == std::io::ErrorKind::InvalidData),
+            "{err:?}"
+        );
     }
 
     #[test]
@@ -1365,7 +1533,7 @@ mod tests {
             ..Session::default()
         };
         session.save_to_xml(&path).unwrap();
-        let loaded = Session::load_from_xml(&path).unwrap();
+        let loaded = read_file(&path).unwrap();
         assert_eq!(session, loaded);
         assert!(loaded.view.indent_guide);
         assert!(loaded.view.word_wrap);
@@ -1388,7 +1556,7 @@ mod tests {
             ..Session::default()
         };
         session.save_to_xml(&path).unwrap();
-        let loaded = Session::load_from_xml(&path).unwrap();
+        let loaded = read_file(&path).unwrap();
         assert!(loaded.view.word_wrap);
         assert!(!loaded.view.indent_guide);
         assert!(!loaded.view.show_whitespace);
@@ -1414,7 +1582,7 @@ mod tests {
             !text.contains("indent_guide"),
             "indent_guide attribute must be elided when default: {text}"
         );
-        let loaded = Session::load_from_xml(&path).unwrap();
+        let loaded = read_file(&path).unwrap();
         assert_eq!(loaded.view, ViewSettings::default());
     }
 
@@ -1480,7 +1648,7 @@ mod tests {
             ..Session::default()
         };
         session.save_to_xml(&path).unwrap();
-        let loaded = Session::load_from_xml(&path).unwrap();
+        let loaded = read_file(&path).unwrap();
         assert_eq!(session, loaded);
         let dock = loaded.dock.expect("dock should round-trip");
         assert_eq!(dock.groups.len(), 2);
@@ -1506,7 +1674,7 @@ mod tests {
             "<dock> element should be elided when None: {text}"
         );
         std::fs::write(&path, "<session><tab path=\"C:/a.txt\"/></session>").unwrap();
-        let loaded = Session::load_from_xml(&path).unwrap();
+        let loaded = read_file(&path).unwrap();
         assert_eq!(loaded.dock, None);
     }
 
@@ -1523,7 +1691,7 @@ mod tests {
             ..Session::default()
         };
         session.save_to_xml(&path).unwrap();
-        let loaded = Session::load_from_xml(&path).unwrap();
+        let loaded = read_file(&path).unwrap();
         assert_eq!(session, loaded);
         let dm = loaded.docmap.expect("docmap should round-trip");
         assert!(dm.visible);
@@ -1549,7 +1717,7 @@ mod tests {
             !xml.contains("visible"),
             "docmap visible=false must be elided; got:\n{xml}"
         );
-        let loaded = Session::load_from_xml(&path).unwrap();
+        let loaded = read_file(&path).unwrap();
         assert!(!loaded.docmap.unwrap().visible);
     }
 
@@ -1577,7 +1745,7 @@ mod tests {
         let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
 <session active="0"><tab path="hello.txt" cursor="0" encoding="UTF-8" eol="LF"/></session>"#;
         std::fs::write(&path, xml).unwrap();
-        let loaded = Session::load_from_xml(&path).unwrap();
+        let loaded = read_file(&path).unwrap();
         assert_eq!(loaded.docmap, None);
         assert_eq!(loaded.tabs.len(), 1);
     }
@@ -1592,7 +1760,7 @@ mod tests {
         let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
 <session active="0"><tab path="hello.txt" cursor="0" encoding="UTF-8" eol="LF"/></session>"#;
         std::fs::write(&path, xml).unwrap();
-        let loaded = Session::load_from_xml(&path).unwrap();
+        let loaded = read_file(&path).unwrap();
         assert_eq!(loaded.view, ViewSettings::default());
         assert_eq!(loaded.tabs.len(), 1);
     }

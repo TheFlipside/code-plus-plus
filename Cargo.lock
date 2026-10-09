@@ -266,6 +266,8 @@ dependencies = [
 name = "codepp-udl"
 version = "0.1.0"
 dependencies = [
+ "codepp-platform",
+ "libc",
  "quick-xml",
  "serde",
  "tempfile",

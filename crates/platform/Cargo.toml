@@ -32,12 +32,15 @@ windows = { version = "0.62", features = [
     # for HMAC-SHA256 — Windows' own, so no crypto crate is added.
     "Win32_Security",
     "Win32_Security_Cryptography",
+    # `fs::open_regular_file`: `GetFileType`, to refuse a pipe or a device.
+    "Win32_Storage_FileSystem",
     "Win32_System_LibraryLoader",
     "Win32_System_SystemInformation",
 ] }
 
 # The dlopen/dlsym/dlclose arm of `dynlib` on Unix (Linux and macOS
-# plugin loading), and `flock` / `geteuid` / `getrandom` (Linux) /
+# plugin loading), `O_NONBLOCK` / `O_NOCTTY` / `fcntl` for
+# `fs::open_regular_file`, and `flock` / `geteuid` / `getrandom` (Linux) /
 # `getentropy` (macOS) for `panel_key`'s Unix backend. macOS's HMAC and
 # ACL calls are in libSystem too, declared where they are used, so no
 # crate is added for them.

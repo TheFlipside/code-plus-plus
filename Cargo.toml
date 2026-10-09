@@ -71,9 +71,11 @@ gtk = "0.18"
 # same version `gtk` 0.18 already pulls in, so nothing new is compiled.
 # MIT.
 glib-sys = "0.18"
-# Only for `O_NOFOLLOW` / `O_NONBLOCK` in the find-in-files worker's
-# open path, and `mkfifo` in its tests; not a general-purpose escape
-# hatch. MIT OR Apache-2.0.
+# Unix calls the standard library does not offer: `dlopen` for plugin
+# loading, the open flags and `fcntl` that open only a regular file
+# without waiting (`codepp-platform`'s `fs`, the find-in-files worker),
+# the panel key's `flock` and entropy calls, and `mkfifo` in tests. Not
+# a general-purpose escape hatch. MIT OR Apache-2.0.
 libc = "0.2"
 notify = "8"
 # Objective-C runtime bindings for `ui_cocoa`. `objc2` is the successor

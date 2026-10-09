@@ -242,6 +242,11 @@ hides a passing test's output, so a skip there would drop the coverage
 while the run stayed green — the trap §2.6 describes for the Windows
 symlink tests.
 
+The platform tests also open a pseudo-terminal (`/dev/ptmx`, with
+devpts mounted), to check that opening a terminal does not make it the
+controlling one. A container that lacks either fails that test
+rather than skipping it.
+
 ---
 
 ## 4. macOS

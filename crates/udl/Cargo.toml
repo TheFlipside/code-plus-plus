@@ -15,6 +15,9 @@ workspace = true
 name = "codepp_udl"
 
 [dependencies]
+# `open_regular_file`, so a named pipe or a device among the UDLs is
+# refused rather than waited on.
+codepp-platform = { workspace = true }
 quick-xml = { workspace = true }
 serde     = { workspace = true }
 tracing   = { workspace = true }
@@ -24,3 +27,8 @@ tracing   = { workspace = true }
 # with fixture UDL files. Workspace-shared to inherit the common
 # version pin.
 tempfile = { workspace = true }
+
+# `mkfifo` and `O_NONBLOCK` for the test that a named pipe among the UDLs
+# is skipped rather than waited on.
+[target.'cfg(unix)'.dev-dependencies]
+libc = { workspace = true }

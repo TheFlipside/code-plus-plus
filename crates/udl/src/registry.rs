@@ -488,6 +488,55 @@ mod tests {
         assert_eq!(reg.entries()[0].definition.name, "Markdown (preinstalled)");
     }
 
+    /// A named pipe named like a UDL is skipped at once, and the UDL beside
+    /// it loads. The scan runs at startup, which a pipe it opened with a
+    /// plain open would hold until something wrote to it. Should the scan
+    /// wait regardless, a writer arrives after five seconds, so the test
+    /// fails rather than hangs.
+    #[cfg(unix)]
+    #[test]
+    fn a_named_pipe_among_the_udls_is_skipped_at_once() {
+        use std::os::unix::ffi::OsStrExt;
+        use std::os::unix::fs::OpenOptionsExt;
+        let tmp = tempfile::tempdir().expect("tempdir must succeed");
+        let markdown = std::fs::read_to_string(markdown_fixture_path())
+            .expect("markdown fixture must be readable");
+        std::fs::write(tmp.path().join("markdown._preinstalled.udl.xml"), &markdown)
+            .expect("write UDL");
+        let pipe = tmp.path().join("pipe.xml");
+        let c = std::ffi::CString::new(pipe.as_os_str().as_bytes()).unwrap();
+        // SAFETY: `c` is a valid NUL-terminated path in a folder this test
+        // owns; `mkfifo` has no other precondition.
+        assert_eq!(unsafe { libc::mkfifo(c.as_ptr(), 0o600) }, 0);
+        let done = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let release = {
+            let (pipe, done) = (pipe.clone(), done.clone());
+            std::thread::spawn(move || {
+                let start = std::time::Instant::now();
+                while !done.load(std::sync::atomic::Ordering::Relaxed) {
+                    if start.elapsed() >= std::time::Duration::from_secs(5) {
+                        let _ = std::fs::OpenOptions::new()
+                            .write(true)
+                            .custom_flags(libc::O_NONBLOCK)
+                            .open(&pipe);
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(20));
+                }
+            })
+        };
+        let started = std::time::Instant::now();
+        let reg = UdlRegistry::scan_dir(tmp.path());
+        let took = started.elapsed();
+        done.store(true, std::sync::atomic::Ordering::Relaxed);
+        release.join().unwrap();
+        assert!(
+            took < std::time::Duration::from_secs(4),
+            "the scan waited on the pipe"
+        );
+        assert_eq!(reg.entries().len(), 1);
+        assert_eq!(reg.entries()[0].definition.name, "Markdown (preinstalled)");
+    }
+
     #[test]
     fn scans_plain_xml_suffix_without_udl_double_suffix() {
         // Regression pin: community UDLs from

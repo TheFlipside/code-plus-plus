@@ -2426,7 +2426,8 @@ impl Shell {
         // Loader: forward results into a Shell-owned channel so we can
         // wake the UI thread on each result without touching the
         // existing Loader API.
-        let (loader, load_rx_inner, loader_shutdown) = Loader::spawn();
+        let (loader, load_rx_inner, loader_shutdown) =
+            Loader::spawn(codepp_platform::open_regular_file);
         let (load_tx_outer, load_rx_outer) = unbounded::<LoadResult>();
         spawn_forwarder(load_rx_inner, load_tx_outer, wake.clone(), "load-forwarder");
 
@@ -7273,7 +7274,14 @@ impl Shell {
         use codepp_core::npp_session::{
             is_non_local_windows_path, lang_type_from_npp_name, NppSessionDoc,
         };
-        let doc = NppSessionDoc::load_from_xml(path)?;
+        // Opened so that a named pipe or a device the user picks is refused
+        // rather than waited on: this runs on the UI thread.
+        let file = codepp_platform::open_regular_file(path)
+            .map_err(codepp_core::npp_session::NppSessionError::Io)?
+            .ok_or_else(|| {
+                codepp_core::npp_session::NppSessionError::Io(codepp_platform::not_a_regular_file())
+            })?;
+        let doc = NppSessionDoc::read_from(file)?;
 
         // Anchor the recorded active tab to its PATH before filtering shifts
         // indices; resolved back to a live tab id after the opens.
@@ -7619,13 +7627,19 @@ impl Shell {
     /// report the saved active index.
     ///
     /// Returns an empty Vec when the file is missing — first-run
-    /// case, never an error. A parse failure also returns empty,
-    /// with a warn-level log so a corrupted file is observable.
+    /// case, never an error. A file that cannot be read (not a
+    /// regular file, over its size cap, or not a session) also
+    /// returns empty, with a warn-level log so it is observable.
     pub fn load_session_entries(&mut self) -> Vec<SessionRestoreEntry> {
         let Some(path) = codepp_platform::session_xml_path() else {
             return Vec::new();
         };
-        let mut session = match Session::load_from_xml(&path) {
+        self.load_session_entries_from(&path)
+    }
+
+    /// [`Self::load_session_entries`] for the session file at `path`.
+    fn load_session_entries_from(&mut self, path: &Path) -> Vec<SessionRestoreEntry> {
+        let mut session = match read_session_file(path) {
             Ok(s) => s,
             Err(e) => {
                 tracing::warn!(path = ?path, error = ?e, "session.xml load failed; starting clean");
@@ -9815,7 +9829,7 @@ impl<U: UiPlatform> HostServices for HostBridge<'_, U> {
         // and `WindowGeometry` are ignored: those describe the
         // *recording tool's* state, not state plugins are asking
         // Code++ to adopt.
-        let session = match codepp_core::session::Session::load_from_xml(&path) {
+        let session = match read_session_file(&path) {
             Ok(s) => s,
             Err(e) => {
                 tracing::warn!(error = ?e, path = ?path,
@@ -9852,7 +9866,7 @@ impl<U: UiPlatform> HostServices for HostBridge<'_, U> {
     }
 
     fn read_session_file_paths(&self, path: PathBuf) -> Option<Vec<PathBuf>> {
-        let session = codepp_core::session::Session::load_from_xml(&path)
+        let session = read_session_file(&path)
             .map_err(|e| {
                 tracing::warn!(error = ?e, path = ?path,
                     "NPPM_GETSESSIONFILES: failed to read session file");
@@ -9904,6 +9918,23 @@ impl<U: UiPlatform> HostServices for HostBridge<'_, U> {
             suggested_name: sanitize_str_for_display(&suggested_name),
             kind: ExportFileKind::from_wire(kind),
         });
+    }
+}
+
+/// Read a session file in Code++'s own format: `session.xml`, or a session
+/// file a plugin names (`NPPM_LOADSESSION`, `NPPM_GETSESSIONFILES`). A
+/// missing file is an empty session, as on a first launch. Only a regular
+/// file is read, and only up to
+/// [`MAX_SESSION_FILE_BYTES`](codepp_core::session::MAX_SESSION_FILE_BYTES):
+/// these run on the UI thread, and a plugin can name any path, which a
+/// named pipe or a huge file would otherwise hold.
+fn read_session_file(path: &Path) -> Result<Session, codepp_core::session::SessionError> {
+    use codepp_core::session::SessionError;
+    match codepp_platform::open_regular_file(path) {
+        Ok(Some(file)) => Session::read_from(file),
+        Ok(None) => Err(SessionError::Io(codepp_platform::not_a_regular_file())),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Session::default()),
+        Err(e) => Err(SessionError::Io(e)),
     }
 }
 
@@ -15041,7 +15072,7 @@ mod tests {
         };
         original.save_to_xml(&xml_path).unwrap();
 
-        let parsed = CoreSession::load_from_xml(&xml_path).unwrap();
+        let parsed = read_session_file(&xml_path).unwrap();
         assert_eq!(parsed.active, Some(1));
         assert_eq!(parsed.tabs.len(), 2);
         assert_eq!(parsed.tabs[0].path, Some(PathBuf::from("/tmp/first.txt")));
@@ -19044,7 +19075,9 @@ mod tests {
         };
         shell.save_npp_session(&path, Some(caret)).unwrap();
 
-        let doc = codepp_core::npp_session::NppSessionDoc::load_from_xml(&path).unwrap();
+        let doc =
+            codepp_core::npp_session::NppSessionDoc::read_from(std::fs::File::open(&path).unwrap())
+                .unwrap();
         let files = &doc.session.main_view.files;
         assert_eq!(files.len(), 3);
         assert_eq!(doc.session.main_view.active_index, 2);
@@ -21619,6 +21652,230 @@ mod tests {
         assert_eq!(
             restored.group_of(DockPanel::Workspace).unwrap().location,
             DockLocation::Side(DockSide::Bottom)
+        );
+    }
+
+    /// Make a named pipe at `path`.
+    #[cfg(unix)]
+    fn mkfifo(path: &Path) {
+        use std::os::unix::ffi::OsStrExt;
+        let c = std::ffi::CString::new(path.as_os_str().as_bytes()).unwrap();
+        // SAFETY: `c` is a valid NUL-terminated path in a folder the test
+        // owns; `mkfifo` has no other precondition.
+        assert_eq!(unsafe { libc::mkfifo(c.as_ptr(), 0o600) }, 0);
+    }
+
+    /// Gives the named pipe at a path a writer once `after` has passed,
+    /// until dropped, so that a regression which waits on the pipe returns
+    /// and its test fails rather than hangs.
+    #[cfg(unix)]
+    struct PipeRelease {
+        done: Arc<std::sync::atomic::AtomicBool>,
+        thread: Option<std::thread::JoinHandle<()>>,
+    }
+
+    #[cfg(unix)]
+    impl PipeRelease {
+        fn after(path: &Path, after: Duration) -> Self {
+            use std::os::unix::fs::OpenOptionsExt;
+            let done = Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let (path, flag) = (path.to_path_buf(), done.clone());
+            let thread = std::thread::spawn(move || {
+                let start = Instant::now();
+                while !flag.load(Ordering::Relaxed) {
+                    if start.elapsed() >= after {
+                        // Pairs with a reader waiting in `open`, then closes
+                        // at once, so the reader sees the end of the file.
+                        let _ = std::fs::OpenOptions::new()
+                            .write(true)
+                            .custom_flags(libc::O_NONBLOCK)
+                            .open(&path);
+                    }
+                    std::thread::sleep(Duration::from_millis(20));
+                }
+            });
+            Self {
+                done,
+                thread: Some(thread),
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    impl Drop for PipeRelease {
+        fn drop(&mut self) {
+            self.done.store(true, Ordering::Relaxed);
+            if let Some(thread) = self.thread.take() {
+                let _ = thread.join();
+            }
+        }
+    }
+
+    /// A named pipe opened as a file is refused at once, and the open after
+    /// it lands: the loader opens through `codepp_platform::open_regular_file`,
+    /// whose open does not wait for a writer. Before, the pipe held the
+    /// loader's one worker, and every open queued behind it, for good.
+    #[cfg(unix)]
+    #[test]
+    fn a_named_pipe_opened_as_a_file_is_refused_and_the_next_open_lands() {
+        let dir = tempfile::tempdir().unwrap();
+        let pipe = dir.path().join("pipe");
+        mkfifo(&pipe);
+        let after = dir.path().join("after.txt");
+        std::fs::write(&after, "after\n").unwrap();
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+        let _release = PipeRelease::after(&pipe, Duration::from_secs(5));
+        let started = Instant::now();
+        shell.open_file(pipe);
+        shell.open_file(after.clone());
+        let mut dialogs = Vec::new();
+        while shell.tabs.iter().any(|t| t.pending_load.is_some()) {
+            assert!(
+                started.elapsed() < Duration::from_secs(10),
+                "the loads did not settle"
+            );
+            dialogs.extend(shell.drain(&mut ui));
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "the pipe held the loader until it had a writer"
+        );
+        let paths: Vec<_> = shell.tabs.iter().filter_map(|t| t.path.clone()).collect();
+        assert_eq!(paths, [after]);
+        assert!(dialogs.iter().any(|d| matches!(
+            d,
+            PendingDialog::Error { title, message }
+                if title == "Open failed" && message.contains("not a regular file")
+        )));
+    }
+
+    /// File → Load Session refuses a named pipe at once: it reads the file
+    /// on the UI thread, which a pipe would otherwise hold until something
+    /// wrote to it.
+    #[cfg(unix)]
+    #[test]
+    fn load_session_refuses_a_named_pipe_at_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let pipe = dir.path().join("session.npp");
+        mkfifo(&pipe);
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let _release = PipeRelease::after(&pipe, Duration::from_secs(5));
+        let started = Instant::now();
+        let result = shell.load_npp_session(&pipe, false);
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "Load Session waited on the pipe"
+        );
+        let Err(codepp_core::npp_session::NppSessionError::Io(e)) = result else {
+            panic!("a pipe is not a session file");
+        };
+        assert_eq!(e.to_string(), "not a regular file");
+    }
+
+    /// A missing session file is an empty session, as on a first launch;
+    /// any other failure to open one is an error.
+    #[test]
+    fn a_missing_session_file_is_an_empty_session() {
+        let dir = tempfile::tempdir().unwrap();
+        let session = read_session_file(&dir.path().join("none.xml")).unwrap();
+        assert!(session.tabs.is_empty());
+        let file = dir.path().join("file");
+        std::fs::write(&file, "").unwrap();
+        assert!(read_session_file(&file.join("x")).is_err());
+    }
+
+    /// A session file a plugin names is read only if it is a regular file:
+    /// `NPPM_GETNBSESSIONFILES` and `NPPM_LOADSESSION` refuse a named pipe
+    /// at once, where each held the UI thread until something wrote to it.
+    /// `NPPM_GETSESSIONFILES` reads through the same function as the first.
+    #[cfg(unix)]
+    #[test]
+    fn a_session_file_a_plugin_names_is_read_only_if_it_is_a_regular_file() {
+        use codepp_plugin_host::dispatch::{NPPM_GETNBSESSIONFILES, NPPM_LOADSESSION};
+        let dir = tempfile::tempdir().unwrap();
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+        let mut send = |msg: u32, path: &Path| {
+            let wide: Vec<u16> = path
+                .to_str()
+                .unwrap()
+                .encode_utf16()
+                .chain(std::iter::once(0))
+                .collect();
+            // SAFETY: `wide` is a NUL-terminated UTF-16 path that outlives
+            // the call, the only pointer either message reads.
+            unsafe {
+                shell.dispatch_plugin_message(
+                    &mut ui,
+                    HostHandles::null(),
+                    msg,
+                    0,
+                    wide.as_ptr() as isize,
+                )
+            }
+        };
+        let two = dir.path().join("two.xml");
+        assert!(write_session_files(
+            &two,
+            &[PathBuf::from("/a.txt"), PathBuf::from("/b.txt")]
+        ));
+        assert_eq!(send(NPPM_GETNBSESSIONFILES, &two), Some(2));
+        let pipe = dir.path().join("pipe.xml");
+        mkfifo(&pipe);
+        let _release = PipeRelease::after(&pipe, Duration::from_secs(5));
+        for msg in [NPPM_GETNBSESSIONFILES, NPPM_LOADSESSION] {
+            let started = Instant::now();
+            assert_eq!(send(msg, &pipe), Some(0));
+            assert!(
+                started.elapsed() < Duration::from_secs(2),
+                "message {msg:#x} waited on the pipe"
+            );
+        }
+    }
+
+    /// `session.xml` that is a named pipe is refused at once: the start
+    /// reads it on the UI thread, which the pipe would otherwise hold until
+    /// something wrote to it.
+    #[cfg(unix)]
+    #[test]
+    fn a_session_xml_that_is_a_named_pipe_is_refused_at_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let pipe = dir.path().join("session.xml");
+        mkfifo(&pipe);
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let _release = PipeRelease::after(&pipe, Duration::from_secs(5));
+        let started = Instant::now();
+        let entries = shell.load_session_entries_from(&pipe);
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "the start waited on the pipe"
+        );
+        assert!(entries.is_empty());
+    }
+
+    /// Every session file the shell reads goes through `read_session_file`,
+    /// the one reader that refuses a named pipe and bounds the read: nothing
+    /// else here names `Session::read_from`, called or passed, so a reader
+    /// added later cannot skip it without this failing.
+    #[test]
+    fn no_session_is_read_but_through_read_session_file() {
+        // LF only, because the tests are found by `"\n#[cfg(test)]\n"`.
+        let src = include_str!("lib.rs").replace("\r\n", "\n");
+        let code = &src[..src.find("\n#[cfg(test)]\n").expect("the tests")];
+        let uses = code
+            .lines()
+            .filter(|l| !l.trim_start().starts_with("//"))
+            .map(|l| l.matches("Session::read_from").count())
+            .sum::<usize>();
+        assert_eq!(
+            uses, 1,
+            "a session is read other than through read_session_file"
         );
     }
 }

@@ -220,18 +220,24 @@ impl UdlDefinition {
     /// # Errors
     ///
     /// - [`UdlError::Io`] — filesystem read failure (path missing,
-    ///   permission denied, mid-read I/O error, or read exceeded
-    ///   the [`MAX_UDL_FILE_BYTES`] cap — the last is surfaced as
-    ///   [`UdlError::TooLarge`], see next).
+    ///   permission denied, mid-read I/O error), or a path that names
+    ///   a folder, a named pipe, a socket or a device rather than a
+    ///   regular file, reported as "not a regular file".
     /// - [`UdlError::TooLarge`] — file size exceeded the cap.
     /// - [`UdlError::Parse`] — malformed XML.
     /// - [`UdlError::MissingUserLang`] — valid XML with no
     ///   `<UserLang>` element.
     pub fn from_file(path: &Path) -> Result<Self, UdlError> {
-        let file = std::fs::File::open(path).map_err(|source| UdlError::Io {
+        let io_error = |source| UdlError::Io {
             path: path.to_owned(),
             source,
-        })?;
+        };
+        // Only a regular file is read, and opening it never waits: a named
+        // pipe named `*.xml` among the UDLs would otherwise hold the
+        // startup scan, and with it the editor's start, for good.
+        let file = codepp_platform::open_regular_file(path)
+            .map_err(io_error)?
+            .ok_or_else(|| io_error(codepp_platform::not_a_regular_file()))?;
         // `take` bounds the number of bytes the `Read` impl will
         // yield. We ask for one byte past the cap so a file of
         // exactly `MAX_UDL_FILE_BYTES` bytes still fits, and a
@@ -243,12 +249,7 @@ impl UdlDefinition {
         // metadata call and the actual read.
         let mut reader = file.take(MAX_UDL_FILE_BYTES + 1);
         let mut contents = String::new();
-        reader
-            .read_to_string(&mut contents)
-            .map_err(|source| UdlError::Io {
-                path: path.to_owned(),
-                source,
-            })?;
+        reader.read_to_string(&mut contents).map_err(io_error)?;
         if contents.len() as u64 > MAX_UDL_FILE_BYTES {
             return Err(UdlError::TooLarge {
                 path: path.to_owned(),
