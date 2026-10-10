@@ -329,10 +329,8 @@ impl Styles {
     /// failures, temp-file creation/write/sync failures, or
     /// the final atomic rename failing.
     pub fn save_to_xml(&self, path: &Path) -> Result<(), StylesError> {
-        let mut xml = String::from("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
-        let body =
-            quick_xml::se::to_string(self).map_err(|e| StylesError::Serialize(e.to_string()))?;
-        xml.push_str(&body);
+        let xml =
+            crate::xml::to_document(self).map_err(|e| StylesError::Serialize(e.to_string()))?;
 
         let parent = path.parent().filter(|p| !p.as_os_str().is_empty());
         if let Some(parent) = parent {
@@ -524,6 +522,22 @@ mod tests {
         s.save_to_xml(&path).unwrap();
         let loaded = Styles::load_from_xml(&path).unwrap();
         assert_eq!(s, loaded);
+    }
+
+    /// A font name with a tab or a line break comes back as itself:
+    /// written as it was, an XML reader turned each into a space.
+    #[test]
+    fn a_font_name_with_tabs_and_line_breaks_round_trips() {
+        let (_dir, path) = temp_path();
+        let s = Styles {
+            default: Some(StyleEntry {
+                font_name: "Tab\tFont\r\nNext".into(),
+                ..StyleEntry::default()
+            }),
+            transparency: None,
+        };
+        s.save_to_xml(&path).unwrap();
+        assert_eq!(Styles::load_from_xml(&path).unwrap(), s);
     }
 
     #[test]

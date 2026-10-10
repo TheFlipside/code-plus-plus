@@ -316,8 +316,7 @@ impl Preferences {
     /// during the create-dirs / tempfile / write / sync / rename
     /// pipeline.
     pub fn save(&self, path: &Path) -> Result<(), PreferencesError> {
-        let mut xml = String::from("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
-        quick_xml::se::to_writer(&mut xml, self).map_err(PreferencesError::Serialize)?;
+        let xml = crate::xml::to_document(self).map_err(PreferencesError::Serialize)?;
         let parent = path.parent().filter(|p| !p.as_os_str().is_empty());
         if let Some(parent) = parent {
             std::fs::create_dir_all(parent).map_err(PreferencesError::Io)?;

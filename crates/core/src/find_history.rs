@@ -137,8 +137,7 @@ impl FindHistory {
     /// for any filesystem failure during the create-dirs /
     /// tempfile / write / sync / rename pipeline.
     pub fn save(&self, path: &Path) -> Result<(), FindHistoryError> {
-        let mut xml = String::from("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
-        quick_xml::se::to_writer(&mut xml, self).map_err(FindHistoryError::Serialize)?;
+        let xml = crate::xml::to_document(self).map_err(FindHistoryError::Serialize)?;
         let parent = path.parent().filter(|p| !p.as_os_str().is_empty());
         if let Some(parent) = parent {
             std::fs::create_dir_all(parent).map_err(FindHistoryError::Io)?;
@@ -232,6 +231,19 @@ mod tests {
         h.save(&path).expect("save");
         let back = FindHistory::load(&path).expect("load");
         assert_eq!(back, h);
+    }
+
+    /// A term with a carriage return comes back as itself: written as it
+    /// was, an XML reader turned it into a line feed.
+    #[test]
+    fn a_term_with_a_carriage_return_round_trips() {
+        let mut h = FindHistory::default();
+        h.push_find("one\r\ntwo\rthree");
+        h.push_replace("tab\there");
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("find_history.xml");
+        h.save(&path).expect("save");
+        assert_eq!(FindHistory::load(&path).expect("load"), h);
     }
 
     #[test]

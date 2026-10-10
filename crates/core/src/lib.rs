@@ -19,6 +19,7 @@ pub mod recent_files;
 pub mod session;
 pub mod shortcuts;
 pub mod styles;
+mod xml;
 
 pub use dock::{
     compute_frame, resolve_drop, BandFrame, DockFrame, DockGroup, DockLayout, DockLocation,

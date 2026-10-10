@@ -656,8 +656,7 @@ impl Session {
     /// [`Self::save_to_xml`] with the cap passed in, so that the tests reach
     /// its boundary with a small session.
     fn save_within(&self, path: &Path, cap: u64) -> Result<(), SessionError> {
-        let mut xml = String::from("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
-        quick_xml::se::to_writer(&mut xml, self).map_err(SessionError::Serialize)?;
+        let xml = crate::xml::to_document(self).map_err(SessionError::Serialize)?;
         // A session the reader would refuse is not written, and the file on
         // disk stays as it was ([`MAX_SESSION_FILE_BYTES`]).
         if xml.len() as u64 > cap {
@@ -751,6 +750,27 @@ mod tests {
         session.save_to_xml(&path).unwrap();
         let loaded = read_file(&path).unwrap();
         assert_eq!(session, loaded);
+    }
+
+    /// A path with a tab or a line break in it, legal on Linux and macOS,
+    /// comes back as itself: written as it was, an XML reader turned each
+    /// into a space, so the restored tab named a different file.
+    #[test]
+    fn a_path_with_tabs_and_line_breaks_round_trips() {
+        let (_dir, path) = temp_session_path();
+        let session = Session {
+            tabs: vec![Tab {
+                path: Some(PathBuf::from("/home/u/tab\there\nline\r\nend.txt")),
+                ..Tab::default()
+            }],
+            workspace: Some(WorkspaceSession {
+                root: Some(PathBuf::from("/home/u/a\tfolder")),
+                ..WorkspaceSession::default()
+            }),
+            ..Session::default()
+        };
+        session.save_to_xml(&path).unwrap();
+        assert_eq!(read_file(&path).unwrap(), session);
     }
 
     #[test]
@@ -1419,9 +1439,7 @@ mod tests {
             }],
             ..Session::default()
         };
-        let mut xml = String::from("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
-        quick_xml::se::to_writer(&mut xml, &session).unwrap();
-        let len = xml.len() as u64;
+        let len = crate::xml::to_document(&session).unwrap().len() as u64;
         let err = session.save_within(&path, len - 1).unwrap_err();
         assert!(
             matches!(err, SessionError::TooLarge { limit } if limit == len - 1),

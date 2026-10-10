@@ -206,8 +206,7 @@ impl RecentFiles {
     /// the create-dirs / tempfile / write / sync / rename
     /// pipeline.
     pub fn save(&self, path: &Path) -> Result<(), RecentFilesError> {
-        let mut xml = String::from("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
-        quick_xml::se::to_writer(&mut xml, self).map_err(RecentFilesError::Serialize)?;
+        let xml = crate::xml::to_document(self).map_err(RecentFilesError::Serialize)?;
         let parent = path.parent().filter(|p| !p.as_os_str().is_empty());
         if let Some(parent) = parent {
             std::fs::create_dir_all(parent).map_err(RecentFilesError::Io)?;
@@ -351,6 +350,18 @@ mod tests {
         r.save(&path).expect("save");
         let back = RecentFiles::load(&path).expect("load");
         assert_eq!(back, r);
+    }
+
+    /// A path with a carriage return comes back as itself: written as it
+    /// was, an XML reader turned it into a line feed.
+    #[test]
+    fn a_path_with_a_carriage_return_round_trips() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("recent_files.xml");
+        let mut r = RecentFiles::default();
+        r.push(Path::new("a\r\nb\rc\td.txt"));
+        r.save(&path).expect("save");
+        assert_eq!(RecentFiles::load(&path).expect("load"), r);
     }
 
     #[test]

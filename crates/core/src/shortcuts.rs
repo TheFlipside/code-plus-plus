@@ -540,9 +540,7 @@ impl PluginShortcuts {
                     .collect(),
             },
         };
-        let mut xml = String::from("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
-        quick_xml::se::to_writer(&mut xml, &doc).map_err(ShortcutsError::Serialize)?;
-        Ok(xml)
+        crate::xml::to_document(&doc).map_err(ShortcutsError::Serialize)
     }
 }
 
@@ -569,6 +567,16 @@ mod tests {
         let xml = store.to_xml_string().unwrap();
         let parsed = PluginShortcuts::from_xml_str(&xml).unwrap();
         assert_eq!(store, parsed);
+    }
+
+    /// A plugin's file name with a tab or a line break comes back as
+    /// itself: written as it was, an XML reader turned each into a space.
+    #[test]
+    fn a_module_name_with_tabs_and_line_breaks_round_trips() {
+        let mut store = PluginShortcuts::new();
+        assert!(store.insert_default(entry("tab\there\r\nx.dll", 3, true, false, false, 0x42)));
+        let xml = store.to_xml_string().unwrap();
+        assert_eq!(PluginShortcuts::from_xml_str(&xml).unwrap(), store);
     }
 
     #[test]

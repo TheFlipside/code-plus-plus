@@ -307,9 +307,7 @@ impl NppSessionDoc {
     /// Returns `Serialize` when quick-xml refuses to emit the
     /// document (rare — only on non-UTF-8 attribute content).
     pub fn to_xml_string(&self) -> Result<String, NppSessionError> {
-        let mut xml = String::from("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
-        quick_xml::se::to_writer(&mut xml, self).map_err(NppSessionError::Serialize)?;
-        Ok(xml)
+        crate::xml::to_document(self).map_err(NppSessionError::Serialize)
     }
 }
 
@@ -430,6 +428,24 @@ mod tests {
         let xml = doc.to_xml_string().unwrap();
         let parsed = NppSessionDoc::from_xml_str(&xml).unwrap();
         assert_eq!(doc, parsed);
+    }
+
+    /// A path with a tab or a line break in it comes back as itself:
+    /// written as it was, an XML reader turned each into a space.
+    #[test]
+    fn a_path_with_tabs_and_line_breaks_round_trips() {
+        let doc = NppSessionDoc {
+            session: NppSession {
+                active_view: 0,
+                main_view: NppView {
+                    active_index: 0,
+                    files: vec![sample_file("/home/u/tab\there\nline\r.rs")],
+                },
+                sub_view: Some(NppView::default()),
+            },
+        };
+        let xml = doc.to_xml_string().unwrap();
+        assert_eq!(NppSessionDoc::from_xml_str(&xml).unwrap(), doc);
     }
 
     #[test]
