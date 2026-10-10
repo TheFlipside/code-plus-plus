@@ -6678,10 +6678,13 @@ impl Shell {
     /// what goes to disk; see [`Self::resolve_persisted_lang`] for the other
     /// half.
     ///
-    /// A UDL-range id with no registry entry keeps the id, deliberately: the
-    /// only way a tab holds one is a plugin's `NPPM_SETBUFFERLANGTYPE` with a
-    /// raw number, and `core::session::Tab::lang` is documented to round-trip
-    /// values Code++ does not recognise rather than discard them.
+    /// A UDL-range id with no registry entry keeps the id, as
+    /// `core::session::Tab::lang` round-trips values Code++ does not
+    /// recognise rather than discard them; the next load declines it, as it
+    /// declines every bare UDL-range id. Nothing can set one since Phase 5
+    /// ([`Self::set_tab_lang`] refuses a UDL id the registry does not hold),
+    /// so a tab holds one only when the registry changed under it: Win32's
+    /// UDL editor rescans it without remapping open tabs (DESIGN.md §7.4).
     fn persisted_lang_fields(
         tab_lang: LangType,
         path: Option<&Path>,
@@ -6735,6 +6738,11 @@ impl Shell {
     /// The cost is that an explicit pre-split UDL choice reverts to
     /// extension detection once and the user re-picks it. That is visible
     /// and two clicks; being styled by a different UDL is neither.
+    ///
+    /// A bare `L_USER` or negative number is declined the same way: neither
+    /// names a language a tab may have ([`Self::names_a_language`]), and
+    /// both could be in a session.xml written before Phase 5, when plugins
+    /// could set them.
     fn resolve_persisted_lang(
         lang: Option<i32>,
         udl: Option<&str>,
@@ -6758,7 +6766,37 @@ impl Shell {
             );
             return None;
         }
+        if !Self::names_a_language(LangType(id)) {
+            tracing::warn!(
+                lang = id,
+                "session.xml carries a language number that names none; falling back to extension detection"
+            );
+            return None;
+        }
         Some(LangType(id))
+    }
+
+    /// Whether `lang` can be a tab's language at all, whoever asks: not a
+    /// negative number, which names no language in Notepad++ either, and
+    /// not `L_USER`, which names no particular User Defined Language — a
+    /// tab holding it would tell plugins it is in a UDL while being in
+    /// none. Code++'s own UDL ids are judged by [`Self::lang_can_be_set`],
+    /// which knows the registry.
+    fn names_a_language(lang: LangType) -> bool {
+        lang.as_npp_id() >= 0 && lang != codepp_core::lang::L_USER
+    }
+
+    /// Whether [`Self::set_tab_lang`] may give a tab `lang`: a language
+    /// [`Self::names_a_language`] accepts, and, for a number in the UDL
+    /// range, one the registry holds. A synthesized `WM_COMMAND` can ask
+    /// Win32's Language menu for any number in its two command ranges, so
+    /// the check sits here, under every route, and not only in the plugin
+    /// dispatcher.
+    fn lang_can_be_set(&self, lang: LangType) -> bool {
+        let id = lang.as_npp_id();
+        Self::names_a_language(lang)
+            && (!codepp_udl::is_udl_lang_id(id)
+                || self.udl_registry.find_by_lang_type_id(id).is_some())
     }
 
     /// The language and pin a tab's first load of `path` sets: what the
@@ -6785,12 +6823,15 @@ impl Shell {
     /// backend a menu pick re-lexes the editor, repaints the status bar
     /// and queues `NPPN_LANGCHANGED`. Win32's menu sent its pick as
     /// `NPPM_SETBUFFERLANGTYPE` through [`Self::dispatch_plugin_message`]
-    /// until Phase 5, as if a plugin had asked.
+    /// until Phase 5, as if a plugin had asked; that route refuses the
+    /// ids the host gives its User Defined Languages, which plugins are
+    /// never given.
     ///
     /// Returns `true` on a real change. The caller must then deliver the
     /// queued notification once its borrow on the state has ended, so a
     /// plugin's `beNotified` can call back into `NPPM_*`. Returns `false`
-    /// with no active tab, and on a same-value no-op, which re-styles,
+    /// with no active tab, for a language no tab may have (see
+    /// [`Self::set_tab_lang`]), and on a same-value no-op, which re-styles,
     /// repaints and announces nothing (so a re-click of the active
     /// language does not flicker the chrome) but is still recorded
     /// against a load in flight (see [`Self::set_tab_lang`]). The new
@@ -6806,10 +6847,12 @@ impl Shell {
     }
 
     /// Change the language of the tab at `idx` because someone asked: the
-    /// one place a requested language change is made. Both routes come
+    /// one place a requested language change is made. Three routes come
     /// here — [`Self::set_active_lang`] from every backend's Language
-    /// menu, and [`HostServices::set_buffer_lang_type`] from plugins'
-    /// `NPPM_SETBUFFERLANGTYPE` / `NPPM_SETCURRENTLANGTYPE`. The GTK and
+    /// menu, [`HostServices::set_buffer_lang_type`] from plugins'
+    /// `NPPM_SETBUFFERLANGTYPE` / `NPPM_SETCURRENTLANGTYPE`, and
+    /// [`HostServices::set_current_user_lang`] from a plugin's
+    /// `NPPM_MENUCOMMAND` naming a User Defined Language. The GTK and
     /// Cocoa menus once did this with a copy of their own, and theirs
     /// never told the plugins. A tab's
     /// first load sets its language from the file instead, unless one was
@@ -6829,8 +6872,17 @@ impl Shell {
     /// that did not happen would mislead a plugin that logs them. It is
     /// still recorded against the tab's load in flight, if it has one,
     /// so that load's landing keeps it ([`Tab::lang_requested_during_load`]).
-    /// An index with no tab does nothing.
+    /// An index with no tab does nothing, and so does a language no tab
+    /// may have ([`Self::lang_can_be_set`]): a negative number, `L_USER`,
+    /// or a UDL id the registry does not hold.
     fn set_tab_lang<U: UiPlatform>(&mut self, ui: &mut U, idx: usize, lang: LangType) -> bool {
+        if !self.lang_can_be_set(lang) {
+            tracing::debug!(
+                lang = lang.as_npp_id(),
+                "a language no tab may have was asked for; nothing changed"
+            );
+            return false;
+        }
         let Some(tab) = self.tabs.get_mut(idx) else {
             return false;
         };
@@ -8340,8 +8392,14 @@ impl Shell {
         let byte_len = text.len() as u64;
         // Untitled buffers have no extension to detect from, so
         // the persisted `@lang` is the only signal — fall back to
-        // `L_TEXT` only when nothing is stored.
-        let resolved_lang = lang.map_or(codepp_core::lang::L_TEXT, codepp_core::lang::LangType);
+        // `L_TEXT` when nothing is stored, or when what is stored is no
+        // language a tab may have. The entries `load_session_entries`
+        // builds are already resolved; this keeps the rule for any
+        // other caller.
+        let resolved_lang = lang
+            .map(LangType)
+            .filter(|l| self.lang_can_be_set(*l))
+            .unwrap_or(codepp_core::lang::L_TEXT);
         self.tabs.push(Tab {
             id,
             path: None,
@@ -8472,8 +8530,12 @@ impl Shell {
         // Lang resolution mirrors `apply_load_result`: the
         // persisted Language-menu choice wins; otherwise fall back to
         // extension-based auto-detection (built-in lexers + UDL associations).
-        let lang =
-            stored_lang.map_or_else(|| Self::detect_lang(&path, &self.udl_registry), LangType);
+        // A stored language no tab may have falls back to detection too;
+        // see `restore_untitled_with_text`.
+        let lang = stored_lang
+            .map(LangType)
+            .filter(|l| self.lang_can_be_set(*l))
+            .unwrap_or_else(|| Self::detect_lang(&path, &self.udl_registry));
         self.tabs.push(Tab {
             id,
             path: Some(path.clone()),
@@ -9721,6 +9783,21 @@ enum ActiveBind {
     Install(String),
 }
 
+/// The language a plugin is told a tab is in: `lang`'s own number, except
+/// that every User Defined Language is Notepad++'s `L_USER`, as it is in
+/// Notepad++. The ids Code++ gives its UDLs are positions in a sorted
+/// directory listing, which shift as files come and go, so they never
+/// leave the process; a plugin learns which UDL from the name
+/// `NPPM_GETLANGUAGENAME` gives `L_USER`. Until Phase 5 plugins were
+/// given the ids themselves.
+fn plugin_lang_id(lang: LangType) -> i32 {
+    if codepp_udl::is_udl_lang_id(lang.as_npp_id()) {
+        codepp_plugin_host::dispatch::L_USER
+    } else {
+        lang.as_npp_id()
+    }
+}
+
 /// Adapter that exposes `Shell` + the per-call platform handles to the
 /// plugin-host's `HostServices` trait. Lives only for the duration of
 /// one `dispatch_plugin_message` call; carries `&mut Shell` and
@@ -9766,16 +9843,13 @@ impl<U: UiPlatform> HostServices for HostBridge<'_, U> {
     }
 
     fn buffer_lang_type(&self, id: isize) -> i32 {
-        // Phase 4 m1: every tab carries its own `LangType`, derived
-        // from the path extension at first-load time. Plugins reading
-        // NPPM_GETBUFFERLANGTYPE for an unknown id get `L_TEXT` (the
-        // same default the tab is born with), matching Notepad++'s
-        // "no such buffer" behaviour.
+        // -1 for an unknown id, Notepad++'s "no such buffer". Until Phase 5
+        // this answered L_TEXT, as if the buffer existed in Normal Text.
         self.shell
             .tabs
             .iter()
             .find(|t| t.id as isize == id)
-            .map_or(L_TEXT.as_npp_id(), |t| t.lang.as_npp_id())
+            .map_or(-1, |t| plugin_lang_id(t.lang))
     }
 
     fn plugins_config_dir(&self) -> PathBuf {
@@ -9947,19 +10021,56 @@ impl<U: UiPlatform> HostServices for HostBridge<'_, U> {
     }
 
     fn set_buffer_lang_type(&mut self, id: isize, lang: i32) -> bool {
-        // FALSE only for an unknown id, Notepad++'s "no such buffer,
-        // nothing changed". Otherwise TRUE: the buffer is now in the
-        // requested language, whether or not it already was. The change
-        // itself — re-lexing the active tab, queueing NPPN_LANGCHANGED,
-        // for a same-language set only a record against the buffer's
-        // load in flight — is `Shell::set_tab_lang`'s, which the GTK and
-        // Cocoa Language menus reach too. The notification is delivered
-        // later, with no borrow held, like the other lifecycle ones.
+        // FALSE for an unknown id, Notepad++'s "no such buffer, nothing
+        // changed". FALSE too for a number in the UDL range, which no
+        // plugin is given: it would pick whichever UDL the directory
+        // listing put there; and for a negative number, which names no
+        // language. L_USER keeps a buffer's UDL, the only one it could
+        // mean. Otherwise TRUE: the buffer is now in the requested
+        // language, whether or not it already was. The change itself —
+        // re-lexing the active tab, queueing NPPN_LANGCHANGED, for a
+        // same-language set only a record against the buffer's load in
+        // flight — is `Shell::set_tab_lang`'s, which the Language menus
+        // reach too. The notification is delivered later, with no borrow
+        // held, like the other lifecycle ones.
         let Some(idx) = self.shell.tabs.iter().position(|t| t.id as isize == id) else {
             return false;
         };
+        if codepp_udl::is_udl_lang_id(lang) {
+            tracing::debug!(
+                buffer_id = id,
+                lang,
+                "a plugin asked for a User Defined Language by Code++'s own id, which plugins are never given; refused"
+            );
+            return false;
+        }
+        if lang == codepp_plugin_host::dispatch::L_USER {
+            return plugin_lang_id(self.shell.tabs[idx].lang) == lang;
+        }
+        // No language is negative: Notepad++ refuses anything below L_TEXT,
+        // and -1 is what NPPM_GETBUFFERLANGTYPE answers for no such buffer.
+        if lang < L_TEXT.as_npp_id() {
+            return false;
+        }
         self.shell.set_tab_lang(self.ui, idx, LangType(lang));
         true
+    }
+
+    fn set_current_user_lang(&mut self, index: usize) {
+        // `NPPM_MENUCOMMAND`'s UDL commands count the UDLs in the order
+        // the registry lists them, which is the order the Language menus
+        // show them in.
+        let Some(entry) = self.shell.udl_registry.entries().get(index) else {
+            tracing::debug!(
+                index,
+                "NPPM_MENUCOMMAND: no User Defined Language at that row"
+            );
+            return;
+        };
+        let lang = LangType(entry.lang_type_id);
+        if let Some(idx) = self.shell.active_tab {
+            self.shell.set_tab_lang(self.ui, idx, lang);
+        }
     }
 
     fn language_name(&self, lang: i32) -> Option<&'static str> {
@@ -9968,6 +10079,17 @@ impl<U: UiPlatform> HostServices for HostBridge<'_, U> {
 
     fn language_desc(&self, lang: i32) -> Option<&'static str> {
         LangType(lang).language_desc()
+    }
+
+    fn current_user_lang_name(&self) -> Option<String> {
+        // A UDL whose file names it "" adds no suffix, as in Notepad++,
+        // where an empty name is a buffer with no UDL name at all.
+        let tab = self.shell.active()?;
+        self.shell
+            .udl_registry
+            .find_by_lang_type_id(tab.lang.as_npp_id())
+            .map(|entry| entry.definition.name.clone())
+            .filter(|name| !name.is_empty())
     }
 
     fn set_menu_item_check(&mut self, cmd_id: i32, checked: bool) {
@@ -10446,10 +10568,7 @@ impl<U: UiPlatform> HostServices for HostBridge<'_, U> {
     }
 
     fn user_lang_count(&self) -> i32 {
-        // Code++ does not yet implement user-defined languages
-        // (UDL). The honest count is 0; plugins gating on
-        // `if (NPPM_GETNBUSERLANG())` skip their UDL-aware path.
-        0
+        i32::try_from(self.shell.udl_registry.entries().len()).unwrap_or(i32::MAX)
     }
 
     fn shortcut_for_cmd_id(&self, cmd_id: i32) -> Option<codepp_plugin_host::ShortcutKey> {
@@ -12755,8 +12874,8 @@ mod tests {
             (None, Some("Markdown (preinstalled)".to_string())),
         );
         // A UDL-range id the registry does not know keeps its raw value —
-        // only a plugin's `NPPM_SETBUFFERLANGTYPE` can produce one, and
         // `core::session::Tab::lang` round-trips values we don't recognise.
+        // Win32's UDL editor can leave a tab holding one when it rescans.
         let unknown = LangType(codepp_udl::UDL_LANG_TYPE_END);
         assert!(reg.find_by_lang_type_id(unknown.as_npp_id()).is_none());
         assert_eq!(
@@ -15712,6 +15831,569 @@ mod tests {
             .pending_notifications
             .iter()
             .any(|n| matches!(n, Notification::LangChanged { .. })));
+    }
+
+    /// A registry holding the preinstalled Markdown UDL and, for each name
+    /// in `more`, a copy of it under that name, scanned from a temporary
+    /// folder. The copies' files sort before Markdown's.
+    fn udl_registry_with(more: &[&str]) -> codepp_udl::UdlRegistry {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join(PREINSTALLED_MARKDOWN_FILENAME),
+            PREINSTALLED_MARKDOWN_UDL,
+        )
+        .unwrap();
+        let text = std::str::from_utf8(PREINSTALLED_MARKDOWN_UDL).unwrap();
+        for (i, name) in more.iter().enumerate() {
+            let copy = text.replacen(
+                r#"name="Markdown (preinstalled)""#,
+                &format!(r#"name="{name}""#),
+                1,
+            );
+            std::fs::write(dir.path().join(format!("extra{i}.udl.xml")), copy).unwrap();
+        }
+        codepp_udl::UdlRegistry::scan_dir(dir.path())
+    }
+
+    /// The id the registry gave the UDL named `name`.
+    fn udl_id(shell: &Shell, name: &str) -> LangType {
+        LangType(
+            shell
+                .udl_registry
+                .find_by_name(name)
+                .unwrap_or_else(|| panic!("no UDL named {name}"))
+                .lang_type_id,
+        )
+    }
+
+    /// A plugin's message, the way the backends deliver one.
+    fn plugin_call(
+        shell: &mut Shell,
+        ui: &mut FakeUi,
+        msg: u32,
+        wparam: usize,
+        lparam: isize,
+    ) -> isize {
+        // SAFETY: the test thread owns `shell` and `ui`, as the UI thread
+        // does in the backends; any pointer argument is the caller's own,
+        // valid for the call.
+        unsafe { shell.dispatch_plugin_message(ui, HostHandles::null(), msg, wparam, lparam) }
+            .expect("an NPPM_* message is answered")
+    }
+
+    /// Two tabs, the first in the Markdown UDL and in front, the second in
+    /// C++, with the registry the test reads ids from.
+    fn shell_with_a_udl_tab() -> Shell {
+        use codepp_core::lang::L_CPP;
+        let mut shell = shell_with_synthetic_tabs(2, Some(0));
+        shell.udl_registry = udl_registry_with(&[]);
+        shell.tabs[0].lang = udl_id(&shell, "Markdown (preinstalled)");
+        shell.tabs[1].lang = L_CPP;
+        shell
+    }
+
+    #[test]
+    fn a_user_defined_language_buffer_answers_l_user_to_plugins() {
+        // Notepad++'s answer: every UDL buffer is in L_USER. The id Code++
+        // gave the UDL follows a directory listing and never leaves the
+        // process; until Phase 5 plugins were given it.
+        use codepp_core::lang::{L_CPP, L_USER};
+        use codepp_plugin_host::dispatch::{NPPM_GETBUFFERLANGTYPE, NPPM_GETCURRENTLANGTYPE};
+        let mut shell = shell_with_a_udl_tab();
+        let mut ui = FakeUi::default();
+        let (udl_tab, cpp_tab) = (shell.tabs[0].id as usize, shell.tabs[1].id as usize);
+        assert!(codepp_udl::is_udl_lang_id(shell.tabs[0].lang.as_npp_id()));
+
+        let get = NPPM_GETBUFFERLANGTYPE;
+        assert_eq!(plugin_call(&mut shell, &mut ui, get, udl_tab, 0), 15);
+        assert_eq!(
+            plugin_call(&mut shell, &mut ui, get, cpp_tab, 0),
+            L_CPP.as_npp_id() as isize
+        );
+        let mut current: i32 = -1;
+        let r = plugin_call(
+            &mut shell,
+            &mut ui,
+            NPPM_GETCURRENTLANGTYPE,
+            0,
+            &raw mut current as isize,
+        );
+        assert_eq!((r, current), (1, L_USER.as_npp_id()));
+
+        // A UDL-range id the registry does not know is still a UDL buffer.
+        shell.tabs[1].lang = LangType(codepp_udl::UDL_LANG_TYPE_END);
+        assert!(shell
+            .udl_registry
+            .find_by_lang_type_id(codepp_udl::UDL_LANG_TYPE_END)
+            .is_none());
+        assert_eq!(plugin_call(&mut shell, &mut ui, get, cpp_tab, 0), 15);
+        // Asking changes nothing.
+        assert!(ui.apply_lang_calls.is_empty());
+        assert!(shell.take_notifications().is_empty());
+    }
+
+    #[test]
+    fn an_unknown_buffer_answers_minus_one_for_its_language() {
+        // Notepad++'s "no such buffer". Until Phase 5 Code++ answered
+        // L_TEXT, as if the buffer existed in Normal Text.
+        use codepp_plugin_host::dispatch::NPPM_GETBUFFERLANGTYPE;
+        let mut shell = shell_with_a_udl_tab();
+        let mut ui = FakeUi::default();
+        assert!(shell.tabs.iter().all(|t| t.id != 999));
+        assert_eq!(
+            plugin_call(&mut shell, &mut ui, NPPM_GETBUFFERLANGTYPE, 999, 0),
+            -1
+        );
+    }
+
+    #[test]
+    fn plugins_cannot_set_a_user_defined_language_by_codepps_own_id() {
+        // A plugin is never given these ids, so one passing such a number
+        // has guessed it, and it would pick whichever UDL the directory
+        // listing put there. Refused, whichever setter, claimed or not.
+        use codepp_core::lang::L_CPP;
+        use codepp_plugin_host::dispatch::{NPPM_SETBUFFERLANGTYPE, NPPM_SETCURRENTLANGTYPE};
+        let mut shell = shell_with_a_udl_tab();
+        let mut ui = FakeUi::default();
+        let md = udl_id(&shell, "Markdown (preinstalled)");
+        let cpp_tab = shell.tabs[1].id as usize;
+        shell.active_tab = Some(1);
+        for lang in [md.as_npp_id(), codepp_udl::UDL_LANG_TYPE_END] {
+            assert_eq!(
+                plugin_call(
+                    &mut shell,
+                    &mut ui,
+                    NPPM_SETBUFFERLANGTYPE,
+                    cpp_tab,
+                    lang as isize,
+                ),
+                0
+            );
+            assert_eq!(
+                plugin_call(
+                    &mut shell,
+                    &mut ui,
+                    NPPM_SETCURRENTLANGTYPE,
+                    0,
+                    lang as isize
+                ),
+                0
+            );
+        }
+        assert_eq!(shell.tabs[1].lang, L_CPP);
+        assert!(ui.apply_lang_calls.is_empty());
+        assert!(ui.status_calls.is_empty());
+        assert!(shell.take_notifications().is_empty());
+    }
+
+    #[test]
+    fn l_user_keeps_a_buffers_user_defined_language_and_sets_no_other() {
+        // L_USER names no particular UDL. NPPM_SETCURRENTLANGTYPE answers
+        // TRUE, changing nothing, on a buffer already in one, so a plugin
+        // that reads the language and writes it back changes nothing, and
+        // FALSE on any other. NPPM_SETBUFFERLANGTYPE refuses it outright,
+        // as Notepad++'s header says.
+        use codepp_core::lang::{L_CPP, L_USER};
+        use codepp_plugin_host::dispatch::{NPPM_SETBUFFERLANGTYPE, NPPM_SETCURRENTLANGTYPE};
+        let mut shell = shell_with_a_udl_tab();
+        let mut ui = FakeUi::default();
+        let md = shell.tabs[0].lang;
+        let udl_tab = shell.tabs[0].id as usize;
+        let user = L_USER.as_npp_id() as isize;
+
+        assert_eq!(
+            plugin_call(&mut shell, &mut ui, NPPM_SETCURRENTLANGTYPE, 0, user),
+            1
+        );
+        assert_eq!(
+            plugin_call(&mut shell, &mut ui, NPPM_SETBUFFERLANGTYPE, udl_tab, user),
+            0
+        );
+        assert_eq!(shell.tabs[0].lang, md);
+
+        shell.active_tab = Some(1);
+        assert_eq!(
+            plugin_call(&mut shell, &mut ui, NPPM_SETCURRENTLANGTYPE, 0, user),
+            0
+        );
+        assert_eq!(shell.tabs[1].lang, L_CPP);
+        assert!(ui.apply_lang_calls.is_empty());
+        assert!(ui.status_calls.is_empty());
+        assert!(shell.take_notifications().is_empty());
+    }
+
+    /// What a plugin reads back from `NPPM_GETLANGUAGENAME` or
+    /// `NPPM_GETLANGUAGEDESC` (`msg`) about `lang`, asked the way the
+    /// header says: probe, then write into what the plugin would allocate,
+    /// the probe plus one. The buffer is larger than any write the host
+    /// makes and filled with a sentinel, so a write that does not fit the
+    /// probe fails the assertions instead of running past the end.
+    fn language_label(shell: &mut Shell, ui: &mut FakeUi, msg: u32, lang: i32) -> String {
+        let probe = plugin_call(shell, ui, msg, lang as usize, 0);
+        let mut buf = vec![0xAAAAu16; codepp_plugin_host::dispatch::MAX_PATH_TCHARS + 8];
+        let written = plugin_call(shell, ui, msg, lang as usize, buf.as_mut_ptr() as isize);
+        assert_eq!(written, probe, "the write and the probe disagree");
+        let fits = usize::try_from(probe).unwrap();
+        assert_eq!(buf[fits], 0, "the write does not end where the probe said");
+        assert!(buf[fits + 1..].iter().all(|&c| c == 0xAAAA));
+        String::from_utf16(&buf[..fits]).unwrap()
+    }
+
+    #[test]
+    fn l_users_name_names_the_user_defined_language_in_front() {
+        // Notepad++'s one way of telling a plugin which UDL a buffer is
+        // in: L_USER's name and description, then " - " and the current
+        // buffer's UDL.
+        use codepp_core::lang::{L_CPP, L_USER};
+        use codepp_plugin_host::dispatch::{NPPM_GETLANGUAGEDESC, NPPM_GETLANGUAGENAME};
+        let mut shell = shell_with_a_udl_tab();
+        let mut ui = FakeUi::default();
+        let user = L_USER.as_npp_id();
+        assert_eq!(
+            language_label(&mut shell, &mut ui, NPPM_GETLANGUAGENAME, user),
+            "udf - Markdown (preinstalled)"
+        );
+        assert_eq!(
+            language_label(&mut shell, &mut ui, NPPM_GETLANGUAGEDESC, user),
+            "User Defined language file - Markdown (preinstalled)"
+        );
+        // A built-in language keeps its own name, whatever is in front.
+        assert_eq!(
+            language_label(&mut shell, &mut ui, NPPM_GETLANGUAGENAME, L_CPP.as_npp_id()),
+            "C++"
+        );
+
+        shell.active_tab = Some(1);
+        assert_eq!(
+            language_label(&mut shell, &mut ui, NPPM_GETLANGUAGENAME, user),
+            "udf"
+        );
+        assert_eq!(
+            language_label(&mut shell, &mut ui, NPPM_GETLANGUAGEDESC, user),
+            "User Defined language file"
+        );
+    }
+
+    #[test]
+    fn a_user_defined_language_named_nothing_adds_no_suffix() {
+        // Notepad++ adds the suffix only for a buffer with a UDL name; a
+        // UDL file may name its language "", and that buffer reads "udf".
+        use codepp_core::lang::L_USER;
+        use codepp_plugin_host::dispatch::NPPM_GETLANGUAGENAME;
+        let mut shell = shell_with_synthetic_tabs(1, Some(0));
+        let mut ui = FakeUi::default();
+        shell.udl_registry = udl_registry_with(&[""]);
+        shell.tabs[0].lang = udl_id(&shell, "");
+        assert_eq!(
+            language_label(
+                &mut shell,
+                &mut ui,
+                NPPM_GETLANGUAGENAME,
+                L_USER.as_npp_id()
+            ),
+            "udf"
+        );
+    }
+
+    #[test]
+    fn nppm_getnbuserlang_counts_the_loaded_user_defined_languages() {
+        use codepp_plugin_host::dispatch::{IDM_LANG_USER, NPPM_GETNBUSERLANG};
+        let mut shell = shell_with_synthetic_tabs(1, Some(0));
+        let mut ui = FakeUi::default();
+        shell.udl_registry = codepp_udl::UdlRegistry::new();
+        assert_eq!(
+            plugin_call(&mut shell, &mut ui, NPPM_GETNBUSERLANG, 0, 0),
+            0
+        );
+
+        shell.udl_registry = udl_registry_with(&["Second", "Third"]);
+        let mut base: i32 = 0;
+        let count = plugin_call(
+            &mut shell,
+            &mut ui,
+            NPPM_GETNBUSERLANG,
+            0,
+            &raw mut base as isize,
+        );
+        assert_eq!((count, base), (3, IDM_LANG_USER));
+    }
+
+    #[test]
+    fn a_user_defined_language_command_switches_the_buffer_in_front() {
+        // NPPM_MENUCOMMAND with IDM_LANG_USER + 1 + i: the i-th UDL in the
+        // registry's order, which the Language menus list them in — how a
+        // Notepad++ plugin switches a buffer to a UDL.
+        use codepp_core::lang::L_CPP;
+        use codepp_plugin_host::dispatch::{IDM_LANG_USER, NPPM_MENUCOMMAND};
+        let mut shell = shell_with_synthetic_tabs(2, Some(1));
+        let mut ui = FakeUi::default();
+        shell.udl_registry = udl_registry_with(&["Second"]);
+        shell.tabs[1].lang = L_CPP;
+        let rows: Vec<i32> = shell
+            .udl_registry
+            .entries()
+            .iter()
+            .map(|e| e.lang_type_id)
+            .collect();
+        assert_eq!(rows.len(), 2);
+        let active = shell.tabs[1].id as isize;
+
+        let r = plugin_call(
+            &mut shell,
+            &mut ui,
+            NPPM_MENUCOMMAND,
+            0,
+            (IDM_LANG_USER + 2) as isize,
+        );
+        assert_eq!(r, 1);
+        assert_eq!(shell.tabs[1].lang, LangType(rows[1]));
+        assert_ne!(
+            shell.tabs[0].lang,
+            LangType(rows[1]),
+            "only the buffer in front"
+        );
+        assert_eq!(ui.apply_lang_calls, [LangType(rows[1])]);
+        let queued = shell.take_notifications();
+        assert!(
+            matches!(
+                queued.as_slice(),
+                [Notification::LangChanged { buffer_id }] if *buffer_id == active
+            ),
+            "expected exactly NPPN_LANGCHANGED for buffer {active}, got {queued:?}",
+        );
+
+        // A row past the last UDL answers TRUE too, and changes nothing.
+        let past = (IDM_LANG_USER + 3) as isize;
+        assert_eq!(
+            plugin_call(&mut shell, &mut ui, NPPM_MENUCOMMAND, 0, past),
+            1
+        );
+        assert_eq!(shell.tabs[1].lang, LangType(rows[1]));
+        assert!(shell.take_notifications().is_empty());
+    }
+
+    #[test]
+    fn plugins_cannot_set_a_negative_language() {
+        // Notepad++ refuses anything below L_TEXT; -1 is also the answer
+        // for no such buffer, which a buffer set to -1 would mimic.
+        use codepp_core::lang::L_CPP;
+        use codepp_plugin_host::dispatch::{NPPM_SETBUFFERLANGTYPE, NPPM_SETCURRENTLANGTYPE};
+        let mut shell = shell_with_a_udl_tab();
+        let mut ui = FakeUi::default();
+        shell.active_tab = Some(1);
+        let cpp_tab = shell.tabs[1].id as usize;
+        for lang in [-1, -5, i32::MIN] {
+            assert_eq!(
+                plugin_call(
+                    &mut shell,
+                    &mut ui,
+                    NPPM_SETBUFFERLANGTYPE,
+                    cpp_tab,
+                    lang as isize,
+                ),
+                0
+            );
+            assert_eq!(
+                plugin_call(
+                    &mut shell,
+                    &mut ui,
+                    NPPM_SETCURRENTLANGTYPE,
+                    0,
+                    lang as isize
+                ),
+                0
+            );
+        }
+        assert_eq!(shell.tabs[1].lang, L_CPP);
+        assert!(shell.take_notifications().is_empty());
+    }
+
+    #[test]
+    fn no_route_gives_a_tab_l_user_or_a_user_defined_language_not_loaded() {
+        // `set_tab_lang` refuses them under every route, the Language
+        // menus included: a synthesized WM_COMMAND can ask Win32's menu
+        // for any number in its two command ranges.
+        use codepp_core::lang::{L_CPP, L_USER};
+        let mut shell = shell_with_a_udl_tab();
+        let mut ui = FakeUi::default();
+        shell.active_tab = Some(1);
+        let md = udl_id(&shell, "Markdown (preinstalled)");
+        let unloaded = LangType(codepp_udl::UDL_LANG_TYPE_END);
+        assert!(shell
+            .udl_registry
+            .find_by_lang_type_id(unloaded.as_npp_id())
+            .is_none());
+        for lang in [L_USER, unloaded, LangType(-1), LangType(-3)] {
+            assert!(!shell.set_active_lang(&mut ui, lang), "{lang:?}");
+            assert_eq!(shell.tabs[1].lang, L_CPP);
+        }
+        assert!(ui.apply_lang_calls.is_empty());
+        assert!(shell.take_notifications().is_empty());
+        // A loaded UDL is a menu pick like any other.
+        assert!(shell.set_active_lang(&mut ui, md));
+        assert_eq!(shell.tabs[1].lang, md);
+    }
+
+    #[test]
+    fn a_stored_l_user_or_negative_language_is_declined_at_restore() {
+        // Neither names a language a tab may have, so a session.xml
+        // carrying one, hand-edited or written before Phase 5, falls back
+        // to extension detection as a bare UDL id does.
+        use codepp_core::lang::{L_RUST, L_USER};
+        let reg = udl_registry_with(&[]);
+        let resolve = |lang| Shell::resolve_persisted_lang(Some(lang), None, &reg);
+        assert_eq!(resolve(L_USER.as_npp_id()), None);
+        assert_eq!(resolve(-1), None);
+        assert_eq!(resolve(-3), None);
+        assert_eq!(resolve(L_RUST.as_npp_id()), Some(L_RUST));
+    }
+
+    #[test]
+    fn a_first_load_takes_no_stored_l_user_or_negative_language() {
+        // The landing reads the record through `resolve_persisted_lang`,
+        // so the file gets its extension's language instead.
+        use codepp_core::lang::L_RUST;
+        for stored in [15, -1, -3] {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("plain.rs");
+            std::fs::write(&path, "fn main() {}\n").unwrap();
+            let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+            let mut shell = Shell::new(wake).unwrap();
+            let mut ui = FakeUi::default();
+            shell.session.tabs.push(codepp_core::session::Tab {
+                path: Some(path.clone()),
+                lang: Some(stored),
+                ..codepp_core::session::Tab::default()
+            });
+            shell.open_file(path);
+            drain_until_loads_settle(&mut shell, &mut ui);
+            assert_eq!(shell.tabs[0].lang, L_RUST, "stored {stored}");
+        }
+    }
+
+    #[test]
+    fn a_restored_backup_takes_no_stored_l_user_or_negative_language() {
+        // Both kinds of backed-up record resolve their language through
+        // `resolve_persisted_lang` too.
+        let dir = tempfile::tempdir().unwrap();
+        let backups = dir.path().join("backup");
+        std::fs::create_dir_all(&backups).unwrap();
+        let file = dir.path().join("a.rs");
+        std::fs::write(&file, "fn main() {}\n").unwrap();
+        std::fs::write(backups.join("new 1@2026-10-09_110000"), "typed\n").unwrap();
+        std::fs::write(backups.join("a.rs@2026-10-09_110000"), "fn edited() {}\n").unwrap();
+        let mut session = Session::new();
+        let mut untitled = record(None, Some(1), "new 1@2026-10-09_110000");
+        untitled.lang = Some(15);
+        let mut edited = record(Some(&file), None, "a.rs@2026-10-09_110000");
+        edited.lang = Some(-3);
+        session.tabs.extend([untitled, edited]);
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let entries = shell.restore_entries(session, Some(&backups), MAX_RESTORED_BACKUP_BYTES);
+        assert_eq!(entries.len(), 2);
+        for entry in &entries {
+            match entry {
+                SessionRestoreEntry::UntitledFromBackup { lang, .. }
+                | SessionRestoreEntry::DirtyFromBackup { lang, .. } => {
+                    assert_eq!(*lang, None);
+                }
+                SessionRestoreEntry::OpenFile(_) => panic!("restored without its backup"),
+            }
+        }
+    }
+
+    #[test]
+    fn the_restore_helpers_take_no_language_a_tab_may_not_have() {
+        // `restore_untitled_with_text` and `restore_dirty_with_text` are
+        // public: a stored L_USER or negative number falls back as the
+        // restore's own resolver would have it, to Normal Text for an
+        // untitled buffer and to the extension's language for a file.
+        use codepp_core::lang::{L_RUST, L_TEXT, L_USER};
+        let dir = tempfile::tempdir().unwrap();
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+        for (stored, expect) in [
+            (L_USER.as_npp_id(), L_TEXT),
+            (-7, L_TEXT),
+            (L_RUST.as_npp_id(), L_RUST),
+        ] {
+            let idx = shell.restore_untitled_with_text(
+                &mut ui,
+                None,
+                "typed\n".to_string(),
+                0,
+                Encoding::Utf8,
+                Eol::Lf,
+                false,
+                None,
+                Some(stored),
+                false,
+            );
+            assert_eq!(shell.tabs[idx].lang, expect, "untitled, stored {stored}");
+        }
+        for (i, stored) in [L_USER.as_npp_id(), -7].into_iter().enumerate() {
+            let path = dir.path().join(format!("file{i}.rs"));
+            std::fs::write(&path, "fn main() {}\n").unwrap();
+            let idx = shell.restore_dirty_with_text(
+                &mut ui,
+                path,
+                "fn edited() {}\n".into(),
+                0,
+                Encoding::Utf8,
+                Eol::Lf,
+                false,
+                false,
+                Some(stored),
+                false,
+            );
+            assert_eq!(shell.tabs[idx].lang, L_RUST, "file, stored {stored}");
+        }
+    }
+
+    #[test]
+    fn a_refused_language_asked_for_while_a_file_loads_is_not_kept_for_it() {
+        // A refused request is not recorded against the load in flight, so
+        // the landing still gives the file its extension's language.
+        use codepp_core::lang::{L_RUST, L_USER};
+        use codepp_plugin_host::dispatch::NPPM_SETBUFFERLANGTYPE;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("plain.rs");
+        std::fs::write(&path, "fn main() {}\n").unwrap();
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+        shell.open_file(path);
+        assert!(shell.tabs[0].pending_load.is_some());
+        assert!(!shell.set_active_lang(&mut ui, L_USER));
+        assert!(!shell.set_active_lang(&mut ui, LangType(-1)));
+        let id = shell.tabs[0].id as usize;
+        assert_eq!(
+            plugin_call(&mut shell, &mut ui, NPPM_SETBUFFERLANGTYPE, id, -1),
+            0
+        );
+        assert_eq!(shell.tabs[0].lang_requested_during_load, None);
+        drain_until_loads_settle(&mut shell, &mut ui);
+        assert_eq!(shell.tabs[0].lang, L_RUST);
+    }
+
+    #[test]
+    fn nppm_getcurrentlangtype_with_no_buffer_answers_false() {
+        // No tab, which no backend leaves for long: FALSE, with L_TEXT
+        // written rather than the -1 an unknown buffer answers.
+        use codepp_plugin_host::dispatch::NPPM_GETCURRENTLANGTYPE;
+        let mut shell = shell_with_synthetic_tabs(0, None);
+        let mut ui = FakeUi::default();
+        let mut lang: i32 = -77;
+        let r = plugin_call(
+            &mut shell,
+            &mut ui,
+            NPPM_GETCURRENTLANGTYPE,
+            0,
+            &raw mut lang as isize,
+        );
+        assert_eq!((r, lang), (0, 0));
     }
 
     #[test]

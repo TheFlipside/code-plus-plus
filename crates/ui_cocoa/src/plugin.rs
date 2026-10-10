@@ -3314,8 +3314,9 @@ thread_local! {
 /// `NPPM_SETMENUITEMCHECK`, and show it on the item at once if the
 /// Plugins menu is open. `false` when `cmd_id` is none of the loaded
 /// plugins' commands — the built-in `IDM_*` ids are not mapped on this
-/// backend, as `NPPM_MENUCOMMAND` is not, and the View menu's own marks
-/// come from live state in `validateMenuItem:` anyway.
+/// backend, as they are not for `NPPM_MENUCOMMAND` (the dispatcher maps
+/// only a User Defined Language's command there), and the View menu's
+/// own marks come from live state in `validateMenuItem:` anyway.
 ///
 /// Called from inside the dispatch's state borrow, so it touches only
 /// this module's own record and the menu item itself: `main_menu` is the

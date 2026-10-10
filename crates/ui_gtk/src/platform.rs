@@ -839,13 +839,15 @@ impl UiPlatform for GtkUi {
 
     fn set_npp_menu_item_check(&mut self, idm: i32, checked: bool) -> bool {
         // A plugin's own commands only: the built-in `IDM_*` ids are not
-        // mapped on this backend, as `NPPM_MENUCOMMAND` is not, and the
-        // View menu's own toggles repaint from live state on every open
-        // anyway. Unlike the dock overrides above, this one touches
-        // widgets from inside the dispatch's borrow — the menu item, if
-        // the menu is up, and the command's toolbar button, if it has one
-        // — which is safe because each one's own handler returns at once
-        // while the mark is being set. See `crate::plugin::set_menu_check`.
+        // mapped on this backend, as they are not for `NPPM_MENUCOMMAND`
+        // (the dispatcher maps only a User Defined Language's command
+        // there, on every backend), and the View menu's own toggles
+        // repaint from live state on every open anyway. Unlike the dock
+        // overrides above, this one touches widgets from inside the
+        // dispatch's borrow — the menu item, if the menu is up, and the
+        // command's toolbar button, if it has one — which is safe because
+        // each one's own handler returns at once while the mark is being
+        // set. See `crate::plugin::set_menu_check`.
         crate::plugin::set_menu_check(idm, checked)
     }
 

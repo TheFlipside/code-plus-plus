@@ -16,21 +16,21 @@ use crate::UdlDefinition;
 
 /// Base `LangType` numeric id for dynamically-registered UDLs.
 ///
-/// The built-in language constant range tops out at
-/// `L_EXTERNAL = 93` per the N++ public plugin ABI
-/// (see `plugins/nppcompat-headers/Notepad_plus_msgs.h`). Starting
-/// UDL ids at `1024` leaves ~930 slots for future N++ additions
-/// (well past N++'s ~1-per-year growth rate) before any
-/// collision.
+/// The built-in language constant range tops out at `L_EXTERNAL`:
+/// 93 in Code++'s compat header
+/// (`plugins/nppcompat-headers/Notepad_plus_msgs.h`) and 97 in
+/// Notepad++'s, whose numbers from 86 up Code++ does not match yet
+/// (DESIGN.md §7.4). Starting UDL ids at `1024` leaves ~930 slots for
+/// future N++ additions (well past N++'s ~1-per-year growth rate)
+/// before any collision.
 ///
-/// **These ids are meant never to leave Code++'s process.** A plugin
-/// asking a UDL buffer's language should get `L_USER = 15`, Notepad++'s
-/// public API contract for "buffer uses a UDL"; the UDL-specific id is a
+/// **These ids never leave Code++'s process.** A plugin asking a UDL
+/// buffer's language gets `L_USER = 15`, Notepad++'s public API contract
+/// for "buffer uses a UDL", and learns which one from the name
+/// `NPPM_GETLANGUAGENAME` gives `L_USER`; the UDL-specific id is a
 /// Code++-internal detail for telling which UDL applies to which buffer.
-/// **Not yet so:** `NPPM_GETCURRENTLANGTYPE` and `NPPM_GETBUFFERLANGTYPE`
-/// answer the id itself, since nothing maps it (DESIGN.md §7.4). The id
-/// follows the scan order of `userDefineLangs/`, so a plugin must not
-/// store it.
+/// It follows the scan order of `userDefineLangs/`, so a plugin could
+/// not keep it anyway, and the host refuses it from a plugin.
 pub const UDL_LANG_TYPE_BASE: i32 = 1024;
 
 /// End of the UDL dynamic-id space (inclusive). 1024 slots is

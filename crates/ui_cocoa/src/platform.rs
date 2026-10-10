@@ -950,14 +950,15 @@ impl UiPlatform for CocoaUi {
 
     fn set_npp_menu_item_check(&mut self, idm: i32, checked: bool) -> bool {
         // A plugin's own commands only: the built-in `IDM_*` ids are not
-        // mapped on this backend, as `NPPM_MENUCOMMAND` is not, and the
-        // View menu's own marks come from live state in
-        // `validateMenuItem:` on every open anyway. Unlike the dock
-        // overrides above, this one touches AppKit from inside the
-        // dispatch's borrow — the item's state, if the menu is open, and
-        // the command's toolbar button, if it has one — which is safe
-        // because setting either state calls back into nothing of ours.
-        // See `crate::plugin::set_menu_check`.
+        // mapped on this backend, as they are not for `NPPM_MENUCOMMAND`
+        // (the dispatcher maps only a User Defined Language's command
+        // there, on every backend), and the View menu's own marks come
+        // from live state in `validateMenuItem:` on every open anyway.
+        // Unlike the dock overrides above, this one touches AppKit from
+        // inside the dispatch's borrow — the item's state, if the menu is
+        // open, and the command's toolbar button, if it has one — which is
+        // safe because setting either state calls back into nothing of
+        // ours. See `crate::plugin::set_menu_check`.
         let known = crate::plugin::set_menu_check(&self.menu, idm, checked);
         if known {
             self.toolbar.set_plugin_button_state(idm, checked);

@@ -28,6 +28,7 @@
 //! The dispatcher itself is platform-neutral (pure `HostServices` +
 //! `#[repr(C)]` types), so it is unconditional since Phase 5.
 
+use std::borrow::Cow;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::PathBuf;
 
@@ -280,6 +281,39 @@ pub const UNI_END: i32 = 8;
 pub const WIN_FORMAT: i32 = 0;
 pub const MAC_FORMAT: i32 = 1;
 pub const UNIX_FORMAT: i32 = 2;
+
+/// Notepad++'s `L_USER`, the language every User Defined Language buffer
+/// answers to [`NPPM_GETCURRENTLANGTYPE`] and [`NPPM_GETBUFFERLANGTYPE`].
+/// The plugin ABI gives no UDL a number of its own: a plugin learns which
+/// one a buffer is in from [`NPPM_GETLANGUAGENAME`] (see
+/// [`USER_LANG_NAME`]) and switches a buffer to one with
+/// [`NPPM_MENUCOMMAND`] (see [`IDM_LANG_USER`]).
+pub const L_USER: i32 = codepp_core::lang::L_USER.0;
+
+/// What [`NPPM_GETLANGUAGENAME`] answers for [`L_USER`]: Notepad++'s short
+/// name for it, followed, when the current buffer is in a User Defined
+/// Language, by ` - ` and that UDL's own name (`udf - Markdown`). The
+/// suffix is the one place the plugin ABI names a buffer's UDL, and it
+/// names the *current* buffer's, as Notepad++'s does.
+pub const USER_LANG_NAME: &str = "udf";
+
+/// What [`NPPM_GETLANGUAGEDESC`] answers for [`L_USER`], with the same
+/// suffix as [`USER_LANG_NAME`].
+pub const USER_LANG_DESC: &str = "User Defined language file";
+
+/// Notepad++'s `IDM_LANG_USER`, its `IDM_LANG + 180`: the command its
+/// Language menu's User Defined Language rows count from, which
+/// [`NPPM_GETNBUSERLANG`] hands a plugin. [`NPPM_MENUCOMMAND`] with
+/// `IDM_LANG_USER + 1 + i` switches the current buffer to the `i`-th UDL
+/// in the order the host lists them, for every `i` that keeps the
+/// command below [`IDM_LANG_USER_LIMIT`]. `IDM_LANG_USER` itself is
+/// Notepad++'s unnamed User Defined Language, which Code++ does not have.
+pub const IDM_LANG_USER: i32 = 46_180;
+
+/// Notepad++'s `IDM_LANG_USER_LIMIT`, its `IDM_LANG + 210`: the User
+/// Defined Language commands are the ids strictly between
+/// [`IDM_LANG_USER`] and this one.
+pub const IDM_LANG_USER_LIMIT: i32 = 46_210;
 
 // --- v1 NPPN_* set ---------------------------------------------------
 
@@ -859,21 +893,31 @@ pub trait HostServices {
     fn current_buffer_id(&self) -> isize;
     /// Path of the buffer with id `id`. None if the id is unknown.
     fn buffer_path(&self, id: isize) -> Option<PathBuf>;
-    /// Lang-type for buffer `id`: its built-in `LangType` id, or `L_TEXT`
-    /// (0) for an unknown id. A User Defined Language buffer answers
-    /// Code++'s internal UDL id (1024 and up), not Notepad++'s `L_USER`;
-    /// DESIGN.md §7.4 tracks the mapping.
+    /// Lang-type for buffer `id`, as Notepad++ numbers it (up to
+    /// `L_TYPESCRIPT`; from 86 up Code++'s numbers disagree with
+    /// Notepad++'s, DESIGN.md §7.4), or `-1` for an unknown id,
+    /// Notepad++'s answer. A built-in language answers its own
+    /// `LangType`, and a buffer in any User Defined Language answers
+    /// [`L_USER`]: the ids Code++ gives its UDLs follow the order of a
+    /// directory listing and never leave the process.
     fn buffer_lang_type(&self, id: isize) -> i32;
     /// Short language name for `lang` (`NPPM_GETLANGUAGENAME`). N++
     /// uses the same string the user sees in the Language menu —
     /// "C", "C++", "Rust", "Normal Text". `None` for langs whose
     /// name isn't known to the host (the dispatcher writes a zero-
     /// length wide string in that case so plugins observe "no
-    /// name" rather than garbage).
+    /// name" rather than garbage). Never asked about [`L_USER`], whose
+    /// name the dispatcher builds itself (see [`USER_LANG_NAME`]).
     fn language_name(&self, lang: i32) -> Option<&'static str>;
     /// Long language description (`NPPM_GETLANGUAGEDESC`). Same
-    /// `None` semantics as [`Self::language_name`].
+    /// `None` semantics as [`Self::language_name`], and likewise never
+    /// asked about [`L_USER`] (see [`USER_LANG_DESC`]).
     fn language_desc(&self, lang: i32) -> Option<&'static str>;
+    /// The name of the User Defined Language the current buffer is in, or
+    /// `None` when it is in none or its UDL's name is empty. The dispatcher
+    /// adds it to [`L_USER`]'s name and description, Notepad++'s one way of
+    /// naming a buffer's UDL.
+    fn current_user_lang_name(&self) -> Option<String>;
     /// Per-install plugin config directory.
     fn plugins_config_dir(&self) -> PathBuf;
     /// HMENU for `which` (NPPPLUGINMENU or NPPMAINMENU). NULL means
@@ -900,7 +944,27 @@ pub trait HostServices {
     fn switch_to_file(&mut self, path: PathBuf) -> bool;
     fn menu_command(&mut self, cmd_id: i32);
     fn make_current_buffer_dirty(&mut self);
+    /// Set buffer `id`'s language, from [`NPPM_SETBUFFERLANGTYPE`] and
+    /// [`NPPM_SETCURRENTLANGTYPE`]. Returns `false`, changing nothing, for
+    /// an unknown id, for a negative number, which names no language
+    /// (Notepad++'s `NPPM_SETBUFFERLANGTYPE` refuses one too; its
+    /// `NPPM_SETCURRENTLANGTYPE` ignores one and answers TRUE), and for a
+    /// number in the host's own
+    /// User Defined Language range, which no plugin is ever given (see
+    /// [`Self::buffer_lang_type`]). [`L_USER`] names no particular UDL:
+    /// it answers `true`, changing nothing, when the buffer is already in
+    /// one, so a plugin that reads the language and writes it back changes
+    /// nothing, and `false` otherwise. The dispatcher refuses `L_USER` for
+    /// `NPPM_SETBUFFERLANGTYPE` before asking, as Notepad++ does. Any other
+    /// number is set, whether or not the host knows it, and answers `true`
+    /// whether or not it changed anything.
     fn set_buffer_lang_type(&mut self, id: isize, lang: i32) -> bool;
+    /// Switch the current buffer to the `index`-th User Defined Language,
+    /// in the order the host lists them: what [`NPPM_MENUCOMMAND`] asks
+    /// for with [`IDM_LANG_USER`] `+ 1 + index`. Nothing happens when
+    /// there is no such UDL; the message answers TRUE either way, as
+    /// Notepad++'s does, so nothing is reported back.
+    fn set_current_user_lang(&mut self, index: usize);
     fn set_menu_item_check(&mut self, cmd_id: i32, checked: bool);
     /// Activate the buffer at index `pos` in view `view`. Phase 3
     /// single-tab is a no-op success.
@@ -1304,13 +1368,8 @@ pub trait HostServices {
     /// item). Returns `false` for unknown values.
     fn set_line_number_width_mode(&mut self, mode: i32) -> bool;
 
-    /// Number of user-defined languages currently registered.
-    /// Drives [`NPPM_GETNBUSERLANG`]. Code++ does not yet
-    /// implement UDL — there is no menu, no XML parser, no
-    /// runtime registry — so this is permanently 0 until the
-    /// UDL system lands. The honest count answers the contract;
-    /// plugins gating on `if (NPPM_GETNBUSERLANG())` see "no
-    /// UDLs" and skip their UDL-aware code path.
+    /// Number of User Defined Languages the host has loaded. Drives
+    /// [`NPPM_GETNBUSERLANG`].
     fn user_lang_count(&self) -> i32;
 
     /// Look up the keyboard shortcut for a built-in command id.
@@ -1614,18 +1673,26 @@ pub unsafe fn dispatch_nppm<S: HostServices>(
         }
 
         NPPM_GETCURRENTLANGTYPE => {
-            // lParam is `LangType*` OUT.
-            let id = services.current_buffer_id();
-            let lang = services.buffer_lang_type(id);
-            if lparam != 0 {
+            // lParam is `LangType*` OUT. Notepad++ answers FALSE, and
+            // writes nothing, when it is NULL. With no current buffer,
+            // which Notepad++ never lacks, the language is -1: FALSE then,
+            // with L_TEXT written, so a plugin that does not check the
+            // answer reads a language that exists rather than an index
+            // below its tables.
+            if lparam == 0 {
+                0
+            } else {
+                let id = services.current_buffer_id();
+                let lang = services.buffer_lang_type(id);
+                let known = lang >= 0;
                 // SAFETY: plugin promises lparam is a valid LangType*
                 // (sizeof == int) it owns. write_unaligned for the
                 // same reason as NPPM_GETCURRENTSCINTILLA above.
                 unsafe {
-                    core::ptr::write_unaligned(lparam as *mut i32, lang);
+                    core::ptr::write_unaligned(lparam as *mut i32, if known { lang } else { 0 });
                 }
+                isize::from(known)
             }
-            1 // TRUE
         }
 
         NPPM_SETCURRENTLANGTYPE => {
@@ -2017,7 +2084,15 @@ pub unsafe fn dispatch_nppm<S: HostServices>(
         }
 
         NPPM_MENUCOMMAND => {
-            services.menu_command(lparam as i32);
+            // A User Defined Language's command switches the current
+            // buffer to it here, since only the shell knows the UDLs;
+            // every other command goes to the UI's menu.
+            let cmd_id = lparam as i32;
+            if let Some(index) = user_lang_menu_index(cmd_id) {
+                services.set_current_user_lang(index);
+            } else {
+                services.menu_command(cmd_id);
+            }
             1
         }
 
@@ -2104,7 +2179,16 @@ pub unsafe fn dispatch_nppm<S: HostServices>(
             // re-applying the same lexer would visibly flicker the
             // colours and the notification would be a false-positive.
             // The trait impl is responsible for that idempotence.
-            isize::from(services.set_buffer_lang_type(wparam as isize, lparam as i32))
+            //
+            // `L_USER` names no particular User Defined Language, and
+            // Notepad++'s header lists it as unsupported here: FALSE,
+            // nothing asked. `NPPM_SETCURRENTLANGTYPE` passes it on.
+            let lang = lparam as i32;
+            if lang == L_USER {
+                0
+            } else {
+                isize::from(services.set_buffer_lang_type(wparam as isize, lang))
+            }
         }
 
         NPPM_GETBUFFERENCODING => {
@@ -2602,23 +2686,43 @@ pub unsafe fn dispatch_nppm<S: HostServices>(
         NPPM_GETLANGUAGENAME => {
             // wparam: LangType id (i32 widened to usize by Win32's
             // `WPARAM`). lparam: wide char* OUT, or 0 for size-probe.
-            // Returns count of TCHARs needed (incl. NUL) on probe /
-            // count written on store. 0 on unknown lang — plugins
-            // that expect a valid lang already bounded their wparam.
+            // Returns the count of TCHARs, without the NUL, on the probe
+            // and on the write alike, as Notepad++'s header says. 0, and
+            // an empty string, for a lang the host has no name for —
+            // plugins that expect a valid lang already bounded their
+            // wparam.
             //
             // `wparam as i32` truncates the upper 32 bits. The N++
             // ABI specifies LangType is a 32-bit signed int (the
             // `LangType_` enum), so a plugin sending a wParam whose
             // high bits are non-zero is malformed; the truncation
             // matches the ABI without an explicit guard.
-            write_lang_string_with_probe(services.language_name(wparam as i32), lparam)
+            let lang = wparam as i32;
+            let name = if lang == L_USER {
+                Some(user_lang_label(
+                    USER_LANG_NAME,
+                    services.current_user_lang_name(),
+                ))
+            } else {
+                services.language_name(lang).map(Cow::Borrowed)
+            };
+            write_lang_string_with_probe(name.as_deref(), lparam)
         }
 
         NPPM_GETLANGUAGEDESC => {
             // Same shape as NPPM_GETLANGUAGENAME above; longer
             // human-readable description, same probe contract,
             // same `wparam as i32` ABI truncation.
-            write_lang_string_with_probe(services.language_desc(wparam as i32), lparam)
+            let lang = wparam as i32;
+            let desc = if lang == L_USER {
+                Some(user_lang_label(
+                    USER_LANG_DESC,
+                    services.current_user_lang_name(),
+                ))
+            } else {
+                services.language_desc(lang).map(Cow::Borrowed)
+            };
+            write_lang_string_with_probe(desc.as_deref(), lparam)
         }
 
         NPPM_ALLOCATESUPPORTED => isize::from(services.alloc_supported()),
@@ -2873,10 +2977,17 @@ pub unsafe fn dispatch_nppm<S: HostServices>(
         }
 
         NPPM_GETNBUSERLANG => {
-            // No args. Returns the count of user-defined
-            // languages registered with the host. Code++ has no
-            // UDL system yet — this is permanently 0 until that
-            // lands.
+            // Returns the count of User Defined Languages. lParam is an
+            // optional `int*` OUT for the command their menu rows count
+            // from, which Notepad++ writes whenever it is not NULL.
+            if lparam != 0 {
+                // SAFETY: plugin promises a non-NULL lparam is a valid
+                // `int*` it owns. write_unaligned for the same reason as
+                // NPPM_GETCURRENTSCINTILLA above.
+                unsafe {
+                    core::ptr::write_unaligned(lparam as *mut i32, IDM_LANG_USER);
+                }
+            }
             services.user_lang_count() as isize
         }
 
@@ -3150,30 +3261,54 @@ unsafe fn wide_ptr_to_string(mut p: *const u16) -> String {
     s
 }
 
+/// The command id `NPPM_MENUCOMMAND` uses for the `index`-th User
+/// Defined Language, inverted: `Some(index)` for an id strictly between
+/// [`IDM_LANG_USER`] and [`IDM_LANG_USER_LIMIT`], as Notepad++'s own
+/// command handler takes them, and `None` for any other id.
+/// `IDM_LANG_USER` itself is Notepad++'s unnamed User Defined Language,
+/// which Code++ does not have, and goes to the menu with the rest.
+fn user_lang_menu_index(cmd_id: i32) -> Option<usize> {
+    if cmd_id > IDM_LANG_USER && cmd_id < IDM_LANG_USER_LIMIT {
+        usize::try_from(cmd_id - IDM_LANG_USER - 1).ok()
+    } else {
+        None
+    }
+}
+
+/// [`L_USER`]'s name or description: `base`, followed by ` - ` and the
+/// current buffer's User Defined Language when it is in one, Notepad++'s
+/// rule. The suffix names the *current* buffer's UDL whichever buffer the
+/// plugin has in mind, since the message carries only a language.
+fn user_lang_label(base: &'static str, udl: Option<String>) -> Cow<'static, str> {
+    match udl {
+        Some(name) => Cow::Owned(format!("{base} - {name}")),
+        None => Cow::Borrowed(base),
+    }
+}
+
 /// Shared body for `NPPM_GETLANGUAGENAME` / `NPPM_GETLANGUAGEDESC`.
 /// Implements the N++ contract: `lparam == 0` means "probe — return
-/// the number of TCHARs the host *will write* if a buffer of that
-/// size is supplied"; otherwise write up to `MAX_PATH_TCHARS` units
-/// into the plugin's buffer and return the count actually written.
-/// `None` (unknown lang) reports zero on both probe and write —
-/// plugins reading the probe see "no name available" rather than
-/// allocating a one-NUL buffer that would silently match an empty
-/// real name.
+/// the number of TCHARs the host will write, not counting the NUL";
+/// otherwise write up to `MAX_PATH_TCHARS` units, the NUL included,
+/// into the plugin's buffer and return the count written, again not
+/// counting the NUL. A plugin allocates the probe plus one, as the
+/// header tells it to. `None` (unknown lang) counts as an empty name:
+/// zero on both, and a lone NUL written, so the plugin's buffer holds
+/// a string rather than whatever was in it.
+///
+/// Until Phase 5 both counts included the NUL, one more than
+/// Notepad++'s header says, so a plugin that kept the count as the
+/// string's length kept the NUL with it.
 ///
 /// Probe and write must agree on the same number for the protocol
-/// to hold: a plugin that allocates `probe` units expects the write
-/// to fill exactly that many. So the probe path applies the same
-/// `MAX_PATH_TCHARS` cap the write path applies — for any future
-/// language name long enough to be truncated, both paths now report
-/// the truncated length.
-fn write_lang_string_with_probe(name: Option<&'static str>, lparam: isize) -> isize {
-    let Some(name) = name else { return 0 };
+/// to hold: a plugin that allocates `probe + 1` units expects the
+/// write to fit in them. So both report the name as [`lang_label_cut`]
+/// leaves it: cut to `MAX_PATH_TCHARS - 1` units, which a User Defined
+/// Language's name, taken from its file, can exceed.
+fn write_lang_string_with_probe(name: Option<&str>, lparam: isize) -> isize {
+    let name = lang_label_cut(name.unwrap_or(""));
     if lparam == 0 {
-        // +1 for the trailing NUL the host always writes; cap at
-        // MAX_PATH_TCHARS to match the truncation `write_wide_path`
-        // applies on the write side.
-        let codeunit_count = name.encode_utf16().count().min(MAX_PATH_TCHARS - 1);
-        (codeunit_count + 1) as isize
+        name.encode_utf16().count() as isize
     } else {
         // SAFETY: per the documented ABI, plugin promises `lparam`
         // points to a wide buffer of at least `MAX_PATH_TCHARS`
@@ -3189,8 +3324,27 @@ fn write_lang_string_with_probe(name: Option<&'static str>, lparam: isize) -> is
                 std::path::Path::new(name),
             )
         };
-        written as isize
+        // `written` counts the NUL, which the ABI leaves out.
+        written.saturating_sub(1) as isize
     }
+}
+
+/// `name` as [`write_lang_string_with_probe`] hands it over: up to its
+/// first NUL, which ends the string a plugin reads, and then the longest
+/// run of whole characters that fits in `MAX_PATH_TCHARS - 1` UTF-16
+/// units, leaving the last for the NUL. Cutting between characters keeps
+/// a surrogate pair whole, where a cut by unit could leave its first
+/// half at the end.
+fn lang_label_cut(name: &str) -> &str {
+    let name = name.split('\0').next().unwrap_or_default();
+    let mut units = 0;
+    for (at, c) in name.char_indices() {
+        units += c.len_utf16();
+        if units > MAX_PATH_TCHARS - 1 {
+            return &name[..at];
+        }
+    }
+    name
 }
 
 /// Write `path` as a null-terminated wide string into the buffer at
@@ -3368,8 +3522,10 @@ mod tests {
         alloc_cmd_id_limit: i32,
         next_alloc_marker: i32,
         alloc_marker_limit: i32,
-        /// Static count for `NPPM_GETNBUSERLANG`. Tests that
-        /// pretend Code++ has UDL set this manually.
+        /// What `current_user_lang_name` answers: the User Defined
+        /// Language the current buffer is in, if any.
+        current_udl: Option<String>,
+        /// Static count for `NPPM_GETNBUSERLANG`.
         user_lang_count: i32,
         /// Lookup table for `NPPM_GETSHORTCUTBYCMDID`. Pairs
         /// `(cmd_id, ShortcutKey)`.
@@ -3490,6 +3646,9 @@ mod tests {
                 _ => None,
             }
         }
+        fn current_user_lang_name(&self) -> Option<String> {
+            self.current_udl.clone()
+        }
         fn plugins_config_dir(&self) -> PathBuf {
             self.plugins_dir.clone()
         }
@@ -3523,6 +3682,9 @@ mod tests {
         }
         fn menu_command(&mut self, cmd_id: i32) {
             self.record(format!("menu_cmd={cmd_id}"));
+        }
+        fn set_current_user_lang(&mut self, index: usize) {
+            self.record(format!("set_udl={index}"));
         }
         fn make_current_buffer_dirty(&mut self) {
             self.record("dirty");
@@ -4066,6 +4228,46 @@ mod tests {
         // the HWND — plugins read the HWND from NppData.
         assert_eq!(r, Some(0));
         assert_eq!(view, 0);
+    }
+
+    #[test]
+    fn get_current_lang_type_with_no_pointer_answers_false() {
+        // Notepad++ answers FALSE, and writes nothing, for a NULL lParam.
+        let mut s = MockServices {
+            current_buffer: 7,
+            buffer_lang: 5,
+            ..Default::default()
+        };
+        let r = unsafe { dispatch_nppm(&mut s, NPPM_GETCURRENTLANGTYPE, 0, 0) };
+        assert_eq!(r, Some(0));
+    }
+
+    #[test]
+    fn get_current_lang_type_with_no_current_buffer_answers_false() {
+        // The services' -1 for no such buffer: FALSE, and L_TEXT written
+        // for a plugin that reads the value without checking.
+        let mut s = MockServices {
+            buffer_lang: -1,
+            ..Default::default()
+        };
+        let mut lang: i32 = -77;
+        let r =
+            unsafe { dispatch_nppm(&mut s, NPPM_GETCURRENTLANGTYPE, 0, &raw mut lang as isize) };
+        assert_eq!((r, lang), (Some(0), 0));
+    }
+
+    #[test]
+    fn get_current_lang_type_answers_true_for_normal_text() {
+        // L_TEXT is 0, every untitled buffer's language: a real answer.
+        let mut s = MockServices {
+            current_buffer: 7,
+            buffer_lang: 0,
+            ..Default::default()
+        };
+        let mut lang: i32 = -77;
+        let r =
+            unsafe { dispatch_nppm(&mut s, NPPM_GETCURRENTLANGTYPE, 0, &raw mut lang as isize) };
+        assert_eq!((r, lang), (Some(1), 0));
     }
 
     #[test]
@@ -4695,6 +4897,14 @@ mod tests {
         // above already guarantees: CODEPPMSG is WM_USER + 5000,
         // above NPPMSG + 200 and RUNCOMMAND_USER + 100.
         assert_eq!(NPPN_FIRST, 1000);
+        // The User Defined Language numbers, from upstream's
+        // `enum LangType` and its `menuCmdID.h` (`IDM_LANG` is
+        // `IDM + 6000`, `IDM` 40000). The checker in
+        // `tools/npp-abi-check/` reads neither file yet, so these were
+        // compared by hand (DESIGN.md §7.4).
+        assert_eq!(L_USER, 15);
+        assert_eq!(IDM_LANG_USER, 40_000 + 6_000 + 180);
+        assert_eq!(IDM_LANG_USER_LIMIT, 40_000 + 6_000 + 210);
     }
 
     #[test]
@@ -4707,43 +4917,209 @@ mod tests {
     }
 
     #[test]
-    fn get_language_name_probe_returns_length_with_nul() {
-        // wparam = LangType (81 = L_RUST in our compat header), lparam = 0
-        // → probe. Expect "Rust".len() + 1 (4 + 1 NUL = 5 TCHARs).
+    fn set_buffer_lang_type_refuses_l_user_without_asking() {
+        // Notepad++'s header: "L_USER and L_EXTERNAL are not supported".
+        // L_USER names no particular User Defined Language.
         let mut s = MockServices::default();
-        let r = unsafe { dispatch_nppm(&mut s, NPPM_GETLANGUAGENAME, 81, 0) };
-        assert_eq!(r, Some(5));
+        let r = unsafe { dispatch_nppm(&mut s, NPPM_SETBUFFERLANGTYPE, 7, L_USER as isize) };
+        assert_eq!(r, Some(0));
+        assert!(s.calls().is_empty(), "{:?}", s.calls());
     }
 
     #[test]
-    fn get_language_name_unknown_lang_returns_zero() {
-        // Unknown LangType id — host has no name for it. Plugins
-        // that read the probe see 0 and back off rather than
-        // allocating a one-NUL buffer that would silently match an
-        // empty real name.
+    fn set_current_lang_type_passes_l_user_on() {
+        // NPPM_SETCURRENTLANGTYPE takes L_USER in Notepad++, so the host
+        // decides: it keeps a buffer's UDL, and refuses otherwise.
+        let mut s = MockServices {
+            current_buffer: 7,
+            ..Default::default()
+        };
+        let r = unsafe { dispatch_nppm(&mut s, NPPM_SETCURRENTLANGTYPE, 0, L_USER as isize) };
+        assert_eq!(r, Some(1));
+        assert_eq!(s.calls(), vec![format!("set_lang[7]={L_USER}")]);
+    }
+
+    #[test]
+    fn user_lang_menu_index_takes_the_ids_strictly_inside_the_range() {
+        assert_eq!(user_lang_menu_index(IDM_LANG_USER), None);
+        assert_eq!(user_lang_menu_index(IDM_LANG_USER + 1), Some(0));
+        assert_eq!(user_lang_menu_index(IDM_LANG_USER_LIMIT - 1), Some(28));
+        assert_eq!(user_lang_menu_index(IDM_LANG_USER_LIMIT), None);
+        assert_eq!(user_lang_menu_index(0), None);
+        assert_eq!(user_lang_menu_index(-1), None);
+    }
+
+    #[test]
+    fn a_user_defined_language_command_switches_the_current_buffer() {
+        // NPPM_MENUCOMMAND with IDM_LANG_USER + 1 + i asks for the i-th
+        // UDL; it answers TRUE whether or not there is one, as Notepad++
+        // does, and never reaches the UI's menu.
+        let mut s = MockServices::default();
+        for cmd in [IDM_LANG_USER + 2, IDM_LANG_USER + 9] {
+            let r = unsafe { dispatch_nppm(&mut s, NPPM_MENUCOMMAND, 0, cmd as isize) };
+            assert_eq!(r, Some(1));
+        }
+        assert_eq!(s.calls(), vec!["set_udl=1", "set_udl=8"]);
+    }
+
+    #[test]
+    fn the_commands_around_the_user_defined_languages_go_to_the_menu() {
+        let mut s = MockServices::default();
+        for cmd in [IDM_LANG_USER, IDM_LANG_USER_LIMIT] {
+            let r = unsafe { dispatch_nppm(&mut s, NPPM_MENUCOMMAND, 0, cmd as isize) };
+            assert_eq!(r, Some(1));
+        }
+        assert_eq!(
+            s.calls(),
+            vec![
+                format!("menu_cmd={IDM_LANG_USER}"),
+                format!("menu_cmd={IDM_LANG_USER_LIMIT}"),
+            ]
+        );
+    }
+
+    #[test]
+    fn get_language_name_probe_returns_the_length_without_the_nul() {
+        // wparam = LangType (81 = L_RUST in our compat header), lparam = 0
+        // → probe. Notepad++'s header: "\0 is not included", so "Rust"
+        // is 4; the plugin allocates 5.
+        let mut s = MockServices::default();
+        let r = unsafe { dispatch_nppm(&mut s, NPPM_GETLANGUAGENAME, 81, 0) };
+        assert_eq!(r, Some(4));
+    }
+
+    #[test]
+    fn get_language_name_unknown_lang_is_an_empty_name() {
+        // Unknown LangType id — host has no name for it. The probe says
+        // 0, and the write leaves an empty string, not whatever the
+        // plugin's buffer held.
         let mut s = MockServices::default();
         let r = unsafe { dispatch_nppm(&mut s, NPPM_GETLANGUAGENAME, 9999, 0) };
         assert_eq!(r, Some(0));
+        let mut buf = [0xAAAAu16; 4];
+        let r = unsafe {
+            dispatch_nppm(
+                &mut s,
+                NPPM_GETLANGUAGENAME,
+                9999,
+                buf.as_mut_ptr() as isize,
+            )
+        };
+        assert_eq!(r, Some(0));
+        assert_eq!(buf, [0, 0xAAAA, 0xAAAA, 0xAAAA]);
     }
 
     #[test]
     fn get_language_name_writes_wide_string() {
         let mut s = MockServices::default();
-        let mut buf = [0u16; 16];
+        let mut buf = [0xAAAAu16; 16];
         let r =
             unsafe { dispatch_nppm(&mut s, NPPM_GETLANGUAGENAME, 81, buf.as_mut_ptr() as isize) };
-        // Wrote 5 TCHARs ("Rust\0").
-        assert_eq!(r, Some(5));
-        let written: Vec<u16> = buf.iter().take_while(|&&c| c != 0).copied().collect();
-        assert_eq!(String::from_utf16(&written).unwrap(), "Rust");
+        // Wrote "Rust\0" and reports the 4 characters, without the NUL.
+        assert_eq!(r, Some(4));
+        assert_eq!(read_wide(&buf), "Rust");
+        assert_eq!(buf[5], 0xAAAA, "nothing written past the NUL");
     }
 
     #[test]
     fn get_language_desc_returns_long_form() {
-        // L_CPP description is "C++ source file" (15 chars + NUL = 16).
+        // L_CPP description is "C++ source file", 15 characters.
         let mut s = MockServices::default();
         let r = unsafe { dispatch_nppm(&mut s, NPPM_GETLANGUAGEDESC, 3, 0) };
-        assert_eq!(r, Some(16));
+        assert_eq!(r, Some(15));
+    }
+
+    /// The string a wide buffer holds up to its first NUL.
+    fn read_wide(buf: &[u16]) -> String {
+        let end = buf.iter().position(|&c| c == 0).expect("no NUL written");
+        String::from_utf16(&buf[..end]).unwrap()
+    }
+
+    /// Ask for `msg` (`NPPM_GETLANGUAGENAME` or `NPPM_GETLANGUAGEDESC`)
+    /// about `lang` the way the header says to: probe, then write into a
+    /// buffer the plugin would allocate as the probe plus one. Returns the
+    /// string and both counts. The buffer is larger than any write the
+    /// host makes and filled with a sentinel, so a write that does not fit
+    /// the probe fails the assertion instead of running past the end.
+    fn probe_then_write(s: &mut MockServices, msg: u32, lang: i32) -> (String, isize, isize) {
+        let probe = unsafe { dispatch_nppm(s, msg, lang as usize, 0) }.unwrap();
+        let mut buf = vec![0xAAAAu16; MAX_PATH_TCHARS + 8];
+        let written =
+            unsafe { dispatch_nppm(s, msg, lang as usize, buf.as_mut_ptr() as isize) }.unwrap();
+        let fits = usize::try_from(probe).unwrap();
+        assert_eq!(buf[fits], 0, "the write does not end where the probe said");
+        assert!(
+            buf[fits + 1..].iter().all(|&c| c == 0xAAAA),
+            "the write went past the probe plus one"
+        );
+        (read_wide(&buf), probe, written)
+    }
+
+    #[test]
+    fn l_user_is_named_after_the_current_user_defined_language() {
+        // Notepad++'s rule: L_USER's name and description, then " - " and
+        // the current buffer's UDL. The only place a plugin learns which
+        // UDL a buffer is in.
+        let mut s = MockServices {
+            current_udl: Some("Markdown (preinstalled)".into()),
+            ..Default::default()
+        };
+        let (name, probe, written) = probe_then_write(&mut s, NPPM_GETLANGUAGENAME, L_USER);
+        assert_eq!(name, "udf - Markdown (preinstalled)");
+        assert_eq!((probe, written), (29, 29));
+        let (desc, probe, written) = probe_then_write(&mut s, NPPM_GETLANGUAGEDESC, L_USER);
+        assert_eq!(desc, "User Defined language file - Markdown (preinstalled)");
+        assert_eq!((probe, written), (52, 52));
+    }
+
+    #[test]
+    fn l_user_with_no_user_defined_language_in_front_is_plain() {
+        let mut s = MockServices::default();
+        let (name, probe, _) = probe_then_write(&mut s, NPPM_GETLANGUAGENAME, L_USER);
+        assert_eq!((name.as_str(), probe), (USER_LANG_NAME, 3));
+        let (desc, _, _) = probe_then_write(&mut s, NPPM_GETLANGUAGEDESC, L_USER);
+        assert_eq!(desc, USER_LANG_DESC);
+    }
+
+    #[test]
+    fn a_long_user_defined_language_name_is_cut_alike_on_probe_and_write() {
+        // A UDL's name comes from its file and has no length limit; the
+        // write stops at MAX_PATH_TCHARS with the NUL, and the probe
+        // promises no more.
+        let mut s = MockServices {
+            current_udl: Some("x".repeat(400)),
+            ..Default::default()
+        };
+        let (name, probe, written) = probe_then_write(&mut s, NPPM_GETLANGUAGENAME, L_USER);
+        let cap = (MAX_PATH_TCHARS - 1) as isize;
+        assert_eq!((probe, written), (cap, cap));
+        assert!(name.starts_with("udf - xxx"));
+        assert_eq!(name.len(), MAX_PATH_TCHARS - 1);
+    }
+
+    #[test]
+    fn a_cut_name_keeps_its_characters_whole() {
+        // U+1D11E takes two UTF-16 units. "udf - " is six, so 126 of
+        // them fill 258 and a 127th would need 260: the cut stops at 258
+        // rather than leave half a pair in the 259th unit.
+        let mut s = MockServices {
+            current_udl: Some("\u{1D11E}".repeat(200)),
+            ..Default::default()
+        };
+        let (name, probe, written) = probe_then_write(&mut s, NPPM_GETLANGUAGENAME, L_USER);
+        assert_eq!((probe, written), (258, 258));
+        assert_eq!(name, format!("udf - {}", "\u{1D11E}".repeat(126)));
+    }
+
+    #[test]
+    fn a_name_ends_at_its_first_nul() {
+        // The plugin reads a C string, so the count stops where it does.
+        let mut s = MockServices {
+            current_udl: Some("Mark\0down".into()),
+            ..Default::default()
+        };
+        let (name, probe, written) = probe_then_write(&mut s, NPPM_GETLANGUAGENAME, L_USER);
+        assert_eq!((name.as_str(), probe, written), ("udf - Mark", 10, 10));
     }
 
     #[test]
@@ -6032,18 +6408,29 @@ mod tests {
     #[test]
     fn user_lang_count_passes_through() {
         let mut s = MockServices::default();
-        // Default 0 — Code++ ships no UDLs.
         assert_eq!(
             unsafe { dispatch_nppm(&mut s, NPPM_GETNBUSERLANG, 0, 0) },
             Some(0)
         );
-        // Mock can pretend a UDL count for tests that exercise
-        // the contract once the UDL system lands.
         s.user_lang_count = 7;
         assert_eq!(
             unsafe { dispatch_nppm(&mut s, NPPM_GETNBUSERLANG, 0, 0) },
             Some(7)
         );
+    }
+
+    #[test]
+    fn user_lang_count_names_the_command_the_rows_count_from() {
+        // Notepad++ writes IDM_LANG_USER through a non-NULL lParam, the
+        // base NPPM_MENUCOMMAND's UDL commands count from.
+        let mut s = MockServices {
+            user_lang_count: 3,
+            ..Default::default()
+        };
+        let mut base: i32 = 0;
+        let r = unsafe { dispatch_nppm(&mut s, NPPM_GETNBUSERLANG, 0, &raw mut base as isize) };
+        assert_eq!(r, Some(3));
+        assert_eq!(base, IDM_LANG_USER);
     }
 
     #[test]

@@ -7300,8 +7300,9 @@ unsafe fn append_udls_to_menu(language_menu: HMENU, registry: &codepp_udl::UdlRe
             // config directory with >900 UDL files can produce
             // entries here that we log-and-drop from the menu
             // — the UDL still loads and can be applied via
-            // extension detection or plugin API, it just has no
-            // Language-menu entry. See DESIGN.md §7.2 Phase 4.6
+            // extension detection, it just has no Language-menu
+            // entry (a plugin reaches only the first 29 UDLs, through
+            // `NPPM_MENUCOMMAND`). See DESIGN.md §7.2 Phase 4.6
             // for the reserved-id-range rationale.
             if offset < 0 || offset > i32::from(ID_UDL_ITEM_END - ID_UDL_ITEM_BASE) {
                 tracing::warn!(
@@ -16843,8 +16844,9 @@ unsafe fn handle_language_menu_click(hwnd: HWND, lang_id: i32) {
 unsafe fn handle_language_menu_click_inner(hwnd: HWND, lang_id: i32) {
     // The host's own menu, not a plugin: until Phase 5 this sent the pick
     // as `NPPM_SETBUFFERLANGTYPE` through the plugin dispatcher, as if a
-    // plugin had asked. The dispatcher is the plugins' route; the menus
-    // take the shell's.
+    // plugin had asked. The dispatcher is the plugins' route, and it
+    // refuses a User Defined Language's id, one plugins are never given;
+    // the menus take the shell's.
     if let Some(state) = unsafe { state_from_hwnd(hwnd) } {
         let (shell, mut ui) = state.split();
         // Whether it changed anything does not matter here: the delivery
@@ -32464,9 +32466,11 @@ mod language_menu_guards {
     //! Source-level guards for the Language menu's route. A pick is the
     //! host's own and goes through `Shell::set_active_lang`, as the GTK and
     //! Cocoa menus do, not through the plugin dispatcher, the plugins'
-    //! route; this menu's picks went that way until Phase 5. Either route
-    //! compiles and runs, and nothing headless here drives a `WM_COMMAND`,
-    //! so the route is pinned in the source.
+    //! route, which refuses a User Defined Language's id, one plugins are
+    //! never given (DESIGN.md §7.4). A pick sent through it, as this
+    //! menu's were until Phase 5, compiles, runs, and leaves the buffer as
+    //! it was when the pick is a UDL. Nothing headless here drives a
+    //! `WM_COMMAND`, so the route is pinned in the source.
 
     use super::plugin_reentry_guards::{
         block_after, code_without_strings, fn_body, production_src,
@@ -32488,7 +32492,7 @@ mod language_menu_guards {
             assert!(
                 !body.contains(plugin_route),
                 "a Language-menu pick goes through the plugin dispatcher (`{plugin_route}`), \
-                 the plugins' route, as if a plugin had asked"
+                 which refuses a User Defined Language's id"
             );
         }
         assert!(

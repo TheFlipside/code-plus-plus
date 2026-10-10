@@ -3,10 +3,13 @@
 //!
 //! `LangType` is a thin newtype over the i32 the Notepad++ plugin ABI
 //! uses (`NPPM_GETCURRENTLANGTYPE` and friends). We don't model the
-//! enum as a Rust `enum` because plugins are free to set any i32 via
-//! `NPPM_SETBUFFERLANGTYPE`, including values from N++ point releases
-//! that aren't yet in our compat header — losing those round-trips
-//! through a Rust enum would be an ABI break.
+//! enum as a Rust `enum` because plugins are free to set almost any i32
+//! via `NPPM_SETBUFFERLANGTYPE`, including values from N++ point
+//! releases that aren't yet in our compat header — losing those
+//! round-trips through a Rust enum would be an ABI break. The host
+//! refuses only negative numbers, which name no language; `L_USER`,
+//! which names no particular User Defined Language; and the numbers it
+//! gives its User Defined Languages, which plugins never see.
 //!
 //! The set of `pub const`s below covers the entire `LangType_` from
 //! `plugins/nppcompat-headers/Notepad_plus_msgs.h`. Numeric values
@@ -32,7 +35,12 @@ use std::path::Path;
 pub struct LangType(pub i32);
 
 impl LangType {
-    /// The numeric id N++ plugins observe via `NPPM_GETCURRENTLANGTYPE`.
+    /// The number itself, as Notepad++ numbers languages up to
+    /// `L_TYPESCRIPT` (85); from 86 up Code++'s numbers disagree with
+    /// Notepad++'s (DESIGN.md §7.4). Plugins are told this for a built-in
+    /// language. A User Defined Language's number,
+    /// which this returns too, never reaches a plugin: the shell answers
+    /// `L_USER` for every User Defined Language buffer.
     #[inline]
     #[must_use]
     pub fn as_npp_id(self) -> i32 {
@@ -1016,9 +1024,12 @@ pub const LANG_TABLE: &[LangEntry] = &[
 //
 // **Variants intentionally absent from `LANG_TABLE`** (so
 // `language_name`/`lexer_name`/`language_desc` return `None`):
-// - `L_ASCII` (id 14), `L_USER` (id 15) — N++'s "user-defined
-//   language" slots; covered by the greyed UDL submenu in the UI
-//   pending Phase 5 user-defined-language support.
+// - `L_ASCII` (id 14) — N++'s MS-DOS style / ASCII-art (NFO) files;
+//   no row here.
+// - `L_USER` (id 15) — the language a plugin is told a User Defined
+//   Language buffer is in. Code++'s UDLs carry ids of their own above
+//   the built-in range, which never leave the process (see
+//   `codepp_udl::UDL_LANG_TYPE_BASE`).
 // - `L_FLASH` (id 27) — ActionScript / Flash; no Lexilla lexer
 //   that maps to N++'s `LexFlash` registration. Out of menu scope.
 // - `L_JS` (id 19) — N++ keeps two JavaScript ids: this older
@@ -1131,9 +1142,9 @@ pub const L_SAS: LangType = LangType(91);
 pub const L_ERRORLIST: LangType = LangType(92);
 pub const L_EXTERNAL: LangType = LangType(93);
 /// Notepad++ added JSON5 as a distinct language id in a recent
-/// release; numeric value `94` matches the upstream public ABI as
-/// of the Lexilla 5.x line that ships with the latest N++ stable.
-/// Kept distinct from [`L_JSON`] so the menu can show two
+/// release. **Its number there is 86, not 94**: Code++ placed it past
+/// `L_EXTERNAL`, and its numbers from 86 up disagree with Notepad++'s
+/// (DESIGN.md §7.4). Kept distinct from [`L_JSON`] so the menu can show two
 /// alphabetically-adjacent entries (`JSON` / `JSON5`) and a
 /// plugin can address either independently via
 /// `NPPM_SETBUFFERLANGTYPE`.

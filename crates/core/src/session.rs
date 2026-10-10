@@ -126,11 +126,14 @@ pub struct Tab {
     /// UDL's numeric id is assigned in directory-scan order and so
     /// names a different language once the `userDefineLangs/` set
     /// changes. Two things can still put a UDL-range *number* here: a
-    /// session.xml written before that split, which the load path
-    /// declines and replaces with extension detection; and an id no
-    /// UDL claims, which only a plugin's raw `NPPM_SETBUFFERLANGTYPE`
-    /// can produce and which round-trips verbatim under this field's
-    /// stated "unknown values survive" contract. See [`Self::udl`].
+    /// session.xml written before that split; and an id no UDL claims,
+    /// which a tab holds only when the host's registry changed under it
+    /// (plugins are never given these ids, and nothing may set one the
+    /// registry does not hold), and which is written verbatim under this
+    /// field's stated "unknown values survive" contract. The load path
+    /// declines both and replaces them with extension detection, as it
+    /// does `L_USER` and a negative number, which name no language a tab
+    /// may have. See [`Self::udl`].
     #[serde(rename = "@lang", skip_serializing_if = "Option::is_none", default)]
     pub lang: Option<i32>,
     /// `<UserLang name="...">` of the User Defined Language this

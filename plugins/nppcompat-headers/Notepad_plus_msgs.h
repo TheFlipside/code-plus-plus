@@ -61,9 +61,18 @@
 
 /* v1: returns the HWND of the active Scintilla view. */
 #define NPPM_GETCURRENTSCINTILLA          (NPPMSG + 4)
-/* v1: returns the active buffer's lang-type id (Lang* enum). */
+/* v1: writes the active buffer's lang-type id (LangType) through
+ *     lParam, an int*, and returns TRUE; FALSE, writing nothing, for a
+ *     NULL lParam, and FALSE, writing L_TEXT, with no current buffer. A
+ *     buffer in any User Defined Language is L_USER;
+ *     NPPM_GETLANGUAGENAME with L_USER names the language. */
 #define NPPM_GETCURRENTLANGTYPE           (NPPMSG + 5)
-/* v1: sets the active buffer's lang-type id. */
+/* v1: sets the active buffer's lang-type id to lParam; a negative one
+ *     is refused (FALSE). L_USER names no particular User Defined
+ *     Language: TRUE, changing nothing, on a buffer already in one, so
+ *     writing back what was read changes nothing; FALSE on any other.
+ *     Switch a buffer to a User Defined Language with NPPM_MENUCOMMAND
+ *     (see NPPM_GETNBUSERLANG). */
 #define NPPM_SETCURRENTLANGTYPE           (NPPMSG + 6)
 /* v2: count of currently open files. wParam = selector
  *     (ALL_OPEN_FILES, PRIMARY_VIEW, SECOND_VIEW). Code++ is
@@ -299,12 +308,11 @@ typedef struct sessionInfo_ {
  *     panels is refused. */
 #define NPPM_CREATESCINTILLAHANDLE        (NPPMSG + 20)
 #define NPPM_DESTROYSCINTILLAHANDLE       (NPPMSG + 21)  /* deprecated upstream */
-/* v3: number of user-defined languages (UDL) currently
- *     registered with the host. Code++ does not yet implement
- *     UDL — the menu, the XML parser, and the runtime registry
- *     are all Phase 4+ polish — so this is permanently 0 until
- *     UDL lands. Plugins gating on `if (NPPM_GETNBUSERLANG())`
- *     skip their UDL-aware code paths. */
+/* v3: number of User Defined Languages the host has loaded. A
+ *     non-NULL lParam, an int*, receives the command their rows count
+ *     from, Notepad++'s IDM_LANG_USER (46180): NPPM_MENUCOMMAND with
+ *     that + 1 + i switches the current buffer to the i-th of them,
+ *     while the command stays below IDM_LANG_USER_LIMIT (46210). */
 #define NPPM_GETNBUSERLANG                (NPPMSG + 22)
 /* v2: returns the active tab index in the requested view
  *     (wParam: 0 = primary, 1 = secondary). Returns -1 when the
@@ -538,7 +546,9 @@ typedef struct CommunicationInfo_ {
     void*        info;            /* sender-defined opaque payload */
 } CommunicationInfo;
 #endif
-/* v1: invoke the menu command identified by lParam (cmdID). */
+/* v1: invoke the menu command identified by lParam (cmdID). A User
+ *     Defined Language's command (see NPPM_GETNBUSERLANG) switches the
+ *     current buffer to that language. */
 #define NPPM_MENUCOMMAND                  (NPPMSG + 48)
 /* v3: open the tab-bar context menu programmatically.
  *     wParam: view (0 = primary, 1 = secondary).
@@ -600,8 +610,14 @@ typedef struct CommunicationInfo_ {
  *     Returns 1 on success (id resolved to a path and reload was
  *     issued), 0 if the id is unknown or has no on-disk path. */
 #define NPPM_RELOADBUFFERID               (NPPMSG + 61)
-/* v1: returns the lang-type id for the buffer at wParam. */
+/* v1: returns the lang-type id for the buffer at wParam, -1 for an
+ *     unknown buffer, and L_USER for a buffer in any User Defined
+ *     Language. */
 #define NPPM_GETBUFFERLANGTYPE            (NPPMSG + 64)
+/* v1: sets the lang-type id of the buffer at wParam to lParam. L_USER
+ *     and negative ids are refused (FALSE), as in Notepad++; switch a
+ *     buffer to a User Defined Language with NPPM_MENUCOMMAND (see
+ *     NPPM_GETNBUSERLANG). */
 #define NPPM_SETBUFFERLANGTYPE            (NPPMSG + 65)
 /* v2: returns the encoding (UniMode enum) of the buffer at wParam.
  *     -1 if the buffer id is unknown — distinct from UNI_8BIT (0)
@@ -678,6 +694,16 @@ typedef struct CommunicationInfo_ {
  *     Same shape as `NPPM_ALLOCATECMDID`. Code++ pool: 25..=31
  *     (seven markers above the bookmark slot at 24). */
 #define NPPM_ALLOCATEMARKER               (NPPMSG + 82)
+/* v1: name (GETLANGUAGENAME) or description (GETLANGUAGEDESC) of the
+ *     lang-type id in wParam, written as a wide string through lParam;
+ *     a NULL lParam asks only for the length. Both calls return the
+ *     number of characters without the NUL: allocate one more. For
+ *     L_USER, "udf" or "User Defined language file", followed, when
+ *     the current buffer is in a User Defined Language, by " - " and
+ *     that language's name, so it can change between the two calls if
+ *     the current buffer does; a plugin that cannot rule that out
+ *     passes MAX_PATH (260) units, which no write exceeds. An unknown
+ *     id has an empty name. */
 #define NPPM_GETLANGUAGENAME              (NPPMSG + 83)
 #define NPPM_GETLANGUAGEDESC              (NPPMSG + 84)
 /* v3: show or hide the doc-switcher panel.
@@ -971,9 +997,11 @@ typedef int EolType;
 
 /*
  * Lang-type IDs returned by NPPM_GETCURRENTLANGTYPE etc. These match
- * Notepad++'s `LangType` enum in numeric order. Phase 3 ships the
- * txt/cpp/rust/python entries; the rest land with Phase 4's lexer
- * wiring.
+ * Notepad++'s `LangType` enum in numeric order up to L_TYPESCRIPT (85).
+ * From 86 up they do not yet: Notepad++ has L_JSON5 and L_MSSQL there,
+ * and two more before its L_EXTERNAL (97); see DESIGN.md §7.4. Phase 3
+ * ships the txt/cpp/rust/python entries; the rest land with Phase 4's
+ * lexer wiring. A buffer in any User Defined Language reports L_USER.
  */
 typedef enum LangType_ {
     L_TEXT = 0,
