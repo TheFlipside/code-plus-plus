@@ -5494,6 +5494,15 @@ impl Shell {
             self.release_marker_before_install(idx, keeps_shadow);
             ui.set_buffer_text(&text, cursor);
             self.settle_marker_after_install(idx, keeps_shadow);
+            // The document now holds what the tab holds, so it is no longer
+            // stale, whatever an earlier landing in the background flagged.
+            // A tab can come to the front without a bind while that flag is
+            // set (a plugin's switch onto a tab whose load is in flight), and
+            // a flag left behind made the next bind of the tab in front fill
+            // the document again, which costs the caret and the undo history.
+            if let Some(tab) = self.tabs.get_mut(idx) {
+                tab.doc_needs_text = false;
+            }
         }
         ui.apply_lang(lang);
         ui.update_status(lang, &encoding, eol, byte_len);
@@ -5831,22 +5840,24 @@ impl Shell {
     /// All wrote, so a restart brought them back and a Save All put them
     /// over the file just reloaded; a marker left behind kept the tab
     /// reading modified, with a backup, over a file it now matched. The
-    /// document is released rather than refilled, which needs no swap of
-    /// the single view: the tab is materialised from the loaded text when
-    /// it is next shown, as a tab loaded in the background is. A document
-    /// the view still shows (the active tab is a fresh open still
-    /// loading, so nothing has rebound the view) stays alive on the
-    /// view's own reference until the next real rebind, and a helper's
-    /// swap in the meantime holds a reference of its own
-    /// ([`UiPlatform::release_doc`]).
+    /// document is released rather than refilled, which needs no swap onto
+    /// the reloaded tab's document: the tab is materialised from the loaded
+    /// text when it is next shown, as a tab loaded in the background is. A
+    /// document the view still shows stays alive on the view's own
+    /// reference ([`UiPlatform::release_doc`]) until the rebind below.
     ///
     /// **Without discarded work**, a tab that already owns a document now
-    /// holds the wrong text in it. Nothing rebinds it here — doing so
-    /// would point the single view at the wrong buffer for the rest of
-    /// the drain — so it is flagged for `bind_active_view` to fill on
-    /// first activation. `bind_and_fill` re-checks for unsaved work then,
-    /// because Replace-in-Files can dirty a background document in
+    /// holds the wrong text in it. It is flagged for `bind_active_view` to
+    /// fill on first activation, not filled here: filling would bind its
+    /// document into the single view, which would then show the wrong buffer
+    /// for the rest of the drain. `bind_and_fill` re-checks for unsaved work
+    /// then, because Replace-in-Files can dirty a background document in
     /// between.
+    ///
+    /// **Either way, when the tab owned a document, the view is put back on
+    /// the tab in front** if it can be behind it
+    /// ([`Shell::view_may_trail_the_front`]); the comment at the rebind says
+    /// how it gets there.
     ///
     /// **The consent is spent here either way.** It covered the unsaved
     /// work the buffer held when the Yes was given, and a document clean
@@ -5862,18 +5873,12 @@ impl Shell {
         stored_doc: isize,
         discarded_work: bool,
     ) {
-        if discarded_work {
-            if stored_doc != 0 {
-                ui.release_doc(stored_doc);
-            }
-            if let Some(tab) = self.tabs.get_mut(idx) {
-                tab.scintilla_doc = 0;
-                tab.reload_confirmed = false;
-                tab.dirty = false;
-            }
-        } else if let Some(tab) = self.tabs.get_mut(idx) {
+        if let Some(tab) = self.tabs.get_mut(idx) {
             tab.reload_confirmed = false;
-            if stored_doc != 0 {
+            if discarded_work {
+                tab.scintilla_doc = 0;
+                tab.dirty = false;
+            } else if stored_doc != 0 {
                 tab.doc_needs_text = true;
             }
         }
@@ -5884,6 +5889,44 @@ impl Shell {
         if let Some(id) = self.tabs.get(idx).map(|tab| tab.id) {
             self.forget_unsaved_state(id);
         }
+        if stored_doc == 0 {
+            return;
+        }
+        if discarded_work {
+            ui.release_doc(stored_doc);
+        }
+        // The view can still be showing this tab's document: an open moves
+        // the front when it is asked for and the view only when its file
+        // lands, so a tab shown before the open stays in the view while the
+        // new tab loads in front. Left there, what the user typed went into a
+        // document that no longer stood for its tab. A released document
+        // belongs to no tab, so the text went with it once the other file
+        // landed. A stale one still holds the text the tab had before its
+        // file landed, and the tab's next activation kept the typing in it
+        // under the file's name (`bind_and_fill`), so a save wrote it over the
+        // file, or, after an undo back to that earlier text, wrote that.
+        //
+        // Put the view on the tab in front, as `apply_failed_load` does when
+        // it removes a tab that had a document; a front tab still loading
+        // gets the empty document a click would give it, so typing there is
+        // work its landing keeps. Only when the view can be behind the front,
+        // though: a bind ends in re-styling the front document, which a
+        // plugin reloading every background tab would otherwise pay once for
+        // each.
+        if self.view_may_trail_the_front() {
+            self.bind_active_view(ui);
+        }
+    }
+
+    /// Whether the view can be showing a document other than the tab in
+    /// front's: only while that tab is still loading, has no document yet,
+    /// or holds a stale one. An open moves the front when it is asked for and
+    /// the view only when its file lands, and a plugin's switch onto a tab
+    /// whose load is in flight leaves the view where it was; every other
+    /// move of the front binds the view as it happens.
+    fn view_may_trail_the_front(&self) -> bool {
+        self.active()
+            .is_some_and(|t| t.pending_load.is_some() || t.scintilla_doc == 0 || t.doc_needs_text)
     }
 
     /// A first load that lands on a tab holding unsaved work it would not
@@ -18408,6 +18451,23 @@ mod tests {
         assert_eq!(shell.tabs[0].lang, L_RUST);
     }
 
+    /// What the loader sends for `path` read as `text`, for a test that
+    /// lands a load by hand.
+    fn loaded_file(
+        id: codepp_core::file::RequestId,
+        path: &Path,
+        text: &str,
+    ) -> codepp_core::file::LoadedFile {
+        codepp_core::file::LoadedFile {
+            id,
+            path: path.to_path_buf(),
+            text: text.to_string(),
+            encoding: Encoding::Utf8,
+            eol: Eol::Lf,
+            byte_len: text.len() as u64,
+        }
+    }
+
     /// Open each name in `names` from a fresh directory and let every load
     /// land. Returns the shell, the fixture, the directory and the paths.
     fn open_settled(names: &[&str]) -> (Shell, FakeUi, tempfile::TempDir, Vec<PathBuf>) {
@@ -19367,6 +19427,431 @@ mod tests {
             ]
         );
         assert_eq!(ui.get_buffer_text(), "typed\n");
+    }
+
+    /// A confirmed reload landing on a background tab releases that tab's
+    /// document, and the view could still be showing it: a second open had
+    /// taken the front without moving the view. The view now ends on the
+    /// tab in front, so typing there goes into that tab's own document,
+    /// which its file then lands beside; the reloaded tab shows the file.
+    #[test]
+    fn a_confirmed_background_reload_does_not_leave_the_view_on_its_document() {
+        let (mut shell, mut ui, dir, paths) = open_settled(&["a.txt"]);
+        let b = dir.path().join("b.txt");
+        std::fs::write(&b, "b\n").unwrap();
+        let a_doc = shell.tabs[0].scintilla_doc;
+        ui.buffer_text = "a edited\n".to_string();
+        ui.doc_dirty.insert(a_doc, true);
+        shell.open_file(b.clone());
+        let landing_req = shell.tabs[1].pending_load.expect("loading");
+        assert_eq!(
+            ui.current_doc, a_doc,
+            "precondition: the view is behind the front"
+        );
+        std::fs::write(&paths[0], "a from disk\n").unwrap();
+        shell.request_reload(paths[0].clone(), ReloadConsent::Confirmed);
+        let reload_req = shell.tabs[0].pending_load.expect("reloading");
+        let mut pending = Vec::new();
+
+        shell.apply_load_result(
+            &mut ui,
+            Ok(loaded_file(reload_req, &paths[0], "a from disk\n")),
+            &mut pending,
+        );
+        assert!(
+            ui.released_docs.contains(&a_doc),
+            "precondition: the confirmed reload released the edits"
+        );
+        assert_ne!(ui.current_doc, a_doc, "the view shows a released document");
+        assert_eq!(
+            Some(ui.current_doc),
+            shell.active().map(|t| t.scintilla_doc),
+            "the view shows the tab in front"
+        );
+
+        ui.buffer_text = "typed\n".to_string();
+        ui.doc_dirty.insert(ui.current_doc, true);
+        shell.apply_load_result(
+            &mut ui,
+            Ok(loaded_file(landing_req, &b, "b\n")),
+            &mut pending,
+        );
+        assert_eq!(
+            shell
+                .tabs
+                .iter()
+                .map(|t| (t.path.clone(), t.untitled_seq.is_some()))
+                .collect::<Vec<_>>(),
+            [
+                (Some(paths[0].clone()), false),
+                (None, true),
+                (Some(b), false)
+            ]
+        );
+        assert_eq!(ui.get_buffer_text(), "typed\n");
+        assert!(shell.switch_to_tab(0));
+        shell.bind_active_view(&mut ui);
+        assert_eq!(ui.get_buffer_text(), "a from disk\n");
+    }
+
+    /// The usual shape of the same landing: the view is already on the tab
+    /// in front, which has edits of its own. Releasing the background
+    /// tab's document and rebinding leaves the front tab exactly as it was,
+    /// its document neither replaced nor refilled.
+    #[test]
+    fn a_confirmed_background_reload_leaves_the_tab_in_front_as_it_was() {
+        let (mut shell, mut ui, _dir, paths) = open_settled(&["a.txt", "b.txt"]);
+        assert_eq!(shell.active_tab, Some(1), "precondition: b.txt is in front");
+        shell.bind_active_view(&mut ui);
+        let b_doc = shell.tabs[1].scintilla_doc;
+        assert_ne!(b_doc, 0, "precondition: b.txt has a document");
+        ui.doc_dirty.insert(b_doc, true);
+        assert!(shell.switch_to_tab(0));
+        shell.bind_active_view(&mut ui);
+        let a_doc = shell.tabs[0].scintilla_doc;
+        ui.buffer_text = "a edited\n".to_string();
+        ui.doc_dirty.insert(a_doc, true);
+        std::fs::write(&paths[1], "b from disk\n").unwrap();
+        shell.request_reload(paths[1].clone(), ReloadConsent::Confirmed);
+        let (minted, filled, styled) = (
+            ui.next_fake_doc,
+            ui.set_text_calls.len(),
+            ui.apply_lang_calls.len(),
+        );
+
+        drain_until_loads_settle(&mut shell, &mut ui);
+        assert!(
+            ui.released_docs.contains(&b_doc),
+            "precondition: the confirmed reload released b's edits"
+        );
+        assert_eq!(ui.current_doc, a_doc);
+        assert_eq!(ui.get_buffer_text(), "a edited\n");
+        assert_eq!(
+            (
+                ui.next_fake_doc,
+                ui.set_text_calls.len(),
+                ui.apply_lang_calls.len()
+            ),
+            (minted, filled, styled),
+            "the tab in front was bound again"
+        );
+    }
+
+    /// A file landing in the background on a tab whose document the view
+    /// still shows leaves that document stale: it holds the empty text the
+    /// tab had while it loaded, and the file waits in `Tab::text` until the
+    /// tab is shown. The view now ends on the tab in front, so text typed
+    /// next goes into that tab's own document, which its file then lands
+    /// beside; the background tab shows its file, and saving it leaves the
+    /// file as it was. Before, the text went into the stale document, the
+    /// tab's next activation kept it under the file's name, and a save
+    /// wrote it, or after an undo the empty document, over the file. Found
+    /// by the security audit of the change that rebinds the view after a
+    /// background release.
+    #[test]
+    fn a_background_landing_does_not_leave_the_view_on_a_stale_document() {
+        let dir = tempfile::tempdir().unwrap();
+        let (one, two) = (dir.path().join("one.txt"), dir.path().join("two.txt"));
+        std::fs::write(&one, "one\n").unwrap();
+        std::fs::write(&two, "two\n").unwrap();
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+        shell.open_file(two.clone());
+        // Shown while it loads, as a click would: an empty document of its own.
+        shell.bind_active_view(&mut ui);
+        let two_doc = shell.tabs[0].scintilla_doc;
+        let two_req = shell.tabs[0].pending_load.expect("loading");
+        shell.open_file(one.clone());
+        let one_req = shell.tabs[1].pending_load.expect("loading");
+        assert_eq!(
+            ui.current_doc, two_doc,
+            "precondition: the view is behind the front"
+        );
+        let mut pending = Vec::new();
+
+        shell.apply_load_result(
+            &mut ui,
+            Ok(loaded_file(two_req, &two, "two\n")),
+            &mut pending,
+        );
+        assert!(
+            shell.tabs[0].doc_needs_text,
+            "precondition: two.txt's document is stale"
+        );
+        assert_ne!(ui.current_doc, two_doc, "the view shows a stale document");
+        assert_eq!(
+            Some(ui.current_doc),
+            shell.active().map(|t| t.scintilla_doc),
+            "the view shows the tab in front"
+        );
+
+        ui.buffer_text = "typed\n".to_string();
+        ui.doc_dirty.insert(ui.current_doc, true);
+        shell.apply_load_result(
+            &mut ui,
+            Ok(loaded_file(one_req, &one, "one\n")),
+            &mut pending,
+        );
+        assert_eq!(
+            shell
+                .tabs
+                .iter()
+                .map(|t| (t.path.clone(), t.untitled_seq.is_some()))
+                .collect::<Vec<_>>(),
+            [(Some(two.clone()), false), (None, true), (Some(one), false)]
+        );
+        assert_eq!(ui.get_buffer_text(), "typed\n");
+        assert!(shell.switch_to_tab(0));
+        shell.bind_active_view(&mut ui);
+        assert_eq!(ui.get_buffer_text(), "two\n");
+        shell.save_current_to_disk(&mut ui).unwrap();
+        assert_eq!(std::fs::read_to_string(&two).unwrap(), "two\n");
+    }
+
+    /// A background landing on a tab that never had a document leaves the
+    /// view alone: the view cannot be showing a document that does not
+    /// exist, and a session restore lands every tab but the one in front
+    /// this way, so a rebind here would style the tab in front again once
+    /// per file at startup.
+    #[test]
+    fn a_background_landing_on_a_tab_with_no_document_leaves_the_view_alone() {
+        let (mut shell, mut ui, dir, _paths) = open_settled(&["a.txt"]);
+        let (b, c) = (dir.path().join("b.txt"), dir.path().join("c.txt"));
+        std::fs::write(&b, "b\n").unwrap();
+        std::fs::write(&c, "c\n").unwrap();
+        shell.open_file(b.clone());
+        let b_req = shell.tabs[1].pending_load.expect("loading");
+        shell.open_file(c);
+        let calls = ui.activate_tab_calls.len();
+        let mut pending = Vec::new();
+
+        shell.apply_load_result(&mut ui, Ok(loaded_file(b_req, &b, "b\n")), &mut pending);
+        assert_eq!(
+            (shell.tabs[1].path.as_deref(), shell.tabs[1].scintilla_doc),
+            (Some(b.as_path()), 0),
+            "precondition: b.txt landed in the background on a tab with no document"
+        );
+        assert_eq!(ui.activate_tab_calls.len(), calls, "the view was rebound");
+    }
+
+    /// The rebind after a background release fills the tab in front when
+    /// that tab has no document yet, as its first showing would, rather than
+    /// showing it empty. Built with `Shell::switch_to_tab`, which moves the
+    /// front without binding the view; a backend rebinds right after a
+    /// plugin's switch unless the tab's load is in flight, so this pins the
+    /// rebind's own behaviour rather than a route a user reaches.
+    #[test]
+    fn a_confirmed_background_reload_fills_a_front_tab_that_has_no_document() {
+        let (mut shell, mut ui, _dir, paths) = open_settled(&["a.txt", "b.txt"]);
+        assert_eq!(
+            shell.tabs[0].scintilla_doc, 0,
+            "precondition: a.txt loaded in the background"
+        );
+        shell.bind_active_view(&mut ui);
+        let b_doc = shell.tabs[1].scintilla_doc;
+        ui.doc_dirty.insert(b_doc, true);
+        assert!(shell.switch_to_tab(0));
+        assert_eq!(
+            ui.current_doc, b_doc,
+            "precondition: the view is still on b.txt"
+        );
+        shell.request_reload(paths[1].clone(), ReloadConsent::Confirmed);
+
+        drain_until_loads_settle(&mut shell, &mut ui);
+        assert!(
+            ui.released_docs.contains(&b_doc),
+            "precondition: the confirmed reload released b's edits"
+        );
+        let a_doc = shell.tabs[0].scintilla_doc;
+        assert_ne!(a_doc, 0, "the tab in front was given no document");
+        assert_eq!(ui.current_doc, a_doc, "the view is not on the tab in front");
+        assert_eq!(
+            ui.get_buffer_text(),
+            "a.txt",
+            "the tab in front was not filled"
+        );
+    }
+
+    /// The usual shape of a stale landing: the view already shows the tab
+    /// in front, which holds nothing unsaved. The rebind leaves that tab's
+    /// document as it was, neither replaced nor refilled, so its caret and
+    /// undo history stay.
+    #[test]
+    fn a_stale_background_landing_leaves_a_clean_tab_in_front_as_it_was() {
+        let (mut shell, mut ui, _dir, paths) = open_settled(&["a.txt", "b.txt"]);
+        assert!(shell.switch_to_tab(0));
+        shell.bind_active_view(&mut ui);
+        assert!(shell.switch_to_tab(1));
+        shell.bind_active_view(&mut ui);
+        let b_doc = shell.tabs[1].scintilla_doc;
+        let (minted, filled, styled) = (
+            ui.next_fake_doc,
+            ui.set_text_calls.len(),
+            ui.apply_lang_calls.len(),
+        );
+        std::fs::write(&paths[0], "a from disk\n").unwrap();
+        shell.request_reload(paths[0].clone(), ReloadConsent::Unconfirmed);
+
+        drain_until_loads_settle(&mut shell, &mut ui);
+        assert!(
+            shell.tabs[0].doc_needs_text,
+            "precondition: a.txt landed in the background on its document"
+        );
+        assert_eq!(ui.current_doc, b_doc);
+        assert_eq!(
+            (
+                ui.next_fake_doc,
+                ui.set_text_calls.len(),
+                ui.apply_lang_calls.len()
+            ),
+            (minted, filled, styled),
+            "the tab in front was bound again"
+        );
+    }
+
+    /// A file installed on the tab in front leaves its document current, even
+    /// when an earlier landing in the background had flagged it stale and a
+    /// plugin's switch brought the tab to the front without a bind. A flag
+    /// left behind made the next unrelated landing's rebind fill the tab in
+    /// front again, putting the caret back to the start.
+    #[test]
+    fn a_file_installed_on_the_tab_in_front_leaves_its_document_current() {
+        let (mut shell, mut ui, _dir, paths) = open_settled(&["a.txt", "b.txt", "c.txt"]);
+        for idx in 0..3 {
+            shell.switch_to_tab(idx);
+            shell.bind_active_view(&mut ui);
+        }
+        std::fs::write(&paths[0], "a two\n").unwrap();
+        shell.request_reload(paths[0].clone(), ReloadConsent::Unconfirmed);
+        drain_until_loads_settle(&mut shell, &mut ui);
+        assert!(
+            shell.tabs[0].doc_needs_text,
+            "precondition: a.txt's document is stale"
+        );
+        std::fs::write(&paths[0], "a three\n").unwrap();
+        shell.request_reload(paths[0].clone(), ReloadConsent::Unconfirmed);
+        let a_req = shell.tabs[0].pending_load.expect("reloading");
+        // A plugin's switch: no backend rebinds onto a tab whose load is in
+        // flight.
+        assert!(shell.switch_to_tab(0));
+        let mut pending = Vec::new();
+
+        shell.apply_load_result(
+            &mut ui,
+            Ok(loaded_file(a_req, &paths[0], "a three\n")),
+            &mut pending,
+        );
+        assert_eq!(ui.get_buffer_text(), "a three\n");
+        assert!(
+            !shell.tabs[0].doc_needs_text,
+            "the installed document is flagged stale"
+        );
+        ui.cursor = 3;
+        let filled = ui.set_text_calls.len();
+        std::fs::write(&paths[1], "b two\n").unwrap();
+        shell.request_reload(paths[1].clone(), ReloadConsent::Unconfirmed);
+        drain_until_loads_settle(&mut shell, &mut ui);
+        assert!(
+            shell.tabs[1].doc_needs_text,
+            "precondition: b.txt landed in the background on its document"
+        );
+        assert_eq!(
+            (ui.set_text_calls.len(), ui.cursor),
+            (filled, 3),
+            "the tab in front was filled again"
+        );
+    }
+
+    /// The view can trail a tab in front that has a document but is still
+    /// loading: a plugin's switch onto such a tab leaves the view where it
+    /// was. A file landing in the background on the tab the view still shows
+    /// then puts the view on the tab in front, on the document that tab
+    /// already has, neither replaced nor filled: it is where text typed while
+    /// the file loads goes.
+    #[test]
+    fn a_background_landing_rebinds_behind_a_front_tab_still_loading() {
+        let (mut shell, mut ui, dir, paths) = open_settled(&["a.txt"]);
+        let a_doc = shell.tabs[0].scintilla_doc;
+        let b = dir.path().join("b.txt");
+        std::fs::write(&b, "b\n").unwrap();
+        shell.open_file(b);
+        // Shown while it loads, as a click would: a document of its own.
+        shell.bind_active_view(&mut ui);
+        let b_doc = shell.tabs[1].scintilla_doc;
+        assert_ne!(b_doc, 0, "precondition: b.txt has a document");
+        assert!(shell.switch_to_tab(0));
+        shell.bind_active_view(&mut ui);
+        // A plugin's switch onto the loading tab: no rebind.
+        assert!(shell.switch_to_tab(1));
+        assert_eq!(
+            ui.current_doc, a_doc,
+            "precondition: the view trails the front"
+        );
+        shell.request_reload(paths[0].clone(), ReloadConsent::Unconfirmed);
+        let a_req = shell.tabs[0].pending_load.expect("reloading");
+        let (minted, filled) = (ui.next_fake_doc, ui.set_text_calls.len());
+        let mut pending = Vec::new();
+
+        shell.apply_load_result(
+            &mut ui,
+            Ok(loaded_file(a_req, &paths[0], "a two\n")),
+            &mut pending,
+        );
+        assert!(
+            shell.tabs[0].doc_needs_text,
+            "precondition: a.txt's document is stale"
+        );
+        assert_eq!(
+            ui.current_doc, b_doc,
+            "the view was left on a stale document"
+        );
+        assert_eq!(
+            (ui.next_fake_doc, ui.set_text_calls.len()),
+            (minted, filled),
+            "the loading tab in front was given a new document, or filled"
+        );
+    }
+
+    /// The view can trail a tab in front that holds a stale document, which
+    /// no backend leaves for long: built here with `Shell::switch_to_tab`,
+    /// which moves the front without binding. A landing in the background
+    /// then puts the view on the tab in front and fills it, rather than
+    /// leaving the view on the landed tab's document.
+    #[test]
+    fn a_background_landing_rebinds_behind_a_stale_front_tab() {
+        let (mut shell, mut ui, _dir, paths) = open_settled(&["a.txt", "b.txt"]);
+        assert!(shell.switch_to_tab(0));
+        shell.bind_active_view(&mut ui);
+        let a_doc = shell.tabs[0].scintilla_doc;
+        assert!(shell.switch_to_tab(1));
+        shell.bind_active_view(&mut ui);
+        let b_doc = shell.tabs[1].scintilla_doc;
+        std::fs::write(&paths[0], "a two\n").unwrap();
+        shell.request_reload(paths[0].clone(), ReloadConsent::Unconfirmed);
+        drain_until_loads_settle(&mut shell, &mut ui);
+        assert!(
+            shell.tabs[0].doc_needs_text,
+            "precondition: a.txt's document is stale"
+        );
+        assert!(shell.switch_to_tab(0));
+        assert_eq!(
+            ui.current_doc, b_doc,
+            "precondition: the view trails the front"
+        );
+        std::fs::write(&paths[1], "b two\n").unwrap();
+        shell.request_reload(paths[1].clone(), ReloadConsent::Unconfirmed);
+
+        drain_until_loads_settle(&mut shell, &mut ui);
+        assert!(
+            shell.tabs[1].doc_needs_text,
+            "precondition: b.txt landed in the background on its document"
+        );
+        assert_eq!(
+            ui.current_doc, a_doc,
+            "the view was left on a stale document"
+        );
+        assert_eq!(ui.get_buffer_text(), "a two\n");
     }
 
     /// Only a fresh tab is kept as an untitled buffer when its load fails. A
