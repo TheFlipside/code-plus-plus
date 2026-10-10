@@ -6780,11 +6780,12 @@ impl Shell {
     }
 
     /// Set the **active** tab's syntax-highlighting language from a
-    /// Language menu. The GTK and Cocoa menus call this; Win32's sends
-    /// `NPPM_SETBUFFERLANGTYPE` through [`Self::dispatch_plugin_message`]
-    /// instead. Both routes end in [`Self::set_tab_lang`], so on every
+    /// Language menu. Every backend's menu calls this, and it ends in
+    /// [`Self::set_tab_lang`], as a plugin's change does, so on every
     /// backend a menu pick re-lexes the editor, repaints the status bar
-    /// and queues `NPPN_LANGCHANGED`, as a plugin's change does.
+    /// and queues `NPPN_LANGCHANGED`. Win32's menu sent its pick as
+    /// `NPPM_SETBUFFERLANGTYPE` through [`Self::dispatch_plugin_message`]
+    /// until Phase 5, as if a plugin had asked.
     ///
     /// Returns `true` on a real change. The caller must then deliver the
     /// queued notification once its borrow on the state has ended, so a
@@ -6806,11 +6807,11 @@ impl Shell {
 
     /// Change the language of the tab at `idx` because someone asked: the
     /// one place a requested language change is made. Both routes come
-    /// here — [`Self::set_active_lang`] from the GTK and Cocoa Language
-    /// menus, and [`HostServices::set_buffer_lang_type`] from plugins'
-    /// `NPPM_SETBUFFERLANGTYPE` / `NPPM_SETCURRENTLANGTYPE` and from
-    /// Win32's Language menu. The GTK and Cocoa menus once did this with
-    /// a copy of their own, and theirs never told the plugins. A tab's
+    /// here — [`Self::set_active_lang`] from every backend's Language
+    /// menu, and [`HostServices::set_buffer_lang_type`] from plugins'
+    /// `NPPM_SETBUFFERLANGTYPE` / `NPPM_SETCURRENTLANGTYPE`. The GTK and
+    /// Cocoa menus once did this with a copy of their own, and theirs
+    /// never told the plugins. A tab's
     /// first load sets its language from the file instead, unless one was
     /// requested here while the file was loading, and a Save As
     /// re-detects it from the new extension; neither announces a change
@@ -12473,11 +12474,11 @@ mod tests {
     fn set_active_lang_flips_then_no_ops_on_repeat() {
         // A real change re-lexes the editor, repaints the status bar and
         // queues NPPN_LANGCHANGED for the active buffer, as a plugin's
-        // NPPM_SETBUFFERLANGTYPE does. The GTK and Cocoa Language menus come
-        // through here, and until both routes shared `set_tab_lang` theirs
-        // never told the plugins. Re-selecting the same language is a
-        // silent no-op, so the menu neither re-styles, flickers the status
-        // bar nor announces a change on every click.
+        // NPPM_SETBUFFERLANGTYPE does. Every backend's Language menu comes
+        // through here, and until both routes shared `set_tab_lang` the
+        // GTK and Cocoa ones never told the plugins. Re-selecting the same
+        // language is a silent no-op, so the menu neither re-styles,
+        // flickers the status bar nor announces a change on every click.
         use codepp_core::lang::L_CPP;
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("plain.txt");
@@ -15513,8 +15514,7 @@ mod tests {
         // active buffer to a new lang must (a) flip Tab.lang, (b)
         // re-apply the lexer through the UI (lexer lives on the
         // view, not the doc), (c) queue NPPN_LANGCHANGED so other
-        // plugins see the change. Win32's Language menu takes this
-        // route too.
+        // plugins see the change.
         use codepp_core::lang::{L_CPP, L_RUST};
         use codepp_plugin_host::dispatch::NPPM_SETBUFFERLANGTYPE;
         let dir = tempfile::tempdir().unwrap();

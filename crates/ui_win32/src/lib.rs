@@ -16826,9 +16826,10 @@ fn show_find_replace_dialog(
 }
 
 /// Handle a Language-menu click — flip the active tab's lang to the
-/// supplied `LangType` id. Routes through the same `set_buffer_lang_type`
-/// the plugin ABI uses, so the code path covers re-applying the lexer
-/// for the active tab and queueing `NPPN_LANGCHANGED`.
+/// supplied `LangType` id, a built-in language's or a User Defined
+/// Language's. Goes through [`codepp_shell::Shell::set_active_lang`],
+/// as the GTK and Cocoa menus do, which re-lexes the editor, repaints
+/// the status bar and queues `NPPN_LANGCHANGED` on a real change.
 ///
 /// # Safety
 ///
@@ -16840,36 +16841,19 @@ unsafe fn handle_language_menu_click(hwnd: HWND, lang_id: i32) {
 }
 
 unsafe fn handle_language_menu_click_inner(hwnd: HWND, lang_id: i32) {
-    // Route through `dispatch_plugin_message` with the
-    // NPPM_SETBUFFERLANGTYPE wire format so the menu click and a
-    // plugin-driven set go through one code path. That code already
-    // re-applies the lexer for the active tab and queues
-    // NPPN_LANGCHANGED on a real change; mirroring it here means
-    // adding/changing language behaviour only happens in one place.
-    let buffer_id = if let Some(state) = unsafe { state_from_hwnd(hwnd) } {
-        match state.shell.active() {
-            Some(t) => t.id as usize,
-            None => return,
-        }
-    } else {
-        return;
-    };
+    // The host's own menu, not a plugin: until Phase 5 this sent the pick
+    // as `NPPM_SETBUFFERLANGTYPE` through the plugin dispatcher, as if a
+    // plugin had asked. The dispatcher is the plugins' route; the menus
+    // take the shell's.
     if let Some(state) = unsafe { state_from_hwnd(hwnd) } {
-        let handles = state.host_handles(hwnd);
         let (shell, mut ui) = state.split();
-        // SAFETY: `dispatch_plugin_message` requires a UI-thread
-        // call with valid handles for this window. The wnd_proc
-        // contract gives us both.
-        unsafe {
-            let _ = shell.dispatch_plugin_message(
-                &mut ui,
-                handles,
-                codepp_plugin_host::dispatch::NPPM_SETBUFFERLANGTYPE,
-                buffer_id,
-                lang_id as isize,
-            );
-        }
+        // Whether it changed anything does not matter here: the delivery
+        // below runs either way, and a no-op queues no language
+        // notification for it to find.
+        let _ = shell.set_active_lang(&mut ui, LangType(lang_id));
     }
+    // After the borrow has ended, so a plugin's `beNotified` can call
+    // back into `NPPM_*` rather than be declined.
     unsafe {
         fire_queued_notifications(hwnd);
     }
@@ -27085,15 +27069,14 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                             // UDL_LANG_TYPE_BASE)`. Invert here and route
                             // through the same `handle_language_menu_click`
                             // path built-in-lexer menu items take — that
-                            // dispatches `NPPM_SETBUFFERLANGTYPE`, which
+                            // calls `Shell::set_active_lang`, which
                             // updates the tab's `lang`, re-runs
                             // `apply_lang` (which reads `udl_registry`
                             // for UDL ids), queues `NPPN_LANGCHANGED`,
                             // and refreshes the status bar. One code
-                            // path for a menu click and a plugin's set;
-                            // a file's own language, set when it opens,
-                            // takes another path and announces nothing
-                            // (DESIGN.md §7.4).
+                            // path for every menu pick; a file's own
+                            // language, set when it opens, takes another
+                            // path and announces nothing (DESIGN.md §7.4).
                             let offset = i32::from(cmd_u16 - ID_UDL_ITEM_BASE);
                             let lang_type_id = codepp_udl::UDL_LANG_TYPE_BASE + offset;
                             handle_language_menu_click(hwnd, lang_type_id);
@@ -32472,6 +32455,60 @@ mod view_binding_guards {
         binds_through_the_shell(
             &code_without_strings(&fn_body(production_src(), "handle_tab_selchange")),
             "the tab switch",
+        );
+    }
+}
+
+#[cfg(test)]
+mod language_menu_guards {
+    //! Source-level guards for the Language menu's route. A pick is the
+    //! host's own and goes through `Shell::set_active_lang`, as the GTK and
+    //! Cocoa menus do, not through the plugin dispatcher, the plugins'
+    //! route; this menu's picks went that way until Phase 5. Either route
+    //! compiles and runs, and nothing headless here drives a `WM_COMMAND`,
+    //! so the route is pinned in the source.
+
+    use super::plugin_reentry_guards::{
+        block_after, code_without_strings, fn_body, production_src,
+    };
+
+    #[test]
+    fn a_language_pick_goes_through_the_shell_setter() {
+        let body = code_without_strings(&fn_body(
+            production_src(),
+            "handle_language_menu_click_inner",
+        ));
+        let borrow_marker = "state_from_hwnd(hwnd) } {";
+        let borrow = block_after(&body, borrow_marker);
+        assert!(
+            borrow.contains("shell.set_active_lang(&mut ui, LangType(lang_id))"),
+            "a Language-menu pick no longer goes through the shell's setter"
+        );
+        for plugin_route in ["dispatch_plugin_message(", "NPPM_SETBUFFERLANGTYPE"] {
+            assert!(
+                !body.contains(plugin_route),
+                "a Language-menu pick goes through the plugin dispatcher (`{plugin_route}`), \
+                 the plugins' route, as if a plugin had asked"
+            );
+        }
+        assert!(
+            !borrow.contains("fire_queued_notifications"),
+            "the delivery runs inside the state borrow, where a plugin's \
+             NPPM_* from beNotified is declined"
+        );
+        let borrow_at = body.find(borrow_marker).expect("checked above");
+        let after = &body[borrow_at..];
+        assert!(
+            after.contains("fire_queued_notifications(hwnd);"),
+            "a Language-menu pick no longer delivers what it queued"
+        );
+        assert_eq!(
+            code_without_strings(production_src())
+                .matches("set_active_lang(")
+                .count(),
+            1,
+            "a second caller of the shell's setter must deliver what it queues \
+             too; route it through `handle_language_menu_click`"
         );
     }
 }
