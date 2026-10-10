@@ -119,11 +119,13 @@ pub const PRIMARY_BUFFER_ID: isize = 1;
 /// allocating a Tab + decoded buffer text — a local `DoS` for the
 /// invoking user's account).
 ///
-/// Equal to [`MAX_OPEN_TABS`], because a session Code++ writes holds at
-/// most one record per open tab. A lower cap dropped the records past it at
-/// the next start, and that start's first save pruned their recovery
-/// backups, so an untitled buffer or the unsaved edits of a file past the
-/// cap were lost.
+/// Equal to [`MAX_OPEN_TABS`]. A session Code++ writes holds at most a
+/// record per open tab, and a second one for a tab still loading its file
+/// that holds typed work; `Shell::session_to_save` writes no more records than this,
+/// leaving out such a file where both records would not fit. A lower cap
+/// dropped the records past it at the next start, and that start's first
+/// save pruned their recovery backups, so an untitled buffer or the unsaved
+/// edits of a file past the cap were lost.
 pub const MAX_SESSION_TABS: usize = MAX_OPEN_TABS;
 
 /// Hard ceiling on the size of an individual backup file we'll read
@@ -2080,6 +2082,14 @@ pub struct Shell {
     /// channel closed) leaves one `u64` behind, bounded by the number of
     /// opens in a session.
     loads_onto_existing_tabs: HashSet<codepp_core::file::RequestId>,
+    /// The file each first load in flight is for, by request: an open
+    /// that will give a tab its path. A tab learns its path only when the
+    /// load lands, so until then this is the one record of which file the
+    /// tab is waiting on. [`Self::save_session`] writes that file for the
+    /// tab, so a session saved in that window reopens it. Taken out when
+    /// the load lands or fails, matched or stale, like
+    /// `loads_onto_existing_tabs`, so it holds only loads in flight.
+    first_loads: HashMap<codepp_core::file::RequestId, PathBuf>,
     /// Per-path debounce deadlines for file-change dialogs. An
     /// entry with a future timestamp means new file-change
     /// events for that path are silently discarded until now
@@ -2588,6 +2598,7 @@ impl Shell {
             on_disk_known: false,
             kept_every_backup: false,
             loads_onto_existing_tabs: HashSet::new(),
+            first_loads: HashMap::new(),
             file_change_debounce: std::collections::HashMap::new(),
             styles: load_styles(),
             udl_registry,
@@ -4763,6 +4774,7 @@ impl Shell {
                 .push(Notification::FileLoadFailed);
             return OpenFileOutcome::Rejected;
         };
+        self.first_loads.insert(req_id, path);
         // Decide where the load result will land. If the active
         // tab is empty *and isn't already waiting for its own load
         // to complete and isn't a user-created File→New buffer*,
@@ -4787,19 +4799,22 @@ impl Shell {
         // produce a Tab with `path = None && pending_load = None &&
         // untitled_seq = None`: a buffer restored from its recovery
         // backup whose `session.xml` record carries no
-        // `untitled_seq`. Code++ writes such a record itself: a session
-        // saved while a file's first load is in flight, by the
-        // autosave or a quit, backs up the loading tab as an untitled
-        // buffer with no number (`tab_needs_backup`). A legacy or
-        // hand-edited file can carry one too. That buffer holds
-        // recovered text, empty or not, under the restore marker, so
-        // the clause refuses a tab whose records mark work
-        // (`marks_unsaved_work`). Before it did, handing such a buffer
-        // a file's load made the landing name it after the file around
-        // the recovered text, and a save then wrote that text over the
-        // file, emptying it when the text was empty. No path is known
-        // to make a clean placeholder today, so the reuse stands as
-        // the rule for one rather than as something a user reaches.
+        // `untitled_seq`. Code++ writes such a record for a tab whose
+        // path is not valid Unicode (`writable_paths_only`), and wrote
+        // one for a tab whose first load was in flight, until a session
+        // saved then learned to record the file instead
+        // (`session_to_save`). A session written before that can carry
+        // one, as can a legacy or hand-edited file, and a buffer
+        // restored from one keeps its missing number at every save.
+        // That buffer holds recovered text, empty or not, under the
+        // restore marker, so the clause refuses a tab whose records
+        // mark work (`marks_unsaved_work`). Before it did, handing such
+        // a buffer a file's load made the landing name it after the
+        // file around the recovered text, and a save then wrote that
+        // text over the file, emptying it when the text was empty. No
+        // path is known to make a clean placeholder today, so the reuse
+        // stands as the rule for one rather than as something a user
+        // reaches.
         //
         // `replace_scratch` is the one documented exception: the
         // startup `new 1`, untouched, alone in the workspace, with the
@@ -5587,14 +5602,16 @@ impl Shell {
                         "discarding stale load result (no matching pending tab)"
                     );
                     self.loads_onto_existing_tabs.remove(&loaded.id);
+                    self.first_loads.remove(&loaded.id);
                     return;
                 };
                 // This load is finished either way, so it is no longer
                 // one whose failure `apply_failed_load` has to reason
                 // about. Dropped on success as well as failure and on
                 // the stale-result path above, so the set only ever
-                // holds loads actually in flight.
+                // holds loads actually in flight. `first_loads` too.
                 self.loads_onto_existing_tabs.remove(&loaded.id);
+                self.first_loads.remove(&loaded.id);
 
                 // Begin watching the new file before pushing into
                 // the editor — if the watch fails the user still gets
@@ -6150,6 +6167,7 @@ impl Shell {
         // took the front, and leaving the view there kept it on a
         // document no tab owns.
         let borrowed_an_existing_tab = self.loads_onto_existing_tabs.remove(&err.id);
+        self.first_loads.remove(&err.id);
         let target = self
             .tabs
             .iter()
@@ -7519,11 +7537,13 @@ impl Shell {
     }
 
     /// Persist the open-tab list to `session.xml`, with a recovery
-    /// backup for every tab whose content is not on disk: an untitled
-    /// buffer, or a file with unsaved edits. Called on clean shutdown and
-    /// by the autosave. The active tab's cursor is pulled live from the
-    /// editor so the next launch restores the caret where the user left
-    /// it; other tabs record cursor 0.
+    /// backup for every buffer holding work that is not on disk: an
+    /// untitled buffer, or a file with unsaved edits. Called on clean
+    /// shutdown and by the autosave. The active tab's cursor is pulled live
+    /// from the editor so the next launch restores the caret where the
+    /// user left it; other tabs record cursor 0, except a file still
+    /// loading, which keeps the caret the session read at startup recorded
+    /// for it. What is written is [`Self::session_to_save`]'s.
     ///
     /// A backup takes a name nothing in the backup folder has
     /// ([`write_backup_file`]), so a save in the same second as the last
@@ -7577,16 +7597,32 @@ impl Shell {
     }
 
     /// Build the session [`Self::save_session`] writes, writing a recovery
-    /// backup into `backups_dir` for each tab that needs one
-    /// ([`Self::tab_needs_backup`]). Every backup shares `timestamp` in
-    /// its name.
+    /// backup into `backups_dir` for each buffer that needs one. Every
+    /// backup shares `timestamp` in its name.
     ///
-    /// A tab whose backup cannot be written keeps naming the newest one
-    /// its record named ([`Self::last_backups`]) if that file is still
+    /// **The tab in front is recorded as its record is written.** It used
+    /// to be re-derived afterwards from paths and untitled numbers, which
+    /// counted a buffer saved with no untitled number as not saved: such a
+    /// buffer before the tab in front put the front one tab early at the
+    /// next start, and one in front left no tab recorded at all.
+    ///
+    /// **A tab still waiting on its first load is saved as that load would
+    /// leave it** ([`Self::loading_tab_records`]). Before, it was saved as
+    /// an untitled buffer, empty unless something was typed into it: `new
+    /// 1` when the file had been opened into it, and otherwise one with no
+    /// number. So a session saved by the autosave or a quit while a file
+    /// loaded left the file out, and the next start restored that buffer
+    /// in its place. Text typed into such a tab gives it two records, the
+    /// text and its file; where that would take the session past
+    /// [`MAX_SESSION_TABS`], which the next start reads, the file is left
+    /// out, as the landing leaves it out at the tab cap.
+    ///
+    /// **A buffer whose backup cannot be written** keeps naming the newest
+    /// one its record named ([`Self::last_backups`]) if that file is still
     /// there: the edits since it are lost, the ones before it are not.
     /// Without one, an untitled buffer is left out, since there is nothing
     /// to restore it from, and a file is recorded without its edits, so the
-    /// next start opens it from disk. The same happens to every tab that
+    /// next start opens it from disk. The same happens to every buffer that
     /// needs a backup when there is no backup folder (a sandboxed
     /// environment).
     fn session_to_save<U: UiPlatform>(
@@ -7636,118 +7672,273 @@ impl Shell {
 
         let mut pass = SavePass::new(backups_dir, timestamp);
         let mut backups = HashMap::new();
-        for (idx, tab) in self.tabs.iter().enumerate() {
-            // Active-tab cursor comes from the editor; others are 0
-            // until a future tab-switch hook persists per-tab cursors.
-            let cursor = if Some(idx) == self.active_tab {
+        // Two records for one file restore as two tabs at best, and at
+        // worst as one, which moves every record after it off the tab the
+        // next start maps it to. So a file a titled tab holds, or an
+        // earlier loading tab is loading, is not recorded again for a tab
+        // still loading it.
+        let held: HashSet<&Path> = self.tabs.iter().filter_map(|t| t.path.as_deref()).collect();
+        let mut loading: HashSet<&Path> = HashSet::new();
+        // How many records past one per tab the next start still reads.
+        // Only a loading tab holding typed text writes a second.
+        let mut room = MAX_SESSION_TABS.saturating_sub(self.tabs.len());
+        let mut active = None;
+        let mut active_file = None;
+        for idx in 0..self.tabs.len() {
+            let tab = &self.tabs[idx];
+            let id = tab.id;
+            let is_active = self.active_tab == Some(idx);
+            let Some(path) = self.first_load_path(tab) else {
+                if let Some(record) = self.tab_record(ui, idx, &mut pass) {
+                    if is_active {
+                        active = Some(session.tabs.len());
+                    }
+                    if let Some(name) = &record.backup {
+                        backups.insert(id, name.clone());
+                    }
+                    session.tabs.push(record);
+                }
+                continue;
+            };
+            let (work, file) = self.loading_tab_records(ui, idx, path, &mut pass);
+            let second_record = work.is_some();
+            if let Some(work) = work {
+                // The landing keeps the front on the work, so the work
+                // record takes it.
+                if is_active {
+                    active = Some(session.tabs.len());
+                }
+                if let Some(name) = &work.backup {
+                    backups.insert(id, name.clone());
+                }
+                session.tabs.push(work);
+            }
+            if second_record && room == 0 {
+                continue;
+            }
+            if held.contains(path) || !loading.insert(path) {
+                if is_active && active.is_none() {
+                    active_file = Some(path);
+                }
+            } else {
+                if second_record {
+                    room -= 1;
+                }
+                if is_active && active.is_none() {
+                    active = Some(session.tabs.len());
+                }
+                session.tabs.push(file);
+            }
+        }
+        // A tab in front whose file was recorded for another tab takes the
+        // front with that record, wherever it is.
+        session.active = active.or_else(|| {
+            active_file.and_then(|p| {
+                session
+                    .tabs
+                    .iter()
+                    .position(|t| t.path.as_deref() == Some(p))
+            })
+        });
+        SavedSession { session, backups }
+    }
+
+    /// The file whose first load `tab` is waiting on, from the open that
+    /// will give the tab its path until that load lands or fails
+    /// (`first_loads`). `None` for a tab being reloaded, which has its path
+    /// already.
+    fn first_load_path(&self, tab: &Tab) -> Option<&Path> {
+        if tab.path.is_some() {
+            return None;
+        }
+        tab.pending_load
+            .and_then(|req| self.first_loads.get(&req))
+            .map(PathBuf::as_path)
+    }
+
+    /// The `session.xml` record for the tab at `idx`, writing its recovery
+    /// backup when it needs one. A buffer whose backup cannot be written
+    /// keeps its last one ([`Self::last_good_backup`]). `None` leaves an
+    /// untitled buffer out of the session when it has neither: the next
+    /// start restores an untitled buffer only from its backup, and skips a
+    /// record that has none. A saved file keeps its record either way,
+    /// since the file on disk still holds what it held when last saved.
+    fn tab_record<U: UiPlatform>(
+        &self,
+        ui: &mut U,
+        idx: usize,
+        pass: &mut SavePass<'_>,
+    ) -> Option<codepp_core::Tab> {
+        let tab = self.tabs.get(idx)?;
+        // Active-tab cursor comes from the editor; others are 0
+        // until a future tab-switch hook persists per-tab cursors.
+        let cursor = if self.active_tab == Some(idx) {
+            ui.get_cursor_pos()
+        } else {
+            0
+        };
+        // Two cases write backups:
+        //   1. Untitled buffer (`tab.path.is_none()`) — always
+        //      backed up; there's no file on disk to fall back
+        //      to and unsaved-buffer survival is the whole
+        //      point.
+        //   2. Saved file with unsaved edits
+        //      (`SCI_GETMODIFY != 0`) — backed up so the
+        //      user's in-memory edits survive a crash or
+        //      close-without-save. The on-disk file's
+        //      content stays intact (we don't touch the real
+        //      path during this write); on next launch the
+        //      backup overlays the buffer and the tab opens
+        //      dirty.
+        //
+        // Clean saved files (path-bound, no edits) skip the
+        // backup write entirely — the disk file IS the
+        // authoritative state.
+        let backup = if self.tab_needs_backup(tab, ui) {
+            let display = if let Some(seq) = tab.untitled_seq {
+                format!("new {seq}")
+            } else if let Some(p) = &tab.path {
+                // Use the file's basename so the backup
+                // dir is human-readable. Sanitised so the
+                // backup we write is also one we can
+                // later read past `is_safe_backup_filename`.
+                sanitize_basename_for_backup(p)
+            } else {
+                format!("untitled-{}", tab.id)
+            };
+            let backup = pass
+                .write(tab, &display, || Self::backup_text_for(tab, ui))
+                .or_else(|| self.last_good_backup(tab.id, pass));
+            if backup.is_none() && tab.path.is_none() {
+                return None;
+            }
+            backup
+        } else {
+            None
+        };
+        // Split the tab's language into the two attributes that carry
+        // it: a built-in lexer by id, a UDL by name. See
+        // `persisted_lang_fields` for why a UDL id must never reach disk.
+        let (lang, udl) =
+            Self::persisted_lang_fields(tab.lang, tab.path.as_deref(), &self.udl_registry);
+        Some(codepp_core::Tab {
+            path: tab.path.clone(),
+            cursor,
+            encoding: tab.encoding.clone(),
+            eol: tab.eol,
+            untitled_seq: tab.untitled_seq,
+            backup,
+            // Round-trip the user-chosen rename label. `None`
+            // for path-bound buffers (their display name comes
+            // from `path`); for untitled buffers, this is the
+            // value File → Rename... wrote, so the next session
+            // restores the same label rather than reverting to
+            // `new N`.
+            custom_name: tab.custom_name.clone(),
+            // Persisted only when it diverges from the extension-derived
+            // default (built-in lexers + UDL associations), so older
+            // session.xml files don't gain a no-op `@lang` and the user's
+            // explicit Language-menu choice still survives a restart.
+            lang,
+            udl,
+            // Persist the user's pin choice so pinned tabs come
+            // back pinned (and at the left edge) on next launch.
+            // Older session.xml files without the attribute
+            // deserialize with `pinned = false` (unpinned), so
+            // no migration is required.
+            pinned: tab.pinned,
+        })
+    }
+
+    /// What a session saved now records for the tab at `idx`, whose first
+    /// load of `path` is still in flight: what that load's landing would
+    /// leave ([`Self::apply_load_result`]), so the next start reopens the
+    /// file and keeps anything typed while it loaded.
+    ///
+    /// The file's record carries what the landing would give the file: the
+    /// caret, language and pin the session read at startup recorded for
+    /// it, or a language or pin requested while it loaded. Work typed into
+    /// the tab meanwhile is kept as the landing keeps it
+    /// ([`Self::divert_first_load`]): an untitled buffer, numbered if it
+    /// had no number, recorded before the file, keeping the tab's language
+    /// and giving up a pin requested during the load, which goes with the
+    /// file. The work is `None` when there is none, or when its backup
+    /// could not be written and it has no earlier one
+    /// ([`Self::last_good_backup`]). Nothing here changes the tab, which
+    /// goes on waiting for its file.
+    fn loading_tab_records<U: UiPlatform>(
+        &self,
+        ui: &mut U,
+        idx: usize,
+        path: &Path,
+        pass: &mut SavePass<'_>,
+    ) -> (Option<codepp_core::Tab>, codepp_core::Tab) {
+        let tab = &self.tabs[idx];
+        let load = tab.pending_load;
+        let pin_moves = tab.pin_requested_during_load == load;
+        let work = if self.holds_unsaved_work(ui, idx) {
+            let seq = tab
+                .untitled_seq
+                .unwrap_or_else(|| pass.give_untitled_number(&self.tabs));
+            let cursor = if self.active_tab == Some(idx) {
                 ui.get_cursor_pos()
             } else {
                 0
             };
-
-            // Decide whether this tab needs a backup file. Two
-            // cases write backups:
-            //   1. Untitled buffer (`tab.path.is_none()`) — always
-            //      backed up; there's no file on disk to fall back
-            //      to and unsaved-buffer survival is the whole
-            //      point.
-            //   2. Saved file with unsaved edits
-            //      (`SCI_GETMODIFY != 0`) — backed up so the
-            //      user's in-memory edits survive a crash or
-            //      close-without-save. The on-disk file's
-            //      content stays intact (we don't touch the real
-            //      path during this write); on next launch the
-            //      backup overlays the buffer and the tab opens
-            //      dirty.
-            //
-            // Clean saved files (path-bound, no edits) skip the
-            // backup write entirely — the disk file IS the
-            // authoritative state.
-            let mut backup_filename: Option<String> = None;
-            if self.tab_needs_backup(tab, ui) {
-                let display = if let Some(seq) = tab.untitled_seq {
-                    format!("new {seq}")
-                } else if let Some(p) = &tab.path {
-                    // Use the file's basename so the backup dir is
-                    // human-readable. Sanitised so the backup we write
-                    // is also one we can later read past
-                    // `is_safe_backup_filename`.
-                    sanitize_basename_for_backup(p)
-                } else {
-                    format!("untitled-{}", tab.id)
-                };
-                backup_filename = pass
-                    .write(tab, &display, || Self::backup_text_for(tab, ui))
-                    .or_else(|| self.last_good_backup(tab.id, &pass));
-                if backup_filename.is_none() && tab.path.is_none() {
-                    // Nothing to restore an untitled buffer from: leave
-                    // it out rather than record an empty tab.
-                    continue;
-                }
-            }
-            if let Some(name) = &backup_filename {
-                backups.insert(tab.id, name.clone());
-            }
-
-            // Split the tab's language into the two attributes that carry
-            // it: a built-in lexer by id, a UDL by name. See
-            // `persisted_lang_fields` for why a UDL id must never reach disk.
-            let (persisted_lang, persisted_udl) =
-                Self::persisted_lang_fields(tab.lang, tab.path.as_deref(), &self.udl_registry);
-            session.tabs.push(codepp_core::Tab {
-                path: tab.path.clone(),
+            let backup = pass
+                .write(tab, &format!("new {seq}"), || {
+                    Self::backup_text_for(tab, ui)
+                })
+                .or_else(|| self.last_good_backup(tab.id, pass));
+            let (lang, udl) = Self::persisted_lang_fields(tab.lang, None, &self.udl_registry);
+            backup.map(|backup| codepp_core::Tab {
+                path: None,
                 cursor,
                 encoding: tab.encoding.clone(),
                 eol: tab.eol,
-                untitled_seq: tab.untitled_seq,
-                backup: backup_filename,
-                // Round-trip the user-chosen rename label. `None`
-                // for path-bound buffers (their display name comes
-                // from `path`); for untitled buffers, this is the
-                // value File → Rename... wrote, so the next session
-                // restores the same label rather than reverting to
-                // `new N`.
+                untitled_seq: Some(seq),
+                backup: Some(backup),
                 custom_name: tab.custom_name.clone(),
-                // Persist the per-buffer language only when it diverges from
-                // the extension-derived default (built-in lexers + UDL
-                // associations), so older session.xml files don't gain a
-                // no-op `@lang` and the user's explicit Language-menu choice
-                // still survives a restart. See [`Self::lang_to_persist`] for
-                // why a UDL-auto-detected tab is deliberately left unpersisted.
-                lang: persisted_lang,
-                udl: persisted_udl,
-                // Persist the user's pin choice so pinned tabs come
-                // back pinned (and at the left edge) on next launch.
-                // Older session.xml files without the attribute
-                // deserialize with `pinned = false` (unpinned), so
-                // no migration is required.
-                pinned: tab.pinned,
-            });
-        }
-        session.active = self.active_tab.and_then(|active_idx| {
-            // Map the tabs[] index to the index inside session.tabs[],
-            // accounting for any tabs we skipped above (a backup
-            // write that failed, or an untitled tab in a sandboxed
-            // environment with no backups dir).
-            let mut session_idx = 0usize;
-            for (i, tab) in self.tabs.iter().enumerate() {
-                let was_persisted = tab.path.is_some()
-                    || (tab.untitled_seq.is_some()
-                        && session
-                            .tabs
-                            .iter()
-                            .any(|s| s.untitled_seq == tab.untitled_seq && s.path.is_none()));
-                if !was_persisted {
-                    continue;
-                }
-                if i == active_idx {
-                    return Some(session_idx);
-                }
-                session_idx += 1;
-            }
+                lang,
+                udl,
+                // A pin set before the load stays with the work, as the
+                // landing keeps it, and one asked for during the load goes
+                // with the file. No loading tab is pinned the first way
+                // today, since an open never loads into a pinned tab, so
+                // this mirrors the landing rather than a path a test reaches.
+                pinned: tab.pinned && !pin_moves,
+            })
+        } else {
             None
-        });
-        SavedSession { session, backups }
+        };
+        // The record the session read at startup holds for the file, which
+        // is what the landing would apply, copied as it is so the next start
+        // resolves it as the landing would have.
+        let stored = self
+            .session
+            .tabs
+            .iter()
+            .find(|t| t.path.as_deref() == Some(path));
+        let (lang, udl) = if tab.lang_requested_during_load == load {
+            Self::persisted_lang_fields(tab.lang, Some(path), &self.udl_registry)
+        } else {
+            stored.map_or((None, None), |t| (t.lang, t.udl.clone()))
+        };
+        let file = codepp_core::Tab {
+            path: Some(path.to_path_buf()),
+            cursor: stored.map_or(0, |t| t.cursor),
+            encoding: tab.encoding.clone(),
+            eol: tab.eol,
+            lang,
+            udl,
+            pinned: if pin_moves {
+                tab.pinned
+            } else {
+                stored.is_some_and(|t| t.pinned)
+            },
+            ..codepp_core::Tab::default()
+        };
+        (work, file)
     }
 
     /// The newest backup tab `id`'s record named ([`Self::last_backups`]),
@@ -8674,14 +8865,20 @@ struct SavedSession {
 /// One session save's recovery backups ([`Shell::session_to_save`]): the
 /// folder they go in, the timestamp their names share, the suffix to try
 /// first for each display name (one past the last this save took), the
-/// names this save wrote, and the display names whose every name was
-/// taken.
+/// names this save wrote, the display names whose every name was taken,
+/// and the untitled numbers given to buffers saved without one.
 struct SavePass<'a> {
     dir: Option<&'a Path>,
     timestamp: &'a str,
     next_suffix: HashMap<String, u32>,
     written: HashSet<String>,
     exhausted: HashSet<String>,
+    /// The untitled numbers the open tabs hold, gathered at the first
+    /// [`Self::give_untitled_number`].
+    held_numbers: Option<HashSet<u32>>,
+    /// Where the next [`Self::give_untitled_number`] starts looking: one
+    /// past the last number it gave.
+    next_number: u32,
 }
 
 impl<'a> SavePass<'a> {
@@ -8692,6 +8889,8 @@ impl<'a> SavePass<'a> {
             next_suffix: HashMap::new(),
             written: HashSet::new(),
             exhausted: HashSet::new(),
+            held_numbers: None,
+            next_number: 1,
         }
     }
 
@@ -8749,6 +8948,22 @@ impl<'a> SavePass<'a> {
                 None
             }
         }
+    }
+
+    /// An untitled number for a buffer this save records without one: the
+    /// lowest held by none of `tabs` and given to no other buffer in this
+    /// save. Each search starts past the number the last one gave, so a
+    /// save of many such buffers stays linear in them.
+    fn give_untitled_number(&mut self, tabs: &[Tab]) -> u32 {
+        let held = self
+            .held_numbers
+            .get_or_insert_with(|| tabs.iter().filter_map(|t| t.untitled_seq).collect());
+        let mut n = self.next_number;
+        while held.contains(&n) && n < u32::MAX {
+            n += 1;
+        }
+        self.next_number = n.saturating_add(1);
+        n
     }
 }
 
@@ -9090,15 +9305,19 @@ fn is_disk_newer_than_backup(disk_path: &Path, backup_path: &Path) -> bool {
     disk_t > backup_t
 }
 
-/// Reject backup filenames that contain a path separator, parent-
 /// Enforce the "pinned-before-unpinned" invariant on a freshly-
 /// parsed [`Session`] by stable-sorting `session.tabs` so pinned
 /// entries occupy the left prefix, then remapping `session.active`
 /// so it still points at the same tab it did pre-sort.
 ///
 /// `Shell::save_session` writes tabs in the invariant-preserving
-/// order, so a `session.xml` Code++ produced itself is already
-/// sorted — this pass is a no-op there. The point is to defend
+/// order, except that the file's record, which follows the loading
+/// tab's typed work, can be pinned while the work is not: by a pin asked
+/// for while the file loads, or by the pin the session read at startup
+/// recorded for a file still loading. This pass moves it forward, as the
+/// landing's pin repair would. Otherwise
+/// a `session.xml` Code++ produced itself is already sorted, and the
+/// pass changes nothing. The point is to defend
 /// against a hand-edited or corrupted `session.xml` that
 /// interleaves pinned and unpinned `<tab>` entries: without this
 /// pass, the tab vector would be reassembled in the on-disk order
@@ -9118,25 +9337,24 @@ fn is_disk_newer_than_backup(disk_path: &Path, backup_path: &Path) -> bool {
 /// tabs" contract in [`SessionRestoreEntry::UntitledFromBackup::pinned`]
 /// and its `DirtyFromBackup` sibling.
 fn normalize_session_pinning(session: &mut Session) {
-    // Capture an identity for the currently-active tab so we can
-    // find it again after the sort. `(path, untitled_seq)` is a
-    // unique identity across every tab shape Code++ writes:
-    // path-bound tabs have `path = Some(_)` and `untitled_seq =
-    // None`; untitled tabs have `path = None` and `untitled_seq
-    // = Some(_)`; the pair distinguishes both.
-    let active_path = session
+    // The new order as old indices, so the tab in front is carried
+    // across the sort by its index. Finding it again by `(path,
+    // untitled_seq)` afterwards picked the first of two untitled
+    // buffers with no number, and a buffer restored from a record
+    // without one keeps writing one at every save.
+    let mut order: Vec<usize> = (0..session.tabs.len()).collect();
+    order.sort_by_key(|&i| std::cmp::Reverse(session.tabs[i].pinned));
+    session.active = session
         .active
-        .and_then(|i| session.tabs.get(i))
-        .map(|t| (t.path.clone(), t.untitled_seq));
-    session.tabs.sort_by_key(|t| std::cmp::Reverse(t.pinned));
-    if let Some((prev_path, prev_seq)) = active_path {
-        session.active = session
-            .tabs
-            .iter()
-            .position(|t| t.path == prev_path && t.untitled_seq == prev_seq);
-    }
+        .and_then(|front| order.iter().position(|&i| i == front));
+    let mut tabs: Vec<Option<codepp_core::Tab>> = std::mem::take(&mut session.tabs)
+        .into_iter()
+        .map(Some)
+        .collect();
+    session.tabs = order.iter().filter_map(|&i| tabs[i].take()).collect();
 }
 
+/// Reject backup filenames that contain a path separator, parent-
 /// directory traversal, drive-letter prefixes, Windows reserved
 /// device names, or other shapes that would let a tampered
 /// session.xml escape the backups directory or open a special
@@ -19854,6 +20072,688 @@ mod tests {
         assert_eq!(ui.get_buffer_text(), "a two\n");
     }
 
+    /// Each record a save would write, as the file it names (its file
+    /// name) or the untitled number it carries, with what its backup in
+    /// `backups` holds.
+    fn saved_records(
+        shell: &Shell,
+        ui: &mut FakeUi,
+        backups: &Path,
+    ) -> (Vec<(String, Option<String>)>, Option<usize>) {
+        let SavedSession {
+            session,
+            backups: written,
+        } = shell.session_to_save(ui, Some(backups), "2026-10-09_120000");
+        let records = session
+            .tabs
+            .iter()
+            .map(|t| {
+                let name = match (&t.path, t.untitled_seq) {
+                    (Some(p), _) => p.file_name().unwrap().to_string_lossy().into_owned(),
+                    (None, Some(n)) => format!("new {n}"),
+                    (None, None) => "Untitled".to_string(),
+                };
+                let backup = t.backup.as_ref().map(|b| {
+                    assert!(
+                        written.values().any(|w| w == b),
+                        "a record names a backup the save wrote"
+                    );
+                    std::fs::read_to_string(backups.join(b)).unwrap()
+                });
+                (name, backup)
+            })
+            .collect();
+        (records, session.active)
+    }
+
+    fn named(name: &str, backup: Option<&str>) -> (String, Option<String>) {
+        (name.to_string(), backup.map(str::to_string))
+    }
+
+    /// What a save backs up: an untitled buffer always, a file only with
+    /// edits not on disk, which keeps its record without a backup when
+    /// there is nowhere to write one, where an untitled buffer is left
+    /// out.
+    #[test]
+    fn a_session_save_backs_up_what_is_not_on_disk() {
+        let (mut shell, mut ui, _dir, _paths) = open_settled(&["a.txt", "b.txt"]);
+        let backups = tempfile::tempdir().unwrap();
+        shell.bind_active_view(&mut ui);
+        let b_doc = shell.tabs[1].scintilla_doc;
+        ui.buffer_text = "b edited\n".to_string();
+        ui.doc_dirty.insert(b_doc, true);
+        shell.new_untitled(&mut ui);
+        ui.buffer_text = "typed\n".to_string();
+
+        let (records, active) = saved_records(&shell, &mut ui, backups.path());
+        assert_eq!(
+            records,
+            vec![
+                named("a.txt", None),
+                named("b.txt", Some("b edited\n")),
+                named("new 1", Some("typed\n")),
+            ]
+        );
+        assert_eq!(active, Some(2));
+
+        let SavedSession {
+            session,
+            backups: written,
+        } = shell.session_to_save(&mut ui, None, "ts");
+        assert!(written.is_empty());
+        let kept: Vec<_> = session
+            .tabs
+            .iter()
+            .map(|t| {
+                (
+                    t.path.as_ref().map(|p| p.file_name().unwrap().to_owned()),
+                    t.backup.clone(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            kept,
+            vec![(Some("a.txt".into()), None), (Some("b.txt".into()), None)]
+        );
+        assert_eq!(session.active, None, "the tab in front was left out");
+    }
+
+    /// A file opened into the untouched `new 1`, saved before it lands, by
+    /// the autosave or a quit: the session names the file, so the next
+    /// start opens it, and does not keep the empty `new 1` it was loading
+    /// into, which its landing would have consumed.
+    #[test]
+    fn a_session_saved_while_a_file_opens_into_new_1_records_the_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("late.txt");
+        std::fs::write(&path, "late\n").unwrap();
+        let backups = tempfile::tempdir().unwrap();
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+        shell.new_untitled(&mut ui);
+        shell.open_file_replacing_scratch(path, true);
+        assert!(
+            shell.tabs[0].pending_load.is_some(),
+            "precondition: the file is still loading"
+        );
+
+        let (records, active) = saved_records(&shell, &mut ui, backups.path());
+        assert_eq!(records, vec![named("late.txt", None)]);
+        assert_eq!(active, Some(0));
+    }
+
+    /// The same, with text typed into `new 1` while the file loaded: the
+    /// session keeps the text as `new 1`, in front, and the file after it,
+    /// which is what the landing would leave.
+    #[test]
+    fn a_session_saved_while_a_file_loads_keeps_text_typed_into_new_1() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("late.txt");
+        std::fs::write(&path, "late\n").unwrap();
+        let backups = tempfile::tempdir().unwrap();
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+        shell.new_untitled(&mut ui);
+        let scratch_doc = shell.tabs[0].scintilla_doc;
+        shell.open_file_replacing_scratch(path.clone(), true);
+        ui.buffer_text = "typed\n".to_string();
+        ui.doc_dirty.insert(scratch_doc, true);
+
+        let (records, active) = saved_records(&shell, &mut ui, backups.path());
+        assert_eq!(
+            records,
+            vec![named("new 1", Some("typed\n")), named("late.txt", None)]
+        );
+        assert_eq!(active, Some(0));
+
+        // What the landing leaves, for comparison.
+        drain_until_loads_settle(&mut shell, &mut ui);
+        let landed: Vec<_> = shell
+            .tabs
+            .iter()
+            .map(|t| (t.path.clone(), t.untitled_seq))
+            .collect();
+        assert_eq!(landed, vec![(None, Some(1)), (Some(path), None)]);
+        assert_eq!(shell.active_tab, Some(0));
+    }
+
+    /// Text typed into a tab while its file loads keeps naming its last
+    /// backup when the next save cannot write a new one, as any tab's text
+    /// does ([`Shell::last_good_backup`]), and the prune keeps that file.
+    /// Without it the record would be left out, and the prune would delete
+    /// the only copy of the text.
+    #[cfg(unix)]
+    #[test]
+    fn text_typed_while_a_file_loads_keeps_its_last_backup_when_a_save_cannot_write() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("late.txt");
+        std::fs::write(&path, "late\n").unwrap();
+        let backups = dir.path().join("backup");
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+        shell.new_untitled(&mut ui);
+        let scratch_doc = shell.tabs[0].scintilla_doc;
+        shell.open_file_replacing_scratch(path.clone(), true);
+        ui.buffer_text = "typed\n".to_string();
+        ui.doc_dirty.insert(scratch_doc, true);
+        let first = shell.session_to_save(&mut ui, Some(&backups), "2026-10-09_120000");
+        let typed_backup = first.session.tabs[0].backup.clone().expect("a backup");
+        shell.after_session_saved(Some(&backups), first.backups);
+        ui.buffer_text = "typed more\n".to_string();
+
+        let Some(second) = while_unwritable(&backups, || {
+            shell.session_to_save(&mut ui, Some(&backups), "2026-10-09_120007")
+        }) else {
+            return;
+        };
+        let records: Vec<(Option<PathBuf>, Option<u32>, Option<String>)> = second
+            .session
+            .tabs
+            .iter()
+            .map(|t| (t.path.clone(), t.untitled_seq, t.backup.clone()))
+            .collect();
+        assert_eq!(
+            records,
+            [
+                (None, Some(1), Some(typed_backup.clone())),
+                (Some(path), None, None)
+            ]
+        );
+        shell.after_session_saved(Some(&backups), second.backups);
+        assert_eq!(files_in(&backups), [typed_backup]);
+    }
+
+    /// Fresh tabs shown while their files load, each typed into: each
+    /// tab's text is kept under an untitled number of its own, one no
+    /// open buffer holds and the other kept text was not given, and the
+    /// tab in front is recorded as its text.
+    #[test]
+    fn a_session_saved_while_files_load_numbers_the_text_typed_into_them() {
+        let dir = tempfile::tempdir().unwrap();
+        let (one, two) = (dir.path().join("one.txt"), dir.path().join("two.txt"));
+        std::fs::write(&one, "one\n").unwrap();
+        std::fs::write(&two, "two\n").unwrap();
+        let backups = tempfile::tempdir().unwrap();
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+        shell.new_untitled(&mut ui);
+        for (path, typed) in [(&one, "typed into one\n"), (&two, "typed into two\n")] {
+            shell.open_file(path.clone());
+            shell.bind_active_view(&mut ui);
+            let doc = shell.active().map_or(0, |t| t.scintilla_doc);
+            assert_ne!(doc, 0, "precondition: the loading tab has a document");
+            ui.buffer_text = typed.to_string();
+            ui.doc_dirty.insert(doc, true);
+        }
+
+        let (records, active) = saved_records(&shell, &mut ui, backups.path());
+        assert_eq!(
+            records,
+            vec![
+                named("new 1", Some("")),
+                named("new 2", Some("typed into one\n")),
+                named("one.txt", None),
+                named("new 3", Some("typed into two\n")),
+                named("two.txt", None),
+            ]
+        );
+        assert_eq!(active, Some(3));
+    }
+
+    /// A file opened twice while its first open still loads has two tabs
+    /// loading it. The session names it once, and a tab in front that is
+    /// loading it takes the front with that one record.
+    #[test]
+    fn a_session_saved_while_one_file_loads_twice_names_it_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("late.txt");
+        std::fs::write(&path, "late\n").unwrap();
+        let backups = tempfile::tempdir().unwrap();
+        let (mut shell, mut ui, _files, _paths) = open_settled(&["a.txt"]);
+        shell.open_file(path.clone());
+        shell.open_file(path);
+        assert_eq!(shell.tabs.len(), 3, "precondition: two tabs load the file");
+        assert_eq!(shell.active_tab, Some(2));
+
+        let (records, active) = saved_records(&shell, &mut ui, backups.path());
+        assert_eq!(records, vec![named("a.txt", None), named("late.txt", None)]);
+        assert_eq!(active, Some(1));
+    }
+
+    /// A session never holds more records than the next start reads
+    /// ([`MAX_SESSION_TABS`]). Text typed into a loading tab gives it a
+    /// second record, and where that does not fit, the tab's file is left
+    /// out, as the landing leaves it out at the tab cap; the text is kept.
+    /// Before, the records past the cap were dropped at the next start, and
+    /// the save after that pruned their backups.
+    #[test]
+    fn a_session_saved_at_the_tab_cap_leaves_a_loading_file_out() {
+        let backups = tempfile::tempdir().unwrap();
+        let (mut shell, mut ui, dir, _paths) = open_settled(&["a.txt"]);
+        for name in ["b.txt", "c.txt"] {
+            let path = dir.path().join(name);
+            std::fs::write(&path, "file\n").unwrap();
+            shell.open_file(path);
+            // Shown while it loads, and typed into.
+            shell.bind_active_view(&mut ui);
+            ui.buffer_text = "typed\n".into();
+            ui.doc_dirty.insert(ui.current_doc, true);
+        }
+        let filler = shell.tabs[0].clone();
+        while shell.tabs.len() < MAX_SESSION_TABS - 1 {
+            let mut tab = filler.clone();
+            tab.id = shell.allocate_buffer_id();
+            tab.path = Some(dir.path().join(format!("f{}.txt", shell.tabs.len())));
+            shell.tabs.push(tab);
+        }
+        let first_records = |session: &Session| -> Vec<String> {
+            session.tabs[..5]
+                .iter()
+                .map(|t| match (&t.path, t.untitled_seq) {
+                    (Some(p), _) => p.file_name().unwrap().to_string_lossy().into_owned(),
+                    (None, Some(n)) => format!("new {n}"),
+                    (None, None) => "Untitled".to_string(),
+                })
+                .collect()
+        };
+
+        let SavedSession { session, .. } =
+            shell.session_to_save(&mut ui, Some(backups.path()), "ts");
+        assert_eq!(session.tabs.len(), MAX_SESSION_TABS);
+        assert_eq!(
+            first_records(&session),
+            ["a.txt", "new 1", "b.txt", "new 2", "f3.txt"]
+        );
+
+        // One tab fewer, and both files fit.
+        shell.tabs.pop();
+        let SavedSession { session, .. } =
+            shell.session_to_save(&mut ui, Some(backups.path()), "ts");
+        assert_eq!(session.tabs.len(), MAX_SESSION_TABS);
+        assert_eq!(
+            first_records(&session),
+            ["a.txt", "new 1", "b.txt", "new 2", "c.txt"]
+        );
+    }
+
+    /// A file still loading is recorded with what its landing would give
+    /// it: the caret, language and pin the session read at startup
+    /// recorded for it.
+    #[test]
+    fn a_file_still_loading_is_saved_with_what_the_session_recorded_for_it() {
+        use codepp_core::lang::L_PYTHON;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("late.txt");
+        std::fs::write(&path, "late\n").unwrap();
+        let backups = tempfile::tempdir().unwrap();
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+        shell.session.tabs.push(codepp_core::session::Tab {
+            path: Some(path.clone()),
+            cursor: 3,
+            lang: Some(L_PYTHON.0),
+            pinned: true,
+            ..codepp_core::session::Tab::default()
+        });
+        shell.open_file(path.clone());
+
+        let SavedSession { session, .. } =
+            shell.session_to_save(&mut ui, Some(backups.path()), "ts");
+        let record = &session.tabs[0];
+        assert_eq!(
+            (
+                record.path.as_deref(),
+                record.cursor,
+                record.lang,
+                record.pinned
+            ),
+            (Some(path.as_path()), 3, Some(L_PYTHON.0), true)
+        );
+    }
+
+    /// A language and a pin asked for while the file loads go with the
+    /// file, as at its landing; the text typed into the tab meanwhile keeps
+    /// the language and gives up the pin.
+    #[test]
+    fn a_language_and_pin_asked_for_while_a_file_loads_are_saved_with_it() {
+        use codepp_core::lang::L_PYTHON;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("late.txt");
+        std::fs::write(&path, "late\n").unwrap();
+        let backups = tempfile::tempdir().unwrap();
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+        shell.new_untitled(&mut ui);
+        let scratch_doc = shell.tabs[0].scintilla_doc;
+        shell.open_file_replacing_scratch(path.clone(), true);
+        assert!(shell.set_active_lang(&mut ui, L_PYTHON));
+        assert!(shell.set_pinned(0, true));
+        ui.buffer_text = "typed\n".to_string();
+        ui.doc_dirty.insert(scratch_doc, true);
+
+        let SavedSession { session, .. } =
+            shell.session_to_save(&mut ui, Some(backups.path()), "ts");
+        let summary: Vec<_> = session
+            .tabs
+            .iter()
+            .map(|t| (t.path.is_some(), t.lang, t.pinned))
+            .collect();
+        assert_eq!(
+            summary,
+            vec![
+                (false, Some(L_PYTHON.0), false),
+                (true, Some(L_PYTHON.0), true)
+            ]
+        );
+    }
+
+    /// A loading tab pinned before its load keeps the pin on its typed
+    /// text, as the landing keeps it on the tab, and the file's record
+    /// takes only a pin asked for during the load. No open makes such a
+    /// tab today, since an open never loads into a pinned tab, so it is
+    /// set by hand: the line that mirrors the landing is held to it.
+    #[test]
+    fn work_in_a_tab_pinned_before_its_load_keeps_the_pin() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("late.txt");
+        std::fs::write(&path, "late\n").unwrap();
+        let backups = tempfile::tempdir().unwrap();
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+        shell.new_untitled(&mut ui);
+        let scratch_doc = shell.tabs[0].scintilla_doc;
+        shell.open_file_replacing_scratch(path.clone(), true);
+        shell.tabs[0].pinned = true;
+        ui.buffer_text = "typed\n".to_string();
+        ui.doc_dirty.insert(scratch_doc, true);
+
+        let SavedSession { session, .. } =
+            shell.session_to_save(&mut ui, Some(backups.path()), "ts");
+        let pins: Vec<_> = session
+            .tabs
+            .iter()
+            .map(|t| (t.path.is_some(), t.pinned))
+            .collect();
+        assert_eq!(pins, vec![(false, true), (true, false)]);
+    }
+
+    /// With nowhere to write backups, text typed into a loading tab cannot
+    /// be kept, as an untitled buffer's cannot; the file is still recorded.
+    #[test]
+    fn a_session_saved_with_no_backups_still_records_a_file_still_loading() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("late.txt");
+        std::fs::write(&path, "late\n").unwrap();
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+        shell.new_untitled(&mut ui);
+        let scratch_doc = shell.tabs[0].scintilla_doc;
+        shell.open_file_replacing_scratch(path.clone(), true);
+        ui.buffer_text = "typed\n".to_string();
+        ui.doc_dirty.insert(scratch_doc, true);
+
+        let SavedSession {
+            session,
+            backups: written,
+        } = shell.session_to_save(&mut ui, None, "ts");
+        assert!(written.is_empty());
+        let paths: Vec<_> = session.tabs.iter().map(|t| t.path.clone()).collect();
+        assert_eq!(paths, vec![Some(path)]);
+        assert_eq!(session.active, Some(0));
+    }
+
+    /// A buffer restored from a backup whose record carried no untitled
+    /// number is saved as it is, and the tab in front is still recorded as
+    /// the one it is: the save used to work the front out from untitled
+    /// numbers, which put it one tab early behind such a buffer and on no
+    /// tab when that buffer was in front.
+    #[test]
+    fn the_tab_in_front_is_recorded_beside_a_buffer_with_no_untitled_number() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("a.txt");
+        std::fs::write(&path, "a\n").unwrap();
+        let backups = tempfile::tempdir().unwrap();
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+        shell.restore_untitled_with_text(
+            &mut ui,
+            None,
+            "recovered\n".to_string(),
+            0,
+            Encoding::Utf8,
+            Eol::Lf,
+            false,
+            None,
+            None,
+            false,
+        );
+        shell.open_file(path);
+        drain_until_loads_settle(&mut shell, &mut ui);
+        assert_eq!(shell.active_tab, Some(1), "precondition: a.txt is in front");
+
+        let (records, active) = saved_records(&shell, &mut ui, backups.path());
+        assert_eq!(
+            records,
+            vec![named("Untitled", Some("recovered\n")), named("a.txt", None)]
+        );
+        assert_eq!(active, Some(1));
+
+        assert!(shell.switch_to_tab(0));
+        shell.bind_active_view(&mut ui);
+        let (_, active) = saved_records(&shell, &mut ui, backups.path());
+        assert_eq!(active, Some(0));
+    }
+
+    /// The record of which file a first load is for lives only while the
+    /// load is in flight: it goes when the load lands, when it fails, and
+    /// when its tab was closed before it landed.
+    #[test]
+    fn the_file_a_first_load_is_for_is_forgotten_once_the_load_ends() {
+        let (mut shell, mut ui, dir, _paths) = open_settled(&["a.txt"]);
+        assert!(shell.first_loads.is_empty(), "a landed load");
+        shell.open_file(dir.path().join("missing.txt"));
+        drain_until_loads_settle(&mut shell, &mut ui);
+        assert!(shell.first_loads.is_empty(), "a failed load");
+        let b = dir.path().join("b.txt");
+        std::fs::write(&b, "b\n").unwrap();
+        shell.open_file(b);
+        assert_eq!(
+            shell.first_loads.len(),
+            1,
+            "precondition: one load in flight"
+        );
+        assert!(shell.close_active_tab().is_some());
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !shell.first_loads.is_empty() {
+            assert!(Instant::now() < deadline, "the stale result never came");
+            shell.drain(&mut ui);
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+
+    /// Land the next result the loader sends, and only that one.
+    fn land_next_load(shell: &mut Shell, ui: &mut FakeUi) {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let result = loop {
+            if let Ok(result) = shell.load_rx.try_recv() {
+                break result;
+            }
+            assert!(Instant::now() < deadline, "no load result arrived");
+            std::thread::sleep(Duration::from_millis(10));
+        };
+        shell.apply_load_result(ui, result, &mut Vec::new());
+    }
+
+    /// A file a titled tab already holds is not recorded again for a tab
+    /// still loading it, and that tab, in front, takes the front with the
+    /// titled tab's record.
+    #[test]
+    fn a_file_a_titled_tab_holds_is_not_recorded_again_for_a_tab_loading_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("late.txt");
+        std::fs::write(&path, "late\n").unwrap();
+        let backups = tempfile::tempdir().unwrap();
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+        shell.open_file(path.clone());
+        shell.open_file(path);
+        land_next_load(&mut shell, &mut ui);
+        assert_eq!(
+            (
+                shell.tabs.iter().filter(|t| t.path.is_some()).count(),
+                shell
+                    .tabs
+                    .iter()
+                    .filter(|t| t.pending_load.is_some())
+                    .count()
+            ),
+            (1, 1),
+            "precondition: one tab holds the file and one is still loading it"
+        );
+        assert_eq!(
+            shell.active_tab,
+            Some(1),
+            "precondition: the loading one is in front"
+        );
+
+        let (records, active) = saved_records(&shell, &mut ui, backups.path());
+        assert_eq!(records, vec![named("late.txt", None)]);
+        assert_eq!(active, Some(0));
+    }
+
+    /// A language picked while an earlier load into the same tab was in
+    /// flight belonged to that load: when it failed and another file was
+    /// opened into the tab, the session saves the new file without it.
+    #[test]
+    fn a_language_picked_during_an_earlier_load_is_not_saved_with_the_next_file() {
+        use codepp_core::lang::L_PYTHON;
+        let dir = tempfile::tempdir().unwrap();
+        let good = dir.path().join("good.txt");
+        std::fs::write(&good, "good\n").unwrap();
+        let backups = tempfile::tempdir().unwrap();
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+        shell.new_untitled(&mut ui);
+        shell.open_file_replacing_scratch(dir.path().join("missing.txt"), true);
+        assert!(shell.set_active_lang(&mut ui, L_PYTHON));
+        drain_until_loads_settle(&mut shell, &mut ui);
+        assert_eq!(
+            (shell.tabs.len(), shell.tabs[0].lang),
+            (1, L_PYTHON),
+            "precondition: the scratch was handed back with the pick"
+        );
+        shell.open_file_replacing_scratch(good, true);
+        assert!(
+            shell.tabs[0].pending_load.is_some(),
+            "precondition: the scratch was reused"
+        );
+
+        let SavedSession { session, .. } =
+            shell.session_to_save(&mut ui, Some(backups.path()), "ts");
+        assert_eq!(
+            session.tabs.iter().map(|t| t.lang).collect::<Vec<_>>(),
+            vec![None]
+        );
+    }
+
+    /// The same for a pin: an unpin asked for while an earlier load was in
+    /// flight belonged to that load, so the session's own pin for the next
+    /// file is saved with it.
+    #[test]
+    fn an_unpin_during_an_earlier_load_is_not_saved_with_the_next_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let good = dir.path().join("good.txt");
+        std::fs::write(&good, "good\n").unwrap();
+        let backups = tempfile::tempdir().unwrap();
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+        shell.session.tabs.push(codepp_core::session::Tab {
+            path: Some(good.clone()),
+            pinned: true,
+            ..codepp_core::session::Tab::default()
+        });
+        shell.new_untitled(&mut ui);
+        shell.open_file_replacing_scratch(dir.path().join("missing.txt"), true);
+        assert!(shell.set_pinned(0, true));
+        assert!(shell.set_pinned(0, false));
+        drain_until_loads_settle(&mut shell, &mut ui);
+        shell.open_file_replacing_scratch(good, true);
+        assert!(
+            shell.tabs[0].pending_load.is_some(),
+            "precondition: the scratch was reused"
+        );
+
+        let SavedSession { session, .. } =
+            shell.session_to_save(&mut ui, Some(backups.path()), "ts");
+        assert_eq!(
+            session.tabs.iter().map(|t| t.pinned).collect::<Vec<_>>(),
+            vec![true]
+        );
+    }
+
+    /// Text typed into a tab while its file loads is saved under the name
+    /// the tab was renamed to, as the landing keeps it.
+    #[test]
+    fn text_typed_while_a_file_loads_is_saved_with_the_tabs_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("late.txt");
+        std::fs::write(&path, "late\n").unwrap();
+        let backups = tempfile::tempdir().unwrap();
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+        shell.open_file(path);
+        shell.bind_active_view(&mut ui);
+        let doc = shell.tabs[0].scintilla_doc;
+        ui.doc_dirty.insert(doc, true);
+        assert!(shell.set_active_custom_name("notes"));
+
+        let SavedSession { session, .. } =
+            shell.session_to_save(&mut ui, Some(backups.path()), "ts");
+        assert_eq!(
+            session
+                .tabs
+                .iter()
+                .map(|t| t.custom_name.clone())
+                .collect::<Vec<_>>(),
+            vec![Some("notes".to_string()), None]
+        );
+    }
+
+    /// Text typed into the tab in front while its file loads is saved with
+    /// the caret the editor reports, as any tab in front is.
+    #[test]
+    fn text_typed_while_a_file_loads_is_saved_with_the_live_caret() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("late.txt");
+        std::fs::write(&path, "late\n").unwrap();
+        let backups = tempfile::tempdir().unwrap();
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+        shell.open_file(path);
+        shell.bind_active_view(&mut ui);
+        let doc = shell.tabs[0].scintilla_doc;
+        ui.doc_dirty.insert(doc, true);
+        ui.cursor = 9;
+
+        let SavedSession { session, .. } =
+            shell.session_to_save(&mut ui, Some(backups.path()), "ts");
+        assert_eq!(session.tabs[0].cursor, 9);
+    }
+
     /// Only a fresh tab is kept as an untitled buffer when its load fails. A
     /// reload of a titled tab holding unsaved edits that fails leaves the
     /// tab named after its file, with no untitled number: one would name
@@ -20741,6 +21641,42 @@ mod tests {
         );
         // Active tab pointer follows "b" to its new position (0).
         assert_eq!(session.active, Some(0));
+    }
+
+    /// Two untitled buffers saved with no number look alike to anything
+    /// that matches records by path and untitled number, so the tab in
+    /// front is carried across the sort by its index: with the second of
+    /// two such buffers in front and a pinned file after them, it is still
+    /// the one in front afterwards.
+    #[test]
+    fn normalize_session_pinning_keeps_the_front_on_a_buffer_with_no_number() {
+        use codepp_core::session::{Session as CoreSession, Tab as CoreTab};
+        let numberless = |backup: &str| CoreTab {
+            backup: Some(backup.to_string()),
+            ..CoreTab::default()
+        };
+        let mut session = CoreSession::new();
+        session.tabs = vec![
+            numberless("untitled-1@ts"),
+            numberless("untitled-2@ts"),
+            CoreTab {
+                path: Some(PathBuf::from("/tmp/p")),
+                pinned: true,
+                ..CoreTab::default()
+            },
+        ];
+        session.active = Some(1);
+
+        normalize_session_pinning(&mut session);
+        assert_eq!(
+            session
+                .tabs
+                .iter()
+                .map(|t| t.backup.as_deref().or(t.path.as_ref().map(|_| "p")))
+                .collect::<Vec<_>>(),
+            vec![Some("p"), Some("untitled-1@ts"), Some("untitled-2@ts")]
+        );
+        assert_eq!(session.active, Some(2));
     }
 
     /// The all-unpinned case is a stable no-op — order preserved,
@@ -24476,5 +25412,235 @@ mod tests {
                 .unwrap();
             assert_eq!(files_in(&backups), [name], "{label}");
         }
+    }
+
+    /// A pipe opened as a file is recorded while it loads, and the loader
+    /// refuses it, so the next file's load is not held up.
+    #[cfg(unix)]
+    #[test]
+    fn a_pipe_loading_tab_is_recorded_and_the_loader_refuses_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let pipe = dir.path().join("pipe.txt");
+        mkfifo(&pipe);
+        let good = dir.path().join("good.txt");
+        std::fs::write(&good, "good\n").unwrap();
+        let backups = tempfile::tempdir().unwrap();
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+        let _release = PipeRelease::after(&pipe, Duration::from_secs(5));
+        shell.open_file(pipe.clone());
+        shell.open_file(good.clone());
+        let (records, active) = saved_records(&shell, &mut ui, backups.path());
+        assert_eq!(
+            records,
+            vec![named("pipe.txt", None), named("good.txt", None)]
+        );
+        assert_eq!(active, Some(1));
+
+        let started = Instant::now();
+        drain_until_loads_settle(&mut shell, &mut ui);
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "the loader was held up by the pipe"
+        );
+        let titled: Vec<_> = shell.tabs.iter().filter_map(|t| t.path.clone()).collect();
+        assert_eq!(titled, vec![good.clone()]);
+        let (records, _) = saved_records(&shell, &mut ui, backups.path());
+        assert_eq!(records, vec![named("good.txt", None)]);
+    }
+
+    /// A session with typed work and its file, written to disk and read
+    /// back by a fresh shell, restores the work as an untitled buffer with
+    /// its number and text, then the file; the front is the work.
+    #[test]
+    fn work_and_file_records_restore_in_order() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("late.txt");
+        std::fs::write(&path, "late\n").unwrap();
+        let backups = dir.path().join("backup");
+        let session_xml = dir.path().join("session.xml");
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake.clone()).unwrap();
+        let mut ui = FakeUi::default();
+        shell.new_untitled(&mut ui);
+        let scratch_doc = shell.tabs[0].scintilla_doc;
+        shell.open_file_replacing_scratch(path.clone(), true);
+        ui.buffer_text = "typed\n".to_string();
+        ui.doc_dirty.insert(scratch_doc, true);
+        shell
+            .save_session_to(&mut ui, &session_xml, Some(&backups), "2026-10-09_120000")
+            .unwrap();
+
+        let mut shell2 = Shell::new(wake).unwrap();
+        let entries = shell2.load_session_entries_from(&session_xml, Some(&backups));
+        assert_eq!(entries.len(), 2);
+        assert!(matches!(
+            &entries[0],
+            SessionRestoreEntry::UntitledFromBackup { untitled_seq: Some(1), text, .. }
+                if text == "typed\n"
+        ));
+        assert!(matches!(&entries[1], SessionRestoreEntry::OpenFile(p) if p == &path));
+        assert_eq!(shell2.session_active_index(), Some(0));
+    }
+
+    /// An `active` past the end of a hand-edited session becomes `None`.
+    #[test]
+    fn normalize_session_pinning_drops_an_out_of_range_front() {
+        use codepp_core::session::{Session as CoreSession, Tab as CoreTab};
+        let mut session = CoreSession::new();
+        session.tabs = vec![CoreTab::default(), CoreTab::default()];
+        session.active = Some(7);
+        normalize_session_pinning(&mut session);
+        assert_eq!(session.active, None);
+    }
+
+    /// The work record keeps a language equal to the file's extension
+    /// default: an untitled buffer's default is Normal Text, whatever the
+    /// file is called.
+    #[test]
+    fn work_keeps_a_language_equal_to_the_files_extension_default() {
+        use codepp_core::lang::L_RUST;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("late.rs");
+        std::fs::write(&path, "fn main() {}\n").unwrap();
+        let backups = tempfile::tempdir().unwrap();
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+        shell.open_file(path);
+        shell.bind_active_view(&mut ui);
+        let doc = shell.tabs[0].scintilla_doc;
+        ui.buffer_text = "typed\n".to_string();
+        ui.doc_dirty.insert(doc, true);
+        assert!(shell.set_active_lang(&mut ui, L_RUST));
+
+        let SavedSession { session, .. } =
+            shell.session_to_save(&mut ui, Some(backups.path()), "ts");
+        assert_eq!(session.tabs[0].path, None, "the first record is the work");
+        assert_eq!(
+            session.tabs[0].lang,
+            Some(L_RUST.0),
+            "the work lost its language"
+        );
+    }
+
+    /// At the cap, a loading tab with no typed work does not use up the
+    /// room a later tab's second record needs.
+    #[test]
+    fn a_workless_loading_tab_does_not_use_up_the_room() {
+        let backups = tempfile::tempdir().unwrap();
+        let (mut shell, mut ui, dir, _paths) = open_settled(&["a.txt"]);
+        // b.txt: loading, nothing typed. c.txt: loading, typed into.
+        let b = dir.path().join("b.txt");
+        let c = dir.path().join("c.txt");
+        std::fs::write(&b, "file\n").unwrap();
+        std::fs::write(&c, "file\n").unwrap();
+        shell.open_file(b);
+        shell.open_file(c);
+        shell.bind_active_view(&mut ui);
+        ui.buffer_text = "typed\n".into();
+        ui.doc_dirty.insert(ui.current_doc, true);
+        let filler = shell.tabs[0].clone();
+        while shell.tabs.len() < MAX_SESSION_TABS - 1 {
+            let mut tab = filler.clone();
+            tab.id = shell.allocate_buffer_id();
+            tab.path = Some(dir.path().join(format!("f{}.txt", shell.tabs.len())));
+            shell.tabs.push(tab);
+        }
+        // One tab short of the cap, one record each, room for one more:
+        // c.txt's second record.
+        let SavedSession { session, .. } =
+            shell.session_to_save(&mut ui, Some(backups.path()), "ts");
+        assert_eq!(session.tabs.len(), MAX_SESSION_TABS);
+    }
+
+    /// A loading tab with typed work that is not in front records caret 0,
+    /// not the view's caret.
+    #[test]
+    fn a_background_loading_tab_with_work_records_caret_zero() {
+        let dir = tempfile::tempdir().unwrap();
+        let (one, two) = (dir.path().join("one.txt"), dir.path().join("two.txt"));
+        std::fs::write(&one, "one\n").unwrap();
+        std::fs::write(&two, "two\n").unwrap();
+        let backups = tempfile::tempdir().unwrap();
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+        shell.open_file(one);
+        shell.bind_active_view(&mut ui);
+        let doc = shell.tabs[0].scintilla_doc;
+        ui.buffer_text = "typed\n".into();
+        ui.doc_dirty.insert(doc, true);
+        shell.open_file(two);
+        ui.cursor = 9;
+        let SavedSession { session, .. } =
+            shell.session_to_save(&mut ui, Some(backups.path()), "ts");
+        assert_eq!(session.tabs[0].untitled_seq, Some(1));
+        assert_eq!(session.tabs[0].cursor, 0);
+    }
+
+    /// A number a loading scratch keeps for its own typed work is not given
+    /// again to another loading tab's work.
+    #[test]
+    fn a_number_a_loading_scratch_keeps_is_not_given_again() {
+        let dir = tempfile::tempdir().unwrap();
+        let (one, two) = (dir.path().join("one.txt"), dir.path().join("two.txt"));
+        std::fs::write(&one, "one\n").unwrap();
+        std::fs::write(&two, "two\n").unwrap();
+        let backups = tempfile::tempdir().unwrap();
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+        shell.new_untitled(&mut ui);
+        let scratch_doc = shell.tabs[0].scintilla_doc;
+        shell.open_file_replacing_scratch(one, true);
+        ui.buffer_text = "typed into the scratch\n".into();
+        ui.doc_dirty.insert(scratch_doc, true);
+        shell.open_file(two);
+        shell.bind_active_view(&mut ui);
+        let doc = shell.tabs[1].scintilla_doc;
+        ui.buffer_text = "typed into two\n".into();
+        ui.doc_dirty.insert(doc, true);
+
+        let (records, _) = saved_records(&shell, &mut ui, backups.path());
+        assert_eq!(
+            records,
+            vec![
+                named("new 1", Some("typed into the scratch\n")),
+                named("one.txt", None),
+                named("new 2", Some("typed into two\n")),
+                named("two.txt", None),
+            ]
+        );
+    }
+
+    /// Work typed into a scratch pinned before the open keeps its pin: the
+    /// open does not load into a pinned tab, so the file gets a tab of its
+    /// own.
+    #[test]
+    fn work_typed_into_a_pinned_scratch_keeps_its_pin() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("late.txt");
+        std::fs::write(&path, "late\n").unwrap();
+        let backups = tempfile::tempdir().unwrap();
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+        shell.new_untitled(&mut ui);
+        let scratch_doc = shell.tabs[0].scintilla_doc;
+        assert!(shell.set_pinned(0, true));
+        shell.open_file_replacing_scratch(path, true);
+        ui.buffer_text = "typed\n".into();
+        ui.doc_dirty.insert(scratch_doc, true);
+
+        let SavedSession { session, .. } =
+            shell.session_to_save(&mut ui, Some(backups.path()), "ts");
+        let summary: Vec<_> = session
+            .tabs
+            .iter()
+            .map(|t| (t.path.is_some(), t.pinned))
+            .collect();
+        assert_eq!(summary, vec![(false, true), (true, false)]);
     }
 }
