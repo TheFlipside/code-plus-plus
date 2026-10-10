@@ -67,7 +67,7 @@
     clippy::missing_errors_doc
 )]
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::thread;
@@ -117,9 +117,14 @@ pub const PRIMARY_BUFFER_ID: isize = 1;
 /// session-save bug or an attacker with write access to `AppData`
 /// could otherwise queue thousands of async loads at startup, each
 /// allocating a Tab + decoded buffer text — a local `DoS` for the
-/// invoking user's account). Set well above any realistic open-tab
-/// count.
-pub const MAX_SESSION_TABS: usize = 512;
+/// invoking user's account).
+///
+/// Equal to [`MAX_OPEN_TABS`], because a session Code++ writes holds at
+/// most one record per open tab. A lower cap dropped the records past it at
+/// the next start, and that start's first save pruned their recovery
+/// backups, so an untitled buffer or the unsaved edits of a file past the
+/// cap were lost.
+pub const MAX_SESSION_TABS: usize = MAX_OPEN_TABS;
 
 /// Hard ceiling on the size of an individual backup file we'll read
 /// during session restore. Untitled buffers are normally small (the
@@ -128,6 +133,16 @@ pub const MAX_SESSION_TABS: usize = 512;
 /// above any realistic untitled-buffer size while keeping the
 /// upper bound on a load attack to a fixed amount.
 const MAX_BACKUP_FILE_BYTES: u64 = 64 * 1024 * 1024;
+
+/// Most bytes of backup text one session restore reads, across every
+/// record. [`MAX_BACKUP_FILE_BYTES`] bounds one backup, and reading each
+/// backup for one record only ([`Shell::restore_entries`]) keeps a session
+/// from naming one file for many records; but names differing only in case
+/// reach one file on a case-insensitive filesystem, and a folder can simply
+/// hold many large backups. Past this, a record restores without its
+/// backup, which stays in the folder for the rest of the run
+/// ([`Shell::kept_backups`]). Sixteen backups at the per-file cap.
+const MAX_RESTORED_BACKUP_BYTES: u64 = 16 * MAX_BACKUP_FILE_BYTES;
 
 /// Hard ceiling on the number of tabs that can be open at one time.
 /// `Shell::open_file` and `Shell::new_untitled` refuse to allocate
@@ -143,9 +158,8 @@ const MAX_BACKUP_FILE_BYTES: u64 = 64 * 1024 * 1024;
 /// window from billions of iterations to thousands.
 ///
 /// 1024 is well above any realistic human workflow (Notepad++
-/// users rarely exceed ~100 tabs in even the largest sessions)
-/// and well above the `MAX_SESSION_TABS` (512) ceiling for
-/// session restore.
+/// users rarely exceed ~100 tabs in even the largest sessions).
+/// It is the ceiling for session restore too ([`MAX_SESSION_TABS`]).
 ///
 /// **Known limitation:** a plugin that *cycles* (open + close in
 /// a loop) instead of accumulating tabs can still climb
@@ -1991,6 +2005,55 @@ pub struct Shell {
     /// `save_all`). Ids are monotonic and never reused, so a closed tab's
     /// stale id is harmless and needs no cleanup.
     unsaved_restore_ids: HashSet<i32>,
+    /// The newest recovery backup each tab's record has named, by tab id:
+    /// the one the `session.xml` on disk names, or one a later save wrote
+    /// whose `session.xml` could not be written. A tab whose new backup
+    /// cannot be written keeps naming this one ([`Self::session_to_save`]),
+    /// and the prune keeps it, so a failed write costs the edits made since
+    /// that backup rather than all of them. Replaced after each save,
+    /// whether or not its `session.xml` reaches disk
+    /// ([`Self::after_session_saved`], [`Self::after_failed_save`]); filled
+    /// at a restore from the records it restores
+    /// ([`Self::restored_backups`]); and dropped for a tab whose content
+    /// goes to disk or comes back from it ([`Self::forget_unsaved_state`]),
+    /// since the backup then holds content the tab no longer has.
+    last_backups: HashMap<i32, String>,
+    /// Every backup the `session.xml` on disk names, whatever tab its
+    /// record became: what a save whose `session.xml` cannot be written
+    /// keeps while it prunes ([`Self::after_failed_save`]), since the next
+    /// start reads that file. Read from the session at the restore, and
+    /// replaced after each save that reaches disk.
+    on_disk_backups: HashSet<String>,
+    /// The backups named by the records [`Self::restore_entries`] turned
+    /// into restore entries, waiting for the tabs those entries become:
+    /// [`Self::restore_untitled_with_text`] and
+    /// [`Self::restore_dirty_with_text`] move each into
+    /// [`Self::last_backups`] under its new tab's id. The first save ends
+    /// the restore and moves any that no tab took into
+    /// [`Self::kept_backups`].
+    restored_backups: Vec<(RestoredBackupKey, String)>,
+    /// Backups the restored session named that no tab took: refused at the
+    /// restore (unreadable, too large, or past the restore's byte budget),
+    /// named only by records past the tab cap, or handed to an entry no tab
+    /// came of. After a session file that could not be read, or that held
+    /// no tabs, every name in the folder ([`Self::keep_every_backup`]).
+    /// Every prune this run keeps them, so their text stays in the folder
+    /// until the next start, whose session no longer names them. Each
+    /// backup refused at the restore is logged with its name, and the
+    /// records past the tab cap with one line counting them.
+    kept_backups: HashSet<String>,
+    /// Whether [`Self::on_disk_backups`] says what the `session.xml` on disk
+    /// names: true once the startup restore has read it or a save has
+    /// written it. Without either (Win32 skips the restore when started
+    /// with a path, and a `session.xml` that cannot be read names nothing
+    /// anyone can tell), a failed save keeps every backup the folder held
+    /// before this run's saves ([`Self::keep_every_backup`]).
+    on_disk_known: bool,
+    /// Whether [`Self::keep_every_backup`] has run. It looks at the folder
+    /// once: a later look would keep the backups this run's saves wrote
+    /// since as well, a set per autosave while `session.xml` cannot be
+    /// written.
+    kept_every_backup: bool,
     /// Loads that were retargeted onto a tab that already existed,
     /// rather than onto one pushed for the occasion.
     ///
@@ -2518,6 +2581,12 @@ impl Shell {
             pending_fif_launch: None,
             deferred_dialogs: Vec::new(),
             unsaved_restore_ids: HashSet::new(),
+            last_backups: HashMap::new(),
+            on_disk_backups: HashSet::new(),
+            restored_backups: Vec::new(),
+            kept_backups: HashSet::new(),
+            on_disk_known: false,
+            kept_every_backup: false,
             loads_onto_existing_tabs: HashSet::new(),
             file_change_debounce: std::collections::HashMap::new(),
             styles: load_styles(),
@@ -4238,8 +4307,9 @@ impl Shell {
                     if let Some(tab) = self.tabs.get_mut(idx) {
                         tab.dirty = false;
                     }
-                    // Written to disk, so no longer unsaved-from-restore.
-                    self.unsaved_restore_ids.remove(&id);
+                    // Written to disk, so nothing unsaved is left for the
+                    // restore marker or the last backup to stand for.
+                    self.forget_unsaved_state(id);
                 }
                 Ok(Err(e)) => errors.push((id, e)),
                 Err(_) => {
@@ -4404,7 +4474,7 @@ impl Shell {
                 // ORs this set into the cached dirty bit — released after,
                 // the glyph would stay red until the next notification.
                 if let Some(id) = self.active().map(|t| t.id) {
-                    self.unsaved_restore_ids.remove(&id);
+                    self.forget_unsaved_state(id);
                 }
                 ui.mark_saved();
                 // Push the new lang through the UI so the lexer
@@ -5449,8 +5519,20 @@ impl Shell {
             return;
         }
         if let Some(id) = self.tabs.get(idx).map(|t| t.id) {
-            self.unsaved_restore_ids.remove(&id);
+            self.forget_unsaved_state(id);
         }
+    }
+
+    /// Tab `id`'s content went to disk, or came back from it: forget what
+    /// stood for its unsaved content. Its restore marker
+    /// ([`Self::unsaved_restore_ids`]) goes, and so does the backup its
+    /// record named ([`Self::last_backups`]), which holds content the tab no
+    /// longer has. A later save whose backup write fails would otherwise
+    /// name it, and the next start would bring back edits that were saved,
+    /// or discarded, since. Every release of the marker goes through here.
+    fn forget_unsaved_state(&mut self, id: i32) {
+        self.unsaved_restore_ids.remove(&id);
+        self.last_backups.remove(&id);
     }
 
     /// Second half, after `set_buffer_text` has set the save point. A
@@ -5788,13 +5870,19 @@ impl Shell {
                 tab.scintilla_doc = 0;
                 tab.reload_confirmed = false;
                 tab.dirty = false;
-                self.unsaved_restore_ids.remove(&tab.id);
             }
         } else if let Some(tab) = self.tabs.get_mut(idx) {
             tab.reload_confirmed = false;
             if stored_doc != 0 {
                 tab.doc_needs_text = true;
             }
+        }
+        // The tab now holds the file's text, or will once it is shown, so a
+        // backup it names holds content it no longer has: text typed while
+        // its file loaded and since undone, say. An install on the tab in
+        // front forgets it the same way (`release_marker_before_install`).
+        if let Some(id) = self.tabs.get(idx).map(|tab| tab.id) {
+            self.forget_unsaved_state(id);
         }
     }
 
@@ -6404,7 +6492,7 @@ impl Shell {
         // this set into the cached dirty bit — released after, the glyph
         // would stay red until the next notification.
         if let Ok(id) = i32::try_from(buffer_id) {
-            self.unsaved_restore_ids.remove(&id);
+            self.forget_unsaved_state(id);
         }
         // Clear Scintilla's dirty glyph for the just-saved buffer.
         // Done here so every save path (single Save, Save As, the
@@ -7148,12 +7236,6 @@ impl Shell {
         }
     }
 
-    /// Persist the open-tab list to `session.xml` at the configured
-    /// path. Called on clean shutdown. The active tab's cursor is
-    /// pulled live from the editor so the next launch restores the
-    /// caret where the user left it; non-active tabs use cursor 0
-    /// for now (milestone 6b's UI tab control records per-tab cursors
-    /// at switch time).
     /// File → Save Session: write a Notepad++-shape session XML at `path`
     /// capturing every path-bound open tab (untitled buffers are skipped —
     /// there is no path to record). `active_caret` is the live caret of the
@@ -7393,7 +7475,26 @@ impl Shell {
         })
     }
 
-    pub fn save_session<U: UiPlatform>(&self, ui: &mut U) -> Result<(), ShellError> {
+    /// Persist the open-tab list to `session.xml`, with a recovery
+    /// backup for every tab whose content is not on disk: an untitled
+    /// buffer, or a file with unsaved edits. Called on clean shutdown and
+    /// by the autosave. The active tab's cursor is pulled live from the
+    /// editor so the next launch restores the caret where the user left
+    /// it; other tabs record cursor 0.
+    ///
+    /// A backup takes a name nothing in the backup folder has
+    /// ([`write_backup_file`]), so a save in the same second as the last
+    /// one cannot overwrite a backup the `session.xml` on disk names. The
+    /// backups the new `session.xml` does not name are pruned only once it
+    /// is on disk, so a crash mid-save never deletes a backup the surviving
+    /// `session.xml` still names.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ShellError::Session`] when `session.xml` cannot be
+    /// written. The prune then keeps what the `session.xml` on disk names,
+    /// and the backups this save wrote ([`Self::after_failed_save`]).
+    pub fn save_session<U: UiPlatform>(&mut self, ui: &mut U) -> Result<(), ShellError> {
         let Some(session_path) = codepp_platform::session_xml_path() else {
             // No config dir resolvable (sandboxed environment); skip
             // session save silently. Untitled buffers still die, but
@@ -7401,6 +7502,56 @@ impl Shell {
             return Ok(());
         };
         let backups_dir = codepp_platform::backups_dir();
+        self.save_session_to(
+            ui,
+            &session_path,
+            backups_dir.as_deref(),
+            &backup_timestamp(),
+        )
+    }
+
+    /// [`Self::save_session`] to `session_path`, with the backups in
+    /// `backups_dir` and `timestamp` in their names.
+    fn save_session_to<U: UiPlatform>(
+        &mut self,
+        ui: &mut U,
+        session_path: &Path,
+        backups_dir: Option<&Path>,
+        timestamp: &str,
+    ) -> Result<(), ShellError> {
+        let mut saved = self.session_to_save(ui, backups_dir, timestamp);
+        writable_paths_only(&mut saved.session);
+        match saved.session.save_to_xml(session_path) {
+            Ok(()) => {
+                self.after_session_saved(backups_dir, saved.backups);
+                Ok(())
+            }
+            Err(e) => {
+                self.after_failed_save(backups_dir, &saved.backups);
+                Err(ShellError::Session(e.to_string()))
+            }
+        }
+    }
+
+    /// Build the session [`Self::save_session`] writes, writing a recovery
+    /// backup into `backups_dir` for each tab that needs one
+    /// ([`Self::tab_needs_backup`]). Every backup shares `timestamp` in
+    /// its name.
+    ///
+    /// A tab whose backup cannot be written keeps naming the newest one
+    /// its record named ([`Self::last_backups`]) if that file is still
+    /// there: the edits since it are lost, the ones before it are not.
+    /// Without one, an untitled buffer is left out, since there is nothing
+    /// to restore it from, and a file is recorded without its edits, so the
+    /// next start opens it from disk. The same happens to every tab that
+    /// needs a backup when there is no backup folder (a sandboxed
+    /// environment).
+    fn session_to_save<U: UiPlatform>(
+        &self,
+        ui: &mut U,
+        backups_dir: Option<&Path>,
+        timestamp: &str,
+    ) -> SavedSession {
         let mut session = Session::new();
         // Persist the current window geometry alongside the tab list
         // so the next launch can restore the user's preferred size.
@@ -7414,9 +7565,9 @@ impl Shell {
         // `sync_workspace_state_to_shell` in `ui_win32`); we
         // snapshot the latest value here. Without this, the
         // workspace state I set via `set_workspace_session`
-        // would be thrown away — `save_session` starts from a
-        // fresh `Session::new()` and only carries over fields
-        // it explicitly copies.
+        // would be thrown away — this starts from a fresh
+        // `Session::new()` and only carries over fields it
+        // explicitly copies.
         session.workspace.clone_from(&self.session.workspace);
         // Same discipline for the right-side Document Map panel
         // state (visible + width). Kept in sync by
@@ -7440,19 +7591,8 @@ impl Shell {
         // to `ViewSettings::default()`.
         session.view = self.session.view;
 
-        // Filenames of all backups we wrote on this save pass.
-        // After session.xml is durably written we use this list to
-        // prune any older backup files in the directory that the
-        // new session no longer references — keeps the directory
-        // bounded over the long term.
-        let mut written_backups: Vec<String> = Vec::new();
-        // Stable timestamp suffix shared by every backup written in
-        // this save pass. Matches Notepad++'s `<name>@<timestamp>`
-        // naming convention for backup files. Local time so the
-        // user can read it at a glance when inspecting the
-        // directory.
-        let timestamp = backup_timestamp();
-
+        let mut pass = SavePass::new(backups_dir, timestamp);
+        let mut backups = HashMap::new();
         for (idx, tab) in self.tabs.iter().enumerate() {
             // Active-tab cursor comes from the editor; others are 0
             // until a future tab-switch hook persists per-tab cursors.
@@ -7481,58 +7621,29 @@ impl Shell {
             // backup write entirely — the disk file IS the
             // authoritative state.
             let mut backup_filename: Option<String> = None;
-            let needs_backup = self.tab_needs_backup(tab, ui);
-            if needs_backup {
-                if let Some(dir) = &backups_dir {
-                    let display = if let Some(seq) = tab.untitled_seq {
-                        format!("new {seq}")
-                    } else if let Some(p) = &tab.path {
-                        // Use the file's basename so the backup
-                        // dir is human-readable. Sanitised so the
-                        // backup we write is also one we can
-                        // later read past `is_safe_backup_filename`.
-                        sanitize_basename_for_backup(p)
-                    } else {
-                        format!("untitled-{}", tab.id)
-                    };
-                    let filename = format!("{display}@{timestamp}");
-                    let abs_path = dir.join(&filename);
-                    let text = Self::backup_text_for(tab, ui);
-                    match write_backup_file(&abs_path, text.as_bytes()) {
-                        Ok(()) => {
-                            backup_filename = Some(filename.clone());
-                            written_backups.push(filename);
-                        }
-                        Err(e) => {
-                            // For untitled tabs a failed backup
-                            // means the tab is lost on next
-                            // launch — log + skip from the
-                            // persisted list. For saved files we
-                            // still have the on-disk version, so
-                            // degrade gracefully: keep the tab in
-                            // session.xml without a backup
-                            // reference. The user loses unsaved
-                            // edits but not the open-tab record.
-                            tracing::warn!(
-                                path = ?tab.path,
-                                untitled_seq = ?tab.untitled_seq,
-                                error = ?e,
-                                "failed to write backup file; unsaved edits not protected",
-                            );
-                            if tab.path.is_none() {
-                                continue;
-                            }
-                        }
-                    }
-                } else if tab.path.is_none() {
-                    // No backups directory available (sandboxed
-                    // environment) — untitled tabs can't be
-                    // persisted, so drop them silently the same
-                    // way the old code did. Saved-file tabs flow
-                    // through (their disk content is the source
-                    // of truth).
+            if self.tab_needs_backup(tab, ui) {
+                let display = if let Some(seq) = tab.untitled_seq {
+                    format!("new {seq}")
+                } else if let Some(p) = &tab.path {
+                    // Use the file's basename so the backup dir is
+                    // human-readable. Sanitised so the backup we write
+                    // is also one we can later read past
+                    // `is_safe_backup_filename`.
+                    sanitize_basename_for_backup(p)
+                } else {
+                    format!("untitled-{}", tab.id)
+                };
+                backup_filename = pass
+                    .write(tab, &display, || Self::backup_text_for(tab, ui))
+                    .or_else(|| self.last_good_backup(tab.id, &pass));
+                if backup_filename.is_none() && tab.path.is_none() {
+                    // Nothing to restore an untitled buffer from: leave
+                    // it out rather than record an empty tab.
                     continue;
                 }
+            }
+            if let Some(name) = &backup_filename {
+                backups.insert(tab.id, name.clone());
             }
 
             // Split the tab's language into the two attributes that carry
@@ -7593,22 +7704,108 @@ impl Shell {
             }
             None
         });
-        session
-            .save_to_xml(&session_path)
-            .map_err(|e| ShellError::Session(e.to_string()))?;
+        SavedSession { session, backups }
+    }
 
-        // Now that session.xml is durably on disk, prune any backup
-        // files in the directory that this save pass didn't write —
-        // those are leftovers from a previous session whose tabs no
-        // longer exist (closed, saved-and-cleaned, or the user moved
-        // to fewer untitled tabs). Doing this *after* the session.xml
-        // write means a crash mid-save can never delete a backup
-        // that the surviving session.xml still references.
-        if let Some(dir) = backups_dir {
-            prune_unreferenced_backups(&dir, &written_backups);
+    /// The newest backup tab `id`'s record named ([`Self::last_backups`]),
+    /// if it is still a file in the backups folder: what a tab whose new
+    /// backup could not be written keeps naming ([`Self::session_to_save`]).
+    ///
+    /// The name is looked up without following a link, and only a regular
+    /// file counts. A name `pass` has already written is refused: that file
+    /// holds another tab's text, which happens when the old backup left the
+    /// folder and a backup of this save took its name.
+    fn last_good_backup(&self, id: i32, pass: &SavePass<'_>) -> Option<String> {
+        let dir = pass.dir?;
+        let name = self.last_backups.get(&id)?;
+        if pass.written.contains(name) {
+            return None;
         }
+        let is_file =
+            std::fs::symlink_metadata(dir.join(name)).is_ok_and(|m| m.file_type().is_file());
+        if !is_file {
+            return None;
+        }
+        tracing::warn!(
+            id,
+            backup = ?name,
+            "the tab's new backup was not written; its record keeps naming its last one",
+        );
+        Some(name.clone())
+    }
 
-        Ok(())
+    /// The bookkeeping after `session.xml` reaches disk naming `backups`,
+    /// the backup each tab's record names, by tab id: prune every other
+    /// backup from `backups_dir` but those the restore left
+    /// ([`Self::kept_backups`]), and remember these as
+    /// [`Self::last_backups`] and [`Self::on_disk_backups`] for the next
+    /// save.
+    fn after_session_saved(&mut self, backups_dir: Option<&Path>, backups: HashMap<i32, String>) {
+        self.end_restore();
+        self.on_disk_known = true;
+        // Now that session.xml is durably on disk, prune any backup
+        // files in the directory that it doesn't name — those are
+        // leftovers from a previous save whose tabs no longer exist
+        // (closed, saved-and-cleaned, or the user moved to fewer
+        // untitled tabs), or older backups of tabs this save wrote
+        // again. Doing this *after* the session.xml write means a
+        // crash mid-save can never delete a backup that the surviving
+        // session.xml still references.
+        if let Some(dir) = backups_dir {
+            let keep: HashSet<&str> = backups
+                .values()
+                .chain(&self.kept_backups)
+                .map(String::as_str)
+                .collect();
+            prune_unreferenced_backups(dir, &keep);
+        }
+        self.on_disk_backups = backups.values().cloned().collect();
+        self.last_backups = backups;
+    }
+
+    /// The bookkeeping after a save whose `session.xml` could not be
+    /// written. The `session.xml` on disk is the one before, since its
+    /// replacement is a rename that either happened or did not, so what it
+    /// names stays ([`Self::on_disk_backups`]). So do `backups`, the ones
+    /// this save's records named: the newest copy of each tab's text, until
+    /// a later save replaces them. Every other backup is pruned, so a disk
+    /// that keeps refusing `session.xml` does not fill with a set of
+    /// backups per autosave.
+    ///
+    /// `backups` also become [`Self::last_backups`]. A later save whose
+    /// backup write fails then names the newest copy rather than the older
+    /// one the `session.xml` on disk names, which would otherwise outlive
+    /// it: once that later `session.xml` reaches disk, its prune keeps only
+    /// what it names.
+    fn after_failed_save(&mut self, backups_dir: Option<&Path>, backups: &HashMap<i32, String>) {
+        self.end_restore();
+        self.last_backups.clone_from(backups);
+        if !self.on_disk_known && !self.kept_every_backup {
+            self.keep_every_backup(backups_dir);
+            // This save's own backups are kept below until a later save
+            // replaces them, not for the whole run.
+            for name in backups.values() {
+                self.kept_backups.remove(name);
+            }
+        }
+        if let Some(dir) = backups_dir {
+            let keep: HashSet<&str> = backups
+                .values()
+                .chain(&self.on_disk_backups)
+                .chain(&self.kept_backups)
+                .map(String::as_str)
+                .collect();
+            prune_unreferenced_backups(dir, &keep);
+        }
+    }
+
+    /// End the restore, which the first save does: a backup it handed to
+    /// an entry that no tab came of is kept for the rest of the run
+    /// ([`Self::kept_backups`]) rather than waiting to be adopted.
+    fn end_restore(&mut self) {
+        for (_, name) in self.restored_backups.drain(..) {
+            self.kept_backups.insert(name);
+        }
     }
 
     /// Read `session.xml` and return one entry per restored tab in
@@ -7629,23 +7826,72 @@ impl Shell {
     /// Returns an empty Vec when the file is missing — first-run
     /// case, never an error. A file that cannot be read (not a
     /// regular file, over its size cap, or not a session) also
-    /// returns empty, with a warn-level log so it is observable.
+    /// returns empty, with a warn-level log so it is observable, and
+    /// every backup in the folder is kept for the run, since nothing
+    /// then says which of them the session named.
     pub fn load_session_entries(&mut self) -> Vec<SessionRestoreEntry> {
         let Some(path) = codepp_platform::session_xml_path() else {
             return Vec::new();
         };
-        self.load_session_entries_from(&path)
+        self.load_session_entries_from(&path, codepp_platform::backups_dir().as_deref())
     }
 
-    /// [`Self::load_session_entries`] for the session file at `path`.
-    fn load_session_entries_from(&mut self, path: &Path) -> Vec<SessionRestoreEntry> {
-        let mut session = match read_session_file(path) {
+    /// [`Self::load_session_entries`] for the session file at `path`, with
+    /// its backups in `backups_dir`.
+    fn load_session_entries_from(
+        &mut self,
+        path: &Path,
+        backups_dir: Option<&Path>,
+    ) -> Vec<SessionRestoreEntry> {
+        let session = match read_session_file(path) {
             Ok(s) => s,
             Err(e) => {
                 tracing::warn!(path = ?path, error = ?e, "session.xml load failed; starting clean");
+                self.keep_every_backup(backups_dir);
                 return Vec::new();
             }
         };
+        self.restore_entries(session, backups_dir, MAX_RESTORED_BACKUP_BYTES)
+    }
+
+    /// Keep every backup now in `backups_dir` for the rest of the run
+    /// ([`Self::kept_backups`]). After a session file that could not be
+    /// read, nothing says which of them it named, and the first save would
+    /// otherwise prune them all, and with them every buffer the session had
+    /// backed up. Only the first call looks at the folder
+    /// ([`Self::kept_every_backup`]).
+    fn keep_every_backup(&mut self, backups_dir: Option<&Path>) {
+        if std::mem::replace(&mut self.kept_every_backup, true) {
+            return;
+        }
+        let Some(entries) = backups_dir.and_then(|dir| std::fs::read_dir(dir).ok()) else {
+            return;
+        };
+        self.kept_backups.extend(
+            entries
+                .flatten()
+                .filter_map(|entry| entry.file_name().into_string().ok()),
+        );
+    }
+
+    /// [`Self::load_session_entries`] for a `session` already read, with
+    /// its backups in `backups_dir`, reading at most `budget` bytes of
+    /// backup text in all. The backup each entry restores from is recorded
+    /// in [`Self::restored_backups`], for the tab the entry becomes.
+    ///
+    /// Each backup is tried for one record only: a later record naming a
+    /// backup an earlier one tried, whether or not it could be read,
+    /// restores without it, so one file is never read into memory twice. Past the budget a record restores
+    /// without its backup too. Such a record, for a file, opens the file
+    /// from disk, and an untitled one is left out. Every backup the session
+    /// names but no record restored from stays in the folder for the rest
+    /// of the run ([`Self::kept_backups`]).
+    fn restore_entries(
+        &mut self,
+        mut session: Session,
+        backups_dir: Option<&Path>,
+        budget: u64,
+    ) -> Vec<SessionRestoreEntry> {
         normalize_session_pinning(&mut session);
         // Cap restored tabs at `MAX_SESSION_TABS` to prevent a
         // tampered or runaway session.xml from queuing thousands
@@ -7654,16 +7900,26 @@ impl Shell {
             tracing::warn!(
                 stored = session.tabs.len(),
                 cap = MAX_SESSION_TABS,
-                "session.xml exceeds tab cap; excess tabs not restored",
+                "session.xml exceeds tab cap; excess tabs not restored, their backups kept for this run",
             );
         }
-        let backups_dir = codepp_platform::backups_dir();
         // Resolve each tab's stored language here rather than handing the raw
         // attributes to the backends: the registry lives on the shell, and one
         // resolution site is what keeps the three UI crates from drifting on
         // it. The entries below therefore carry an id the registry has already
         // vouched for, or `None`.
         let registry = &self.udl_registry;
+        let mut restored_backups = Vec::new();
+        // Every backup the session names, whatever becomes of its record:
+        // what the `session.xml` on disk names.
+        let named: HashSet<String> = session
+            .tabs
+            .iter()
+            .filter_map(|t| t.backup.clone())
+            .collect();
+        // The backups a record restored from, and the bytes of the budget
+        // still unread.
+        let mut reads = BackupReads::new(budget);
         let entries: Vec<SessionRestoreEntry> = session
             .tabs
             .iter()
@@ -7683,29 +7939,10 @@ impl Shell {
                 // is needed below for the mtime comparison that
                 // detects external edits during the recovery
                 // window.
-                let backup_loaded: Option<(String, PathBuf)> =
-                    t.backup.as_deref().and_then(|name| {
-                        if !is_safe_backup_filename(name) {
-                            tracing::warn!(
-                                backup = ?name,
-                                "session.xml backup name failed safety check; backup ignored",
-                            );
-                            return None;
-                        }
-                        let dir = backups_dir.as_ref()?;
-                        let abs_path = dir.join(name);
-                        match read_backup_file(dir, &abs_path) {
-                            Ok(text) => Some((text, abs_path)),
-                            Err(e) => {
-                                tracing::warn!(
-                                    backup = ?abs_path,
-                                    error = ?e,
-                                    "failed to read backup file; falling back to disk content if path-bound",
-                                );
-                                None
-                            }
-                        }
-                    });
+                let backup_loaded: Option<(String, PathBuf)> = t
+                    .backup
+                    .as_deref()
+                    .and_then(|name| reads.read(backups_dir, name));
                 // Capture the backup's filename for the mtime check
                 // below — `backup_loaded` carries the *absolute*
                 // path; the filename portion is what
@@ -7723,8 +7960,7 @@ impl Shell {
                         // prompt — the user picks "keep my edits"
                         // (overwriting the disk) or "reload"
                         // (dropping the backup overlay).
-                        let disk_changed_externally =
-                            is_disk_newer_than_backup(path, &backup_path);
+                        let disk_changed_externally = is_disk_newer_than_backup(path, &backup_path);
                         // Independent: did *the backup itself*
                         // get edited? Compares the file's mtime
                         // against the timestamp encoded in its
@@ -7732,6 +7968,9 @@ impl Shell {
                         let backup_modified_externally = backup_filename
                             .as_deref()
                             .is_some_and(|name| is_backup_modified_externally(&backup_path, name));
+                        if let Some(name) = backup_filename {
+                            restored_backups.push((RestoredBackupKey::File(path.clone()), name));
+                        }
                         Some(SessionRestoreEntry::DirtyFromBackup {
                             path: path.clone(),
                             text,
@@ -7758,6 +7997,10 @@ impl Shell {
                         let backup_modified_externally = backup_filename
                             .as_deref()
                             .is_some_and(|name| is_backup_modified_externally(&backup_path, name));
+                        if let Some(name) = backup_filename {
+                            restored_backups
+                                .push((RestoredBackupKey::Untitled(t.untitled_seq), name));
+                        }
                         SessionRestoreEntry::UntitledFromBackup {
                             untitled_seq: t.untitled_seq,
                             text,
@@ -7774,8 +8017,38 @@ impl Shell {
                 }
             })
             .collect();
+        self.kept_backups = named
+            .iter()
+            .filter(|name| !reads.claimed.contains(*name))
+            .cloned()
+            .collect();
+        self.on_disk_backups = named;
+        self.on_disk_known = true;
+        self.restored_backups = restored_backups;
+        if session.tabs.is_empty() {
+            // `Session` reads an empty file, or any document with another
+            // root element, as a session with no tabs; Code++ always leaves
+            // one tab, so treat it like a file that could not be read.
+            self.keep_every_backup(backups_dir);
+        }
+        // Only the records the restore reads are kept, now that the backups
+        // the rest name are noted: every lookup by path in `self.session`
+        // scans all of them, and a session file the reader takes can hold
+        // hundreds of thousands.
+        session.tabs.truncate(MAX_SESSION_TABS);
         self.session = session;
         entries
+    }
+
+    /// Record, as tab `id`'s [`Self::last_backups`] entry, the backup the
+    /// first restore entry with `key` came from ([`Self::restored_backups`]).
+    /// Entries with one key are restored in the order they were read, so
+    /// the first is this tab's.
+    fn adopt_restored_backup(&mut self, id: i32, key: &RestoredBackupKey) {
+        if let Some(pos) = self.restored_backups.iter().position(|(k, _)| k == key) {
+            let (_, name) = self.restored_backups.remove(pos);
+            self.last_backups.insert(id, name);
+        }
     }
 
     /// Backwards-compatible wrapper that returns just the disk
@@ -7827,6 +8100,7 @@ impl Shell {
         pinned: bool,
     ) -> usize {
         let id = self.allocate_buffer_id();
+        self.adopt_restored_backup(id, &RestoredBackupKey::Untitled(untitled_seq));
         let new_idx = self.tabs.len();
         let byte_len = text.len() as u64;
         // Untitled buffers have no extension to detect from, so
@@ -7957,6 +8231,7 @@ impl Shell {
         pinned: bool,
     ) -> usize {
         let id = self.allocate_buffer_id();
+        self.adopt_restored_backup(id, &RestoredBackupKey::File(path.clone()));
         let new_idx = self.tabs.len();
         let byte_len = text.len() as u64;
         // Lang resolution mirrors `apply_load_result`: the
@@ -8224,6 +8499,233 @@ impl Shell {
     }
 }
 
+/// What one session restore has read of its backups, and may still read
+/// ([`Shell::restore_entries`]).
+struct BackupReads {
+    /// Bytes of backup text the restore may still read.
+    budget_left: u64,
+    /// Every name a read was tried for, whatever came of it: a backup that
+    /// fails after its bytes were read (not UTF-8) is not tried again for
+    /// each record that names it.
+    attempted: HashSet<String>,
+    /// The names a record restored from; the rest stay in the folder for
+    /// the run ([`Shell::kept_backups`]).
+    claimed: HashSet<String>,
+}
+
+impl BackupReads {
+    fn new(budget: u64) -> Self {
+        Self {
+            budget_left: budget,
+            attempted: HashSet::new(),
+            claimed: HashSet::new(),
+        }
+    }
+
+    /// Read the backup `name` in `dir` for one record: its text and path,
+    /// or `None` for a name that is not safe, one already tried, a missing
+    /// folder, or a backup that cannot be read within what is left of the
+    /// budget. The budget is charged for a read that will happen whatever
+    /// it answers, so a backup that fails costs what one that succeeds does.
+    fn read(&mut self, dir: Option<&Path>, name: &str) -> Option<(String, PathBuf)> {
+        if !is_safe_backup_filename(name) {
+            tracing::warn!(
+                backup = ?name,
+                "session.xml backup name failed safety check; backup ignored",
+            );
+            return None;
+        }
+        if !self.attempted.insert(name.to_owned()) {
+            tracing::warn!(
+                backup = ?name,
+                "an earlier record read this backup; this one restores without it",
+            );
+            return None;
+        }
+        let dir = dir?;
+        let abs_path = dir.join(name);
+        let max_bytes = self.budget_left.min(MAX_BACKUP_FILE_BYTES);
+        let len = std::fs::metadata(&abs_path).map_or(0, |m| m.len());
+        if len <= max_bytes {
+            self.budget_left -= len;
+        }
+        match read_backup_file(dir, &abs_path, max_bytes) {
+            Ok(text) => {
+                self.claimed.insert(name.to_owned());
+                Some((text, abs_path))
+            }
+            Err(e) => {
+                tracing::warn!(
+                    backup = ?abs_path,
+                    error = ?e,
+                    "failed to read backup file; falling back to disk content if path-bound",
+                );
+                None
+            }
+        }
+    }
+}
+
+/// Make `session` one `session.xml` can hold whatever paths it carries.
+/// `session.xml` holds a path as text, so one that is not valid Unicode (a
+/// file name that is not UTF-8 on Linux or macOS, or that holds an unpaired
+/// surrogate on Windows) cannot be written, and one such tab used to fail
+/// the whole save: every newer backup went unnamed, and the next start
+/// restored the session from before. A tab with a backup is kept as an
+/// untitled buffer named after its file, so its text comes back; one with
+/// none is left out, the file on disk holding what it holds; and a
+/// workspace folder is dropped. Each is logged.
+fn writable_paths_only(session: &mut Session) {
+    let active = session.active.take();
+    let tabs = std::mem::take(&mut session.tabs);
+    for (idx, mut tab) in tabs.into_iter().enumerate() {
+        if let Some(path) = tab.path.as_deref().filter(|p| p.to_str().is_none()) {
+            if tab.backup.is_none() {
+                tracing::warn!(
+                    path = ?path,
+                    "a path that is not valid Unicode cannot be saved; the tab is left out of the session",
+                );
+                continue;
+            }
+            tracing::warn!(
+                path = ?path,
+                "a path that is not valid Unicode cannot be saved; the tab is saved as an untitled buffer",
+            );
+            tab.custom_name = path.file_name().map(|n| n.to_string_lossy().into_owned());
+            tab.path = None;
+        }
+        if active == Some(idx) {
+            session.active = Some(session.tabs.len());
+        }
+        session.tabs.push(tab);
+    }
+    if let Some(workspace) = &mut session.workspace {
+        if let Some(root) = workspace.root.as_deref().filter(|r| r.to_str().is_none()) {
+            tracing::warn!(
+                path = ?root,
+                "a workspace folder that is not valid Unicode cannot be saved; it is left out",
+            );
+            workspace.root = None;
+        }
+    }
+}
+
+/// Which restored tab a backup named in `session.xml` belongs to, for
+/// [`Shell::restored_backups`]: an untitled buffer by its number, a file by
+/// its path.
+#[derive(Debug, PartialEq, Eq)]
+enum RestoredBackupKey {
+    Untitled(Option<u32>),
+    File(PathBuf),
+}
+
+/// What [`Shell::session_to_save`] builds: the session to write, and the
+/// backup each tab's record names, by tab id. The backups are what the
+/// prune keeps, and what [`Shell::last_backups`] becomes, once the session
+/// is on disk.
+struct SavedSession {
+    session: Session,
+    backups: HashMap<i32, String>,
+}
+
+/// One session save's recovery backups ([`Shell::session_to_save`]): the
+/// folder they go in, the timestamp their names share, the suffix to try
+/// first for each display name (one past the last this save took), the
+/// names this save wrote, and the display names whose every name was
+/// taken.
+struct SavePass<'a> {
+    dir: Option<&'a Path>,
+    timestamp: &'a str,
+    next_suffix: HashMap<String, u32>,
+    written: HashSet<String>,
+    exhausted: HashSet<String>,
+}
+
+impl<'a> SavePass<'a> {
+    fn new(dir: Option<&'a Path>, timestamp: &'a str) -> Self {
+        Self {
+            dir,
+            timestamp,
+            next_suffix: HashMap::new(),
+            written: HashSet::new(),
+            exhausted: HashSet::new(),
+        }
+    }
+
+    /// Write a new backup of `tab`, holding what `text` returns and named
+    /// after `label`, the readable part of a backup's name; return the
+    /// name.
+    /// `None` when there is no backups folder (a sandboxed environment), in
+    /// which case the text is never read; when the write failed; or when
+    /// every name for `label` was taken, after which this save tries no
+    /// name for `label` again. The failures are logged with the tab.
+    ///
+    /// Names for one `label` are tried from one past the last this save
+    /// took, so a backup this save wrote is never taken again by name,
+    /// even if its file left the folder in between.
+    fn write(&mut self, tab: &Tab, label: &str, text: impl FnOnce() -> String) -> Option<String> {
+        let dir = self.dir?;
+        if self.exhausted.contains(label) {
+            tracing::warn!(
+                id = tab.id,
+                path = ?tab.path,
+                untitled_seq = ?tab.untitled_seq,
+                backup = ?label,
+                "every backup name for this display was taken earlier in this save; unsaved edits not protected",
+            );
+            return None;
+        }
+        let first = self.next_suffix.get(label).copied().unwrap_or(1);
+        match write_backup_file(dir, label, self.timestamp, first, text().as_bytes()) {
+            Ok(Some((name, suffix))) => {
+                self.next_suffix
+                    .insert(label.to_owned(), suffix.saturating_add(1));
+                self.written.insert(name.clone());
+                Some(name)
+            }
+            Ok(None) => {
+                self.exhausted.insert(label.to_owned());
+                tracing::warn!(
+                    id = tab.id,
+                    path = ?tab.path,
+                    untitled_seq = ?tab.untitled_seq,
+                    backup = ?label,
+                    "every backup name for this display is taken; unsaved edits not protected",
+                );
+                None
+            }
+            Err(e) => {
+                tracing::warn!(
+                    id = tab.id,
+                    path = ?tab.path,
+                    untitled_seq = ?tab.untitled_seq,
+                    backup = ?label,
+                    error = ?e,
+                    "failed to write backup file; unsaved edits not protected",
+                );
+                None
+            }
+        }
+    }
+}
+
+/// The name of the backup of `display` written at `timestamp`, the
+/// `suffix`-th with that display and timestamp: `<display>@<timestamp>`
+/// for the first, `<display>~<suffix>@<timestamp>` for the rest.
+fn backup_name(display: &str, timestamp: &str, suffix: u32) -> String {
+    if suffix <= 1 {
+        format!("{display}@{timestamp}")
+    } else {
+        format!("{display}~{suffix}@{timestamp}")
+    }
+}
+
+/// How many names [`write_backup_file`] tries for one backup. A save gives
+/// a display name at most one backup per open tab, and a save earlier in
+/// the same second as many, so this covers every name Code++ can take
+/// itself, with room for what else the folder holds.
+const MAX_BACKUP_NAME_ATTEMPTS: u32 = 2 * MAX_OPEN_TABS as u32 + 16;
+
 /// Local-time timestamp string used as the suffix on backup
 /// filenames. Format `YYYY-MM-DD_HHMMSS` (no separators in the
 /// time portion) matches the layout Notepad++ uses, so the
@@ -8326,8 +8828,28 @@ fn sanitize_basename_for_backup(path: &Path) -> String {
     if out.starts_with('.') {
         out.insert(0, '_');
     }
+    // A stem that names a Windows device (`con.txt`, a legal name on
+    // Linux and macOS) would be refused when the backup is read back,
+    // so the edits it held were lost across a restart. Same prefix.
+    if is_reserved_device_stem(out.split('.').next().unwrap_or(&out)) {
+        out.insert(0, '_');
+    }
+    // Keep the whole backup name within what a filesystem takes for one
+    // name; a longer one could never be written, so the tab's edits were
+    // never backed up.
+    let mut end = out.len().min(MAX_BACKUP_DISPLAY_BYTES);
+    while !out.is_char_boundary(end) {
+        end -= 1;
+    }
+    out.truncate(end);
     out
 }
+
+/// Longest display portion of a recovery backup's name, in bytes. The rest
+/// of the name, `~<suffix>@YYYY-MM-DD_HHMMSS`, takes at most 29 more, so a
+/// name stays within the 255 bytes a file name may take on Linux and macOS,
+/// and the 255 UTF-16 units on Windows, which are never more than its bytes.
+const MAX_BACKUP_DISPLAY_BYTES: usize = 200;
 
 /// Parse a backup filename's `@YYYY-MM-DD_HHMMSS` suffix into a
 /// UNIX timestamp (seconds since epoch). Returns `None` if the
@@ -8596,45 +9118,131 @@ fn is_safe_backup_filename(name: &str) -> bool {
     // Windows reserved device names. `dir.join("CON")` opens the
     // console device, so a tampered session.xml with
     // `backup="CON"` would hang `read_to_string` on the device
-    // rather than reading a file. The reserved set is matched
-    // case-insensitively against the name's stem (the portion
-    // before any trailing `.`), since `CON.txt` is *also* the
-    // console on Windows.
+    // rather than reading a file. Matched against the name's stem
+    // (the portion before its first `.`), since `CON.txt` is
+    // *also* the console on Windows.
+    !is_reserved_device_stem(name.split('.').next().unwrap_or(name))
+}
+
+/// Whether `stem` names a Windows device (`CON`, `NUL`, `COM1`, ...),
+/// matched case-insensitively. [`is_safe_backup_filename`] refuses a
+/// backup whose name's stem is one, and [`sanitize_basename_for_backup`]
+/// never gives a backup such a stem.
+fn is_reserved_device_stem(stem: &str) -> bool {
     const RESERVED: &[&str] = &[
         "CON", "PRN", "AUX", "NUL", "COM0", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7",
         "COM8", "COM9", "LPT0", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8",
         "LPT9",
     ];
-    let stem = name.split('.').next().unwrap_or(name);
-    let stem_upper: String = stem.to_ascii_uppercase();
-    if RESERVED.iter().any(|r| *r == stem_upper) {
-        return false;
-    }
-    true
+    RESERVED.iter().any(|r| r.eq_ignore_ascii_case(stem))
 }
 
-/// Write `bytes` to `path` atomically (sibling temp file +
-/// rename). Same atomic-write recipe the session.xml save uses,
-/// adapted for raw bytes. Creates the parent directory if it
-/// doesn't exist yet — first-launch case.
-fn write_backup_file(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+/// Write `bytes` into `dir` as a new backup of `display` taken at
+/// `timestamp`, and return its name and the suffix it took
+/// ([`backup_name`]), trying suffixes from `first_suffix` up; `Ok(None)`
+/// when all [`MAX_BACKUP_NAME_ATTEMPTS`] of them are taken. Creates the
+/// folder if it does not exist yet, the first-launch case.
+///
+/// The bytes go to a sibling temp file first, as the session.xml save
+/// does, which then takes the name without replacing anything already
+/// there. A name is taken by another tab's backup in this save, by a save
+/// earlier in the same second, by one the filesystem treats as the same
+/// (a case-insensitive folder, or Unicode normalisation on macOS), or by
+/// anything else in the folder; the next suffix is tried then. Replacing
+/// was how two dirty files with one name, in different folders, came to
+/// share one backup, so that one's edits were lost and both tabs came
+/// back with the second one's text. On a filesystem that can neither
+/// rename without replacing nor make a hard link (FAT, some network
+/// filesystems), a name nothing has is taken with an ordinary rename,
+/// which would replace a file another writer put there in between.
+fn write_backup_file(
+    dir: &Path,
+    display: &str,
+    timestamp: &str,
+    first_suffix: u32,
+    bytes: &[u8],
+) -> std::io::Result<Option<(String, u32)>> {
+    write_backup_file_with(
+        dir,
+        display,
+        timestamp,
+        first_suffix,
+        bytes,
+        |tmp, target| tmp.persist_noclobber(target).map(drop),
+    )
+}
+
+/// [`write_backup_file`], with `persist_new` the rename that must not
+/// replace anything: tempfile's `persist_noclobber`, which a test swaps
+/// for one that fails another way, with an error other than "already
+/// exists" for a name that is taken, or for every name, as on FAT.
+fn write_backup_file_with(
+    dir: &Path,
+    display: &str,
+    timestamp: &str,
+    first_suffix: u32,
+    bytes: &[u8],
+    mut persist_new: impl FnMut(tempfile::NamedTempFile, &Path) -> Result<(), tempfile::PersistError>,
+) -> std::io::Result<Option<(String, u32)>> {
     use std::io::Write;
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    std::fs::create_dir_all(dir)?;
+    // tempfile renames with the Win32 calls themselves, which refuse a
+    // path longer than `MAX_PATH` unless it is a verbatim one (`\\?\`),
+    // and a backup name can take 229 of those 260 characters. A
+    // canonical path on Windows is verbatim.
+    // A folder whose canonical path cannot be had (some network
+    // filesystems) is used as it is, which still works under `MAX_PATH`.
+    #[cfg(windows)]
+    let canonical = std::fs::canonicalize(dir).unwrap_or_else(|_| dir.to_path_buf());
+    #[cfg(windows)]
+    let dir = canonical.as_path();
     let mut tmp = tempfile::Builder::new()
         .prefix(".backup-")
         .suffix(".tmp")
-        .tempfile_in(parent)?;
+        .tempfile_in(dir)?;
     tmp.write_all(bytes)?;
     tmp.as_file_mut().sync_all()?;
-    tmp.persist(path).map_err(|e| e.error)?;
-    Ok(())
+    let mut suffix = first_suffix.max(1);
+    for _ in 0..MAX_BACKUP_NAME_ATTEMPTS {
+        let name = backup_name(display, timestamp, suffix);
+        let target = dir.join(&name);
+        match persist_new(tmp, &target) {
+            Ok(()) => return Ok(Some((name, suffix))),
+            Err(e) => {
+                // The name is taken when the rename says so, or when
+                // anything is at it, whatever error the rename gave:
+                // which one a platform gives for a folder at the name,
+                // say, is not something to rely on.
+                let taken = e.error.kind() == std::io::ErrorKind::AlreadyExists
+                    || std::fs::symlink_metadata(&target).is_ok();
+                if !taken {
+                    // A filesystem that can neither rename without
+                    // replacing nor make a hard link (FAT, some network
+                    // filesystems) refuses the rename itself while
+                    // nothing has the name, so an ordinary rename takes
+                    // it. That one replaces whatever another writer puts
+                    // there in between; only Code++ writes into the
+                    // folder, and anything that can write there can
+                    // replace a backup directly anyway.
+                    return e
+                        .file
+                        .persist(&target)
+                        .map(|_| Some((name, suffix)))
+                        .map_err(|e| e.error);
+                }
+                tmp = e.file;
+                suffix = suffix.saturating_add(1);
+            }
+        }
+    }
+    Ok(None)
 }
 
-/// Read a backup file capped at [`MAX_BACKUP_FILE_BYTES`] and
-/// return its content as UTF-8. Filenames are first validated
+/// Read a backup file of at most `max_bytes` bytes, which the restore
+/// keeps within [`MAX_BACKUP_FILE_BYTES`] and the bytes left of
+/// [`MAX_RESTORED_BACKUP_BYTES`], and return its content as UTF-8. The
+/// file is opened only if it is a regular one
+/// (`codepp_platform::open_regular_file`). Filenames are first validated
 /// against [`is_safe_backup_filename`] in the load path; this
 /// function additionally canonicalises both the requested path and
 /// the parent directory and refuses any path whose canonical form
@@ -8642,7 +9250,7 @@ fn write_backup_file(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
 /// tampered session.xml or a symlink dropped into the backup dir
 /// (the latter only writable by a local attacker, but cheap to
 /// guard).
-fn read_backup_file(expected_dir: &Path, path: &Path) -> std::io::Result<String> {
+fn read_backup_file(expected_dir: &Path, path: &Path, max_bytes: u64) -> std::io::Result<String> {
     use std::io::Read;
     // Canonicalise both ends so the prefix comparison works even
     // when the backups dir uses a relative path or contains
@@ -8665,22 +9273,37 @@ fn read_backup_file(expected_dir: &Path, path: &Path) -> std::io::Result<String>
     // race is one with write access to the user's own AppData / config
     // dir — i.e. the same user. Acceptable under the desktop-app
     // trust boundary; no privilege escalation surface.
-    let mut file = std::fs::File::open(&canonical_path)?;
-    let metadata = file.metadata()?;
-    if metadata.len() > MAX_BACKUP_FILE_BYTES {
+    //
+    // Opened so that a named pipe or a device under a backup's name is
+    // refused rather than waited on: the restore runs on the UI thread.
+    let Some(file) = codepp_platform::open_regular_file(&canonical_path)? else {
+        return Err(codepp_platform::not_a_regular_file());
+    };
+    // Refused unread when its length is past what the restore may still
+    // read; the read itself is bounded as well, for a file that grows
+    // after its length was read.
+    let len = file.metadata()?.len();
+    if len > max_bytes {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidData,
-            format!("backup file exceeds {MAX_BACKUP_FILE_BYTES} byte cap"),
+            format!(
+                "backup file is {len} bytes, more than the {max_bytes} the restore may still read"
+            ),
         ));
     }
-    // `as usize` cast is safe: the cap above (64 MiB) is well within
-    // `usize::MAX` on every supported target including 32-bit. The
-    // cap-check is the real defence — the cast could only overflow
-    // on a target where `MAX_BACKUP_FILE_BYTES` exceeded `usize::MAX`,
-    // which the const keeps below.
-    let mut buf = String::with_capacity(metadata.len() as usize);
-    file.read_to_string(&mut buf)?;
-    Ok(buf)
+    let mut bytes = Vec::new();
+    file.take(max_bytes.saturating_add(1))
+        .read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > max_bytes {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("backup file grew past the {max_bytes} bytes the restore may still read"),
+        ));
+    }
+    // Only where the bytes stop being UTF-8 goes into the error: the
+    // restore logs it, and a `FromUtf8Error` carries every byte read.
+    String::from_utf8(bytes)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e.utf8_error()))
 }
 
 /// Delete every file in `dir` whose name isn't in the `keep` list.
@@ -8693,7 +9316,7 @@ fn read_backup_file(expected_dir: &Path, path: &Path) -> std::io::Result<String>
 /// failed prune is non-critical (next save will try again), and
 /// returning an error here would mask a *successful* session.xml
 /// write higher up.
-fn prune_unreferenced_backups(dir: &Path, keep: &[String]) {
+fn prune_unreferenced_backups(dir: &Path, keep: &HashSet<&str>) {
     // No backup directory yet (first save with no untitled
     // tabs) — nothing to prune.
     let Ok(entries) = std::fs::read_dir(dir) else {
@@ -8717,7 +9340,7 @@ fn prune_unreferenced_backups(dir: &Path, keep: &[String]) {
             let _ = std::fs::remove_file(entry.path());
             continue;
         }
-        if keep.iter().any(|k| k == name_str) {
+        if keep.contains(name_str) {
             continue;
         }
         // Belt-and-braces: only delete files that look like our
@@ -9162,8 +9785,8 @@ impl<U: UiPlatform> HostServices for HostBridge<'_, U> {
         // Primary view exposes the active tab's `tabs[]` index;
         // secondary view doesn't exist yet (split-view is Phase 5),
         // so it reports -1 — the documented "no view" sentinel.
-        // The `i as i32` cast is safe: `MAX_SESSION_TABS = 512`,
-        // well below `i32::MAX`.
+        // The `i as i32` cast is safe: `MAX_OPEN_TABS` (1024) bounds
+        // the tab list, well below `i32::MAX`.
         match view {
             0 => self.shell.active_tab.map_or(-1, |i| i as i32),
             _ => -1,
@@ -20217,6 +20840,1330 @@ mod tests {
         assert_eq!(sanitize_basename_for_backup(Path::new("..")), "untitled");
     }
 
+    /// A file whose name's stem is a Windows device (`con.txt`, legal on
+    /// Linux and macOS) gets a backup the restore reads back: before, the
+    /// backup was written under that stem and refused when read, so the
+    /// edits were lost across a restart.
+    #[test]
+    fn sanitize_basename_gives_no_backup_a_device_stem() {
+        for (input, expected) in [
+            ("con.txt", "_con.txt"),
+            ("NUL.tar.gz", "_NUL.tar.gz"),
+            ("Com1", "_Com1"),
+            ("lpt9.log", "_lpt9.log"),
+            ("console.txt", "console.txt"),
+        ] {
+            let s = sanitize_basename_for_backup(Path::new(input));
+            assert_eq!(s, expected, "for {input}");
+            for suffix in [1, 7] {
+                let name = backup_name(&s, "2026-01-01_000000", suffix);
+                assert!(is_safe_backup_filename(&name), "{name} is refused");
+            }
+        }
+    }
+
+    /// A file with a long name gets a backup it can write: before, the
+    /// backup's name ran past the 255 bytes one file name may take, so no
+    /// backup of that tab was ever written.
+    #[test]
+    fn sanitize_basename_keeps_a_backup_name_writable() {
+        let long = sanitize_basename_for_backup(Path::new(&format!("{}.txt", "a".repeat(300))));
+        assert_eq!(long, "a".repeat(MAX_BACKUP_DISPLAY_BYTES));
+        // Cut at a character, not inside one.
+        let wide = sanitize_basename_for_backup(Path::new(&"é".repeat(150)));
+        assert_eq!(wide, "é".repeat(MAX_BACKUP_DISPLAY_BYTES / 2));
+        let dir = tempfile::tempdir().unwrap();
+        for label in [long, wide] {
+            let name = backup_name(&label, "2026-01-01_000000", u32::MAX);
+            assert!(name.len() <= 255, "{} bytes", name.len());
+            let (name, _) =
+                write_backup_file(dir.path(), &label, "2026-01-01_000000", u32::MAX, b"x")
+                    .unwrap()
+                    .expect("a free name");
+            assert_eq!(std::fs::read(dir.path().join(&name)).unwrap(), b"x");
+        }
+    }
+
+    /// Two dirty files with one name, in different folders, get a backup
+    /// each, and a restart restores each from its own. Before, both were
+    /// written as `lib.rs@<timestamp>`, the second replacing the first, so
+    /// the first tab's edits were lost and both came back with the second
+    /// one's text.
+    #[test]
+    fn two_files_with_one_name_are_backed_up_apart() {
+        let dir = tempfile::tempdir().unwrap();
+        let (a, b) = (
+            dir.path().join("a").join("lib.rs"),
+            dir.path().join("b").join("lib.rs"),
+        );
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake.clone()).unwrap();
+        let mut ui = FakeUi::default();
+        for (path, text) in [(&a, "edits in a\n"), (&b, "edits in b\n")] {
+            shell.restore_dirty_with_text(
+                &mut ui,
+                path.clone(),
+                text.into(),
+                0,
+                Encoding::Utf8,
+                Eol::Lf,
+                false,
+                false,
+                None,
+                false,
+            );
+        }
+        let backups = dir.path().join("backup");
+
+        let saved = shell.session_to_save(&mut ui, Some(&backups), "2026-10-09_120000");
+        let names: Vec<String> = saved
+            .session
+            .tabs
+            .iter()
+            .map(|t| t.backup.clone().expect("a backup"))
+            .collect();
+        assert_eq!(
+            names,
+            ["lib.rs@2026-10-09_120000", "lib.rs~2@2026-10-09_120000"]
+        );
+        let mut next = Shell::new(wake).unwrap();
+        let restored: Vec<(PathBuf, String)> = next
+            .restore_entries(saved.session, Some(&backups), MAX_RESTORED_BACKUP_BYTES)
+            .into_iter()
+            .map(|entry| match entry {
+                SessionRestoreEntry::DirtyFromBackup { path, text, .. } => (path, text),
+                _ => panic!("not restored from its backup"),
+            })
+            .collect();
+        assert_eq!(
+            restored,
+            [
+                (a, "edits in a\n".to_string()),
+                (b, "edits in b\n".to_string())
+            ]
+        );
+    }
+
+    /// No backup replaces what is already in the backup folder: a backup
+    /// written in the same second by an earlier save, which the
+    /// `session.xml` on disk still names until this save's replaces it,
+    /// or anything else that has the name. The next free suffix is taken,
+    /// past as many taken ones as there are.
+    #[test]
+    fn a_backup_never_replaces_a_file_already_in_the_folder() {
+        let dir = tempfile::tempdir().unwrap();
+        let backups = dir.path().join("backup");
+        std::fs::create_dir_all(backups.join("notes.txt@2026-10-09_120000")).unwrap();
+        std::fs::write(backups.join("lib.rs@2026-10-09_120000"), "older backup\n").unwrap();
+        std::fs::write(backups.join("lib.rs~2@2026-10-09_120000"), "an older one\n").unwrap();
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+        for name in ["lib.rs", "notes.txt"] {
+            shell.restore_dirty_with_text(
+                &mut ui,
+                dir.path().join(name),
+                format!("edits in {name}\n"),
+                0,
+                Encoding::Utf8,
+                Eol::Lf,
+                false,
+                false,
+                None,
+                false,
+            );
+        }
+
+        let saved = shell.session_to_save(&mut ui, Some(&backups), "2026-10-09_120000");
+        let names: Vec<String> = saved
+            .session
+            .tabs
+            .iter()
+            .map(|t| t.backup.clone().expect("a backup"))
+            .collect();
+        assert_eq!(
+            names,
+            [
+                "lib.rs~3@2026-10-09_120000",
+                "notes.txt~2@2026-10-09_120000"
+            ]
+        );
+        assert_eq!(
+            std::fs::read_to_string(backups.join("lib.rs@2026-10-09_120000")).unwrap(),
+            "older backup\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(backups.join(&names[0])).unwrap(),
+            "edits in lib.rs\n"
+        );
+    }
+
+    /// Run `f` while this account cannot write into `dir`, or return `None`
+    /// when it writes there regardless (root, or on Linux a process holding
+    /// `CAP_DAC_OVERRIDE`), measured rather than guessed. Locally that skips
+    /// the test; under CI it fails instead, since `cargo test` hides a
+    /// passing test's output and a skip would drop the coverage unseen.
+    #[cfg(unix)]
+    fn while_unwritable<R>(dir: &Path, f: impl FnOnce() -> R) -> Option<R> {
+        use std::os::unix::fs::PermissionsExt;
+        /// Puts the folder's mode back when dropped, a panic in `f`
+        /// included, so the test's temporary folder can still be removed.
+        struct Restore<'a>(&'a Path, u32);
+        impl Drop for Restore<'_> {
+            fn drop(&mut self) {
+                let _ = std::fs::set_permissions(self.0, std::fs::Permissions::from_mode(self.1));
+            }
+        }
+        let mode = std::fs::metadata(dir).unwrap().permissions().mode();
+        std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o555)).unwrap();
+        let restore = Restore(dir, mode);
+        let writes_anyway = std::fs::write(dir.join("probe"), "").is_ok();
+        let result = (!writes_anyway).then(f);
+        drop(restore);
+        if writes_anyway {
+            let _ = std::fs::remove_file(dir.join("probe"));
+        }
+        assert!(
+            result.is_some() || std::env::var_os("CI").is_none(),
+            "this account writes into a folder it has no permission to write (root?), so a \
+             failed backup write cannot be staged: CI must run the Linux and macOS tests as \
+             an ordinary account (DEVELOPMENT.md §3.4, §4.5)"
+        );
+        result
+    }
+
+    /// The names of the files left in `dir`, sorted.
+    fn files_in(dir: &Path) -> Vec<String> {
+        let mut names: Vec<String> = std::fs::read_dir(dir)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().into_string().unwrap())
+            .collect();
+        names.sort();
+        names
+    }
+
+    /// A tab whose new backup cannot be written keeps naming the backup
+    /// its record named in the `session.xml` on disk, and the prune keeps
+    /// that file. Before, the record lost its backup and the prune deleted
+    /// the file, so the text was on disk nowhere. A tab with no earlier
+    /// backup still goes without, and so does one whose earlier backup has
+    /// gone from the folder: an untitled one is left out, a file recorded
+    /// without its edits.
+    #[cfg(unix)]
+    #[test]
+    fn a_tab_whose_backup_cannot_be_written_keeps_naming_its_last_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let backups = dir.path().join("backup");
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+        let (file, gone) = (dir.path().join("x.txt"), dir.path().join("z.txt"));
+        for path in [&file, &gone] {
+            shell.restore_dirty_with_text(
+                &mut ui,
+                path.clone(),
+                "first edits\n".into(),
+                0,
+                Encoding::Utf8,
+                Eol::Lf,
+                false,
+                false,
+                None,
+                false,
+            );
+        }
+        let first = shell.session_to_save(&mut ui, Some(&backups), "2026-10-09_120000");
+        let file_backup = first.session.tabs[0].backup.clone().expect("a backup");
+        let gone_backup = first.session.tabs[1].backup.clone().expect("a backup");
+        shell.after_session_saved(Some(&backups), first.backups);
+        std::fs::remove_file(backups.join(gone_backup)).unwrap();
+        std::fs::write(backups.join("stale@2026-01-01_000000"), "stale\n").unwrap();
+        // A file and an untitled buffer, both with unsaved text, that no
+        // save has backed up yet.
+        let other = dir.path().join("y.txt");
+        shell.restore_dirty_with_text(
+            &mut ui,
+            other.clone(),
+            "unbacked edits\n".into(),
+            0,
+            Encoding::Utf8,
+            Eol::Lf,
+            false,
+            false,
+            None,
+            false,
+        );
+        shell.new_untitled(&mut ui);
+        ui.buffer_text = "typed\n".into();
+        ui.doc_dirty.insert(ui.current_doc, true);
+
+        let Some(second) = while_unwritable(&backups, || {
+            shell.session_to_save(&mut ui, Some(&backups), "2026-10-09_120007")
+        }) else {
+            return;
+        };
+        let records: Vec<(Option<PathBuf>, Option<String>)> = second
+            .session
+            .tabs
+            .iter()
+            .map(|t| (t.path.clone(), t.backup.clone()))
+            .collect();
+        assert_eq!(
+            records,
+            [
+                (Some(file), Some(file_backup.clone())),
+                (Some(gone), None),
+                (Some(other), None)
+            ]
+        );
+        shell.after_session_saved(Some(&backups), second.backups);
+        assert_eq!(files_in(&backups), [file_backup]);
+    }
+
+    /// The same for a tab restored from its backup at startup, before any
+    /// save of this run has written one: its record keeps naming the
+    /// backup it was restored from.
+    #[cfg(unix)]
+    #[test]
+    fn a_restored_tab_whose_backup_cannot_be_written_keeps_the_one_it_came_from() {
+        let dir = tempfile::tempdir().unwrap();
+        let backups = dir.path().join("backup");
+        std::fs::create_dir_all(&backups).unwrap();
+        std::fs::write(backups.join("new 2@2026-10-09_110000"), "restored text\n").unwrap();
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+        let mut startup = Session::new();
+        startup.tabs.push(codepp_core::Tab {
+            untitled_seq: Some(2),
+            backup: Some("new 2@2026-10-09_110000".into()),
+            ..codepp_core::Tab::default()
+        });
+        for entry in shell.restore_entries(startup, Some(&backups), MAX_RESTORED_BACKUP_BYTES) {
+            let SessionRestoreEntry::UntitledFromBackup {
+                untitled_seq, text, ..
+            } = entry
+            else {
+                panic!("not restored from its backup");
+            };
+            shell.restore_untitled_with_text(
+                &mut ui,
+                untitled_seq,
+                text,
+                0,
+                Encoding::Utf8,
+                Eol::Lf,
+                false,
+                None,
+                None,
+                false,
+            );
+        }
+
+        let Some(first) = while_unwritable(&backups, || {
+            shell.session_to_save(&mut ui, Some(&backups), "2026-10-09_120000")
+        }) else {
+            return;
+        };
+        assert_eq!(
+            first.session.tabs[0].backup.as_deref(),
+            Some("new 2@2026-10-09_110000")
+        );
+        shell.after_session_saved(Some(&backups), first.backups);
+        assert_eq!(files_in(&backups), ["new 2@2026-10-09_110000"]);
+    }
+
+    /// Every record a session can hold is restored: the restore cap is the
+    /// open-tab cap. Before, a session with more than 512 tabs restored
+    /// only the first 512, and the next save pruned the backups of the
+    /// rest.
+    #[test]
+    fn every_record_a_session_can_hold_is_restored() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut session = Session::new();
+        for seq in 1..=u32::try_from(MAX_OPEN_TABS).unwrap() {
+            let name = format!("new {seq}@2026-10-09_120000");
+            std::fs::write(dir.path().join(&name), format!("{seq}\n")).unwrap();
+            session.tabs.push(codepp_core::Tab {
+                untitled_seq: Some(seq),
+                backup: Some(name),
+                ..codepp_core::Tab::default()
+            });
+        }
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+
+        let entries = shell.restore_entries(session, Some(dir.path()), MAX_RESTORED_BACKUP_BYTES);
+        assert_eq!(entries.len(), MAX_OPEN_TABS);
+    }
+
+    /// Restore `path` as a file with unsaved `text`, as the startup restore
+    /// does for a record with a backup.
+    fn restore_dirty(shell: &mut Shell, ui: &mut FakeUi, path: &Path, text: &str) {
+        shell.restore_dirty_with_text(
+            ui,
+            path.to_path_buf(),
+            text.into(),
+            0,
+            Encoding::Utf8,
+            Eol::Lf,
+            false,
+            false,
+            None,
+            false,
+        );
+    }
+
+    /// Turn restore `entries` into tabs, as each backend's startup restore
+    /// does.
+    fn restore_tabs(shell: &mut Shell, ui: &mut FakeUi, entries: Vec<SessionRestoreEntry>) {
+        for entry in entries {
+            match entry {
+                SessionRestoreEntry::UntitledFromBackup {
+                    untitled_seq, text, ..
+                } => {
+                    shell.restore_untitled_with_text(
+                        ui,
+                        untitled_seq,
+                        text,
+                        0,
+                        Encoding::Utf8,
+                        Eol::Lf,
+                        false,
+                        None,
+                        None,
+                        false,
+                    );
+                }
+                SessionRestoreEntry::DirtyFromBackup { path, text, .. } => {
+                    restore_dirty(shell, ui, &path, &text);
+                }
+                SessionRestoreEntry::OpenFile(path) => {
+                    shell.open_file(path);
+                }
+            }
+        }
+    }
+
+    /// What a restore entry would become, for comparing in a test.
+    fn describe(entry: &SessionRestoreEntry) -> String {
+        match entry {
+            SessionRestoreEntry::UntitledFromBackup {
+                untitled_seq, text, ..
+            } => format!("untitled {untitled_seq:?}: {text:?}"),
+            SessionRestoreEntry::DirtyFromBackup { path, text, .. } => {
+                format!("dirty {}: {text:?}", path.display())
+            }
+            SessionRestoreEntry::OpenFile(path) => format!("open {}", path.display()),
+        }
+    }
+
+    /// A session record naming `backup`: the file at `path`, or an untitled
+    /// buffer numbered `seq`.
+    fn record(path: Option<&Path>, seq: Option<u32>, backup: &str) -> codepp_core::Tab {
+        codepp_core::Tab {
+            path: path.map(Path::to_path_buf),
+            untitled_seq: seq,
+            backup: Some(backup.into()),
+            ..codepp_core::Tab::default()
+        }
+    }
+
+    /// A dirty file restored from its backup keeps naming that backup when
+    /// the first save of the run cannot write a new one, as an untitled
+    /// buffer does. Before, a file's backup was filed under a key the tab
+    /// never looked up, so its record lost the backup and the prune
+    /// deleted the file.
+    #[cfg(unix)]
+    #[test]
+    fn a_restored_file_whose_backup_cannot_be_written_keeps_the_one_it_came_from() {
+        let dir = tempfile::tempdir().unwrap();
+        let backups = dir.path().join("backup");
+        std::fs::create_dir_all(&backups).unwrap();
+        std::fs::write(backups.join("x.txt@2026-10-09_110000"), "restored text\n").unwrap();
+        let file = dir.path().join("x.txt");
+        std::fs::write(&file, "on disk\n").unwrap();
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+        let mut startup = Session::new();
+        startup
+            .tabs
+            .push(record(Some(&file), None, "x.txt@2026-10-09_110000"));
+        let entries = shell.restore_entries(startup, Some(&backups), MAX_RESTORED_BACKUP_BYTES);
+        restore_tabs(&mut shell, &mut ui, entries);
+
+        let Some(first) = while_unwritable(&backups, || {
+            shell.session_to_save(&mut ui, Some(&backups), "2026-10-09_120000")
+        }) else {
+            return;
+        };
+        assert_eq!(
+            first.session.tabs[0].backup.as_deref(),
+            Some("x.txt@2026-10-09_110000")
+        );
+        shell.after_session_saved(Some(&backups), first.backups);
+        assert_eq!(files_in(&backups), ["x.txt@2026-10-09_110000"]);
+    }
+
+    /// Records restored under one key, untitled buffers without a number
+    /// from a session written before numbers were saved, hand their backups
+    /// to their tabs in the order they were read, so each tab keeps naming
+    /// its own when a write fails.
+    #[cfg(unix)]
+    #[test]
+    fn restored_backups_go_to_their_tabs_in_order() {
+        let dir = tempfile::tempdir().unwrap();
+        let backups = dir.path().join("backup");
+        std::fs::create_dir_all(&backups).unwrap();
+        let mut startup = Session::new();
+        for (name, text) in [
+            ("untitled-1@2026-10-09_110000", "first\n"),
+            ("untitled-2@2026-10-09_110000", "second\n"),
+        ] {
+            std::fs::write(backups.join(name), text).unwrap();
+            startup.tabs.push(record(None, None, name));
+        }
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+        let entries = shell.restore_entries(startup, Some(&backups), MAX_RESTORED_BACKUP_BYTES);
+        restore_tabs(&mut shell, &mut ui, entries);
+
+        let Some(saved) = while_unwritable(&backups, || {
+            shell.session_to_save(&mut ui, Some(&backups), "2026-10-09_120000")
+        }) else {
+            return;
+        };
+        let names: Vec<Option<&str>> = saved
+            .session
+            .tabs
+            .iter()
+            .map(|t| t.backup.as_deref())
+            .collect();
+        assert_eq!(
+            names,
+            [
+                Some("untitled-1@2026-10-09_110000"),
+                Some("untitled-2@2026-10-09_110000")
+            ]
+        );
+    }
+
+    /// A backup is read for one record only. A session can name one backup
+    /// for several records, by hand or by a fault; the later untitled
+    /// record is then left out, and the later file opens from disk. Before,
+    /// every record read the file again, so one 64 MiB backup named by
+    /// every record of a session was read a thousand times at startup.
+    #[test]
+    fn a_backup_is_restored_for_one_record_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let backups = dir.path().join("backup");
+        std::fs::create_dir_all(&backups).unwrap();
+        std::fs::write(backups.join("new 1@2026-10-09_110000"), "typed\n").unwrap();
+        std::fs::write(backups.join("x.txt@2026-10-09_110000"), "edits\n").unwrap();
+        let (x, y) = (dir.path().join("x.txt"), dir.path().join("y.txt"));
+        let mut session = Session::new();
+        session.tabs = vec![
+            record(None, Some(1), "new 1@2026-10-09_110000"),
+            record(None, Some(2), "new 1@2026-10-09_110000"),
+            record(Some(&x), None, "x.txt@2026-10-09_110000"),
+            record(Some(&y), None, "x.txt@2026-10-09_110000"),
+        ];
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+
+        let entries = shell.restore_entries(session, Some(&backups), MAX_RESTORED_BACKUP_BYTES);
+        let described: Vec<String> = entries.iter().map(describe).collect();
+        assert_eq!(
+            described,
+            [
+                "untitled Some(1): \"typed\\n\"".to_string(),
+                format!("dirty {}: \"edits\\n\"", x.display()),
+                format!("open {}", y.display()),
+            ]
+        );
+    }
+
+    /// One restore reads at most its budget of backup text in all. Past it,
+    /// an untitled record is left out and a file opens from disk, and the
+    /// backups they named stay in the folder through every save of the
+    /// run. Names that differ only in case reach one file on a
+    /// case-insensitive filesystem, so reading each name once does not
+    /// bound the reading by itself.
+    #[test]
+    fn a_restore_reads_at_most_its_budget_and_keeps_what_it_left() {
+        let dir = tempfile::tempdir().unwrap();
+        let backups = dir.path().join("backup");
+        std::fs::create_dir_all(&backups).unwrap();
+        let x = dir.path().join("x.txt");
+        std::fs::write(&x, "on disk\n").unwrap();
+        let mut session = Session::new();
+        for (seq, text) in [(1, "aaaaaaaaa\n"), (2, "bbbbbbbbb\n"), (3, "ccccccccc\n")] {
+            let name = format!("new {seq}@2026-10-09_110000");
+            std::fs::write(backups.join(&name), text).unwrap();
+            session.tabs.push(record(None, Some(seq), &name));
+        }
+        std::fs::write(backups.join("x.txt@2026-10-09_110000"), "edits\n").unwrap();
+        session
+            .tabs
+            .push(record(Some(&x), None, "x.txt@2026-10-09_110000"));
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+
+        // Room for two of the ten-byte backups, and not for a third or for
+        // the six-byte one.
+        let entries = shell.restore_entries(session, Some(&backups), 25);
+        let described: Vec<String> = entries.iter().map(describe).collect();
+        assert_eq!(
+            described,
+            [
+                "untitled Some(1): \"aaaaaaaaa\\n\"".to_string(),
+                "untitled Some(2): \"bbbbbbbbb\\n\"".to_string(),
+                format!("open {}", x.display()),
+            ]
+        );
+        restore_tabs(&mut shell, &mut ui, entries);
+        for timestamp in ["2026-10-09_120000", "2026-10-09_120007"] {
+            let saved = shell.session_to_save(&mut ui, Some(&backups), timestamp);
+            shell.after_session_saved(Some(&backups), saved.backups);
+            for kept in ["new 3@2026-10-09_110000", "x.txt@2026-10-09_110000"] {
+                assert!(backups.join(kept).is_file(), "{kept} pruned at {timestamp}");
+            }
+        }
+    }
+
+    /// The first save ends the restore: a backup it read for an entry that
+    /// no tab came of stays in the folder through the run, rather than
+    /// being pruned, and nothing is left waiting for a tab.
+    #[test]
+    fn a_restored_backup_no_tab_took_is_kept_for_the_run() {
+        let dir = tempfile::tempdir().unwrap();
+        let backups = dir.path().join("backup");
+        std::fs::create_dir_all(&backups).unwrap();
+        let mut session = Session::new();
+        for seq in [1, 2] {
+            let name = format!("new {seq}@2026-10-09_110000");
+            std::fs::write(backups.join(&name), format!("{seq}\n")).unwrap();
+            session.tabs.push(record(None, Some(seq), &name));
+        }
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+        let entries = shell.restore_entries(session, Some(&backups), MAX_RESTORED_BACKUP_BYTES);
+        // Only the first entry becomes a tab.
+        restore_tabs(&mut shell, &mut ui, entries.into_iter().take(1).collect());
+
+        for timestamp in ["2026-10-09_120000", "2026-10-09_120007"] {
+            let saved = shell.session_to_save(&mut ui, Some(&backups), timestamp);
+            shell.after_session_saved(Some(&backups), saved.backups);
+            assert!(shell.restored_backups.is_empty());
+            assert!(
+                backups.join("new 2@2026-10-09_110000").is_file(),
+                "pruned at {timestamp}"
+            );
+        }
+    }
+
+    /// A save whose `session.xml` cannot be written keeps every backup the
+    /// `session.xml` on disk names, and the backups it wrote. The next such
+    /// save prunes the ones the last one wrote, so a disk that keeps
+    /// refusing `session.xml` does not fill up. Before, nothing was pruned
+    /// after a failed write, and each failed autosave left a set of backups
+    /// behind.
+    #[test]
+    fn a_failed_session_write_prunes_without_losing_what_is_on_disk() {
+        let dir = tempfile::tempdir().unwrap();
+        let backups = dir.path().join("backup");
+        let session_xml = dir.path().join("session.xml");
+        // A file where the session's folder would be, so its write fails.
+        std::fs::write(dir.path().join("blocked"), "").unwrap();
+        let unwritable = dir.path().join("blocked").join("session.xml");
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+        shell.new_untitled(&mut ui);
+        ui.buffer_text = "typed\n".into();
+        ui.doc_dirty.insert(ui.current_doc, true);
+
+        shell
+            .save_session_to(&mut ui, &session_xml, Some(&backups), "2026-10-09_120000")
+            .unwrap();
+        assert_eq!(files_in(&backups), ["new 1@2026-10-09_120000"]);
+        for (timestamp, written) in [
+            ("2026-10-09_120007", "new 1@2026-10-09_120007"),
+            ("2026-10-09_120014", "new 1@2026-10-09_120014"),
+        ] {
+            assert!(shell
+                .save_session_to(&mut ui, &unwritable, Some(&backups), timestamp)
+                .is_err());
+            assert_eq!(files_in(&backups), ["new 1@2026-10-09_120000", written]);
+        }
+        let on_disk = read_session_file(&session_xml).unwrap();
+        assert_eq!(
+            on_disk.tabs[0].backup.as_deref(),
+            Some("new 1@2026-10-09_120000")
+        );
+        shell
+            .save_session_to(&mut ui, &session_xml, Some(&backups), "2026-10-09_120021")
+            .unwrap();
+        assert_eq!(files_in(&backups), ["new 1@2026-10-09_120021"]);
+    }
+
+    /// A tab whose content went to disk since its last backup forgets that
+    /// backup: a later save whose write fails records it without one,
+    /// rather than naming a backup of edits the file already holds. The
+    /// next start would otherwise put the older text back over the file.
+    #[cfg(unix)]
+    #[test]
+    fn a_tab_saved_since_its_last_backup_does_not_fall_back_to_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let backups = dir.path().join("backup");
+        let path = dir.path().join("x.txt");
+        std::fs::write(&path, "on disk\n").unwrap();
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+        restore_dirty(&mut shell, &mut ui, &path, "first edits\n");
+        let first = shell.session_to_save(&mut ui, Some(&backups), "2026-10-09_120000");
+        assert!(first.session.tabs[0].backup.is_some(), "precondition");
+        shell.after_session_saved(Some(&backups), first.backups);
+
+        shell.save_current_to_disk(&mut ui).unwrap();
+        ui.doc_dirty.insert(ui.current_doc, true);
+        let Some(second) = while_unwritable(&backups, || {
+            shell.session_to_save(&mut ui, Some(&backups), "2026-10-09_120007")
+        }) else {
+            return;
+        };
+        assert_eq!(second.session.tabs[0].path.as_deref(), Some(path.as_path()));
+        assert_eq!(second.session.tabs[0].backup, None);
+    }
+
+    /// A save that fails straight after a restore keeps the backups the
+    /// restored session names: that `session.xml` is still the one on disk,
+    /// and the next start reads it again.
+    #[test]
+    fn a_failed_first_save_keeps_the_backups_the_restored_session_names() {
+        let dir = tempfile::tempdir().unwrap();
+        let backups = dir.path().join("backup");
+        std::fs::create_dir_all(&backups).unwrap();
+        let name = "new 1@2026-10-09_110000";
+        std::fs::write(backups.join(name), "restored\n").unwrap();
+        // Named by nothing: neither the session on disk nor this save.
+        std::fs::write(backups.join("old@2026-10-09_100000"), "orphan\n").unwrap();
+        let mut startup = Session::new();
+        startup.tabs.push(record(None, Some(1), name));
+        std::fs::write(dir.path().join("blocked"), "").unwrap();
+        let unwritable = dir.path().join("blocked").join("session.xml");
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+        let entries = shell.restore_entries(startup, Some(&backups), MAX_RESTORED_BACKUP_BYTES);
+        restore_tabs(&mut shell, &mut ui, entries);
+
+        assert!(shell
+            .save_session_to(&mut ui, &unwritable, Some(&backups), "2026-10-09_120000")
+            .is_err());
+        assert_eq!(
+            files_in(&backups),
+            ["new 1@2026-10-09_110000", "new 1@2026-10-09_120000"]
+        );
+    }
+
+    /// A session file that cannot be read keeps every backup in the folder
+    /// for the run. Nothing then says which of them it named, and the first
+    /// save used to prune them all, and with them every buffer the session
+    /// had backed up.
+    #[test]
+    fn an_unreadable_session_keeps_every_backup_for_the_run() {
+        let dir = tempfile::tempdir().unwrap();
+        let session_xml = dir.path().join("session.xml");
+        std::fs::write(&session_xml, "<session><tab").unwrap();
+        let backups = dir.path().join("backup");
+        std::fs::create_dir_all(&backups).unwrap();
+        let name = "new 1@2026-10-09_110000";
+        std::fs::write(backups.join(name), "typed before the crash\n").unwrap();
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+        assert!(shell
+            .load_session_entries_from(&session_xml, Some(&backups))
+            .is_empty());
+
+        shell
+            .save_session_to(&mut ui, &session_xml, Some(&backups), "2026-10-09_120000")
+            .unwrap();
+        assert_eq!(files_in(&backups), [name]);
+    }
+
+    /// A backup longer than the restore may still read is refused before
+    /// it is read, by its length; a file that grows past it while it is
+    /// read is cut off by the read.
+    #[test]
+    fn a_backup_past_what_may_be_read_is_refused_unread() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("new 1@2026-10-09_110000");
+        let file = std::fs::File::create(&path).unwrap();
+        file.set_len(1000).unwrap();
+        let err = read_backup_file(dir.path(), &path, 100).unwrap_err();
+        assert!(
+            err.to_string().contains("is 1000 bytes"),
+            "refused by the read rather than by its length: {err}"
+        );
+        assert_eq!(
+            read_backup_file(dir.path(), &path, 1000).unwrap().len(),
+            1000
+        );
+    }
+
+    /// A named pipe under a backup's name is refused at once, rather than
+    /// holding the restore, which runs on the UI thread at startup, until
+    /// something writes to it. A device is refused the same way.
+    #[cfg(unix)]
+    #[test]
+    fn a_named_pipe_under_a_backup_name_is_refused_at_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let backups = dir.path().join("backup");
+        std::fs::create_dir_all(&backups).unwrap();
+        let name = "new 1@2026-10-09_110000";
+        mkfifo(&backups.join(name));
+        let _release = PipeRelease::after(&backups.join(name), Duration::from_secs(5));
+        let mut session = Session::new();
+        session.tabs.push(record(None, Some(1), name));
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let started = Instant::now();
+        let entries = shell.restore_entries(session, Some(&backups), MAX_RESTORED_BACKUP_BYTES);
+        assert!(
+            started.elapsed() < Duration::from_secs(4),
+            "the restore waited on the pipe"
+        );
+        assert!(entries.is_empty(), "a pipe restored as a buffer");
+    }
+
+    /// Within one save, a display name's backups take ever later names: a
+    /// name this save wrote is never taken again, even if its file left
+    /// the folder in between, so two records never name one file.
+    #[test]
+    fn a_save_never_takes_a_name_it_wrote_again() {
+        let dir = tempfile::tempdir().unwrap();
+        let tab = Tab::default();
+        let mut pass = SavePass::new(Some(dir.path()), "2026-10-09_120000");
+        let first = pass
+            .write(&tab, "lib.rs", || "a\n".into())
+            .expect("written");
+        std::fs::remove_file(dir.path().join(&first)).unwrap();
+        let second = pass
+            .write(&tab, "lib.rs", || "b\n".into())
+            .expect("written");
+        assert_eq!(
+            (first.as_str(), second.as_str()),
+            ("lib.rs@2026-10-09_120000", "lib.rs~2@2026-10-09_120000")
+        );
+    }
+
+    /// A tab whose backup cannot be written does not fall back to a name
+    /// this save wrote for another tab: that happens when its last backup
+    /// left the folder and another backup took the name, and the file then
+    /// holds the other tab's text.
+    #[test]
+    fn the_fallback_never_names_a_backup_this_save_wrote() {
+        let dir = tempfile::tempdir().unwrap();
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        shell
+            .last_backups
+            .insert(7, "lib.rs@2026-10-09_120000".into());
+        let mut pass = SavePass::new(Some(dir.path()), "2026-10-09_120000");
+        let written = pass.write(&Tab::default(), "lib.rs", || "another tab's\n".into());
+        assert_eq!(written.as_deref(), Some("lib.rs@2026-10-09_120000"));
+        assert_eq!(shell.last_good_backup(7, &pass), None);
+        // A save that did not write it falls back to it.
+        let other = SavePass::new(Some(dir.path()), "2026-10-09_120007");
+        assert_eq!(
+            shell.last_good_backup(7, &other).as_deref(),
+            Some("lib.rs@2026-10-09_120000")
+        );
+    }
+
+    /// The fallback names only a regular file in the backups folder, looked
+    /// up without following a link, and only when there is a folder.
+    #[cfg(unix)]
+    #[test]
+    fn the_fallback_names_only_a_file_in_the_folder() {
+        let dir = tempfile::tempdir().unwrap();
+        let backups = dir.path().join("backup");
+        std::fs::create_dir_all(&backups).unwrap();
+        let name = "lib.rs@2026-10-09_120000";
+        let elsewhere = dir.path().join("elsewhere.txt");
+        std::fs::write(&elsewhere, "not a backup\n").unwrap();
+        std::os::unix::fs::symlink(&elsewhere, backups.join(name)).unwrap();
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        shell.last_backups.insert(7, name.into());
+        let pass = SavePass::new(Some(&backups), "2026-10-09_120007");
+        assert_eq!(shell.last_good_backup(7, &pass), None, "a link");
+
+        std::fs::remove_file(backups.join(name)).unwrap();
+        std::fs::write(backups.join(name), "backup\n").unwrap();
+        assert_eq!(shell.last_good_backup(7, &pass).as_deref(), Some(name));
+        let no_folder = SavePass::new(None, "2026-10-09_120007");
+        assert_eq!(shell.last_good_backup(7, &no_folder), None, "no folder");
+    }
+
+    /// Once every name for a display name is taken, the save tries none
+    /// for it again: a later tab with that display name goes without a new
+    /// backup at once, rather than after trying every name again, and
+    /// other display names are still written.
+    #[test]
+    fn a_display_name_with_no_free_name_is_not_tried_twice() {
+        let dir = tempfile::tempdir().unwrap();
+        let timestamp = "2026-10-09_120000";
+        for suffix in 1..=MAX_BACKUP_NAME_ATTEMPTS {
+            std::fs::write(
+                dir.path().join(backup_name("lib.rs", timestamp, suffix)),
+                "",
+            )
+            .unwrap();
+        }
+        let mut pass = SavePass::new(Some(dir.path()), timestamp);
+        assert_eq!(pass.write(&Tab::default(), "lib.rs", || "a\n".into()), None);
+        let read = std::cell::Cell::new(false);
+        let again = pass.write(&Tab::default(), "lib.rs", || {
+            read.set(true);
+            "b\n".into()
+        });
+        assert_eq!(again, None);
+        assert!(!read.get(), "a second backup was attempted");
+        assert!(pass
+            .write(&Tab::default(), "notes.txt", || "c\n".into())
+            .is_some());
+    }
+
+    /// A name is taken whenever something is at it, whatever error the
+    /// rename gave, since which one a platform gives for a folder at the
+    /// name, say, is not something to rely on. Staged with a rename that
+    /// answers "permission denied".
+    #[test]
+    fn a_name_is_taken_whenever_something_is_there() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("lib.rs@2026-10-09_120000"), "older\n").unwrap();
+        let written = write_backup_file_with(
+            dir.path(),
+            "lib.rs",
+            "2026-10-09_120000",
+            1,
+            b"new\n",
+            |tmp, target| {
+                if target.exists() {
+                    Err(tempfile::PersistError {
+                        error: std::io::Error::from(std::io::ErrorKind::PermissionDenied),
+                        file: tmp,
+                    })
+                } else {
+                    tmp.persist_noclobber(target).map(drop)
+                }
+            },
+        )
+        .unwrap();
+        assert_eq!(written, Some(("lib.rs~2@2026-10-09_120000".to_string(), 2)));
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("lib.rs@2026-10-09_120000")).unwrap(),
+            "older\n"
+        );
+    }
+
+    /// Whatever is at a name keeps it: a link, a link to nothing, a folder
+    /// or a named pipe. None is followed or replaced, and the backup takes
+    /// the next free name.
+    #[cfg(unix)]
+    #[test]
+    fn a_backup_never_replaces_a_link_a_folder_or_a_pipe() {
+        let dir = tempfile::tempdir().unwrap();
+        let outside = dir.path().join("outside.txt");
+        std::fs::write(&outside, "outside\n").unwrap();
+        let backups = dir.path().join("backup");
+        std::fs::create_dir(&backups).unwrap();
+        let ts = "2026-10-09_120000";
+        std::os::unix::fs::symlink(&outside, backups.join(format!("lib.rs@{ts}"))).unwrap();
+        std::os::unix::fs::symlink(
+            dir.path().join("nothing"),
+            backups.join(format!("lib.rs~2@{ts}")),
+        )
+        .unwrap();
+        std::fs::create_dir(backups.join(format!("lib.rs~3@{ts}"))).unwrap();
+        mkfifo(&backups.join(format!("lib.rs~4@{ts}")));
+        let written = write_backup_file(&backups, "lib.rs", ts, 1, b"new\n").unwrap();
+        assert_eq!(written, Some((format!("lib.rs~5@{ts}"), 5)));
+        assert_eq!(std::fs::read_to_string(&outside).unwrap(), "outside\n");
+        assert!(!dir.path().join("nothing").exists());
+        assert_eq!(
+            std::fs::read_to_string(backups.join(format!("lib.rs~5@{ts}"))).unwrap(),
+            "new\n"
+        );
+    }
+
+    /// On a filesystem that can neither rename without replacing nor make
+    /// a hard link (FAT, some network filesystems), the rename that must
+    /// not replace fails while nothing has the name, and an ordinary rename
+    /// takes it. Staged with a rename that fails as it does there.
+    #[test]
+    fn a_filesystem_without_safe_renames_still_gets_its_backup() {
+        let dir = tempfile::tempdir().unwrap();
+        let written = write_backup_file_with(
+            dir.path(),
+            "lib.rs",
+            "2026-10-09_120000",
+            1,
+            b"new\n",
+            |tmp, _| {
+                Err(tempfile::PersistError {
+                    error: std::io::Error::from(std::io::ErrorKind::Unsupported),
+                    file: tmp,
+                })
+            },
+        )
+        .unwrap();
+        assert_eq!(written, Some(("lib.rs@2026-10-09_120000".to_string(), 1)));
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("lib.rs@2026-10-09_120000")).unwrap(),
+            "new\n"
+        );
+    }
+
+    /// A backup whose path runs past `MAX_PATH` is written: tempfile's
+    /// rename refuses such a path unless it is verbatim, which the folder
+    /// is made before the backup is named.
+    #[cfg(windows)]
+    #[test]
+    fn a_backup_past_max_path_is_written() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut backups = dir.path().to_path_buf();
+        while backups.as_os_str().len() < 120 {
+            backups.push("a_folder_name");
+        }
+        let label = "a".repeat(MAX_BACKUP_DISPLAY_BYTES);
+        let (name, _) = write_backup_file(&backups, &label, "2026-10-09_120000", 1, b"x")
+            .unwrap()
+            .expect("a free name");
+        assert!(backups.join(&name).as_os_str().len() > 260);
+        assert_eq!(std::fs::read(backups.join(&name)).unwrap(), b"x");
+    }
+
+    /// A backup written by a save whose `session.xml` could not be written
+    /// is the one a later failed backup write falls back to, not the older
+    /// one the `session.xml` on disk names. Once that later `session.xml`
+    /// reaches disk its prune keeps only what it names, so the fallback
+    /// used to name the older backup and the newer one was pruned.
+    #[cfg(unix)]
+    #[test]
+    fn a_backup_a_failed_save_wrote_is_the_one_fallen_back_to() {
+        let dir = tempfile::tempdir().unwrap();
+        let backups = dir.path().join("backup");
+        let session_xml = dir.path().join("session.xml");
+        std::fs::write(dir.path().join("blocked"), "").unwrap();
+        let unwritable = dir.path().join("blocked").join("session.xml");
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+        shell.new_untitled(&mut ui);
+        ui.buffer_text = "first\n".into();
+        ui.doc_dirty.insert(ui.current_doc, true);
+        shell
+            .save_session_to(&mut ui, &session_xml, Some(&backups), "2026-10-09_120000")
+            .unwrap();
+        ui.buffer_text = "second\n".into();
+        assert!(shell
+            .save_session_to(&mut ui, &unwritable, Some(&backups), "2026-10-09_120007")
+            .is_err());
+        ui.buffer_text = "third\n".into();
+        let Some(third) = while_unwritable(&backups, || {
+            shell.save_session_to(&mut ui, &session_xml, Some(&backups), "2026-10-09_120014")
+        }) else {
+            return;
+        };
+        third.unwrap();
+        let session = read_session_file(&session_xml).unwrap();
+        let named = session.tabs[0].backup.clone().expect("a backup");
+        assert_eq!(
+            std::fs::read_to_string(backups.join(named)).unwrap(),
+            "second\n"
+        );
+    }
+
+    /// A backup named only by records past the tab cap stays for the run,
+    /// like any other backup the restore leaves.
+    #[test]
+    fn backups_named_past_the_tab_cap_are_kept_for_the_run() {
+        let dir = tempfile::tempdir().unwrap();
+        let backups = dir.path().join("backup");
+        std::fs::create_dir_all(&backups).unwrap();
+        let mut session = Session::new();
+        let total = MAX_SESSION_TABS + 2;
+        for seq in 1..=u32::try_from(total).unwrap() {
+            let name = format!("new {seq}@2026-10-09_110000");
+            std::fs::write(backups.join(&name), "x\n").unwrap();
+            session.tabs.push(record(None, Some(seq), &name));
+        }
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let entries = shell.restore_entries(session, Some(&backups), MAX_RESTORED_BACKUP_BYTES);
+        assert_eq!(entries.len(), MAX_SESSION_TABS);
+
+        shell.after_session_saved(Some(&backups), HashMap::new());
+        for seq in [total - 1, total] {
+            let name = format!("new {seq}@2026-10-09_110000");
+            assert!(backups.join(&name).is_file(), "{name} pruned");
+        }
+    }
+
+    /// The readable part of a backup's name is cut on a character boundary
+    /// even when the limit falls inside a character.
+    #[test]
+    fn a_backup_name_is_cut_on_a_character_inside_a_wide_one() {
+        let name = sanitize_basename_for_backup(Path::new(&"€".repeat(100)));
+        assert_eq!(name, "€".repeat(MAX_BACKUP_DISPLAY_BYTES / 3));
+    }
+
+    /// A save whose `session.xml` cannot be written, straight after a
+    /// start whose `session.xml` could not be read, keeps every backup.
+    #[test]
+    fn a_failed_save_after_an_unreadable_session_keeps_every_backup() {
+        let dir = tempfile::tempdir().unwrap();
+        let session_xml = dir.path().join("session.xml");
+        std::fs::write(&session_xml, "<session><tab").unwrap();
+        let backups = dir.path().join("backup");
+        std::fs::create_dir_all(&backups).unwrap();
+        let name = "new 1@2026-10-09_110000";
+        std::fs::write(backups.join(name), "typed before the crash\n").unwrap();
+        std::fs::write(dir.path().join("blocked"), "").unwrap();
+        let unwritable = dir.path().join("blocked").join("session.xml");
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+        assert!(shell
+            .load_session_entries_from(&session_xml, Some(&backups))
+            .is_empty());
+
+        assert!(shell
+            .save_session_to(&mut ui, &unwritable, Some(&backups), "2026-10-09_120000")
+            .is_err());
+        assert_eq!(files_in(&backups), [name]);
+    }
+
+    /// The per-file cap holds through the restore even while the budget
+    /// has room for more, and the backup stays in the folder for the run.
+    #[test]
+    fn a_backup_past_the_per_file_cap_is_not_restored() {
+        let dir = tempfile::tempdir().unwrap();
+        let backups = dir.path().join("backup");
+        std::fs::create_dir_all(&backups).unwrap();
+        let name = "new 1@2026-10-09_110000";
+        std::fs::File::create(backups.join(name))
+            .unwrap()
+            .set_len(MAX_BACKUP_FILE_BYTES + 1)
+            .unwrap();
+        let mut session = Session::new();
+        session.tabs.push(record(None, Some(1), name));
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let entries = shell.restore_entries(session, Some(&backups), MAX_RESTORED_BACKUP_BYTES);
+        assert!(entries.is_empty());
+        assert!(shell.kept_backups.contains(name));
+    }
+
+    /// A backup that is not UTF-8 is refused with an error that does not
+    /// carry its bytes: the restore logs the error, so a 64 MiB backup
+    /// would be logged whole, several times over once escaped.
+    #[test]
+    fn a_backup_that_is_not_utf8_is_refused_without_its_bytes() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("new 1@2026-10-09_110000");
+        let mut bytes = vec![b'a'; 64 * 1024];
+        bytes.push(0xFF);
+        std::fs::write(&path, &bytes).unwrap();
+        let e = read_backup_file(dir.path(), &path, MAX_BACKUP_FILE_BYTES).unwrap_err();
+        assert_eq!(e.kind(), std::io::ErrorKind::InvalidData);
+        let shown = format!("{e:?}");
+        assert!(shown.len() < 1024, "{} bytes: {shown:.200}", shown.len());
+    }
+
+    /// A backup a record restored from is the tab's, not one kept for the
+    /// run: the prune treats it as the tab's last backup, so a later save
+    /// that writes a newer one removes it.
+    #[test]
+    fn a_backup_a_record_restored_from_is_not_kept() {
+        let dir = tempfile::tempdir().unwrap();
+        let backups = dir.path().join("backup");
+        std::fs::create_dir_all(&backups).unwrap();
+        let name = "new 1@2026-10-09_110000";
+        std::fs::write(backups.join(name), "typed\n").unwrap();
+        let mut session = Session::new();
+        session.tabs.push(record(None, Some(1), name));
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let entries = shell.restore_entries(session, Some(&backups), MAX_RESTORED_BACKUP_BYTES);
+        assert_eq!(entries.len(), 1);
+        assert!(!shell.kept_backups.contains(name));
+    }
+
+    /// Save after save whose `session.xml` cannot be written, with no
+    /// session read at startup (Win32 started with a path): what the folder
+    /// held before is kept, and of this run's backups only the newest.
+    /// Before, each failed save kept its own set for the rest of the run.
+    #[test]
+    fn failed_saves_with_no_session_read_keep_only_the_newest_set() {
+        let dir = tempfile::tempdir().unwrap();
+        let backups = dir.path().join("backup");
+        std::fs::create_dir_all(&backups).unwrap();
+        let older = "new 9@2026-10-09_110000";
+        std::fs::write(backups.join(older), "from the run before\n").unwrap();
+        std::fs::write(dir.path().join("blocked"), "").unwrap();
+        let unwritable = dir.path().join("blocked").join("session.xml");
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+        shell.new_untitled(&mut ui);
+        ui.doc_dirty.insert(ui.current_doc, true);
+        for (n, timestamp) in [
+            "2026-10-10_120000",
+            "2026-10-10_120007",
+            "2026-10-10_120014",
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            ui.buffer_text = format!("typed {n}\n");
+            assert!(shell
+                .save_session_to(&mut ui, &unwritable, Some(&backups), timestamp)
+                .is_err());
+        }
+        let files = files_in(&backups);
+        assert_eq!(files.len(), 2, "{files:?}");
+        let newest = files
+            .iter()
+            .find(|f| *f != older)
+            .expect("the newest backup");
+        assert_eq!(
+            std::fs::read_to_string(backups.join(newest)).unwrap(),
+            "typed 2\n"
+        );
+    }
+
+    /// The same after a `session.xml` that could not be read, and the save
+    /// that finally reaches disk keeps what the folder held at startup and
+    /// its own backups, not every failed save's.
+    #[test]
+    fn failed_saves_after_an_unreadable_session_keep_only_the_newest_set() {
+        let dir = tempfile::tempdir().unwrap();
+        let session_xml = dir.path().join("session.xml");
+        std::fs::write(&session_xml, "<session><tab").unwrap();
+        let backups = dir.path().join("backup");
+        std::fs::create_dir_all(&backups).unwrap();
+        let older = "new 9@2026-10-09_110000";
+        std::fs::write(backups.join(older), "from the run before\n").unwrap();
+        std::fs::write(dir.path().join("blocked"), "").unwrap();
+        let unwritable = dir.path().join("blocked").join("session.xml");
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+        assert!(shell
+            .load_session_entries_from(&session_xml, Some(&backups))
+            .is_empty());
+        shell.new_untitled(&mut ui);
+        ui.doc_dirty.insert(ui.current_doc, true);
+        for (n, timestamp) in [
+            "2026-10-10_120000",
+            "2026-10-10_120007",
+            "2026-10-10_120014",
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            ui.buffer_text = format!("typed {n}\n");
+            assert!(shell
+                .save_session_to(&mut ui, &unwritable, Some(&backups), timestamp)
+                .is_err());
+        }
+        assert_eq!(files_in(&backups).len(), 2, "{:?}", files_in(&backups));
+        ui.buffer_text = "typed 3\n".into();
+        shell
+            .save_session_to(&mut ui, &session_xml, Some(&backups), "2026-10-10_120021")
+            .unwrap();
+        let files = files_in(&backups);
+        assert_eq!(files.len(), 2, "{files:?}");
+        assert!(files.iter().any(|f| f == older), "{files:?}");
+    }
+
+    /// The session kept after a restore holds only the records the restore
+    /// read, and a backup named only by a record past the cap is still kept
+    /// for the run. Every lookup by path in it scans all of it, and a
+    /// session file the reader takes can hold some 370,000 records: 1,023
+    /// files landing behind such a session took 30 seconds.
+    #[test]
+    fn the_session_kept_after_a_restore_holds_only_the_records_it_read() {
+        let dir = tempfile::tempdir().unwrap();
+        let backups = dir.path().join("backup");
+        std::fs::create_dir_all(&backups).unwrap();
+        let past_the_cap = "new 9@2026-10-09_110000";
+        std::fs::write(backups.join(past_the_cap), "past the cap\n").unwrap();
+        let mut session = Session::new();
+        for n in 0..MAX_SESSION_TABS + 5 {
+            session.tabs.push(codepp_core::Tab {
+                path: Some(PathBuf::from(format!("/p/{n}"))),
+                ..codepp_core::Tab::default()
+            });
+        }
+        session.tabs.push(record(None, Some(9), past_the_cap));
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let entries = shell.restore_entries(session, Some(&backups), MAX_RESTORED_BACKUP_BYTES);
+        assert_eq!(entries.len(), MAX_SESSION_TABS);
+        assert_eq!(shell.session.tabs.len(), MAX_SESSION_TABS);
+        assert!(shell.kept_backups.contains(past_the_cap));
+    }
+
+    /// Every release of a tab's restore marker forgets the backup its
+    /// record named as well: `forget_unsaved_state` is the one place
+    /// either is removed, and the five places that save a tab's content or
+    /// replace it from disk call it. A source check, because a release
+    /// that skipped the backup shows only when a later backup write fails.
+    #[test]
+    fn every_release_of_unsaved_state_goes_through_one_place() {
+        // LF only, as the other source checks here read it.
+        let src = include_str!("lib.rs").replace("\r\n", "\n");
+        let production = &src[..src
+            .find("\n#[cfg(test)]\nmod tests {")
+            .expect("the test module")];
+        // Code only: a call commented out does not count.
+        let production: String = production
+            .lines()
+            .map(|line| line.find("//").map_or(line, |at| &line[..at]))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let start = production
+            .find("    fn forget_unsaved_state(")
+            .expect("forget_unsaved_state");
+        let end = start + production[start..].find("\n    }\n").expect("its end");
+        for needle in ["unsaved_restore_ids.remove(", "last_backups.remove("] {
+            assert_eq!(
+                (
+                    production.matches(needle).count(),
+                    production[start..end].matches(needle).count()
+                ),
+                (1, 1),
+                "{needle} must be called once, from forget_unsaved_state"
+            );
+        }
+        assert_eq!(
+            production.matches("self.forget_unsaved_state(").count(),
+            5,
+            "a place that saves a tab or reloads it no longer forgets its unsaved state"
+        );
+    }
+
     /// `restore_dirty_with_text` with `disk_changed_externally =
     /// true` must queue a `PendingDialog::ConfirmReload` so the
     /// next `Shell::drain` returns it to the UI. Without this
@@ -21851,7 +23798,7 @@ mod tests {
         let mut shell = Shell::new(wake).unwrap();
         let _release = PipeRelease::after(&pipe, Duration::from_secs(5));
         let started = Instant::now();
-        let entries = shell.load_session_entries_from(&pipe);
+        let entries = shell.load_session_entries_from(&pipe, None);
         assert!(
             started.elapsed() < Duration::from_secs(2),
             "the start waited on the pipe"
@@ -21877,5 +23824,172 @@ mod tests {
             uses, 1,
             "a session is read other than through read_session_file"
         );
+    }
+
+    /// A backup that fails after its bytes were read (not UTF-8) costs the
+    /// budget as one that succeeds does, and a name is tried once: before,
+    /// a session naming one such 64 MiB file for 1024 records read it 1024
+    /// times, and the budget never moved.
+    #[test]
+    fn a_backup_that_fails_after_it_was_read_still_costs_the_budget() {
+        let dir = tempfile::tempdir().unwrap();
+        for n in [
+            "a@2026-10-09_110000",
+            "b@2026-10-09_110000",
+            "c@2026-10-09_110000",
+        ] {
+            std::fs::write(dir.path().join(n), b"123456789\xFF").unwrap();
+        }
+        let mut reads = BackupReads::new(25);
+        assert!(reads
+            .read(Some(dir.path()), "a@2026-10-09_110000")
+            .is_none());
+        assert_eq!(reads.budget_left, 15);
+        // The same name again: not read, not charged.
+        assert!(reads
+            .read(Some(dir.path()), "a@2026-10-09_110000")
+            .is_none());
+        assert_eq!(reads.budget_left, 15);
+        assert!(reads
+            .read(Some(dir.path()), "b@2026-10-09_110000")
+            .is_none());
+        assert_eq!(reads.budget_left, 5);
+        // Longer than what is left: refused unread, nothing charged.
+        assert!(reads
+            .read(Some(dir.path()), "c@2026-10-09_110000")
+            .is_none());
+        assert_eq!(reads.budget_left, 5);
+        assert!(reads.claimed.is_empty(), "a failed read is not a claim");
+    }
+
+    /// With no restore this run (Win32 started with a path) a failed
+    /// `session.xml` write still keeps the backups the `session.xml` on disk
+    /// names: nothing in memory says which they are.
+    #[test]
+    fn a_failed_save_with_no_restore_keeps_every_backup() {
+        let dir = tempfile::tempdir().unwrap();
+        let backups = dir.path().join("backup");
+        std::fs::create_dir_all(&backups).unwrap();
+        let old = "new 1@2026-10-09_110000";
+        std::fs::write(backups.join(old), "unsaved text from the last run\n").unwrap();
+        std::fs::write(dir.path().join("blocked"), "").unwrap();
+        let unwritable = dir.path().join("blocked").join("session.xml");
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+        shell.new_untitled(&mut ui);
+        ui.buffer_text = "typed\n".into();
+        ui.doc_dirty.insert(ui.current_doc, true);
+        assert!(shell
+            .save_session_to(&mut ui, &unwritable, Some(&backups), "2026-10-09_120000")
+            .is_err());
+        assert!(files_in(&backups).contains(&old.to_string()));
+    }
+
+    /// A file landing on a tab in the background replaces what the tab
+    /// holds, at once or when the tab is next shown, so the tab forgets its
+    /// last backup, as an install on the tab in front does. A save whose
+    /// write then fails would otherwise name a backup of text the tab no
+    /// longer has, which the next start would show over the file.
+    #[test]
+    fn a_background_landing_forgets_the_tabs_last_backup() {
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+        shell.new_untitled(&mut ui);
+        let idx = shell.active_tab.unwrap();
+        let id = shell.tabs[idx].id;
+        for discarded_work in [false, true] {
+            shell
+                .last_backups
+                .insert(id, "new 1@2026-10-09_110000".into());
+            shell.settle_background_landing(&mut ui, idx, 0, discarded_work);
+            assert!(
+                !shell.last_backups.contains_key(&id),
+                "discarded work: {discarded_work}"
+            );
+        }
+    }
+
+    /// A tab whose path is not valid Unicode no longer fails the whole
+    /// save: with unsaved work it is saved as an untitled buffer named after
+    /// its file, with its backup; clean, it is left out; and a workspace
+    /// folder that is not valid Unicode is dropped. The tab in front keeps
+    /// its place among the records written.
+    #[cfg(unix)]
+    #[test]
+    fn a_path_that_is_not_unicode_does_not_fail_the_save() {
+        use codepp_core::session::WorkspaceSession;
+        use std::os::unix::ffi::OsStrExt;
+        let bad = |b: &[u8]| PathBuf::from(std::ffi::OsStr::from_bytes(b));
+        let dir = tempfile::tempdir().unwrap();
+        let backups = dir.path().join("backup");
+        let session_xml = dir.path().join("session.xml");
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+        restore_dirty(&mut shell, &mut ui, &bad(b"/w/caf\xe9.txt"), "edits\n");
+        shell.session.workspace = Some(WorkspaceSession {
+            root: Some(bad(b"/w/\xff")),
+            ..WorkspaceSession::default()
+        });
+        shell
+            .save_session_to(&mut ui, &session_xml, Some(&backups), "2026-10-09_120000")
+            .unwrap();
+        let saved = read_session_file(&session_xml).unwrap();
+        assert_eq!(saved.tabs.len(), 1);
+        let tab = &saved.tabs[0];
+        assert_eq!(tab.path, None);
+        assert_eq!(tab.custom_name.as_deref(), Some("caf\u{fffd}.txt"));
+        let name = tab.backup.clone().expect("the backup is named");
+        assert_eq!(
+            std::fs::read_to_string(backups.join(name)).unwrap(),
+            "edits\n"
+        );
+        assert_eq!(saved.active, Some(0));
+        assert!(saved.workspace.and_then(|w| w.root).is_none());
+
+        let mut session = Session::new();
+        session.tabs = vec![
+            codepp_core::Tab {
+                path: Some(bad(b"/w/clean\xe9.txt")),
+                ..codepp_core::Tab::default()
+            },
+            codepp_core::Tab {
+                path: Some(PathBuf::from("/w/b.txt")),
+                ..codepp_core::Tab::default()
+            },
+        ];
+        session.active = Some(1);
+        writable_paths_only(&mut session);
+        assert_eq!(session.tabs.len(), 1);
+        assert_eq!(session.tabs[0].path.as_deref(), Some(Path::new("/w/b.txt")));
+        assert_eq!(session.active, Some(0));
+    }
+
+    /// A `session.xml` that reads as a session with no tabs (empty, or
+    /// another document altogether) keeps every backup for the run, as one
+    /// that cannot be read does.
+    #[test]
+    fn a_session_file_with_no_tabs_keeps_every_backup_for_the_run() {
+        for (label, content) in [("empty", ""), ("another root", "<NotepadPlus/>")] {
+            let dir = tempfile::tempdir().unwrap();
+            let backups = dir.path().join("backup");
+            std::fs::create_dir_all(&backups).unwrap();
+            let name = "new 1@2026-10-09_110000";
+            std::fs::write(backups.join(name), "typed before\n").unwrap();
+            let session_xml = dir.path().join("session.xml");
+            std::fs::write(&session_xml, content).unwrap();
+            let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+            let mut shell = Shell::new(wake).unwrap();
+            let mut ui = FakeUi::default();
+            assert!(shell
+                .load_session_entries_from(&session_xml, Some(&backups))
+                .is_empty());
+            shell
+                .save_session_to(&mut ui, &session_xml, Some(&backups), "2026-10-09_120000")
+                .unwrap();
+            assert_eq!(files_in(&backups), [name], "{label}");
+        }
     }
 }

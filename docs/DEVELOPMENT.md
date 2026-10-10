@@ -236,8 +236,9 @@ sources, which it previously skipped.
 
 The runner must also run the tests as an ordinary account, not as root.
 Two of the plugin-panel key tests need a file their own account cannot
-read, and root reads every file. Run as root they skip on a
-developer's machine, but they *fail* when `CI` is set: `cargo test`
+read, and the recovery-backup tests in `codepp-shell` need a folder it
+cannot write; root reads and writes everything. Run as root they skip on
+a developer's machine, but they *fail* when `CI` is set: `cargo test`
 hides a passing test's output, so a skip there would drop the coverage
 while the run stayed green — the trap §2.6 describes for the Windows
 symlink tests.
@@ -364,8 +365,9 @@ cursors fall back to system defaults. Cosmetic; not a build problem.
 The `macos`-labelled runner must run the tests as an ordinary account,
 not as root, for the reason §3.4 gives for Linux: the plugin-panel key
 tests (`codepp-platform`'s `panel_key`, shared by both platforms) need a
-file their own account cannot read, and fail rather than skip when `CI`
-is set. The macOS-only key tests also call `/bin/chmod +a` to put
+file their own account cannot read, and the recovery-backup tests in
+`codepp-shell` need a folder it cannot write; both fail rather than skip
+when `CI` is set. The macOS-only key tests also call `/bin/chmod +a` to put
 extended ACLs on files in a temporary directory, so the runner's temp
 directory must be on a volume that keeps ACLs (APFS does).
 

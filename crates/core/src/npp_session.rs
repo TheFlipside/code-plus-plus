@@ -165,8 +165,8 @@ impl YesNo {
 }
 
 /// Hard cap on the size of a session XML file [`NppSessionDoc::read_from`]
-/// will read. Real N++ session files are kilobytes; even a 512-tab session
-/// (the `MAX_SESSION_TABS` ceiling) with long paths stays well under a
+/// will read. Real N++ session files are kilobytes; even a 1024-tab session
+/// (the `MAX_SESSION_TABS` ceiling) with long paths stays under a
 /// megabyte. The cap bounds the synchronous read + full-document
 /// deserialisation of a *user-picked* (hence untrusted) file so a hostile
 /// multi-hundred-MB "session" can't freeze the UI thread before the tab

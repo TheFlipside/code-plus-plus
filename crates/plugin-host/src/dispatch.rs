@@ -1771,8 +1771,8 @@ pub unsafe fn dispatch_nppm<S: HostServices>(
             // Returns the active tab index in that view, or -1 if
             // the view has no active tab. N++ uses `int` here, so
             // the negative-on-empty signal fits. The `i as i32` cast
-            // in `HostBridge::current_doc_index` is safe because
-            // `MAX_SESSION_TABS = 512` (tab count cap in `core::session`).
+            // in `HostBridge::current_doc_index` is safe because the
+            // shell caps open tabs at `MAX_OPEN_TABS` (1024).
             services.current_doc_index(wparam as i32) as isize
         }
 
