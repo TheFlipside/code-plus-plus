@@ -25881,9 +25881,21 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let session = read_session_file(&dir.path().join("none.xml")).unwrap();
         assert!(session.tabs.is_empty());
-        let file = dir.path().join("file");
-        std::fs::write(&file, "").unwrap();
-        assert!(read_session_file(&file.join("x")).is_err());
+        // An interior NUL fails in `std` with `InvalidInput` before any OS
+        // call, so this is "another failure" on every platform.
+        assert!(matches!(
+            read_session_file(Path::new("bad\0name.xml")),
+            Err(codepp_core::session::SessionError::Io(e))
+                if e.kind() == std::io::ErrorKind::InvalidInput
+        ));
+        // A path through a regular file fails with `ENOTDIR` on Unix; Windows
+        // reports it as `ERROR_PATH_NOT_FOUND`, which reads as missing.
+        #[cfg(unix)]
+        {
+            let file = dir.path().join("file");
+            std::fs::write(&file, "").unwrap();
+            assert!(read_session_file(&file.join("x")).is_err());
+        }
     }
 
     /// A session file a plugin names is read only if it is a regular file:
