@@ -162,9 +162,14 @@ pub struct GtkUi {
     /// (the UDL editor modal — Phase 4.6 m3 — is not yet ported here), so
     /// every read through this pointer is shared and never races the
     /// `&mut Shell` the split hands out. When the GTK UDL editor *does*
-    /// land, its "save UDL → rescan" must mutate `shell.udl_registry`
-    /// through `with_state` **only** (no `GtkUi` on the stack), so this
-    /// pointer never observes a `&mut UdlRegistry`. Win32 relies on the
+    /// land, its "save UDL → rescan" must install the new registry with
+    /// `Shell::replace_udl_registry`, which carries the open tabs over to
+    /// the new ids, through `with_state` **only** (no `GtkUi` on the
+    /// stack), so this pointer never observes a `&mut UdlRegistry`. Only
+    /// then may it split, in a later step, to show the tab in front again
+    /// with `Shell::reapply_active_lang`, and it must deliver the
+    /// `NPPN_LANGCHANGED` notices the replacement queued once no borrow is
+    /// held, as Win32's `refresh_udl_registry` does. Win32 relies on the
     /// same hand-maintained discipline — see its field doc.
     pub udl_registry: *const codepp_udl::UdlRegistry,
 }

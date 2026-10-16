@@ -186,10 +186,15 @@ pub struct CocoaUi {
     /// — the UDL editor modal (Phase 4.6 m3) is Win32-only — so every
     /// read through this pointer is shared and never races the
     /// `&mut Shell` the split hands out. If a Cocoa UDL editor ever
-    /// lands, its "save UDL → rescan" must mutate `shell.udl_registry`
-    /// through `with_state` **only** (no `CocoaUi` on the stack), so
-    /// this pointer never observes a `&mut UdlRegistry`. All three
-    /// backends rely on the same hand-maintained discipline.
+    /// lands, its "save UDL → rescan" must install the new registry with
+    /// `Shell::replace_udl_registry`, which carries the open tabs over to
+    /// the new ids, through `with_state` **only** (no `CocoaUi` on the
+    /// stack), so this pointer never observes a `&mut UdlRegistry`. Only
+    /// then may it split, in a later step, to show the tab in front again
+    /// with `Shell::reapply_active_lang`, and it must deliver the
+    /// `NPPN_LANGCHANGED` notices the replacement queued once no borrow is
+    /// held, as Win32's `refresh_udl_registry` does. All three backends
+    /// rely on the same hand-maintained discipline.
     pub udl_registry: *const codepp_udl::UdlRegistry,
 }
 

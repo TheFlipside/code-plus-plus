@@ -81,7 +81,10 @@ const MAX_UDL_SCAN_ENTRIES: usize = (UDL_LANG_TYPE_END - UDL_LANG_TYPE_BASE + 1)
 /// stored across that event names a **different** UDL on the way
 /// back. `session.xml` therefore persists `definition.name` and
 /// resolves it through [`UdlRegistry::find_by_name`]; anything
-/// else that outlives the process must do the same.
+/// else that outlives the process must do the same, and so must
+/// anything that outlives the registry: the shell's
+/// `replace_udl_registry` moves every open tab to its UDL's new id
+/// when the folder is scanned again mid-session.
 ///
 /// `#[non_exhaustive]` so m1d / m3 can add fields (e.g. a menu-
 /// item command id derived from `lang_type_id`) without a
@@ -202,7 +205,8 @@ fn classify_entry(
 /// The registry is intentionally read-only after construction —
 /// the UDL editor modal (Phase 4.6 m3) writes new UDL files to
 /// the directory but does not mutate the in-memory registry;
-/// picking up the new file requires re-scanning (also m3).
+/// picking up the new file takes a new scan, which the shell
+/// installs in place of this one with `replace_udl_registry`.
 #[derive(Debug, Clone, Default)]
 pub struct UdlRegistry {
     entries: Vec<UdlEntry>,

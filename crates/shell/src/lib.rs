@@ -6669,10 +6669,10 @@ impl Shell {
     /// A UDL-range id with no registry entry keeps the id, as
     /// `core::session::Tab::lang` round-trips values Code++ does not
     /// recognise rather than discard them; the next load declines it, as it
-    /// declines every bare UDL-range id. Nothing can set one since Phase 5
-    /// ([`Self::set_tab_lang`] refuses a UDL id the registry does not hold),
-    /// so a tab holds one only when the registry changed under it: Win32's
-    /// UDL editor rescans it without remapping open tabs (DESIGN.md §7.4).
+    /// declines every bare UDL-range id. No tab should hold one:
+    /// [`Self::set_tab_lang`] refuses a UDL id the registry does not hold,
+    /// and [`Self::replace_udl_registry`] carries every tab over when the
+    /// registry is scanned again.
     fn persisted_lang_fields(
         tab_lang: LangType,
         path: Option<&Path>,
@@ -6892,6 +6892,126 @@ impl Shell {
         self.pending_notifications
             .push(Notification::LangChanged { buffer_id });
         true
+    }
+
+    /// Install a freshly scanned UDL registry and carry every open tab's
+    /// User Defined Language over to it. Called when `userDefineLangs/` is
+    /// scanned again mid-session: on Win32, after the UDL editor saves a
+    /// language.
+    ///
+    /// **Why a tab cannot keep its id.** The registry numbers UDLs in the
+    /// order of a sorted listing of the folder, so a newly saved file that
+    /// sorts first moves every id after it. A tab left holding its old
+    /// number is then in another UDL: that UDL's rules paint it, the status
+    /// bar names it, and the next session save persists its name. Until
+    /// Phase 5 a reload put such a tab right by detecting its language
+    /// again; a reload keeps a tab's language now (DESIGN.md §7.4).
+    ///
+    /// So each tab in a UDL is given that UDL's successor in the new
+    /// registry ([`Self::udl_successor`]): the entry of the same name loaded
+    /// from the same file; else the first of the same name, the identity
+    /// `session.xml` persists; else the one loaded from the same file, which
+    /// is how a UDL renamed in the editor and saved over its own file keeps
+    /// its buffers. A UDL with no successor was deleted, renamed along with
+    /// its file, or no longer parses. Its tabs take the language their
+    /// extension gives, or Normal Text when they have no path, which is what
+    /// a restart would give them, and a language requested for one while its
+    /// file was loading is dropped, so the landing decides it.
+    ///
+    /// Every tab that does not end in a UDL of the name it had gets
+    /// `NPPN_LANGCHANGED` queued, which the caller delivers with no borrow
+    /// on the state held: it left the UDLs, or the name a plugin is told
+    /// for its language changed, a tab whose old id named no UDL included.
+    /// A tab carried to a UDL of the same name changed nothing a plugin can
+    /// see and is not announced.
+    ///
+    /// Returns whether the tab in front was in a UDL. The caller must then
+    /// show it again with [`Self::reapply_active_lang`], through a UI split
+    /// **after** this returns: the view still has the old registry's palette,
+    /// which the UDL editor may just have changed, and every backend's UI
+    /// reads the registry through a raw pointer taken when it is split, so
+    /// no UI may be alive while the registry is replaced.
+    #[must_use = "true means the tab in front was in a UDL: show it again with reapply_active_lang"]
+    pub fn replace_udl_registry(&mut self, registry: codepp_udl::UdlRegistry) -> bool {
+        let old = std::mem::replace(&mut self.udl_registry, registry);
+        let mut active_in_udl = false;
+        for idx in 0..self.tabs.len() {
+            let id = self.tabs[idx].lang.as_npp_id();
+            if !codepp_udl::is_udl_lang_id(id) {
+                continue;
+            }
+            active_in_udl |= self.active_tab == Some(idx);
+            let old_entry = old.find_by_lang_type_id(id);
+            let successor = old_entry.and_then(|e| Self::udl_successor(e, &self.udl_registry));
+            let tab = &mut self.tabs[idx];
+            let lang = if let Some(entry) = successor {
+                LangType(entry.lang_type_id)
+            } else {
+                tracing::info!(
+                    buffer = tab.id,
+                    udl = old_entry.map(|e| e.definition.name.as_str()),
+                    "a tab's User Defined Language is gone after a rescan; it takes its extension's language"
+                );
+                // The request named a UDL that is gone; the landing decides.
+                tab.lang_requested_during_load = None;
+                tab.path
+                    .as_deref()
+                    .map_or(L_TEXT, |p| Self::detect_lang(p, &self.udl_registry))
+            };
+            let old_name = old_entry.map(|e| e.definition.name.as_str());
+            let new_name = self
+                .udl_registry
+                .find_by_lang_type_id(lang.as_npp_id())
+                .map(|e| e.definition.name.as_str());
+            tab.lang = lang;
+            if new_name.is_none() || new_name != old_name {
+                self.pending_notifications.push(Notification::LangChanged {
+                    buffer_id: tab.id as isize,
+                });
+            }
+        }
+        active_in_udl
+    }
+
+    /// The entry in `registry` that carries on `old`, a UDL of an earlier
+    /// scan, or `None` if none does; see [`Self::replace_udl_registry`].
+    ///
+    /// The file comes into it only as a tie-break and a last resort. Two
+    /// UDLs may share a name, and the file tells which of them a tab was in;
+    /// and a UDL renamed in the editor is saved over its own file. The name
+    /// comes first because it is what a restart would go by: a UDL saved
+    /// under a new file with its old name, by Save As, is the same language.
+    fn udl_successor<'r>(
+        old: &codepp_udl::UdlEntry,
+        registry: &'r codepp_udl::UdlRegistry,
+    ) -> Option<&'r codepp_udl::UdlEntry> {
+        let name = old.definition.name.as_str();
+        let file = old.definition.source_path.as_deref();
+        let same_file = |e: &&codepp_udl::UdlEntry| {
+            file.is_some() && e.definition.source_path.as_deref() == file
+        };
+        let entries = registry.entries();
+        entries
+            .iter()
+            .find(|e| e.definition.name == name && same_file(e))
+            .or_else(|| registry.find_by_name(name))
+            .or_else(|| entries.iter().find(same_file))
+    }
+
+    /// Show the tab in front in its language again: re-lex the view in it
+    /// and repaint the status bar. For when what a language *is* changed
+    /// under the tab rather than which language it has, as after
+    /// [`Self::replace_udl_registry`], whose UDLs the view still paints with
+    /// the palette and rules they had before. Does nothing with no tab in
+    /// front. Like [`Self::set_tab_lang`], it lexes whatever document the
+    /// view shows, which trails the tab in front while that tab's load is
+    /// in flight.
+    pub fn reapply_active_lang<U: UiPlatform>(&self, ui: &mut U) {
+        let Some(tab) = self.active() else {
+            return;
+        };
+        ui.apply_lang(tab.lang);
+        ui.update_status(tab.lang, &tab.encoding, tab.eol, tab.byte_len);
     }
 
     /// Set the active tab's display name — File → Rename on an *untitled*
@@ -15875,6 +15995,228 @@ mod tests {
         shell.tabs[0].lang = udl_id(&shell, "Markdown (preinstalled)");
         shell.tabs[1].lang = L_CPP;
         shell
+    }
+
+    /// The preinstalled Markdown UDL's file text, under the name `name`.
+    fn udl_text_named(name: &str) -> String {
+        std::str::from_utf8(PREINSTALLED_MARKDOWN_UDL)
+            .unwrap()
+            .replacen(
+                r#"name="Markdown (preinstalled)""#,
+                &format!(r#"name="{name}""#),
+                1,
+            )
+    }
+
+    /// A UDL folder holding, per `(file, name)` pair, a copy of the
+    /// preinstalled Markdown UDL under that name. Kept by the test, so it
+    /// can be changed and scanned again.
+    fn udl_dir_with(files: &[(&str, &str)]) -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        for (file, name) in files {
+            std::fs::write(dir.path().join(file), udl_text_named(name)).unwrap();
+        }
+        dir
+    }
+
+    /// The id `registry` gave the UDL it loaded from `file`.
+    fn udl_id_of_file(registry: &codepp_udl::UdlRegistry, file: &Path) -> LangType {
+        let file = std::fs::canonicalize(file).unwrap();
+        LangType(
+            registry
+                .entries()
+                .iter()
+                .find(|e| e.definition.source_path.as_deref() == Some(file.as_path()))
+                .unwrap_or_else(|| panic!("no UDL loaded from {}", file.display()))
+                .lang_type_id,
+        )
+    }
+
+    /// The buffers `queued` announces a language change for, in order.
+    fn lang_changes(queued: &[Notification]) -> Vec<isize> {
+        queued
+            .iter()
+            .map(|n| match n {
+                Notification::LangChanged { buffer_id } => *buffer_id,
+                other => panic!("expected only NPPN_LANGCHANGED, got {other:?}"),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_rescan_moves_every_udl_tab_to_its_udls_new_id() {
+        // Saving in the UDL editor scans the folder again, and the registry
+        // numbers UDLs by the folder's sorted listing, so a new file that
+        // sorts first moves every id after it. Until Phase 5 a reload
+        // re-detected a tab's language and so put this right by accident; a
+        // reload keeps the language now, so the rescan carries the tabs over.
+        use codepp_core::lang::L_CPP;
+        let dir = udl_dir_with(&[("b.udl.xml", "Beta"), ("c.udl.xml", "Gamma")]);
+        let mut shell = shell_with_synthetic_tabs(3, Some(0));
+        shell.udl_registry = codepp_udl::UdlRegistry::scan_dir(dir.path());
+        let beta = udl_id(&shell, "Beta");
+        shell.tabs[0].lang = beta;
+        shell.tabs[1].lang = udl_id(&shell, "Gamma");
+        shell.tabs[2].lang = L_CPP;
+        // Gamma asked for while the tab's file loads: carried over, the
+        // request stands, so the landing keeps it.
+        shell.tabs[1].pending_load = Some(902);
+        shell.tabs[1].lang_requested_during_load = Some(902);
+
+        std::fs::write(dir.path().join("a.udl.xml"), udl_text_named("Alpha")).unwrap();
+        let rescanned = codepp_udl::UdlRegistry::scan_dir(dir.path());
+        // What makes the bug: Beta's old id names another UDL now.
+        assert_eq!(
+            rescanned
+                .find_by_lang_type_id(beta.as_npp_id())
+                .map(|e| e.definition.name.as_str()),
+            Some("Alpha")
+        );
+        assert!(
+            shell.replace_udl_registry(rescanned),
+            "the tab in front is in a UDL"
+        );
+
+        assert_eq!(shell.tabs[0].lang, udl_id(&shell, "Beta"));
+        assert_ne!(shell.tabs[0].lang, beta, "Beta's id moved");
+        assert_eq!(shell.tabs[1].lang, udl_id(&shell, "Gamma"));
+        assert_eq!(shell.tabs[1].lang_requested_during_load, Some(902));
+        assert_eq!(shell.tabs[2].lang, L_CPP, "a tab in no UDL is left alone");
+        // What the next session save writes for the tab: still Beta.
+        assert_eq!(
+            Shell::persisted_lang_fields(
+                shell.tabs[0].lang,
+                shell.tabs[0].path.as_deref(),
+                &shell.udl_registry
+            ),
+            (None, Some("Beta".to_string()))
+        );
+        assert!(
+            shell.take_notifications().is_empty(),
+            "nothing a plugin can see changed"
+        );
+    }
+
+    #[test]
+    fn a_rescan_asks_for_the_tab_in_front_only_when_it_is_in_a_udl() {
+        use codepp_core::lang::L_CPP;
+        let dir = udl_dir_with(&[("b.udl.xml", "Beta")]);
+        let mut shell = shell_with_synthetic_tabs(2, Some(1));
+        shell.udl_registry = codepp_udl::UdlRegistry::scan_dir(dir.path());
+        shell.tabs[0].lang = udl_id(&shell, "Beta");
+        shell.tabs[1].lang = L_CPP;
+        assert!(!shell.replace_udl_registry(codepp_udl::UdlRegistry::scan_dir(dir.path())));
+        assert_eq!(shell.tabs[0].lang, udl_id(&shell, "Beta"));
+
+        // Showing the tab in front again re-lexes the view in its language
+        // and repaints the status bar from the tab.
+        shell.active_tab = Some(0);
+        shell.tabs[0].byte_len = 42;
+        let mut ui = FakeUi::default();
+        shell.reapply_active_lang(&mut ui);
+        let beta = udl_id(&shell, "Beta");
+        assert_eq!(ui.apply_lang_calls, [beta]);
+        assert_eq!(ui.status_calls.len(), 1);
+        assert_eq!((ui.status_calls[0].0, ui.status_calls[0].3), (beta, 42));
+
+        shell.active_tab = None;
+        let mut ui = FakeUi::default();
+        shell.reapply_active_lang(&mut ui);
+        assert!(ui.apply_lang_calls.is_empty() && ui.status_calls.is_empty());
+    }
+
+    #[test]
+    fn a_udl_renamed_over_its_own_file_keeps_its_tabs() {
+        // The editor saves a renamed UDL over the file it came from, so the
+        // file is what is left to know it by.
+        let dir = udl_dir_with(&[("b.udl.xml", "Beta")]);
+        let mut shell = shell_with_synthetic_tabs(1, Some(0));
+        shell.udl_registry = codepp_udl::UdlRegistry::scan_dir(dir.path());
+        shell.tabs[0].lang = udl_id(&shell, "Beta");
+        std::fs::write(dir.path().join("b.udl.xml"), udl_text_named("Beta 2")).unwrap();
+        std::fs::write(dir.path().join("a.udl.xml"), udl_text_named("Alpha")).unwrap();
+
+        assert!(shell.replace_udl_registry(codepp_udl::UdlRegistry::scan_dir(dir.path())));
+        assert_eq!(shell.tabs[0].lang, udl_id(&shell, "Beta 2"));
+        // A plugin asking its language's name is told another one now.
+        assert_eq!(
+            lang_changes(&shell.take_notifications()),
+            [shell.tabs[0].id as isize]
+        );
+    }
+
+    #[test]
+    fn a_udls_name_outranks_its_file() {
+        // Save As writes a UDL to a new file under its old name, and the old
+        // file may come to hold another. The name is what a restart goes by.
+        let dir = udl_dir_with(&[("b.udl.xml", "Beta")]);
+        let mut shell = shell_with_synthetic_tabs(1, Some(0));
+        shell.udl_registry = codepp_udl::UdlRegistry::scan_dir(dir.path());
+        shell.tabs[0].lang = udl_id(&shell, "Beta");
+        std::fs::write(dir.path().join("b.udl.xml"), udl_text_named("Other")).unwrap();
+        std::fs::write(dir.path().join("z.udl.xml"), udl_text_named("Beta")).unwrap();
+
+        assert!(shell.replace_udl_registry(codepp_udl::UdlRegistry::scan_dir(dir.path())));
+        assert_eq!(shell.tabs[0].lang, udl_id(&shell, "Beta"));
+        assert_ne!(shell.tabs[0].lang, udl_id(&shell, "Other"));
+        assert!(shell.take_notifications().is_empty());
+    }
+
+    #[test]
+    fn two_udls_of_one_name_are_told_apart_by_their_files() {
+        let dir = udl_dir_with(&[("b1.udl.xml", "Beta"), ("b2.udl.xml", "Beta")]);
+        let (b1, b2) = (dir.path().join("b1.udl.xml"), dir.path().join("b2.udl.xml"));
+        let mut shell = shell_with_synthetic_tabs(2, Some(0));
+        shell.udl_registry = codepp_udl::UdlRegistry::scan_dir(dir.path());
+        shell.tabs[0].lang = udl_id_of_file(&shell.udl_registry, &b2);
+        shell.tabs[1].lang = udl_id_of_file(&shell.udl_registry, &b1);
+        std::fs::write(dir.path().join("a.udl.xml"), udl_text_named("Alpha")).unwrap();
+
+        assert!(shell.replace_udl_registry(codepp_udl::UdlRegistry::scan_dir(dir.path())));
+        assert_eq!(shell.tabs[0].lang, udl_id_of_file(&shell.udl_registry, &b2));
+        assert_eq!(shell.tabs[1].lang, udl_id_of_file(&shell.udl_registry, &b1));
+        assert!(shell.take_notifications().is_empty());
+    }
+
+    #[test]
+    fn a_tab_whose_udl_is_gone_takes_its_extensions_language() {
+        let dir = udl_dir_with(&[
+            (PREINSTALLED_MARKDOWN_FILENAME, "Markdown (preinstalled)"),
+            ("b.udl.xml", "Beta"),
+        ]);
+        let mut shell = shell_with_synthetic_tabs(5, Some(0));
+        shell.udl_registry = codepp_udl::UdlRegistry::scan_dir(dir.path());
+        let beta = udl_id(&shell, "Beta");
+        for tab in &mut shell.tabs {
+            tab.lang = beta;
+        }
+        shell.tabs[0].path = Some(PathBuf::from("/tmp/notes.md"));
+        // tabs[1] keeps its `.txt` path.
+        shell.tabs[2].path = None;
+        // A file's first load in flight, Beta asked for while it loads: the
+        // landing should decide, as for any first load.
+        shell.tabs[3].path = None;
+        shell.tabs[3].pending_load = Some(901);
+        shell.tabs[3].lang_requested_during_load = Some(901);
+        // An id no UDL had; no tab should hold one, but none must stay.
+        shell.tabs[4].lang = LangType(codepp_udl::UDL_LANG_TYPE_END);
+        std::fs::remove_file(dir.path().join("b.udl.xml")).unwrap();
+
+        assert!(shell.replace_udl_registry(codepp_udl::UdlRegistry::scan_dir(dir.path())));
+        let langs: Vec<LangType> = shell.tabs.iter().map(|t| t.lang).collect();
+        assert_eq!(
+            langs,
+            [
+                udl_id(&shell, "Markdown (preinstalled)"),
+                L_TEXT,
+                L_TEXT,
+                L_TEXT,
+                L_TEXT
+            ]
+        );
+        assert_eq!(shell.tabs[3].lang_requested_during_load, None);
+        let ids: Vec<isize> = shell.tabs.iter().map(|t| t.id as isize).collect();
+        assert_eq!(lang_changes(&shell.take_notifications()), ids);
     }
 
     #[test]

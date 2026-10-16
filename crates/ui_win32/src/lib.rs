@@ -1998,13 +1998,18 @@ struct Win32Ui {
     /// non-aliased-by-construction" invariant as
     /// [`Self::accel_handle`] and friends.
     ///
-    /// **Aliasing discipline.** The registry is populated once
-    /// at `Shell::new` and never mutated after — every read
-    /// through this pointer is shared, no `&mut` ever crosses
-    /// the FFI boundary via this field. When m3's editor modal
-    /// mutates the registry, the mutation must go through
-    /// `state_from_hwnd(state)` (no `Win32Ui` involvement) so
-    /// this pointer never observes a `&mut UdlRegistry`.
+    /// **Aliasing discipline.** The registry is populated at
+    /// `Shell::new` and replaced only by
+    /// `Shell::replace_udl_registry`, which `refresh_udl_registry`
+    /// calls through `state_from_hwnd` with no `Win32Ui` of its
+    /// own alive, splitting a fresh one only afterwards. The
+    /// pointer is to the field, which a replacement does not move,
+    /// so a `Win32Ui` in an outer frame — one whose modal pump
+    /// delivered the rescan — still reads the live registry. What
+    /// keeps that sound is the other half of the rule: no
+    /// `&UdlEntry` read through this pointer may outlive the call
+    /// that read it. `apply_udl_lang` and `update_status` clone
+    /// what they need and let go.
     udl_registry: *const codepp_udl::UdlRegistry,
     editor: EditorHandle,
     /// Direct-call handle for the Document Map's miniature
@@ -2301,8 +2306,8 @@ impl UiPlatform for Win32Ui {
         // `update_status` runs).
         //
         // SAFETY on `&*self.udl_registry`: same as
-        // `apply_udl_lang` — the registry is populated once at
-        // `Shell::new`, read-only from here, and outlives every
+        // `apply_udl_lang` — the registry is read-only while any
+        // `Win32Ui` is alive (see the field doc) and outlives every
         // `Win32Ui` value that captures a pointer to it.
         let lang_label = resolve_lang_label(lang, unsafe { &*self.udl_registry });
         write_status_part(
@@ -4041,16 +4046,15 @@ impl Win32Ui {
         // the outer callers' `&mut WindowState` borrow (aliasing
         // UB in `handle_close_active_tab_inner`,
         // `handle_tab_selchange`, `handle_style_config_menu`).
-        // The registry is populated once at `Shell::new` and
-        // read-only from here.
+        // The registry is read-only while a `Win32Ui` is alive.
         //
         // SAFETY: `self.udl_registry` was captured from
         // `WindowState.shell.udl_registry` at Win32Ui
         // construction. `WindowState` outlives `Win32Ui` (which
         // is Copy but only ever exists as a short-lived value
-        // during dispatch), the registry is never mutated after
-        // `Shell::new`, and we only take a shared reference
-        // for the duration of the clone.
+        // during dispatch), the registry is replaced only with no
+        // `Win32Ui` alive (see the field doc), and we only take a
+        // shared reference for the duration of the clone.
         // Clone only what we need: the style palette (Vec of 24
         // small structs) and the Arc of compiled rules (pointer
         // bump). Was `entry.definition.clone()` — that copied
@@ -7287,7 +7291,10 @@ unsafe fn append_udls_to_menu(language_menu: HMENU, registry: &codepp_udl::UdlRe
 /// Refresh the loaded UDL registry from disk after the user
 /// saves a UDL via the m3 editor. Rebuilds the Language menu's
 /// dynamic UDL section so the newly-saved UDL becomes
-/// selectable without a restart.
+/// selectable without a restart, carries every open tab's UDL
+/// over to the new registry, and shows the tab in front again
+/// when it is in a UDL, so a saved change to its palette or
+/// rules reaches the view.
 ///
 /// Contract: called on the UI thread from the main `WndProc`'s
 /// `WM_APP_UDL_REFRESH` arm ONLY. Not re-entrant with plugin
@@ -7295,16 +7302,58 @@ unsafe fn append_udls_to_menu(language_menu: HMENU, registry: &codepp_udl::UdlRe
 /// `&mut WindowState` borrow so a plugin-thread read never
 /// races.
 unsafe fn refresh_udl_registry(main_hwnd: HWND) {
-    let Some(state) = (unsafe { state_from_hwnd(main_hwnd) }) else {
-        return;
-    };
     let Some(dir) = codepp_platform::user_define_langs_dir() else {
         tracing::warn!("cannot refresh UDL registry: user_define_langs_dir unavailable");
         return;
     };
-    // Re-scan from disk. Same call `Shell::new` uses at startup.
-    state.shell.udl_registry = codepp_udl::UdlRegistry::scan_dir(&dir);
+    // Scoped so the borrow on the state has ended before the
+    // delivery below.
+    {
+        let Some(state) = (unsafe { state_from_hwnd(main_hwnd) }) else {
+            return;
+        };
+        // Re-scan from disk, the same call `Shell::new` makes at
+        // startup, and install it through the shell, which moves
+        // every open tab to its UDL's new id: the ids follow the
+        // folder's sorted listing, so a newly saved file shifts
+        // them. No `Win32Ui` is alive here; one is split below,
+        // after the replacement, because it reads the registry
+        // through a pointer taken when it is split.
+        let registry = codepp_udl::UdlRegistry::scan_dir(&dir);
+        let active_in_udl = state.shell.replace_udl_registry(registry);
+        unsafe { rebuild_udl_menu_rows(main_hwnd, state) };
+        if active_in_udl {
+            // A UDL's re-lex paints with `SCI_SETSTYLING`, and each
+            // one sends a synchronous `SCN_MODIFIED` back into
+            // `main_wnd_proc`, which would take a second
+            // `&mut WindowState` while this one is live. The guard
+            // has those arms declined, as `convert_doc_eols` does;
+            // for a style change they would only have marked a
+            // keystroke-latency sample. The flag cannot be set here,
+            // since `state_from_hwnd` would have answered `None`
+            // above; the check is the defensive form `enter`'s
+            // assert against nesting asks for, as in
+            // `convert_doc_eols`.
+            let _call_guard =
+                (!PLUGIN_CALL_ACTIVE.load(Ordering::Acquire)).then(PluginCallGuard::enter);
+            let (shell, mut ui) = state.split();
+            shell.reapply_active_lang(&mut ui);
+        }
+    }
+    // A tab whose UDL is gone, or was renamed, has its change
+    // announced; delivered with no borrow held, so a plugin's
+    // `beNotified` can call back into `NPPM_*`.
+    unsafe { fire_queued_notifications(main_hwnd) };
+}
 
+/// Replace the Language menu's flat rows of loaded UDLs with the
+/// current registry's. Split out of [`refresh_udl_registry`].
+///
+/// # Safety
+///
+/// Caller must invoke from the UI thread that owns `main_hwnd`,
+/// with `state` the window's state.
+unsafe fn rebuild_udl_menu_rows(main_hwnd: HWND, state: &WindowState) {
     // Clear the previously-appended dynamic UDL entries from the
     // Language menu. Walk from the end and delete every trailing
     // item whose command id sits in the UDL range, plus a
@@ -25617,8 +25666,12 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
             // UDL editor saved a UDL — re-scan the registry from
             // disk so the newly-saved (or updated) UDL becomes
             // selectable from the Language menu without a
-            // restart. Same-thread PostMessage from the editor's
-            // Save handler, so no aliasing concern.
+            // restart. Posted on this thread by the editor's Save
+            // handler. Another process can post it too; that costs
+            // a rescan and nothing else, since the scan reads only
+            // the real folder. Arriving inside a nested pump it is
+            // handled under the outer frame's borrow, like every
+            // other message here.
             udl_editor::WM_APP_UDL_REFRESH => {
                 refresh_udl_registry(hwnd);
                 LRESULT(0)
@@ -33240,5 +33293,144 @@ mod language_menu_guards {
             "a second caller of the shell's setter must deliver what it queues \
              too; route it through `handle_language_menu_click`"
         );
+    }
+}
+
+#[cfg(test)]
+mod udl_rescan_guards {
+    //! Source-level guards for the rescan a UDL editor save asks for. The
+    //! registry numbers UDLs by the sorted listing of `userDefineLangs/`,
+    //! so a newly saved file can move every open tab's id onto another
+    //! UDL. `Shell::replace_udl_registry` carries the tabs over; a plain
+    //! assignment to `shell.udl_registry` compiles, runs, and leaves them
+    //! on the moved ids (DESIGN.md §7.4). Nothing headless here drives the
+    //! editor's save, so the route is pinned in the source.
+
+    use super::plugin_reentry_guards::{
+        block_after, code_without_strings, fn_body, production_src,
+    };
+
+    #[test]
+    fn a_rescan_carries_the_tabs_over_through_the_shell() {
+        let body = code_without_strings(&fn_body(production_src(), "refresh_udl_registry"));
+        let replace = body
+            .find("state.shell.replace_udl_registry(registry)")
+            .expect("the rescan no longer installs its registry through the shell");
+        let split = body
+            .find("state.split()")
+            .expect("the rescan no longer shows the tab in front again");
+        assert!(
+            replace < split,
+            "a `Win32Ui` is split before the registry is replaced; it reads the \
+             registry through a pointer taken when it is split"
+        );
+        let shown = block_after(&body, "if active_in_udl");
+        let at = |pattern: &str| {
+            shown
+                .find(pattern)
+                .unwrap_or_else(|| panic!("the re-show of the tab in front lost `{pattern}`"))
+        };
+        // The named binding is what holds the guard to the end of the
+        // block; `let _ =` would drop it at once and leave the re-lex
+        // unguarded.
+        let guard = at("let _call_guard =");
+        assert!(
+            shown[guard..].contains("PluginCallGuard::enter"),
+            "the re-show no longer arms `PluginCallGuard`"
+        );
+        let shown_split = at("let (shell, mut ui) = state.split();");
+        let reapply = at("shell.reapply_active_lang(&mut ui);");
+        assert!(
+            guard < reapply,
+            "the re-lex runs unguarded; each SCI_SETSTYLING re-enters the window \
+             procedure, which then takes a second `&mut WindowState`"
+        );
+        assert!(
+            shown_split < reapply,
+            "the re-show uses a `Win32Ui` split before it"
+        );
+        let scope = block_after(&body, "\n    {\n");
+        assert!(
+            scope.contains("state.shell.replace_udl_registry(registry)"),
+            "the replacement left the scope that holds the state"
+        );
+        assert!(
+            scope.contains("rebuild_udl_menu_rows(main_hwnd, state)"),
+            "the rescan no longer rebuilds the Language menu's UDL rows"
+        );
+        assert!(
+            !scope.contains("fire_queued_notifications"),
+            "the delivery runs inside the state borrow, where a plugin's \
+             NPPM_* from beNotified is declined"
+        );
+        assert!(
+            body.contains("fire_queued_notifications(main_hwnd)"),
+            "the rescan no longer delivers the language changes it queues"
+        );
+    }
+
+    /// Whether a line of code could write a `udl_registry`: assigns one,
+    /// or takes it `&mut` or hands it to `std::mem`. Line-based, so a
+    /// `&mut` on the line of a mere read is refused too; the crate has
+    /// none, and a false alarm is the cheap direction.
+    fn writes_the_registry(line: &str) -> bool {
+        if !line.contains("udl_registry") {
+            return false;
+        }
+        if line.contains("&mut") || line.contains("&raw mut") || line.contains("mem::") {
+            return true;
+        }
+        line.match_indices("udl_registry").any(|(i, m)| {
+            let rest = line[i + m.len()..].trim_start();
+            rest.starts_with('=') && !rest.starts_with("==")
+        })
+    }
+
+    #[test]
+    fn the_write_check_tells_a_write_from_a_read() {
+        for write in [
+            "state.shell.udl_registry = registry;",
+            "s.udl_registry=codepp_udl::UdlRegistry::new();",
+            "std::mem::swap(&mut s.udl_registry, &mut other);",
+            "let old = mem::replace(&mut shell.udl_registry, new);",
+            "    &mut state.shell.udl_registry,",
+            "let p = &raw mut state.shell.udl_registry;",
+        ] {
+            assert!(writes_the_registry(write), "not seen as a write: {write}");
+        }
+        for read in [
+            "udl_registry: &raw const self.shell.udl_registry,",
+            "let active_in_udl = state.shell.replace_udl_registry(registry);",
+            "append_udls_to_menu(language_menu, &state.shell.udl_registry);",
+            "if shell.udl_registry == other {",
+        ] {
+            assert!(!writes_the_registry(read), "seen as a write: {read}");
+        }
+    }
+
+    #[test]
+    fn nothing_else_writes_the_registry() {
+        let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/src");
+        let mut read = 0;
+        for entry in std::fs::read_dir(dir).expect("the crate's sources are readable") {
+            let path = entry.unwrap().path();
+            if path.extension().and_then(|e| e.to_str()) != Some("rs") {
+                continue;
+            }
+            let src = std::fs::read_to_string(&path).unwrap();
+            let production = src.split("#[cfg(test)]").next().unwrap_or("");
+            for line in code_without_strings(production).lines() {
+                assert!(
+                    !writes_the_registry(line),
+                    "{} writes the UDL registry past the shell (`{}`); install a new \
+                     one with `Shell::replace_udl_registry`, which carries the open \
+                     tabs over",
+                    path.display(),
+                    line.trim()
+                );
+            }
+            read += 1;
+        }
+        assert!(read > 5, "the check read only {read} source files");
     }
 }
