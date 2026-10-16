@@ -435,28 +435,15 @@ pub trait UiPlatform {
     /// adds the constant-width path.
     fn set_line_number_width_mode(&mut self, mode: i32) -> bool;
 
-    /// Look up the keyboard shortcut bound to `cmd_id` in the
-    /// host's accelerator table. Returns the `ShortcutKey`
-    /// (Ctrl/Alt/Shift bits + virtual key) when a binding
-    /// exists; `None` for unbound cmd ids. Drives
-    /// `NPPM_GETSHORTCUTBYCMDID`.
-    ///
-    /// Win32 answers from its accelerator table. The default,
-    /// `None`, is what a backend without one answers. A plugin
-    /// command's shortcut is answered from the shell's shortcut
-    /// cache before this is asked, on every backend.
-    fn shortcut_for_cmd_id(&self, _cmd_id: i32) -> Option<codepp_plugin_host::ShortcutKey> {
-        None
-    }
-
-    /// Remove every accelerator-table binding for `cmd_id`.
-    /// Returns `true` if at least one binding was removed,
-    /// `false` if the cmd id had no binding (table left
-    /// unchanged in that case). Drives
-    /// `NPPM_REMOVESHORTCUTBYCMDID`. Win32 strips the binding from
-    /// its accelerator table; the default, `false`, is what a backend
-    /// without one answers. A plugin command's cached shortcut is
-    /// removed by the shell as well, on every backend.
+    /// Remove every accelerator-table binding for the plugin command
+    /// `cmd_id`. Returns `true` if at least one binding was removed,
+    /// `false` if the cmd id had no binding (table left unchanged in
+    /// that case). Drives `NPPM_REMOVESHORTCUTBYCMDID`, which asks this
+    /// only for a plugin command id, as Notepad++ answers it for plugin
+    /// commands only. Win32 strips the binding from its accelerator
+    /// table; the default, `false`, is what a backend without one
+    /// answers. The command's cached shortcut is removed by the shell
+    /// as well, on every backend.
     fn remove_shortcut_for_cmd_id(&mut self, _cmd_id: i32) -> bool {
         false
     }
@@ -484,10 +471,11 @@ pub trait UiPlatform {
     }
 
     /// Add a toolbar button for the plugin command `cmd_id`, showing
-    /// the plugin's image. Drives `NPPM_ADDTOOLBARICON`. The image is
-    /// an `HICON` on Win32, an `NSImage*` on Cocoa and a `GdkPixbuf*`
-    /// on GTK. The default, `false`, is what a backend without plugin
-    /// toolbar buttons answers.
+    /// the plugin's image. Drives `NPPM_ADDTOOLBARICON`, which asks
+    /// this only for a plugin command id. The image is an `HICON` on
+    /// Win32, an `NSImage*` on Cocoa and a `GdkPixbuf*` on GTK. The
+    /// default, `false`, is what a backend without plugin toolbar
+    /// buttons answers.
     fn add_toolbar_icon(&mut self, _cmd_id: i32, _hicon: codepp_plugin_host::Hwnd) -> bool {
         false
     }
@@ -3780,7 +3768,7 @@ impl Shell {
         match self.plugins.commit_load(pending, result) {
             Ok(ready) => ready,
             Err(e) => {
-                tracing::warn!(idx = pending.idx, error = ?e, "plugin load failed");
+                tracing::warn!(idx = pending.idx(), error = ?e, "plugin load failed");
                 None
             }
         }
@@ -10411,7 +10399,7 @@ impl<U: UiPlatform> HostServices for HostBridge<'_, U> {
     fn alloc_supported(&self) -> bool {
         // Code++ implements `NPPM_ALLOCATECMDID` and
         // `NPPM_ALLOCATEMARKER` — the cmd-id pool is
-        // 60_000..65_500 (5500 ids), the marker pool is 25..32
+        // 61_000..65_500 (4500 ids), the marker pool is 25..32
         // (seven markers above the bookmark slot). Plugins
         // gating on this can take the allocating path.
         true
@@ -10572,26 +10560,22 @@ impl<U: UiPlatform> HostServices for HostBridge<'_, U> {
     }
 
     fn shortcut_for_cmd_id(&self, cmd_id: i32) -> Option<codepp_plugin_host::ShortcutKey> {
-        // Plugin-band ids answer from the persistent shortcut cache
-        // — the cross-platform authority, and the only one on
-        // GTK/Cocoa where the UiPlatform default returns `None`.
-        // Built-in ids keep the platform answer (Win32's live
-        // accelerator-table introspection).
-        if cmd_id >= codepp_plugin_host::PLUGIN_CMD_ID_BASE {
-            return self.shell.plugin_shortcut_for_cmd_id(cmd_id);
-        }
-        self.ui.shortcut_for_cmd_id(cmd_id)
+        // From the persistent shortcut cache, the cross-platform
+        // authority, which knows plugin commands only. The dispatcher
+        // asks for a plugin command id only.
+        self.shell.plugin_shortcut_for_cmd_id(cmd_id)
     }
 
     fn remove_shortcut_for_cmd_id(&mut self, cmd_id: i32) -> bool {
-        // Plugin-band ids: drop the persisted cache entry (which is
-        // what the fire path consults on every backend), then let
-        // the platform strip any live accelerator too (Win32's
-        // HACCEL entry; a no-op default elsewhere). Either half
-        // counting as "removed" matches the message's contract —
-        // the binding no longer fires.
-        let removed_store = cmd_id >= codepp_plugin_host::PLUGIN_CMD_ID_BASE
-            && self.shell.remove_plugin_shortcut_by_cmd_id(cmd_id);
+        // `cmd_id` is a plugin command id: the dispatcher refuses any
+        // other, so no plugin can strip one of Code++'s own shortcuts.
+        //
+        // Drop the persisted cache entry (which is what the fire path
+        // consults on every backend), then let the platform strip any
+        // live accelerator too (Win32's HACCEL entry; a no-op default
+        // elsewhere). Either half counting as "removed" matches the
+        // message's contract — the binding no longer fires.
+        let removed_store = self.shell.remove_plugin_shortcut_by_cmd_id(cmd_id);
         let removed = self.ui.remove_shortcut_for_cmd_id(cmd_id) || removed_store;
         // Queue NPPN_SHORTCUTREMAPPED only on a real removal —
         // a no-op call (cmd_id had no binding) is silent. The
@@ -10612,6 +10596,9 @@ impl<U: UiPlatform> HostServices for HostBridge<'_, U> {
     }
 
     fn add_toolbar_icon(&mut self, cmd_id: i32, hicon: codepp_plugin_host::Hwnd) -> bool {
+        // `cmd_id` is a plugin command id: the dispatcher refuses any
+        // other, so Win32 never adds a button that runs something else.
+        // GTK and Cocoa take only a loaded plugin's command anyway.
         self.ui.add_toolbar_icon(cmd_id, hicon)
     }
 
@@ -12030,6 +12017,13 @@ mod tests {
         /// is called — `NPPM_MAKECURRENTBUFFERDIRTY` tests assert
         /// the shell reached the UI method once per plugin call.
         mark_dirty_calls: usize,
+        /// Every `remove_shortcut_for_cmd_id` call's id, so the
+        /// `NPPM_REMOVESHORTCUTBYCMDID` tests can tell the ids the
+        /// shell passed on from the ones it refused.
+        shortcut_removals_asked: Vec<i32>,
+        /// Every `add_toolbar_icon` call's command id, for the same
+        /// distinction in the `NPPM_ADDTOOLBARICON` tests.
+        toolbar_buttons: Vec<i32>,
     }
 
     impl UiPlatform for FakeUi {
@@ -12268,18 +12262,11 @@ mod tests {
             // already filtered by `matches!` before calling.
             true
         }
-        #[cfg(target_os = "windows")]
-        fn shortcut_for_cmd_id(&self, _cmd_id: i32) -> Option<codepp_plugin_host::ShortcutKey> {
-            // FakeUi has no accelerator table — tests that
-            // exercise the lookup path exercise the dispatcher
-            // mock instead.
-            None
-        }
-        #[cfg(target_os = "windows")]
-        fn remove_shortcut_for_cmd_id(&mut self, _cmd_id: i32) -> bool {
-            // Same rationale as `shortcut_for_cmd_id` above —
-            // FakeUi has nothing to remove from. Always reports
-            // "nothing was removed."
+        fn remove_shortcut_for_cmd_id(&mut self, cmd_id: i32) -> bool {
+            // FakeUi has no accelerator table, so nothing is removed;
+            // it records what it was asked, so a test can tell an id
+            // the shell refused from one it passed on.
+            self.shortcut_removals_asked.push(cmd_id);
             false
         }
         #[cfg(target_os = "windows")]
@@ -12294,11 +12281,11 @@ mod tests {
             // shape without involving the shell layer.
             true
         }
-        #[cfg(target_os = "windows")]
-        fn add_toolbar_icon(&mut self, _cmd_id: i32, _hicon: codepp_plugin_host::Hwnd) -> bool {
-            // FakeUi has no toolbar — same rationale as the
-            // modeless-dialog mock above. The dispatcher mock
-            // exercises the success/failure surface.
+        fn add_toolbar_icon(&mut self, cmd_id: i32, _hicon: codepp_plugin_host::Hwnd) -> bool {
+            // FakeUi has no toolbar; it records the command and
+            // answers success, so a test can tell an id the shell
+            // refused from one it passed on.
+            self.toolbar_buttons.push(cmd_id);
             true
         }
         // `is_dark_mode_enabled` / `dark_mode_colors`: FakeUi
@@ -14027,8 +14014,7 @@ mod tests {
         let mut ui = FakeUi::default();
 
         const NPPM_MENUCOMMAND: u32 = (0x0400 + 1000) + 48;
-        // IDM_FILE_OPEN = IDM_BASE(40000) + 1000 + 2 = 41002.
-        const IDM_FILE_OPEN: isize = 41002;
+        const IDM_FILE_OPEN: isize = codepp_plugin_host::idm::IDM_FILE_OPEN as isize;
 
         let r = unsafe {
             shell.dispatch_plugin_message(
@@ -14056,8 +14042,7 @@ mod tests {
         let mut ui = FakeUi::default();
 
         const NPPM_SETMENUITEMCHECK: u32 = (0x0400 + 1000) + 40;
-        // IDM_VIEW_WRAP = IDM_BASE + 4000 + 7 = 44007.
-        const IDM_VIEW_WRAP: usize = 44007;
+        const IDM_VIEW_WRAP: usize = codepp_plugin_host::idm::IDM_VIEW_WRAP as usize;
 
         let checked_r = unsafe {
             shell.dispatch_plugin_message(
@@ -14679,7 +14664,7 @@ mod tests {
         while let Some(pending) = shell.next_plugin_to_load() {
             let result = codepp_plugin_host::execute_load(&pending, npp_data, None);
             if shell.commit_plugin_load(&pending, result).is_some() {
-                loaded.push(pending.idx);
+                loaded.push(pending.idx());
             }
         }
         loaded
@@ -16095,9 +16080,71 @@ mod tests {
         );
     }
 
+    /// The plugin shortcut and toolbar messages act on plugin command
+    /// ids only, as Notepad++'s shortcut messages do. Any other id is
+    /// one of Code++'s own commands, or names one by its low 16 bits on
+    /// Win32, and until Phase 5 reached the backend: a plugin could
+    /// strip one of Code++'s shortcuts, or add a toolbar button that
+    /// ran one of its commands (DESIGN.md §7.4). The dispatcher refuses
+    /// them, so the backend is never asked; this runs that end to end,
+    /// through the shell's bridge.
+    #[test]
+    fn shortcut_and_toolbar_messages_take_plugin_commands_only() {
+        use codepp_plugin_host::dispatch::{NPPM_ADDTOOLBARICON, NPPM_REMOVESHORTCUTBYCMDID};
+        use codepp_plugin_host::ffi::ToolbarIcons;
+        use codepp_plugin_host::idm::{IDM_EDIT_AUTOCOMPLETE, IDM_FILE_NEW};
+        use codepp_plugin_host::{PLUGIN_ALLOC_CMD_BASE, PLUGIN_CMD_ID_BASE, PLUGIN_CMD_ID_LIMIT};
+        let mut shell = shell_with_synthetic_tabs(1, Some(0));
+        let mut ui = FakeUi::default();
+        // Any non-null icon handle: the dispatcher refuses or passes
+        // on before an icon is looked at.
+        let mut icon = 0u8;
+        let icons = ToolbarIcons {
+            h_toolbar_bmp: std::ptr::null_mut(),
+            h_toolbar_icon: (&raw mut icon).cast(),
+        };
+        let icons = &raw const icons as isize;
+        for id in [
+            // Code++'s File → Save on Win32, by number and by its low 16
+            // bits.
+            1000,
+            65_536 + 1000,
+            IDM_FILE_NEW,
+            IDM_EDIT_AUTOCOMPLETE,
+            PLUGIN_CMD_ID_LIMIT,
+        ] {
+            let wparam = usize::try_from(id).expect("a positive id");
+            let removed = plugin_call(&mut shell, &mut ui, NPPM_REMOVESHORTCUTBYCMDID, wparam, 0);
+            assert_eq!(removed, 0, "{id}");
+            let added = plugin_call(&mut shell, &mut ui, NPPM_ADDTOOLBARICON, wparam, icons);
+            assert_eq!(added, 0, "{id}");
+        }
+        assert!(
+            ui.shortcut_removals_asked.is_empty(),
+            "the backend was asked to remove {:?}",
+            ui.shortcut_removals_asked
+        );
+        assert!(
+            ui.toolbar_buttons.is_empty(),
+            "the backend was asked for buttons for {:?}",
+            ui.toolbar_buttons
+        );
+
+        let plugin_ids = [PLUGIN_CMD_ID_BASE, PLUGIN_ALLOC_CMD_BASE];
+        for id in plugin_ids {
+            let wparam = usize::try_from(id).expect("a positive id");
+            plugin_call(&mut shell, &mut ui, NPPM_REMOVESHORTCUTBYCMDID, wparam, 0);
+            let added = plugin_call(&mut shell, &mut ui, NPPM_ADDTOOLBARICON, wparam, icons);
+            assert_eq!(added, 1, "{id}");
+        }
+        assert_eq!(ui.shortcut_removals_asked, plugin_ids);
+        assert_eq!(ui.toolbar_buttons, plugin_ids);
+    }
+
     #[test]
     fn nppm_getnbuserlang_counts_the_loaded_user_defined_languages() {
-        use codepp_plugin_host::dispatch::{IDM_LANG_USER, NPPM_GETNBUSERLANG};
+        use codepp_plugin_host::dispatch::NPPM_GETNBUSERLANG;
+        use codepp_plugin_host::idm::IDM_LANG_USER;
         let mut shell = shell_with_synthetic_tabs(1, Some(0));
         let mut ui = FakeUi::default();
         shell.udl_registry = codepp_udl::UdlRegistry::new();
@@ -16124,7 +16171,8 @@ mod tests {
         // registry's order, which the Language menus list them in — how a
         // Notepad++ plugin switches a buffer to a UDL.
         use codepp_core::lang::L_CPP;
-        use codepp_plugin_host::dispatch::{IDM_LANG_USER, NPPM_MENUCOMMAND};
+        use codepp_plugin_host::dispatch::NPPM_MENUCOMMAND;
+        use codepp_plugin_host::idm::IDM_LANG_USER;
         let mut shell = shell_with_synthetic_tabs(2, Some(1));
         let mut ui = FakeUi::default();
         shell.udl_registry = udl_registry_with(&["Second"]);

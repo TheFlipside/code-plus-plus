@@ -476,6 +476,12 @@ typedef struct sessionInfo_ {
  *     HICON's lifetime; `ImageList_ReplaceIcon` internally
  *     copies the bits, so the plugin can free its handle
  *     immediately after this call returns.
+ *     wParam must be a plugin command id: any other id, a
+ *     Notepad++ command's included, returns FALSE, where
+ *     Notepad++ adds the button. On Windows that is one of a
+ *     plugin's menu commands or an NPPM_ALLOCATECMDID id; on
+ *     macOS and Linux, one of the loaded plugins' own menu
+ *     commands only (below).
  *     On macOS hToolbarIcon is an NSImage*, which the host
  *     retains, so the plugin may release its own reference once
  *     this returns. wParam must be one of the loaded plugins'
@@ -658,11 +664,13 @@ typedef struct CommunicationInfo_ {
 /* v2: BOOL — current status bar hidden state. */
 #define NPPM_ISSTATUSBARHIDDEN            (NPPMSG + 75)
 
-/* v3: look up the keyboard shortcut bound to a built-in command
- *     id. wParam: cmd id. lParam: ShortcutKey* OUT — host
+/* v3: look up the keyboard shortcut bound to a plugin's menu
+ *     command. wParam: cmd id. lParam: ShortcutKey* OUT — host
  *     writes the binding's Ctrl/Alt/Shift bits + virtual key.
  *     Returns: BOOL — TRUE if a binding exists, FALSE
- *     otherwise (out-buffer untouched on FALSE). */
+ *     otherwise (out-buffer untouched on FALSE). Any other id,
+ *     a built-in command's included, returns FALSE, as in
+ *     Notepad++. */
 #define NPPM_GETSHORTCUTBYCMDID           (NPPMSG + 76)
 /* v1: open the file at lParam (TCHAR*). */
 #define NPPM_DOOPEN                       (NPPMSG + 77)
@@ -687,7 +695,7 @@ typedef struct CommunicationInfo_ {
  *     Returns: TRUE on success (plugin then uses ids
  *             `*lParam .. *lParam + wParam`),
  *             FALSE on bad args (count <= 0, NULL out) or pool
- *             exhaustion. Code++ pool: 60_000..65_500 (5500 ids).
+ *             exhaustion. Code++ pool: 61_000..65_500 (4500 ids).
  *             Allocations are durable for the host's lifetime. */
 #define NPPM_ALLOCATECMDID                (NPPMSG + 81)
 /* v3: reserve `wParam` consecutive Scintilla marker numbers.
@@ -753,21 +761,25 @@ typedef struct CommunicationInfo_ {
  *     wParam / lParam: unused. Code++ has no auto-update; the
  *     call is unconditionally a no-op. */
 #define NPPM_DISABLEAUTOUPDATE            (NPPMSG + 95)
-/* v3: remove every accelerator-table binding for the given
- *     cmd id.
+/* v3: remove every keyboard binding for the given plugin menu
+ *     command.
  *     wParam: cmd id whose binding to drop.
  *     lParam: unused.
  *     Returns: TRUE if a binding existed and was removed, FALSE
- *             otherwise (unknown cmd id, or no binding to
- *             remove). After a successful REMOVE, calling
- *             NPPM_GETSHORTCUTBYCMDID for the same cmd id
- *             returns FALSE — the binding is gone from the live
- *             accelerator table. Win32 has no in-place mutation
- *             API, so the host implements REMOVE as
- *             copy → filter → create-new → destroy-old → swap
- *             on the HACCEL it stores; the message pump reads
- *             the live handle on every iteration so the change
- *             takes effect on the very next keystroke. */
+ *             otherwise (unknown cmd id, or no binding to remove). It
+ *             acts on plugin commands only, as Notepad++'s does; for
+ *             any other id, a built-in command's included, it changes
+ *             nothing and returns FALSE, where Notepad++ returns TRUE
+ *             for any id but 0, whether or not a binding was removed,
+ *             so a plugin cannot rely on either answer. After a
+ *             successful REMOVE, NPPM_GETSHORTCUTBYCMDID for the same
+ *             cmd id returns FALSE, and the binding no longer fires. On
+ *             Windows the host also rebuilds its accelerator table
+ *             without it — Win32 has no in-place mutation API, so that
+ *             is copy → filter → create-new → destroy-old → swap on the
+ *             HACCEL it stores — and the message pump reads the live
+ *             handle on every iteration, so the change takes effect on
+ *             the very next keystroke. */
 #define NPPM_REMOVESHORTCUTBYCMDID        (NPPMSG + 96)
 /* v3: returns the per-user plugins directory (parent of every
  *     plugin subdirectory) into a plugin-allocated wide buffer.

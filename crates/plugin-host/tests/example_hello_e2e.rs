@@ -28,6 +28,8 @@
 //! `cargo build --workspace` produces but `cargo test -p
 //! codepp-plugin-host` does not. Run after a workspace build:
 //! `cargo test -p codepp-plugin-host --test example_hello_e2e -- --ignored`.
+//! A test fails, rather than skips, when the library is not there: a run
+//! that reaches an ignored test asked for it.
 
 #![cfg(target_os = "linux")]
 
@@ -163,30 +165,29 @@ extern "C" fn mock_dispatch(hwnd: *mut c_void, msg: u32, wparam: usize, lparam: 
     0
 }
 
-/// Locate `libexample_hello.so` under the workspace `target/<profile>/`.
-fn built_plugin() -> Option<PathBuf> {
-    // CARGO_MANIFEST_DIR = .../crates/plugin-host; the workspace target
-    // dir is two levels up. Try both debug and release profiles.
-    let ws = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .parent()?
-        .parent()?
-        .to_path_buf();
-    for profile in ["debug", "release"] {
-        let p = ws.join("target").join(profile).join("libexample_hello.so");
-        if p.exists() {
-            return Some(p);
-        }
-    }
-    None
+/// `libexample_hello.so`, where a build with this test binary's target
+/// directory and profile puts it: beside the `deps` folder the test
+/// binary is in.
+fn built_plugin() -> PathBuf {
+    let exe = std::env::current_exe().expect("the test binary's path");
+    let profile = exe
+        .parent()
+        .and_then(std::path::Path::parent)
+        .expect("the test binary is in <target>/<profile>/deps");
+    let so = profile.join("libexample_hello.so");
+    assert!(
+        so.exists(),
+        "{} is not built: run `cargo build --workspace` first, in the tests' \
+         profile (`--release` for a release run)",
+        so.display()
+    );
+    so
 }
 
 #[test]
 #[ignore = "needs `cargo build --workspace` to produce libexample_hello.so first"]
 fn example_hello_inserts_via_the_dispatch_pipeline() {
-    let Some(so) = built_plugin() else {
-        eprintln!("skipping: libexample_hello.so not built (run `cargo build --workspace`)");
-        return;
-    };
+    let so = built_plugin();
 
     // Stage into the `<dir>/<stem>.so` layout discovery requires.
     let tmp = tempfile::tempdir().unwrap();
@@ -279,10 +280,7 @@ fn example_hello_inserts_via_the_dispatch_pipeline() {
 #[test]
 #[ignore = "needs `cargo build --workspace` to produce libexample_hello.so first"]
 fn example_hello_resolves_the_closing_path_from_inside_file_before_close() {
-    let Some(so) = built_plugin() else {
-        eprintln!("skipping: libexample_hello.so not built (run `cargo build --workspace`)");
-        return;
-    };
+    let so = built_plugin();
     let tmp = tempfile::tempdir().unwrap();
     let plugin_dir = tmp.path().join("example_hello");
     std::fs::create_dir_all(&plugin_dir).unwrap();

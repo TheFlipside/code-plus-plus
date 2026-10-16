@@ -40,6 +40,7 @@ pub mod dispatch;
 pub mod docking;
 pub mod ffi;
 pub mod host;
+pub mod idm;
 pub mod menu_checks;
 pub mod plugin_limits;
 
@@ -73,9 +74,9 @@ pub use dispatch::{
 };
 
 pub use host::{
-    execute_load, LoadNotifications, LoadedPlugin, PendingLoad, PluginAdminEntry, PluginHost,
-    PluginInfo, PluginReady, PLUGIN_ALLOC_CMD_BASE, PLUGIN_ALLOC_CMD_LIMIT,
-    PLUGIN_ALLOC_MARKER_BASE, PLUGIN_ALLOC_MARKER_LIMIT, PLUGIN_CMD_ID_BASE,
+    execute_load, is_plugin_cmd_id, LoadNotifications, LoadedPlugin, PendingLoad, PluginAdminEntry,
+    PluginHost, PluginInfo, PluginReady, PLUGIN_ALLOC_CMD_BASE, PLUGIN_ALLOC_CMD_LIMIT,
+    PLUGIN_ALLOC_MARKER_BASE, PLUGIN_ALLOC_MARKER_LIMIT, PLUGIN_CMD_ID_BASE, PLUGIN_CMD_ID_LIMIT,
 };
 
 pub use menu_checks::PluginMenuChecks;

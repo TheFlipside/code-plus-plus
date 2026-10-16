@@ -171,8 +171,9 @@ impl PluginCommand {
     /// # Safety
     ///
     /// Call on the UI thread, as the Notepad++ ABI requires, while the
-    /// `PluginHost` the command came from is alive — plugins are never
-    /// unloaded before it drops, so its library is mapped until then.
+    /// `PluginHost` the command came from is alive. Its library is
+    /// mapped at least that long; today, for the rest of the process,
+    /// since a library is never unmapped once it is mapped.
     pub unsafe fn run(self) {
         let _calling = CallingPlugin::enter(self.owner);
         // SAFETY: forwarded from the caller; `func` takes no arguments.
@@ -221,9 +222,10 @@ impl PluginMessageProc {
     /// # Safety
     ///
     /// Call on the UI thread while the `PluginHost` this came from is
-    /// alive — plugins are never unloaded before it drops. `wparam` and
-    /// `lparam` must be valid for whatever `msg` means to the plugin: a
-    /// pointer passed in `lparam` must stay live for the call.
+    /// alive: its library is mapped at least that long, and today for
+    /// the rest of the process. `wparam` and `lparam` must be valid for
+    /// whatever `msg` means to the plugin: a pointer passed in `lparam`
+    /// must stay live for the call.
     #[must_use]
     pub unsafe fn send(self, msg: u32, wparam: usize, lparam: isize) -> isize {
         let _calling = CallingPlugin::enter(self.owner);

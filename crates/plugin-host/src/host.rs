@@ -16,6 +16,7 @@
 //! not care about) and `std::panic::catch_unwind`, with no OS-specific
 //! code. Unconditional since Phase 5's GTK/Linux host port.
 
+use std::mem::ManuallyDrop;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
 
@@ -209,27 +210,24 @@ enum PluginState {
     Failed(String),
 }
 
-/// State of a successfully loaded plugin. Holds the `DynLib` (drops
-/// `FreeLibrary` at shutdown), the resolved entry-point function
-/// pointers, and the cached `FuncItem` array.
+/// State of a successfully loaded plugin: the resolved entry-point
+/// function pointers and the cached `FuncItem` array.
+///
+/// It holds no handle to the library. A library is never unmapped
+/// once it is mapped ([`keep_mapped`]), so the entry points stay valid
+/// for the rest of the process, and dropping a `LoadedPlugin` unmaps
+/// nothing: not when the host drops it, not when
+/// [`PluginHost::commit_load`] refuses it, and not when a backend loses
+/// it on the way there.
 ///
 /// Public only because it travels from [`execute_load`] to
 /// [`PluginHost::commit_load`] through the caller, which is what lets
 /// the load itself run with no host borrow held — its fields stay
 /// private.
 pub struct LoadedPlugin {
-    /// The `DynLib`'s job is to keep the underlying DLL mapped for
-    /// as long as the plugin is loaded. Clippy does not count `Drop`
-    /// as a field-read, so the field appears unread to dead-code
-    /// analysis; the allow attribute documents the intentional
-    /// ownership.
-    ///
-    /// **Its `Drop` — which would `FreeLibrary` — is deliberately
-    /// never reached.** `PluginHost::drop` destructures this struct
-    /// and `mem::forget`s the library; see that impl for why
-    /// unloading a plugin at teardown crashes the host.
-    #[allow(dead_code)]
-    lib: DynLib,
+    /// The load this is the outcome of, so [`PluginHost::commit_load`]
+    /// files it under that load's plugin and no other.
+    load: PendingLoad,
     set_info: SetInfoFn,
     get_name: GetNameFn,
     get_funcs_array: GetFuncsArrayFn,
@@ -252,27 +250,56 @@ pub struct LoadedPlugin {
     name: String,
 }
 
-/// First menu-command id assigned to a plugin's `FuncItem`. The
-/// numeric range starts well above any plausible host-built-in id
-/// (Code++'s File menu uses 1000-series ids; Notepad++'s `IDM_BASE`
-/// is 40000) so plugin cmds never collide with the host's `WM_COMMAND`
-/// handlers in either ABI.
-pub const PLUGIN_CMD_ID_BASE: i32 = 50_000;
+/// First menu-command id assigned to a plugin's `FuncItem`.
+///
+/// A plugin can name any command id in `NPPM_MENUCOMMAND`,
+/// `NPPM_SETMENUITEMCHECK` and the shortcut messages, so plugin
+/// commands share one number space with Code++'s own commands and
+/// with Notepad++'s. This range and the allocation pool after it
+/// clear both. Code++'s own command ids stay below 5000. Notepad++'s
+/// menu commands count from its `IDM`, 40000, and end at 49001, and
+/// above those it numbers two blocks of its own, each with room to
+/// grow: its auto-completion and tab-switching commands, 50000 to
+/// 50020 (`IDCMD` to `IDCMD_LIMIT` in its `resource.h`), and its
+/// Scintilla key commands, 60000 to 60030 (`IDSCINTILLA` to
+/// `IDSCINTILLA_LIMIT`). The range starts a thousand above the first
+/// block and ends where the second begins.
+///
+/// Until Phase 5 it began at 50000, so `NPPM_MENUCOMMAND` with
+/// Notepad++'s function completion ran the first loaded plugin's
+/// first command (DESIGN.md §7.4). No file Code++ writes holds these
+/// numbers: `shortcuts.xml` and `session.xml` name a plugin command
+/// by its module and its `FuncItem` index.
+pub const PLUGIN_CMD_ID_BASE: i32 = 51_000;
 
-/// First plugin-allocatable command id. Distinct from
-/// [`PLUGIN_CMD_ID_BASE`] so menu-driven plugin commands and
-/// programmatically-allocated ones can't collide. Drives
-/// `NPPM_ALLOCATECMDID`. The 10 000-id gap above
-/// `PLUGIN_CMD_ID_BASE` accommodates 500+ plugins each
-/// contributing 20 menu items before the `FuncItem` range would
-/// reach the allocator base.
-pub const PLUGIN_ALLOC_CMD_BASE: i32 = 60_000;
+/// First id past the `FuncItem` range: 9000 ids, for every plugin a
+/// session loads. A load whose items would not fit fails
+/// ([`execute_load`]), so the range never reaches Notepad++'s
+/// Scintilla key commands at 60000 or the allocation pool.
+pub const PLUGIN_CMD_ID_LIMIT: i32 = 60_000;
 
-/// First id past the plugin-allocatable command range. Sized so
-/// `PLUGIN_ALLOC_CMD_LIMIT - PLUGIN_ALLOC_CMD_BASE` (5500 ids)
-/// is comfortably above any plausible plugin's needs and stays
-/// well clear of `u16::MAX` where Win32 `WM_COMMAND` IDs live.
+/// First plugin-allocatable command id. Drives `NPPM_ALLOCATECMDID`.
+/// A thousand above Notepad++'s Scintilla key commands (see
+/// [`PLUGIN_CMD_ID_BASE`]), and apart from the `FuncItem` range so a
+/// plugin's menu commands and its allocated ids cannot collide.
+pub const PLUGIN_ALLOC_CMD_BASE: i32 = 61_000;
+
+/// First id past the plugin-allocatable command range: 4500 ids,
+/// comfortably above any plausible plugin's needs, and below
+/// `u16::MAX`, since a Win32 `WM_COMMAND` carries its id in 16 bits.
 pub const PLUGIN_ALLOC_CMD_LIMIT: i32 = 65_500;
+
+/// Whether `id` is a plugin command id: one a plugin's `FuncItem` was
+/// given, or one `NPPM_ALLOCATECMDID` can hand out. Every other id is
+/// Code++'s or Notepad++'s, which a host must not answer as a
+/// plugin's. A plugin may name any number in a message, so this is
+/// how a host tells "a plugin's command" from "a different command
+/// that a plugin named" before acting on either.
+#[must_use]
+pub fn is_plugin_cmd_id(id: i32) -> bool {
+    (PLUGIN_CMD_ID_BASE..PLUGIN_CMD_ID_LIMIT).contains(&id)
+        || (PLUGIN_ALLOC_CMD_BASE..PLUGIN_ALLOC_CMD_LIMIT).contains(&id)
+}
 
 /// First plugin-allocatable Scintilla marker number. Marker 24
 /// is reserved for bookmarks (`NPPM_GETBOOKMARKID`); markers
@@ -294,20 +321,22 @@ pub const PLUGIN_ALLOC_MARKER_LIMIT: i32 = 32;
 pub struct PluginHost {
     /// Every discovered plugin. **Entries are never removed and a
     /// loaded plugin is never unloaded** — not while the host lives,
-    /// and not by the host's own drop either, which deliberately
-    /// leaks the libraries rather than `FreeLibrary`ing them (see
-    /// `impl Drop for PluginHost`). The UI relies on the first half
-    /// of that: `crate::dispatch::NotifyTargets` snapshots the loaded
-    /// plugins' `beNotified` pointers and calls them after the borrow
-    /// on this host has been dropped. A future unload / hot-reload
-    /// path must invalidate those snapshots first.
+    /// and not when it drops either: a plugin's library is given up,
+    /// still mapped, as soon as it is mapped (see [`keep_mapped`]).
+    /// The UI relies on the first half of that:
+    /// `crate::dispatch::NotifyTargets` snapshots the loaded plugins'
+    /// `beNotified` pointers and calls them after the borrow on this
+    /// host has been dropped. A future unload / hot-reload path must
+    /// invalidate those snapshots first.
     plugins: Vec<PluginInfo>,
     /// Next menu-command id to hand out at the next successful load.
     /// Monotonically increasing; never reused so that a plugin which
     /// fails to load cannot leak its allocated cmds onto a later
     /// plugin's items.
     next_cmd_id: i32,
-    /// Set between [`PluginHost::next_pending_load`] and its
+    /// The load in progress, as it was handed out: set by
+    /// [`PluginHost::next_pending_load`] or
+    /// [`PluginHost::load_blocking`], and cleared by that load's
     /// [`PluginHost::commit_load`].
     ///
     /// The load runs with **no host borrow held**, which is the whole
@@ -330,7 +359,14 @@ pub struct PluginHost {
     /// is on its way out anyway. Each backend logs at `error` if it
     /// ever happens, because the symptom otherwise is "plugins
     /// silently stopped loading" with nothing to go on.
-    load_in_progress: bool,
+    ///
+    /// It holds the whole load rather than only recording that one is
+    /// in progress, so `commit_load` takes that load, exactly as it was
+    /// handed out, and no other, once: a `PendingLoad` committed
+    /// already, one this host did not hand out, or one changed since,
+    /// in its plugin, path or base, is refused, changes nothing, and
+    /// cannot release the latch of a load still running.
+    load_in_progress: Option<PendingLoad>,
     /// Next id to hand out for `NPPM_ALLOCATECMDID`. Distinct
     /// from `next_cmd_id` so plugin menu commands and
     /// programmatically-allocated ids can't collide. Bumped by
@@ -352,7 +388,7 @@ impl Default for PluginHost {
             next_cmd_id: PLUGIN_CMD_ID_BASE,
             next_alloc_cmd_id: PLUGIN_ALLOC_CMD_BASE,
             next_alloc_marker: PLUGIN_ALLOC_MARKER_BASE,
-            load_in_progress: false,
+            load_in_progress: None,
         }
     }
 }
@@ -662,25 +698,37 @@ impl PluginHost {
     /// something touches it — still holds for the other thirty-nine a
     /// user may have installed.
     pub fn next_pending_load_in(&mut self, only: Option<&[String]>) -> Option<PendingLoad> {
-        if self.load_in_progress {
+        if self.load_in_progress.is_some() {
             // A nested loader — see the field doc. Answering here
             // would duplicate a command-id range.
             return None;
         }
-        let cmd_id_base = self.next_cmd_id;
-        let (idx, plugin) = self.plugins.iter().enumerate().find(|(_, p)| {
+        let idx = self.plugins.iter().position(|p| {
             if p.is_loaded() || p.failed_reason().is_some() || p.disabled {
                 return false;
             }
             only.is_none_or(|keys| keys.contains(&p.module_key()))
         })?;
+        Some(self.hand_out(idx))
+    }
+
+    /// Hand out the load of plugin `idx`, numbered from the next free
+    /// command id, and take the latch for it. The one place this host
+    /// makes a [`PendingLoad`], so [`Self::commit_load`]'s check that
+    /// it commits the load in progress, as it was handed out, holds for
+    /// every caller. `idx` must name a discovered plugin.
+    fn hand_out(&mut self, idx: usize) -> PendingLoad {
+        debug_assert!(
+            self.load_in_progress.is_none(),
+            "a load was handed out while another was in progress"
+        );
         let pending = PendingLoad {
             idx,
-            path: plugin.path.clone(),
-            cmd_id_base,
+            path: self.plugins[idx].path.clone(),
+            cmd_id_base: self.next_cmd_id,
         };
-        self.load_in_progress = true;
-        Some(pending)
+        self.load_in_progress = Some(pending.clone());
+        pending
     }
 
     /// Record the outcome of an [`execute_load`], and hand back the
@@ -704,31 +752,62 @@ impl PluginHost {
     /// # Errors
     ///
     /// The load itself failed (the error is recorded on the plugin
-    /// and surfaced to the UI), or `pending.idx` is out of range.
+    /// and surfaced to the UI), `pending` is not the load in progress
+    /// (committed already, or not handed out yet), or `result` is the
+    /// outcome of another load. Such a commit changes nothing, and the
+    /// load in progress keeps the latch. A load refused here leaves its
+    /// library mapped, as every library stays once it is mapped
+    /// ([`keep_mapped`]).
+    ///
+    /// Only an `Ok` outcome carries the load it came from. An `Err`
+    /// committed for the load in progress is taken as that load's
+    /// failure whatever its text: it can mark only the plugin the latch
+    /// names as failed, and that plugin is not offered again.
     pub fn commit_load(
         &mut self,
         pending: &PendingLoad,
         result: Result<LoadedPlugin, String>,
     ) -> Result<Option<PluginReady>, String> {
-        self.load_in_progress = false;
-        let Some(plugin) = self.plugins.get_mut(pending.idx) else {
-            return Err(format!("plugin index {} out of range", pending.idx));
-        };
-        // `PendingLoad` has to be public to cross the borrow gap, so
-        // its fields are constructible by any caller. A value whose
-        // `idx` and `path` disagree would file one library's
-        // `LoadedPlugin` under another plugin's entry — the registry
-        // would then report the wrong name, and a menu click would
-        // reach the wrong DLL. Nothing does this today; the check
-        // costs a string compare once per load.
-        if plugin.path != pending.path {
-            return Err(format!(
-                "PendingLoad for {} does not match plugin {} at {}",
-                pending.path.display(),
-                pending.idx,
-                plugin.path.display()
-            ));
+        // Only the load in progress is committed, and only once; its
+        // commit releases the latch whatever the outcome. Anything else
+        // is refused before it touches the latch or the plugin, so it
+        // cannot release a load still running. A `PendingLoad` cannot be
+        // built outside this crate, so one from a caller is a load this
+        // host handed out: the one in progress, or one committed
+        // already, which would record its outcome over the plugin's.
+        // Nor may the outcome be another load's, which would file that
+        // library under this plugin's entry. A refused outcome is simply
+        // dropped: a `LoadedPlugin` holds no handle that could unmap its
+        // library.
+        // A refusal is a backend's bug rather than a plugin's: logged at
+        // `error` here, where the caller logs a load that failed at
+        // `warn`, since it leaves the latch held and lazy loading off.
+        if self.load_in_progress.as_ref() != Some(pending) {
+            let e = format!(
+                "PendingLoad for {} is not the load in progress",
+                pending.path.display()
+            );
+            tracing::error!(error = ?e, "plugin load commit refused");
+            return Err(e);
         }
+        if result.as_ref().is_ok_and(|loaded| loaded.load != *pending) {
+            let e = format!(
+                "the outcome committed for {} is another load's",
+                pending.path.display()
+            );
+            tracing::error!(error = ?e, "plugin load commit refused");
+            return Err(e);
+        }
+        self.load_in_progress = None;
+        // In range: the load was handed out for a discovered plugin, and
+        // entries are never removed.
+        let plugin = &mut self.plugins[pending.idx];
+        // What matching the load as handed out guarantees: a plugin's
+        // path never changes once it is discovered, and only a commit
+        // moves the next free id, which no other load could reach while
+        // this one held the latch.
+        debug_assert_eq!(plugin.path, pending.path);
+        debug_assert_eq!(pending.cmd_id_base, self.next_cmd_id);
         match result {
             Ok(loaded) => {
                 // Reserve the assigned ids — never reused, even if a
@@ -753,10 +832,9 @@ impl PluginHost {
 
     /// Load one plugin end to end in a single call.
     ///
-    /// **Not for a UI backend.** This holds the host borrow across
-    /// the plugin's `setInfo`, `getFuncsArray` and its load-time
-    /// notifications,
-    /// which is precisely what the three-phase API
+    /// **Not for a UI backend.** This holds the host borrow across the
+    /// plugin's `setInfo`, `getFuncsArray` and its load-time
+    /// notifications, which is precisely what the three-phase API
     /// ([`Self::next_pending_load`] → [`execute_load`] →
     /// [`Self::commit_load`]) exists to avoid: a plugin that
     /// interrogates the host from `setInfo` gets declined, reads 0,
@@ -768,10 +846,20 @@ impl PluginHost {
     /// outright, so there is no second borrow for a re-entrant call
     /// to collide with.
     ///
+    /// It takes the load latch as [`Self::next_pending_load`] does, and
+    /// like it does not load a plugin that is loaded already or has
+    /// failed, since a second try could run the plugin's init twice. A
+    /// plugin loaded already, or disabled, is left alone with `Ok(())`,
+    /// and no latch is taken for it. A panic in the load itself, a host
+    /// bug, propagates and leaves the latch set; the backends, which
+    /// must survive one, run [`execute_load`] inside `catch_unwind`.
+    ///
     /// # Errors
     ///
-    /// The library failed to map, an entry point was missing, or the
-    /// plugin published a malformed `FuncItem` array.
+    /// `idx` names no plugin, the plugin failed to load before (its
+    /// recorded reason), another load is in progress, the library
+    /// failed to map, an entry point was missing, or the plugin
+    /// published a malformed `FuncItem` array.
     pub fn load_blocking(
         &mut self,
         idx: usize,
@@ -784,11 +872,13 @@ impl PluginHost {
         if plugin.is_loaded() || plugin.disabled {
             return Ok(());
         }
-        let pending = PendingLoad {
-            idx,
-            path: plugin.path.clone(),
-            cmd_id_base: self.next_cmd_id,
-        };
+        if let Some(reason) = plugin.failed_reason() {
+            return Err(reason.to_string());
+        }
+        if self.load_in_progress.is_some() {
+            return Err("another plugin's load is in progress".to_string());
+        }
+        let pending = self.hand_out(idx);
         let loaded = execute_load(&pending, npp_data, dispatch);
         let mut notices = LoadNotifications::default();
         if let Some(ready) = self.commit_load(&pending, loaded)? {
@@ -837,87 +927,92 @@ impl PluginHost {
     }
 }
 
-impl Drop for PluginHost {
-    /// **Deliberately does not unload the plugin libraries.**
-    ///
-    /// `DynLib`'s own `Drop` calls `FreeLibrary`, and running it here
-    /// — at process teardown, which is the only place a `PluginHost`
-    /// is dropped — crashes the host. Measured rather than reasoned
-    /// about: with the real `NppExec` loaded, Code++ exited
-    /// `0xC0000005` (`STATUS_ACCESS_VIOLATION`) every time, and
-    /// skipping the `FreeLibrary` made it exit `0` every time, with
-    /// no other change.
-    ///
-    /// The reason is that a host cannot know what a plugin still has
-    /// alive. Unmapping the library leaves any window whose `WNDPROC`
-    /// lives in it, any `SetTimer` callback, any thread, any hook and
-    /// any TLS destructor pointing at addresses that are no longer
-    /// mapped — and Windows keeps delivering to them. Our own dock
-    /// frames make one instance of that certain rather than likely:
-    /// they are *owned* by the main window, so Win32 destroys them
-    /// after the main window's `WM_DESTROY` returns, which is after
-    /// this drop runs, and destroying a frame destroys the plugin's
-    /// client window with it. But `NppExec` crashes without registering
-    /// a dock at all, so enumerating the cases is not a strategy.
-    ///
-    /// What is lost by not unloading: nothing the OS does not do a
-    /// moment later. The process is exiting; every mapping goes with
-    /// it. `NPPN_SHUTDOWN` still fires while everything is still
-    /// mapped — from `WM_CLOSE` on Win32 and from the quit path on
-    /// GTK and Cocoa — so a plugin still gets its documented chance to
-    /// save state.
-    ///
-    /// This is the one place the host deviates from DESIGN.md §6.4's
-    /// "on exit: `NPPN_SHUTDOWN` → unload", and §6.4 records why.
-    ///
-    /// Applied on every platform, but **measured only on Windows** —
-    /// the repro needs a real third-party plugin and there is no
-    /// Linux or macOS runner on the development host. The POSIX
-    /// analogue of the hazard is real (an `atexit` handler, a
-    /// pthread TLS destructor or a signal handler registered by a
-    /// `dlclose`d `.so`), so the unconditional choice is the
-    /// conservative one rather than a verified one.
-    ///
-    /// **The leak is per drop, not per process**, and nothing here
-    /// enforces that a `PluginHost` is dropped only at exit — an
-    /// assertion to that effect was tried and removed, because the
-    /// test suite legitimately builds and drops many hosts in one
-    /// process and it fired on all of them. Each backend builds
-    /// exactly one `Shell`, so the invariant holds today by
-    /// construction. A future hot-reload or restart-without-exit path
-    /// would make this leak per cycle and unbounded, silently; such a
-    /// path needs a real unload story (drain the plugin's windows and
-    /// timers first, then `FreeLibrary`) rather than this.
-    fn drop(&mut self) {
-        for plugin in &mut self.plugins {
-            let state = std::mem::replace(&mut plugin.state, PluginState::Pending);
-            if let PluginState::Loaded(loaded) = state {
-                // Leak *only* the library. The rest of `LoadedPlugin`
-                // — the cached `FuncItem`s, the shortcut defaults,
-                // the name — is ordinary host-owned heap with no
-                // relationship to the unmapped-module hazard, so it
-                // drops normally. Destructuring rather than
-                // `mem::forget`ing the whole value is what keeps the
-                // leak to the thing the reasoning is actually about.
-                let LoadedPlugin { lib, .. } = loaded;
-                std::mem::forget(lib);
-            }
-        }
-    }
+/// Wrap a plugin's library the moment it is mapped, so that no handle
+/// to it ever unmaps it: the library stays mapped for the rest of the
+/// process.
+///
+/// `load_inner` wraps every library as soon as `DynLib::load` returns,
+/// before any of its entry points is looked up, so no later step can
+/// unmap it: not a refusal before `setInfo` (an ANSI plugin, a missing
+/// entry point), not one after it, not a load
+/// [`PluginHost::commit_load`] refuses or a backend never commits, and
+/// not the host's own drop. Notepad++ unmaps a plugin it refuses before
+/// `setInfo`; Code++ keeps it, at the cost of one mapping for each
+/// refused plugin, which is never tried again. On Windows a mapped DLL
+/// cannot be deleted or replaced, so a refused plugin's file stays
+/// locked until Code++ exits, as a loaded plugin's always has: updating
+/// such a plugin takes a restart.
+///
+/// **Unmapping a plugin that has run any of its code can crash the
+/// host.** Loading a library runs its `DllMain` (a shared object's
+/// constructors), and a refused plugin has run `isUnicode` as well;
+/// either may have started a thread, a hook or a timer. Measured on
+/// Linux: a test plugin that starts a thread in `isUnicode` and returns
+/// FALSE crashed the host with `SIGSEGV` when the thread next ran, once
+/// the refusal had unmapped its library. A plugin that has run its init
+/// leaves more behind. `DynLib`'s own `Drop` calls `FreeLibrary`, and
+/// running it at process teardown crashed Code++. Measured rather than
+/// reasoned about: with the real `NppExec` loaded, Code++ exited
+/// `0xC0000005` (`STATUS_ACCESS_VIOLATION`) every time, and skipping
+/// the `FreeLibrary` made it exit `0` every time, with no other change.
+///
+/// The reason is that a host cannot know what a plugin still has
+/// alive. Unmapping the library leaves any window whose `WNDPROC`
+/// lives in it, any `SetTimer` callback, any thread, any hook and any
+/// TLS destructor pointing at addresses that are no longer mapped —
+/// and Windows keeps delivering to them. Our own dock frames make one
+/// instance of that certain rather than likely: they are *owned* by the
+/// main window, so Win32 destroys them after the main window's
+/// `WM_DESTROY` returns, which is after the host has dropped, and
+/// destroying a frame destroys the plugin's client window with it. But
+/// `NppExec` crashes without registering a dock at all, so enumerating
+/// the cases is not a strategy.
+///
+/// What is lost by not unloading: nothing the OS does not do a moment
+/// later. The process is exiting; every mapping goes with it.
+/// `NPPN_SHUTDOWN` still fires while everything is still mapped — from
+/// `WM_CLOSE` on Win32 and from the quit path on GTK and Cocoa — so a
+/// plugin still gets its documented chance to save state.
+///
+/// DESIGN.md §6.4 records why the host does not unload a plugin on
+/// exit.
+///
+/// Applied on every platform. The teardown crash was measured on
+/// Windows, with a real third-party plugin, and the crash after a
+/// refusal on Linux, with a test plugin; the POSIX analogue of the
+/// teardown hazard is real too (an `atexit` handler, a pthread TLS
+/// destructor or a signal handler registered by a `dlclose`d `.so`).
+///
+/// **The leak is per load, not per process.** Each backend builds
+/// exactly one `Shell` and loads each plugin once, so a library is
+/// mapped once and left mapped; a test suite that builds many hosts in
+/// one process maps a library once per load. A future hot-reload or
+/// restart-without-exit path would leak a mapping per cycle, silently;
+/// such a path needs a real unload story (drain the plugin's windows
+/// and timers first, then `FreeLibrary`) rather than this.
+fn keep_mapped(lib: DynLib) -> ManuallyDrop<DynLib> {
+    ManuallyDrop::new(lib)
 }
 
 /// A plugin picked for loading by [`PluginHost::next_pending_load`],
 /// carrying everything [`execute_load`] needs so the host borrow can
-/// be dropped before any plugin code runs.
-#[derive(Clone, Debug)]
+/// be dropped before any plugin code runs. Its fields are private, so
+/// outside this crate one can be had only from the host, and
+/// [`PluginHost::commit_load`] takes it only if it is the load in
+/// progress, field for field.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PendingLoad {
-    /// Index into the host's plugin list, passed back to
-    /// [`PluginHost::commit_load`].
-    pub idx: usize,
-    /// The library to map.
-    pub path: std::path::PathBuf,
-    /// First command id this plugin's `FuncItem`s get.
-    pub cmd_id_base: i32,
+    idx: usize,
+    path: std::path::PathBuf,
+    cmd_id_base: i32,
+}
+
+impl PendingLoad {
+    /// Index into the host's plugin list.
+    #[must_use]
+    pub fn idx(&self) -> usize {
+        self.idx
+    }
 }
 
 /// A freshly-loaded plugin's `beNotified`, handed back by
@@ -948,8 +1043,8 @@ impl PluginReady {
         // moment the ABI sets aside for it — is this plugin's.
         let _calling = crate::caller::CallingPlugin::enter(self.idx);
         // SAFETY: `be_notified` came from a successful resolve in
-        // `execute_load`, its library is still mapped (plugins are
-        // never unloaded before the host drops), and the
+        // `execute_load`, its library is still mapped (a library is
+        // never unmapped once mapped: `keep_mapped`), and the
         // `SCNotification` is `#[repr(C)]` and lives on this stack
         // frame through the synchronous call.
         let result = catch_unwind(AssertUnwindSafe(|| unsafe {
@@ -1143,7 +1238,7 @@ pub fn execute_load(
     // handler or timer of its own, which no call of the host's marks —
     // for the first `MAX_ROUTED_PLUGINS` plugins found.
     let dispatch = dispatch.map(|router| crate::caller::plugin_route(pending.idx, router));
-    load_inner(&pending.path, npp_data, pending.cmd_id_base, dispatch)
+    load_inner(pending, npp_data, dispatch)
 }
 
 /// One row's worth of data for the Plugin Manager UI. Decoupled
@@ -1236,12 +1331,10 @@ fn install_dispatch(lib: &DynLib, dispatch: Option<crate::ffi::HostDispatchFn>, 
 /// `accepted` runs between the isUnicode check and getName — once the
 /// plugin is known to be loadable, before any more of it runs.
 ///
-/// A refused plugin's library is freed when its `DynLib` drops, as on
-/// every failed load — which is also what Notepad++ does with it. That
-/// is the one place the host unloads a plugin; the "never unload"
-/// policy (DESIGN.md §6.4) is about a plugin that initialised, whose
-/// windows, threads and hooks may outlive a `FreeLibrary`. A plugin
-/// refused here has run its `DllMain` and `isUnicode` and nothing else.
+/// A refused plugin's library stays mapped, as every library does once
+/// it is mapped ([`keep_mapped`]): it has run its `DllMain` and
+/// `isUnicode`, and either may have started something that would
+/// outlive an unmap. Notepad++ unmaps it.
 fn run_init_entry_points(
     is_unicode: IsUnicodeFn,
     get_name: GetNameFn,
@@ -1309,9 +1402,8 @@ fn run_init_entry_points(
 /// back through the plugin's pointer so the plugin's own copy of
 /// `_cmdID` matches the value the host installs in the menu.
 fn load_inner(
-    path: &Path,
+    pending: &PendingLoad,
     npp_data: NppData,
-    cmd_id_base: i32,
     dispatch: Option<crate::ffi::HostDispatchFn>,
 ) -> Result<LoadedPlugin, String> {
     // Cap on the FuncItem count a plugin can contribute. Hoisted
@@ -1322,7 +1414,12 @@ fn load_inner(
     // would otherwise trigger a ~17 GB `Vec::with_capacity`.
     const MAX_FUNCITEMS: i32 = 1024;
 
-    let lib = DynLib::load(path)?;
+    let path = pending.path.as_path();
+    let cmd_id_base = pending.cmd_id_base;
+    // Mapped for good from here on, whatever becomes of the load: the
+    // refusals below, before and after `setInfo`, included
+    // (`keep_mapped`).
+    let lib = keep_mapped(DynLib::load(path)?);
 
     // SAFETY: each resolve call casts the GetProcAddress result to
     // the function pointer type declared in `ffi`. Those types match
@@ -1377,59 +1474,58 @@ fn load_inner(
             "getFuncsArray returned implausible count {count}; cap is {MAX_FUNCITEMS}"
         ));
     }
-    if raw.is_null() || count <= 0 {
-        // Allow plugins that contribute no menu items — they may
-        // still be useful via beNotified-only lifecycles.
-        let funcs = Vec::new();
-        return Ok(LoadedPlugin {
-            lib,
-            set_info,
-            get_name,
-            get_funcs_array,
-            be_notified,
-            message_proc,
-            is_unicode,
-            funcs,
-            shortcut_defaults: Vec::new(),
-            name,
-        });
-    }
-
-    // Copy the FuncItem array out of the plugin's address space into
-    // our own Vec, assigning each entry a host-allocated `cmd_id`
-    // and writing that id back through the plugin's pointer so the
-    // plugin's own copy of `_cmdID` matches what the host installs
-    // in the menu (the ABI contract from PluginInterface.h). The
-    // plugin retains ownership of its FuncItem memory and the
-    // `p_sh_key` accelerator pointers; we copy by value.
-    // SAFETY: raw is non-null and points to `count` valid FuncItem
-    // values (per the plugin's contract). We read and write each
-    // element. Plugins that store FuncItems in read-only memory
-    // (e.g. as a const initializer in the .rdata section) cause an
-    // access violation at the write — Notepad++ has the same
-    // requirement, so this matches the public ABI.
-    let (funcs, shortcut_defaults) = unsafe {
-        let count = count as usize;
-        let mut out = Vec::with_capacity(count);
-        let mut shortcuts = Vec::with_capacity(count);
-        for i in 0..count {
-            let id = cmd_id_base.saturating_add(i as i32);
-            // Write the id back through the plugin's pointer first,
-            // then read the (now-updated) entry by value into our
-            // Vec — guarantees our copy and the plugin's copy agree.
-            (*raw.add(i)).cmd_id = id;
-            out.push(*raw.add(i));
-            // Dereference the accelerator now, while the DLL is
-            // freshly mapped and under the same validity contract
-            // as the FuncItem read above (PluginInterface.h: the
-            // ShortcutKey outlives the plugin until SHUTDOWN).
-            shortcuts.push(snapshot_shortcut_key((*raw.add(i)).p_sh_key));
+    // A plugin may contribute no menu items: it may still be useful
+    // through beNotified-only lifecycles. One outcome is built below
+    // for both cases, so every outcome carries its load.
+    let (funcs, shortcut_defaults) = if raw.is_null() || count <= 0 {
+        (Vec::new(), Vec::new())
+    } else {
+        // Checked before any id is written back into the plugin's items:
+        // an id past the range would be one of Notepad++'s Scintilla key
+        // commands or a plugin's allocated id.
+        if !fits_cmd_id_range(cmd_id_base, count) {
+            return Err(format!(
+                "its {count} menu commands do not fit: plugin command ids end at \
+                 {PLUGIN_CMD_ID_LIMIT}, and the next free one is {cmd_id_base}"
+            ));
         }
-        (out, shortcuts)
+
+        // Copy the FuncItem array out of the plugin's address space into
+        // our own Vec, assigning each entry a host-allocated `cmd_id`
+        // and writing that id back through the plugin's pointer so the
+        // plugin's own copy of `_cmdID` matches what the host installs
+        // in the menu (the ABI contract from PluginInterface.h). The
+        // plugin retains ownership of its FuncItem memory and the
+        // `p_sh_key` accelerator pointers; we copy by value.
+        // SAFETY: raw is non-null and points to `count` valid FuncItem
+        // values (per the plugin's contract). We read and write each
+        // element. Plugins that store FuncItems in read-only memory
+        // (e.g. as a const initializer in the .rdata section) cause an
+        // access violation at the write — Notepad++ has the same
+        // requirement, so this matches the public ABI.
+        unsafe {
+            let count = count as usize;
+            let mut out = Vec::with_capacity(count);
+            let mut shortcuts = Vec::with_capacity(count);
+            for i in 0..count {
+                let id = cmd_id_base.saturating_add(i as i32);
+                // Write the id back through the plugin's pointer first,
+                // then read the (now-updated) entry by value into our
+                // Vec — guarantees our copy and the plugin's copy agree.
+                (*raw.add(i)).cmd_id = id;
+                out.push(*raw.add(i));
+                // Dereference the accelerator now, while the DLL is
+                // freshly mapped and under the same validity contract
+                // as the FuncItem read above (PluginInterface.h: the
+                // ShortcutKey outlives the plugin until SHUTDOWN).
+                shortcuts.push(snapshot_shortcut_key((*raw.add(i)).p_sh_key));
+            }
+            (out, shortcuts)
+        }
     };
 
     Ok(LoadedPlugin {
-        lib,
+        load: pending.clone(),
         set_info,
         get_name,
         get_funcs_array,
@@ -1440,6 +1536,19 @@ fn load_inner(
         shortcut_defaults,
         name,
     })
+}
+
+/// Whether `count` menu commands numbered from `base` all fall in the
+/// `FuncItem` range, [`PLUGIN_CMD_ID_BASE`] up to
+/// [`PLUGIN_CMD_ID_LIMIT`]. `base` comes from the host's own counter,
+/// which never leaves the range, so the lower bound only states it: a
+/// base below the range would number a plugin's items among Code++'s
+/// own commands.
+fn fits_cmd_id_range(base: i32, count: i32) -> bool {
+    base >= PLUGIN_CMD_ID_BASE
+        && base
+            .checked_add(count)
+            .is_some_and(|end| end <= PLUGIN_CMD_ID_LIMIT)
 }
 
 /// Copy a plugin's `ShortcutKey` out of its address space, or `None`
@@ -1589,21 +1698,18 @@ unsafe fn wide_to_string(mut p: *const u16) -> String {
     String::from_utf16_lossy(&units)
 }
 
-// Windows-only: these load real (or deliberately broken) `.dll`s and
-// use `.dll`-named fixtures. Discovery, which is platform-neutral file
-// logic, has its own module below that runs everywhere. The Linux load
-// path (including the dispatch handshake) is covered end-to-end by the
-// GTK plugin demo, and `has_plugin_extension` is tested per-OS in
-// `codepp-platform`.
-#[cfg(all(test, target_os = "windows"))]
+// The shortcut snapshot and the id allocators, on every platform. The
+// load is tested in `commit_tests` (the latch, a file that fails to
+// map, an index past the registry) and, against real plugins, in
+// `id_range_e2e` and `tests/`; discovery in `discovery_tests`.
+#[cfg(test)]
 mod tests {
     use super::*;
 
     /// The one unsafe dereference the shortcut path adds: NULL and
     /// zero-key pointers yield `None`, a real chord copies by value.
-    /// (The end-to-end read out of a real DLL's `FuncItem`s is covered
-    /// by the windows-gated load tests once a bundled plugin ships a
-    /// default shortcut.)
+    /// (Reading one out of a real plugin's `FuncItem`s needs a bundled
+    /// plugin that declares a default shortcut, which none does yet.)
     #[test]
     fn snapshot_shortcut_key_handles_null_zero_and_real_chords() {
         assert_eq!(unsafe { snapshot_shortcut_key(std::ptr::null_mut()) }, None);
@@ -1616,42 +1722,6 @@ mod tests {
         assert_eq!(unsafe { snapshot_shortcut_key(&raw mut sk) }, Some(sk));
         sk.key = 0;
         assert_eq!(unsafe { snapshot_shortcut_key(&raw mut sk) }, None);
-    }
-
-    #[test]
-    fn load_invalid_dll_marks_failed() {
-        let dir = tempfile::tempdir().unwrap();
-        std::fs::create_dir(dir.path().join("not-a-dll")).unwrap();
-        std::fs::write(
-            dir.path().join("not-a-dll").join("not-a-dll.dll"),
-            b"this isn't a real dll",
-        )
-        .unwrap();
-        let mut host = PluginHost::new();
-        host.discover(dir.path()).unwrap();
-
-        let npp_data = NppData {
-            npp_handle: core::ptr::null_mut(),
-            scintilla_main_handle: core::ptr::null_mut(),
-            scintilla_second_handle: core::ptr::null_mut(),
-        };
-        let result = host.load_blocking(0, npp_data, None);
-        assert!(result.is_err());
-        let info = host.iter().next().unwrap();
-        assert!(!info.is_loaded());
-        assert!(info.failed_reason().is_some());
-    }
-
-    #[test]
-    fn load_out_of_range_idx_errors() {
-        let mut host = PluginHost::new();
-        let npp_data = NppData {
-            npp_handle: core::ptr::null_mut(),
-            scintilla_main_handle: core::ptr::null_mut(),
-            scintilla_second_handle: core::ptr::null_mut(),
-        };
-        let result = host.load_blocking(99, npp_data, None);
-        assert!(result.is_err());
     }
 
     // --- Plugin-id allocator (NPPM_ALLOCATECMDID / NPPM_ALLOCATEMARKER) ---
@@ -1729,6 +1799,80 @@ mod tests {
         // burning any markers — the alloc is atomic.
         assert_eq!(host.allocate_marker(8), None);
         assert_eq!(host.allocate_marker(1), Some(25));
+    }
+}
+
+// The command-id ranges: plain numbers, and the checks hold on every
+// backend.
+#[cfg(test)]
+mod cmd_id_range_tests {
+    use super::{
+        fits_cmd_id_range, is_plugin_cmd_id, PLUGIN_ALLOC_CMD_BASE, PLUGIN_ALLOC_CMD_LIMIT,
+        PLUGIN_CMD_ID_BASE, PLUGIN_CMD_ID_LIMIT,
+    };
+
+    /// The ids Notepad++ numbers above its plugin ranges, any of which
+    /// a plugin can name in `NPPM_MENUCOMMAND`: its menu sections,
+    /// from its `IDM` to the end of its Run menu's, and the two blocks
+    /// its `resource.h` reserves above those, `IDCMD` to `IDCMD_LIMIT`
+    /// and `IDSCINTILLA` to `IDSCINTILLA_LIMIT`.
+    const NPP_COMMANDS: [std::ops::RangeInclusive<i32>; 3] =
+        [40_000..=49_999, 50_000..=50_020, 60_000..=60_030];
+
+    #[test]
+    fn plugin_command_ids_are_none_of_notepad_plus_pluses() {
+        for id in 0..=i32::from(u16::MAX) {
+            if is_plugin_cmd_id(id) {
+                let clash = NPP_COMMANDS.iter().find(|r| r.contains(&id));
+                assert!(clash.is_none(), "{id} is a plugin id inside {clash:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn plugin_command_ids_are_the_funcitem_range_and_the_pool() {
+        for (id, expected) in [
+            (PLUGIN_CMD_ID_BASE - 1, false),
+            (PLUGIN_CMD_ID_BASE, true),
+            (PLUGIN_CMD_ID_LIMIT - 1, true),
+            (PLUGIN_CMD_ID_LIMIT, false),
+            (PLUGIN_ALLOC_CMD_BASE - 1, false),
+            (PLUGIN_ALLOC_CMD_BASE, true),
+            (PLUGIN_ALLOC_CMD_LIMIT - 1, true),
+            (PLUGIN_ALLOC_CMD_LIMIT, false),
+            (-1, false),
+            (i32::MAX, false),
+        ] {
+            assert_eq!(is_plugin_cmd_id(id), expected, "{id}");
+        }
+        // Every plugin id travels in a `WM_COMMAND`'s 16 bits.
+        assert!(PLUGIN_ALLOC_CMD_LIMIT <= i32::from(u16::MAX) + 1);
+        // The ranges keep their order, so neither can reach the other.
+        const { assert!(PLUGIN_CMD_ID_LIMIT <= PLUGIN_ALLOC_CMD_BASE) };
+    }
+
+    #[test]
+    fn a_plugin_s_commands_must_fit_the_funcitem_range() {
+        let room = PLUGIN_CMD_ID_LIMIT - PLUGIN_CMD_ID_BASE;
+        for (base, count, expected) in [
+            (PLUGIN_CMD_ID_BASE, 1, true),
+            (PLUGIN_CMD_ID_BASE, room, true),
+            (PLUGIN_CMD_ID_BASE, room + 1, false),
+            (PLUGIN_CMD_ID_LIMIT - 1, 1, true),
+            (PLUGIN_CMD_ID_LIMIT - 1, 2, false),
+            (PLUGIN_CMD_ID_LIMIT, 1, false),
+            // A base below the range would number the plugin's items
+            // among Code++'s own commands.
+            (PLUGIN_CMD_ID_BASE - 1, 1, false),
+            (0, 1, false),
+            (i32::MAX, 1, false),
+        ] {
+            assert_eq!(
+                fits_cmd_id_range(base, count),
+                expected,
+                "{count} from {base}"
+            );
+        }
     }
 }
 
@@ -2398,8 +2542,7 @@ mod load_order_tests {
             "the plugin must be given its route before its code runs"
         );
         assert!(
-            compact[compact_load..]
-                .starts_with("load_inner(&pending.path,npp_data,pending.cmd_id_base,dispatch)"),
+            compact[compact_load..].starts_with("load_inner(pending,npp_data,dispatch)"),
             "the load no longer installs the dispatch the route was chosen for"
         );
     }
@@ -2443,6 +2586,884 @@ mod load_order_tests {
             unicode < refusal && refusal < routed && routed < name,
             "an ANSI plugin must be refused before any other entry point runs, \
              and before it is given a route into the host"
+        );
+    }
+
+    /// The body of `fn name` in this file, as code only and without
+    /// whitespace, so neither a comment nor rustfmt's layout decides a
+    /// guard's outcome. The body ends at the first `}` indented as far
+    /// as the `fn` line, so a method ends at its own brace rather than
+    /// its `impl` block's.
+    fn compact_body(name: &str) -> String {
+        let src = include_str!("host.rs").replace("\r\n", "\n");
+        let sig = format!("fn {name}(");
+        let at = src.find(&sig).unwrap_or_else(|| panic!("no fn {name}"));
+        let line_start = src[..at].rfind('\n').map_or(0, |i| i + 1);
+        let indent: String = src[line_start..at]
+            .chars()
+            .take_while(|&c| c == ' ')
+            .collect();
+        let body = &src[at..];
+        let end = body
+            .find(&format!("\n{indent}}}\n"))
+            .unwrap_or_else(|| panic!("no end of fn {name}"));
+        body[..end]
+            .lines()
+            .map(|l| l.split("//").next().unwrap_or(""))
+            .collect::<String>()
+            .split_whitespace()
+            .collect()
+    }
+
+    /// A plugin's items are numbered only once they are known to fit
+    /// the `FuncItem` range: the check runs, and refuses the load,
+    /// before the loop that writes each id back into the plugin's
+    /// items. `id_range_e2e` below runs it against the real
+    /// `example-hello` on Linux; this pins the order everywhere.
+    #[test]
+    fn a_plugin_s_ids_are_checked_before_they_are_written() {
+        let compact = compact_body("load_inner");
+        let check = compact
+            .find("if!fits_cmd_id_range(cmd_id_base,count){returnErr(format!(")
+            .expect("the load no longer refuses commands that do not fit");
+        let write = compact
+            .find("(*raw.add(i)).cmd_id=id;")
+            .expect("the load no longer writes each id back");
+        assert!(
+            check < write,
+            "the ids must be checked before any is written into the plugin's items"
+        );
+    }
+
+    /// Once a library is mapped, nothing unmaps it. `load_inner` is the
+    /// one place in this file that maps one, it gives the library up
+    /// (`keep_mapped`) in the statement that maps it, nothing here takes
+    /// it back or drops it in place, and a `LoadedPlugin` holds no handle
+    /// to it. So neither a refusal before the init entry points finish
+    /// (a missing entry point, a plugin refused as ANSI), nor one after
+    /// them, nor an outcome `commit_load` refuses, nor a load a backend
+    /// never commits can unmap it under whatever its `DllMain` or its
+    /// init left running. `id_range_e2e` below sees a library refused
+    /// before `setInfo`, one refused after it and an uncommitted one stay
+    /// mapped on Linux; this pins the shape everywhere.
+    #[test]
+    fn a_library_is_never_unmapped_once_mapped() {
+        // The production half of this file, which ends at its first test
+        // module, read as code only. No other crate maps a plugin.
+        let src = include_str!("host.rs").replace("\r\n", "\n");
+        let production: String = src[..src.find("\n#[cfg(test)]\nmod ").expect("a test module")]
+            .lines()
+            .map(|l| l.split("//").next().unwrap_or(""))
+            .collect::<String>()
+            .split_whitespace()
+            .collect();
+        assert_eq!(
+            production.matches("DynLib::load(").count(),
+            1,
+            "a plugin's library is mapped somewhere other than load_inner"
+        );
+        assert_eq!(
+            production.matches("ManuallyDrop::").count(),
+            production.matches("ManuallyDrop::new(").count(),
+            "something takes a library back out of keep_mapped's hands"
+        );
+        assert!(
+            !production.contains("drop_in_place"),
+            "something drops a library in place"
+        );
+        let load = compact_body("load_inner");
+        assert_eq!(
+            load.matches("DynLib::load(").count(),
+            1,
+            "load_inner maps a library a second way"
+        );
+        assert!(
+            load.contains("letlib=keep_mapped(DynLib::load(path)?);"),
+            "the library is not given up in the statement that maps it"
+        );
+        assert!(
+            !load.contains("ManuallyDrop::"),
+            "load_inner takes the library back out of keep_mapped's hands"
+        );
+        assert!(
+            compact_body("keep_mapped").ends_with("->ManuallyDrop<DynLib>{ManuallyDrop::new(lib)"),
+            "keep_mapped no longer keeps the library from being dropped"
+        );
+        let fields = &src[src.find("pub struct LoadedPlugin {").expect("LoadedPlugin")..];
+        let fields: String = fields[..fields.find("\n}\n").expect("the struct's end")]
+            .lines()
+            .map(|l| l.split("//").next().unwrap_or(""))
+            .collect();
+        assert!(
+            !fields.contains("DynLib"),
+            "a LoadedPlugin holds its library again, so dropping one unmaps it"
+        );
+    }
+}
+
+/// The load latch, on every platform: what [`PluginHost::commit_load`]
+/// takes and refuses, what a commit releases and reserves, which
+/// plugin a pass hands out, and what [`PluginHost::load_blocking`] does
+/// with a plugin it must not load. The fixtures are not libraries:
+/// discovery reads only their names, a load of one fails to map it, and
+/// a load that succeeds is staged from entry points that do nothing
+/// (`loaded_without_a_library`).
+#[cfg(test)]
+mod commit_tests {
+    use super::*;
+
+    /// A host that has discovered two plugins, `alpha` and `beta`, so a
+    /// test can see both that the first is not offered again and that
+    /// the next one is.
+    fn host_with_two_plugins() -> (tempfile::TempDir, PluginHost) {
+        let dir = tempfile::tempdir().expect("a temporary directory");
+        for name in ["alpha", "beta"] {
+            let folder = dir.path().join(name);
+            std::fs::create_dir_all(&folder).expect("the plugin's folder");
+            std::fs::write(folder.join(format!("{name}.{PLUGIN_EXTENSION}")), b"x")
+                .expect("the plugin's file");
+        }
+        let mut host = PluginHost::default();
+        assert_eq!(host.discover(dir.path()).expect("discovery"), 2);
+        (dir, host)
+    }
+
+    /// A `PendingLoad` changed since it was handed out, to another
+    /// plugin's path or a base the host did not hand out, is not the
+    /// load in progress. Committing it would file this library under
+    /// another plugin's entry, or number the plugin's items over
+    /// another plugin's. It is refused whatever its outcome, and it
+    /// changes nothing: the plugin is neither loaded nor failed, the
+    /// latch stays with the load still running, and that load's own
+    /// commit goes through afterwards, having used no ids.
+    #[test]
+    fn a_load_changed_since_it_was_handed_out_is_refused() {
+        let (_dir, mut host) = host_with_two_plugins();
+        let alpha = host.next_pending_load().expect("alpha, pending");
+        let beta_path = host.iter().nth(1).expect("beta").path.clone();
+        let room = PLUGIN_CMD_ID_LIMIT - PLUGIN_CMD_ID_BASE;
+        let mut forgeries = vec![(
+            "another plugin's path".to_string(),
+            PendingLoad {
+                path: beta_path,
+                ..alpha.clone()
+            },
+        )];
+        for shift in [-1, 1, 3, room] {
+            forgeries.push((
+                format!("its base moved by {shift}"),
+                PendingLoad {
+                    cmd_id_base: alpha.cmd_id_base + shift,
+                    ..alpha.clone()
+                },
+            ));
+        }
+        for (change, forged) in &forgeries {
+            let err = host
+                .commit_load(forged, Err("forged".to_string()))
+                .expect_err("a load changed since it was handed out was committed");
+            assert!(err.contains("not the load in progress"), "{change}: {err}");
+            let first = host.iter().next().expect("alpha");
+            assert!(
+                !first.is_loaded() && first.failed_reason().is_none(),
+                "{change}: the refused commit changed what is recorded for alpha"
+            );
+            assert!(
+                host.next_pending_load().is_none(),
+                "{change}: the refused commit released alpha's latch"
+            );
+        }
+        let err = host
+            .commit_load(&alpha, Err("alpha's own error".to_string()))
+            .expect_err("a failed load");
+        assert_eq!(err, "alpha's own error", "alpha's own commit was refused");
+        let beta = host.next_pending_load().expect("beta, pending");
+        assert_eq!(beta.idx, 1, "the next load is not beta's");
+        assert_eq!(
+            beta.cmd_id_base, PLUGIN_CMD_ID_BASE,
+            "a refused commit used command ids"
+        );
+    }
+
+    /// Only the load in progress is committed, and only once. A
+    /// `PendingLoad` committed already, or one the host did not hand
+    /// out, is refused, changes nothing recorded, and leaves the latch
+    /// to the load still running: released, it would let a nested pass
+    /// hand out a second load numbered from the same base.
+    #[test]
+    fn only_the_load_in_progress_is_committed() {
+        let (_dir, mut host) = host_with_two_plugins();
+        let alpha = host.next_pending_load().expect("alpha, pending");
+        let not_handed_out = PendingLoad {
+            idx: alpha.idx + 1,
+            ..alpha.clone()
+        };
+        let err = host
+            .commit_load(&not_handed_out, Err("forged".to_string()))
+            .expect_err("a load the host did not hand out was committed");
+        assert!(err.contains("not the load in progress"), "{err}");
+        assert!(
+            host.next_pending_load().is_none(),
+            "a load the host did not hand out released alpha's latch"
+        );
+        let _ = host.commit_load(&alpha, Err("alpha's own error".to_string()));
+        let beta = host.next_pending_load().expect("beta, pending");
+        assert_ne!(beta.idx, alpha.idx, "the failed plugin was offered again");
+        let err = host
+            .commit_load(&alpha, Err("committed again".to_string()))
+            .expect_err("a load committed already was committed again");
+        assert!(err.contains("not the load in progress"), "{err}");
+        assert!(
+            host.iter()
+                .next()
+                .expect("alpha")
+                .failed_reason()
+                .is_some_and(|r| r == "alpha's own error"),
+            "the second commit changed what was recorded for alpha"
+        );
+        assert!(
+            host.next_pending_load().is_none(),
+            "the second commit of alpha released beta's latch"
+        );
+        let err = host
+            .commit_load(&beta, Err("beta's own error".to_string()))
+            .expect_err("a failed load");
+        assert_eq!(err, "beta's own error", "beta's own commit was refused");
+    }
+
+    /// No window and no route into a host: these fixtures never get as
+    /// far as an entry point.
+    fn no_npp_data() -> NppData {
+        NppData {
+            npp_handle: std::ptr::null_mut(),
+            scintilla_main_handle: std::ptr::null_mut(),
+            scintilla_second_handle: std::ptr::null_mut(),
+        }
+    }
+
+    /// `load_blocking` takes the latch as `next_pending_load` does, so
+    /// its own commit is the load in progress: a file that is not a
+    /// library is recorded as the failure it is, and the latch is
+    /// released for the next load.
+    #[test]
+    fn a_blocking_load_commits_its_own_outcome() {
+        let (_dir, mut host) = host_with_two_plugins();
+        let err = host
+            .load_blocking(0, no_npp_data(), None)
+            .expect_err("a file that is not a library loaded");
+        assert!(!err.contains("not the load in progress"), "{err}");
+        let alpha = host.iter().next().expect("alpha");
+        assert_eq!(alpha.failed_reason(), Some(err.as_str()));
+        let next = host
+            .next_pending_load()
+            .expect("the blocking load did not release the latch");
+        assert_eq!(next.idx, 1, "the next load is not beta's");
+    }
+
+    /// A plugin that failed is not loaded again, since a second try
+    /// could run its init twice. Its recorded reason comes back even
+    /// with its file gone, so nothing was opened again.
+    #[test]
+    fn a_blocking_load_does_not_retry_a_failed_plugin() {
+        let (dir, mut host) = host_with_two_plugins();
+        let first = host
+            .load_blocking(0, no_npp_data(), None)
+            .expect_err("a file that is not a library loaded");
+        let file = dir
+            .path()
+            .join("alpha")
+            .join(format!("alpha.{PLUGIN_EXTENSION}"));
+        std::fs::remove_file(file).expect("alpha's file");
+        let second = host
+            .load_blocking(0, no_npp_data(), None)
+            .expect_err("a failed plugin loaded");
+        assert_eq!(second, first, "the failed plugin was loaded again");
+    }
+
+    /// While another load is in progress, a blocking load is refused,
+    /// and leaves that load's latch and its own plugin as they were.
+    #[test]
+    fn a_blocking_load_is_refused_while_another_is_in_progress() {
+        let (_dir, mut host) = host_with_two_plugins();
+        let alpha = host.next_pending_load().expect("alpha, pending");
+        let err = host
+            .load_blocking(1, no_npp_data(), None)
+            .expect_err("a blocking load ran while another was in progress");
+        assert!(err.contains("in progress"), "{err}");
+        let beta = host.iter().nth(1).expect("beta");
+        assert!(
+            beta.failed_reason().is_none(),
+            "the refused plugin was recorded as failed"
+        );
+        assert!(
+            host.next_pending_load().is_none(),
+            "the refusal released alpha's latch"
+        );
+        let err = host
+            .commit_load(&alpha, Err("alpha's own error".to_string()))
+            .expect_err("a failed load");
+        assert_eq!(err, "alpha's own error", "alpha's commit was refused");
+    }
+
+    // Entry points for a plugin the tests record as loaded without
+    // mapping a library. None of them runs on the paths these tests
+    // take.
+    extern "C" fn no_info(_: NppData) {}
+    extern "C" fn no_name() -> *const u16 {
+        std::ptr::null()
+    }
+    extern "C" fn no_items(_: *mut i32) -> *mut FuncItem {
+        std::ptr::null_mut()
+    }
+    extern "C" fn no_notification(_: *const SCNotification) {}
+    extern "C" fn no_message(_: u32, _: usize, _: isize) -> isize {
+        0
+    }
+    extern "C" fn unicode() -> i32 {
+        1
+    }
+
+    /// The outcome of `pending` succeeding, with `items` menu items and
+    /// the plugin's file stem for its name, from entry points that do
+    /// nothing, so a test can commit a success without a library.
+    fn loaded_without_a_library(pending: &PendingLoad, items: usize) -> LoadedPlugin {
+        let item = FuncItem {
+            item_name: [0; crate::ffi::MENU_TITLE_LENGTH],
+            p_func: None,
+            cmd_id: 0,
+            init2_check: 0,
+            p_sh_key: std::ptr::null_mut(),
+        };
+        LoadedPlugin {
+            load: pending.clone(),
+            set_info: no_info,
+            get_name: no_name,
+            get_funcs_array: no_items,
+            be_notified: no_notification,
+            message_proc: no_message,
+            is_unicode: unicode,
+            funcs: vec![item; items],
+            shortcut_defaults: vec![None; items],
+            name: pending
+                .path
+                .file_stem()
+                .expect("a plugin file")
+                .to_string_lossy()
+                .into_owned(),
+        }
+    }
+
+    /// A load that succeeded releases the latch as one that failed
+    /// does, so the next plugin is offered once a load has gone
+    /// through.
+    #[test]
+    fn a_load_that_succeeded_releases_the_latch() {
+        let (_dir, mut host) = host_with_two_plugins();
+        let alpha = host.next_pending_load().expect("alpha, pending");
+        let ready = host
+            .commit_load(&alpha, Ok(loaded_without_a_library(&alpha, 0)))
+            .expect("a load that succeeded was refused");
+        assert!(
+            ready.is_some(),
+            "a load that succeeded has nothing to deliver"
+        );
+        let first = host.iter().next().expect("alpha");
+        assert!(first.is_loaded(), "the load that succeeded is not recorded");
+        assert_eq!(
+            first.name.as_deref(),
+            Some("alpha"),
+            "the loaded plugin's name is not recorded"
+        );
+        let beta = host
+            .next_pending_load()
+            .expect("a load that succeeded kept the latch");
+        assert_eq!(beta.idx, 1, "the next load is not beta's");
+    }
+
+    /// A commit reserves the ids of the plugin's items, so the next
+    /// load is numbered after them.
+    #[test]
+    fn a_commit_reserves_the_ids_of_its_items() {
+        let (_dir, mut host) = host_with_two_plugins();
+        let alpha = host.next_pending_load().expect("alpha, pending");
+        host.commit_load(&alpha, Ok(loaded_without_a_library(&alpha, 3)))
+            .expect("a load that succeeded was refused");
+        let beta = host.next_pending_load().expect("beta, pending");
+        assert_eq!(
+            beta.cmd_id_base,
+            PLUGIN_CMD_ID_BASE + 3,
+            "the commit did not reserve the ids of alpha's items"
+        );
+    }
+
+    /// The outcome committed must be the load's own. Another load's,
+    /// here an earlier load's committed for beta's, or one numbered
+    /// from another base, would file that library under beta's entry,
+    /// or install items numbered from ids beta was not given. It is
+    /// refused, changes nothing recorded, and leaves the latch with
+    /// beta, whose own outcome then goes through.
+    #[test]
+    fn an_outcome_of_another_load_is_refused() {
+        let (_dir, mut host) = host_with_two_plugins();
+        let alpha = host.next_pending_load().expect("alpha, pending");
+        let _ = host.commit_load(&alpha, Err("alpha's own error".to_string()));
+        let beta = host.next_pending_load().expect("beta, pending");
+        let others = [
+            ("an earlier load's", alpha.clone()),
+            (
+                "one numbered from another base",
+                PendingLoad {
+                    cmd_id_base: beta.cmd_id_base + 1,
+                    ..beta.clone()
+                },
+            ),
+        ];
+        for (whose, other) in &others {
+            let err = host
+                .commit_load(&beta, Ok(loaded_without_a_library(other, 1)))
+                .expect_err("another load's outcome was committed");
+            assert!(err.contains("another load's"), "{whose}: {err}");
+            let second = host.iter().nth(1).expect("beta");
+            assert!(
+                !second.is_loaded() && second.failed_reason().is_none(),
+                "{whose}: the refused outcome changed what is recorded for beta"
+            );
+            assert!(
+                host.next_pending_load().is_none(),
+                "{whose}: the refused outcome released beta's latch"
+            );
+        }
+        host.commit_load(&beta, Ok(loaded_without_a_library(&beta, 0)))
+            .expect("beta's own outcome was refused");
+        assert!(
+            host.iter().nth(1).expect("beta").is_loaded(),
+            "beta's own outcome is not recorded"
+        );
+    }
+
+    /// A pass restricted to named plugins hands out only those: none
+    /// for an empty set, and the one named, past one it does not name.
+    #[test]
+    fn a_restricted_pass_offers_only_the_plugins_it_names() {
+        let (_dir, mut host) = host_with_two_plugins();
+        assert!(
+            host.next_pending_load_in(Some(&[])).is_none(),
+            "a pass naming no plugin handed one out"
+        );
+        let beta_key = host.iter().nth(1).expect("beta").module_key();
+        let pending = host
+            .next_pending_load_in(Some(&[beta_key]))
+            .expect("beta, pending");
+        assert_eq!(pending.idx, 1, "a plugin the pass did not name was offered");
+    }
+
+    /// An index that names no plugin is an error, and takes no latch.
+    #[test]
+    fn a_blocking_load_of_no_plugin_is_an_error() {
+        let (_dir, mut host) = host_with_two_plugins();
+        let err = host
+            .load_blocking(99, no_npp_data(), None)
+            .expect_err("a blocking load of no plugin succeeded");
+        assert!(err.contains("out of range"), "{err}");
+        assert!(
+            host.next_pending_load().is_some(),
+            "the refusal took the latch"
+        );
+    }
+
+    /// A blocking load leaves a plugin that is loaded already alone:
+    /// loading it again would run its init a second time.
+    #[test]
+    fn a_blocking_load_leaves_a_loaded_plugin_alone() {
+        let (_dir, mut host) = host_with_two_plugins();
+        let alpha = host.next_pending_load().expect("alpha, pending");
+        host.commit_load(&alpha, Ok(loaded_without_a_library(&alpha, 0)))
+            .expect("a load that succeeded was refused");
+        host.load_blocking(0, no_npp_data(), None)
+            .expect("a loaded plugin was loaded again");
+        assert!(
+            host.iter().next().expect("alpha").is_loaded(),
+            "the loaded plugin is no longer recorded as loaded"
+        );
+    }
+
+    /// A blocking load leaves a disabled plugin alone, and takes no
+    /// latch for it.
+    #[test]
+    fn a_blocking_load_leaves_a_disabled_plugin_alone() {
+        let (_dir, mut host) = host_with_two_plugins();
+        assert!(host.set_disabled(0, true), "alpha was disabled already");
+        host.load_blocking(0, no_npp_data(), None)
+            .expect("a disabled plugin was loaded");
+        let alpha = host.iter().next().expect("alpha");
+        assert!(
+            !alpha.is_loaded() && alpha.failed_reason().is_none(),
+            "a disabled plugin was loaded"
+        );
+        let beta = host
+            .next_pending_load()
+            .expect("the blocking load kept a latch for a disabled plugin");
+        assert_eq!(beta.idx, 1, "the next load is not beta's");
+    }
+}
+
+/// The command-id range, run against the real `example-hello`: a load
+/// that does not fit is refused before any id is written and is not
+/// offered again, an exact fit loads, a refused plugin and one never
+/// committed keep their libraries mapped, a plugin refused before
+/// `setInfo` keeps its library mapped while its own thread runs on, and
+/// a load committed twice is refused the second time, even when its
+/// items took no ids.
+///
+/// Inside the crate rather than beside `tests/example_hello_e2e.rs`,
+/// because running out of room is staged by setting the host's own
+/// counter, which only the crate can reach. A real host gets there
+/// only once its plugins have numbered 9000 commands.
+///
+/// Linux only, like `tests/example_hello_e2e.rs`, and `#[ignore]`d for
+/// the same reason: it needs `libexample_hello.so`, which a build of
+/// `codepp-example-hello` makes and `cargo test -p codepp-plugin-host`
+/// does not. The refusal before `setInfo` also compiles a fixture with
+/// the C compiler, `cc`. Run it with
+/// `cargo build -p codepp-example-hello && cargo test -p
+/// codepp-plugin-host --lib id_range_e2e -- --ignored`. A test fails,
+/// rather than skips, when the library or `cc` is not there.
+#[cfg(all(test, target_os = "linux"))]
+mod id_range_e2e {
+    use super::*;
+
+    /// The plugin, where a build with this test binary's target
+    /// directory and profile puts it: beside the `deps` folder the test
+    /// binary is in.
+    fn built_plugin() -> PathBuf {
+        let exe = std::env::current_exe().expect("the test binary's path");
+        let profile = exe
+            .parent()
+            .and_then(Path::parent)
+            .expect("the test binary is in <target>/<profile>/deps");
+        let so = profile.join("libexample_hello.so");
+        assert!(
+            so.exists(),
+            "{} is not built: run `cargo build -p codepp-example-hello` first, in \
+             the tests' profile (`--release` for a release run)",
+            so.display()
+        );
+        so
+    }
+
+    /// A copy of the plugin, in the layout discovery takes, and a host
+    /// that has discovered it. A copy per test, so no two tests share a
+    /// mapping.
+    fn staged() -> (tempfile::TempDir, PathBuf, PluginHost) {
+        let tmp = tempfile::tempdir().expect("a temporary directory");
+        let folder = tmp.path().join("example_hello");
+        std::fs::create_dir_all(&folder).expect("the plugin's folder");
+        let path = folder.join("example_hello.so");
+        std::fs::copy(built_plugin(), &path).expect("a copy of the plugin");
+        let mut host = PluginHost::new();
+        assert_eq!(host.discover(tmp.path()).expect("discovery"), 1);
+        (tmp, path, host)
+    }
+
+    /// No window and no route into a host: the plugin's init needs
+    /// neither, and a load with no route sends nothing.
+    fn npp_data() -> NppData {
+        NppData {
+            npp_handle: std::ptr::null_mut(),
+            scintilla_main_handle: std::ptr::null_mut(),
+            scintilla_second_handle: std::ptr::null_mut(),
+        }
+    }
+
+    /// The `_cmdID` of each of the plugin's items, read from the
+    /// plugin's own array through a handle of the test's own.
+    fn item_ids(lib: &DynLib) -> Vec<i32> {
+        // SAFETY: `getFuncsArray` has the ABI `ffi` declares, and
+        // returns the plugin's own static array, which `lib` keeps
+        // mapped while it is read.
+        unsafe {
+            let get: GetFuncsArrayFn = lib.resolve("getFuncsArray").expect("getFuncsArray");
+            let mut count = 0;
+            let raw = get(&raw mut count);
+            (0..usize::try_from(count).expect("a count"))
+                .map(|i| (*raw.add(i)).cmd_id)
+                .collect()
+        }
+    }
+
+    /// How many items the plugin has.
+    fn item_count(lib: &DynLib) -> i32 {
+        i32::try_from(item_ids(lib).len()).expect("a count")
+    }
+
+    /// The control for the mapping checks: here a library whose plugin
+    /// has run its init entry points, as a load runs them, unmaps when
+    /// its `DynLib` drops. Without it, a library that stayed mapped for
+    /// a reason of its own, its init's included, would pass a check
+    /// that the host kept it mapped, whatever the host did with it.
+    fn assert_a_dropped_library_is_unmapped() {
+        let (_tmp, control, _host) = staged();
+        let lib = DynLib::load(&control).expect("the plugin");
+        assert!(is_mapped(&control), "a loaded library is not mapped");
+        // SAFETY: each entry point has the ABI `ffi` declares. The
+        // plugin's init needs no window, and with no route it sends
+        // nothing.
+        unsafe {
+            let is_unicode: IsUnicodeFn = lib.resolve("isUnicode").expect("isUnicode");
+            let get_name: GetNameFn = lib.resolve("getName").expect("getName");
+            let set_info: SetInfoFn = lib.resolve("setInfo").expect("setInfo");
+            assert_ne!(is_unicode(), 0, "example-hello is a Unicode plugin");
+            let _ = get_name();
+            set_info(npp_data());
+        }
+        assert!(item_count(&lib) > 0, "example-hello publishes commands");
+        drop(lib);
+        assert!(
+            !is_mapped(&control),
+            "a dropped library stays mapped here, so this test cannot see one unmapped"
+        );
+    }
+
+    /// Whether this process has the file at `path` mapped.
+    fn is_mapped(path: &Path) -> bool {
+        let path = path.canonicalize().expect("the staged plugin");
+        let path = path.to_str().expect("a UTF-8 path");
+        std::fs::read_to_string("/proc/self/maps")
+            .expect("/proc/self/maps")
+            .lines()
+            .any(|line| line.ends_with(path))
+    }
+
+    #[test]
+    #[ignore = "needs libexample_hello.so: run `cargo build -p codepp-example-hello` first"]
+    fn a_load_that_does_not_fit_is_refused_before_any_id_is_written() {
+        let (_tmp, path, mut host) = staged();
+        // A handle of the test's own, so the plugin's array can still
+        // be read once the host's load is refused.
+        let mine = DynLib::load(&path).expect("the plugin");
+        let items = item_count(&mine);
+        assert!(items > 1, "example-hello publishes more than one command");
+        // One id short of room.
+        let base = PLUGIN_CMD_ID_LIMIT - items + 1;
+        host.next_cmd_id = base;
+        let pending = host.next_pending_load().expect("the plugin, pending");
+        assert_eq!(pending.cmd_id_base, base);
+        let Err(err) = execute_load(&pending, npp_data(), None) else {
+            panic!("a load with no room was not refused");
+        };
+        assert!(err.contains("do not fit"), "{err}");
+        assert!(
+            item_ids(&mine).iter().all(|&id| id == 0),
+            "an id was written into the plugin's items before the refusal"
+        );
+        assert!(host.commit_load(&pending, Err(err)).is_err());
+        let plugin = host.iter().next().expect("the plugin");
+        assert!(plugin
+            .failed_reason()
+            .is_some_and(|r| r.contains("do not fit")));
+        assert!(
+            host.next_pending_load().is_none(),
+            "a refused plugin was offered again"
+        );
+        assert_eq!(host.next_cmd_id, base, "a refused load used command ids");
+    }
+
+    #[test]
+    #[ignore = "needs libexample_hello.so: run `cargo build -p codepp-example-hello` first"]
+    fn a_load_that_fits_exactly_takes_the_last_ids_of_the_range() {
+        let (_tmp, path, mut host) = staged();
+        let mine = DynLib::load(&path).expect("the plugin");
+        let items = item_count(&mine);
+        host.next_cmd_id = PLUGIN_CMD_ID_LIMIT - items;
+        let pending = host.next_pending_load().expect("the plugin, pending");
+        let loaded = execute_load(&pending, npp_data(), None).expect("an exact fit loads");
+        assert!(host.commit_load(&pending, Ok(loaded)).is_ok());
+        let ids = item_ids(&mine);
+        assert_eq!(ids.first().copied(), Some(PLUGIN_CMD_ID_LIMIT - items));
+        assert_eq!(ids.last().copied(), Some(PLUGIN_CMD_ID_LIMIT - 1));
+        assert_eq!(host.next_cmd_id, PLUGIN_CMD_ID_LIMIT);
+    }
+
+    #[test]
+    #[ignore = "needs libexample_hello.so: run `cargo build -p codepp-example-hello` first"]
+    fn a_refused_plugin_keeps_its_library_mapped() {
+        assert_a_dropped_library_is_unmapped();
+        let (_tmp, path, mut host) = staged();
+        // No room at all.
+        host.next_cmd_id = PLUGIN_CMD_ID_LIMIT;
+        let pending = host.next_pending_load().expect("the plugin, pending");
+        let Err(err) = execute_load(&pending, npp_data(), None) else {
+            panic!("a load with no room was not refused");
+        };
+        assert!(err.contains("do not fit"), "{err}");
+        assert!(
+            is_mapped(&path),
+            "a refused plugin's library was unmapped after its init ran"
+        );
+    }
+
+    /// A backend that loses a load's outcome on the way to
+    /// `commit_load` drops a `LoadedPlugin`, which unmaps nothing.
+    #[test]
+    #[ignore = "needs libexample_hello.so: run `cargo build -p codepp-example-hello` first"]
+    fn a_load_never_committed_keeps_its_library_mapped() {
+        assert_a_dropped_library_is_unmapped();
+        let (_tmp, path, mut host) = staged();
+        let pending = host.next_pending_load().expect("the plugin, pending");
+        let loaded = execute_load(&pending, npp_data(), None).expect("the plugin loads");
+        drop(loaded);
+        assert!(
+            is_mapped(&path),
+            "a load that was never committed unmapped its plugin's library"
+        );
+    }
+
+    #[test]
+    #[ignore = "needs libexample_hello.so: run `cargo build -p codepp-example-hello` first"]
+    fn a_load_committed_twice_is_refused_the_second_time() {
+        let (_tmp, _path, mut host) = staged();
+        let pending = host.next_pending_load().expect("the plugin, pending");
+        let first = execute_load(&pending, npp_data(), None).expect("the plugin loads");
+        assert!(host.commit_load(&pending, Ok(first)).is_ok());
+        // A caller holding two outcomes for one load: the second is
+        // numbered from the base the first commit used.
+        let second = execute_load(&pending, npp_data(), None).expect("the plugin loads again");
+        let err = host
+            .commit_load(&pending, Ok(second))
+            .expect_err("a load committed already was committed again");
+        assert!(err.contains("not the load in progress"), "{err}");
+        assert!(
+            host.iter().next().expect("the plugin").is_loaded(),
+            "the refused commit replaced the loaded plugin"
+        );
+    }
+
+    /// A load committed already is refused even while the next free id
+    /// is still the one it was numbered from, as it is after a plugin
+    /// whose items took no ids: its first commit released the latch, so
+    /// it is no longer the load in progress. A second commit would
+    /// record its outcome over the loaded plugin, a failure here, which
+    /// would stop its commands running. Staged by putting the counter
+    /// back where the load found it, which is where such a plugin
+    /// leaves it.
+    #[test]
+    #[ignore = "needs libexample_hello.so: run `cargo build -p codepp-example-hello` first"]
+    fn a_plugin_whose_items_took_no_ids_is_committed_once() {
+        let (_tmp, path, mut host) = staged();
+        let pending = host.next_pending_load().expect("the plugin, pending");
+        let loaded = execute_load(&pending, npp_data(), None).expect("the plugin loads");
+        assert!(host.commit_load(&pending, Ok(loaded)).is_ok());
+        host.next_cmd_id = pending.cmd_id_base;
+        let err = host
+            .commit_load(&pending, Err("committed again".to_string()))
+            .expect_err("a load committed already was committed again");
+        assert!(err.contains("not the load in progress"), "{err}");
+        assert!(
+            host.iter().next().expect("the plugin").is_loaded(),
+            "the second commit replaced the loaded plugin"
+        );
+        assert!(
+            is_mapped(&path),
+            "the second commit unmapped the loaded plugin's library"
+        );
+    }
+
+    /// A test plugin built by the C compiler at test time, for the two
+    /// shapes no in-tree plugin has. By default its `isUnicode` starts a
+    /// thread and returns FALSE, so it is refused as ANSI before
+    /// `setInfo` with code of its own still running. Compiled with
+    /// `-DITEMLESS` it is a Unicode plugin that publishes no menu items.
+    const FIXTURE: &str = r"
+#include <pthread.h>
+#include <unistd.h>
+static volatile long ticks;
+static void *tick(void *arg) { (void)arg; for (;;) { ticks++; usleep(2000); } return 0; }
+int isUnicode(void) {
+#ifdef ITEMLESS
+    return 1;
+#else
+    pthread_t t;
+    if (pthread_create(&t, 0, tick, 0) == 0) pthread_detach(t);
+    return 0;
+#endif
+}
+struct NppData { void *npp, *main, *second; };
+void setInfo(struct NppData data) { (void)data; }
+const void *getName(void) { return 0; }
+void *getFuncsArray(int *count) { *count = 0; return 0; }
+void beNotified(void *notification) { (void)notification; }
+long messageProc(unsigned msg, unsigned long wparam, long lparam) {
+    (void)msg; (void)wparam; (void)lparam; return 1;
+}
+";
+
+    /// The fixture, compiled with `cc` and the given flags and staged
+    /// in the layout discovery takes as the plugin `name`, and a host
+    /// that has discovered it.
+    fn staged_fixture(name: &str, flags: &[&str]) -> (tempfile::TempDir, PathBuf, PluginHost) {
+        let tmp = tempfile::tempdir().expect("a temporary directory");
+        let src = tmp.path().join("fixture.c");
+        std::fs::write(&src, FIXTURE).expect("the fixture's source");
+        let plugins = tmp.path().join("plugins");
+        let folder = plugins.join(name);
+        std::fs::create_dir_all(&folder).expect("the fixture's folder");
+        let path = folder.join(format!("{name}.so"));
+        let status = std::process::Command::new("cc")
+            .args(["-shared", "-fPIC", "-pthread"])
+            .args(flags)
+            .arg("-o")
+            .arg(&path)
+            .arg(&src)
+            .status()
+            .expect("a C compiler, `cc`, on PATH");
+        assert!(status.success(), "the fixture did not compile");
+        let mut host = PluginHost::new();
+        assert_eq!(host.discover(&plugins).expect("discovery"), 1);
+        (tmp, path, host)
+    }
+
+    /// A plugin that publishes no menu items still loads: it may be
+    /// useful through `beNotified` alone. Its outcome carries its load,
+    /// as every outcome does, and it takes no command ids.
+    #[test]
+    #[ignore = "needs a C compiler, `cc`, on PATH"]
+    fn a_plugin_with_no_items_loads_and_takes_no_ids() {
+        let (_tmp, _path, mut host) = staged_fixture("itemless_fixture", &["-DITEMLESS"]);
+        let base = host.next_cmd_id;
+        let pending = host.next_pending_load().expect("the fixture, pending");
+        let loaded = execute_load(&pending, npp_data(), None).expect("an item-less plugin loads");
+        assert!(loaded.funcs.is_empty(), "the fixture publishes no items");
+        assert_eq!(loaded.load, pending, "the outcome does not carry its load");
+        assert!(host.commit_load(&pending, Ok(loaded)).is_ok());
+        assert!(host.iter().next().expect("the fixture").is_loaded());
+        assert_eq!(
+            host.next_cmd_id, base,
+            "an item-less plugin took command ids"
+        );
+    }
+
+    /// The refusal round five found: before `setInfo`, a plugin's own
+    /// code may already be running, from `DllMain` or `isUnicode`, so
+    /// unmapping its library there crashes the host when that code next
+    /// runs. The fixture's thread ticks every 2 ms, so a library
+    /// unmapped by the refusal ends this test in a `SIGSEGV`.
+    #[test]
+    #[ignore = "needs libexample_hello.so and `cc`: run `cargo build -p codepp-example-hello` first"]
+    fn a_plugin_refused_before_set_info_keeps_its_library_mapped() {
+        assert_a_dropped_library_is_unmapped();
+        let (_tmp, path, mut host) = staged_fixture("ansi_fixture", &[]);
+        let pending = host.next_pending_load().expect("the fixture, pending");
+        let Err(err) = execute_load(&pending, npp_data(), None) else {
+            panic!("an ANSI plugin was not refused");
+        };
+        assert!(err.contains("isUnicode returned FALSE"), "{err}");
+        assert!(host.commit_load(&pending, Err(err)).is_err());
+        drop(host);
+        // Long enough for the fixture's thread to tick many times.
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        assert!(
+            is_mapped(&path),
+            "a plugin refused before setInfo had its library unmapped"
         );
     }
 }

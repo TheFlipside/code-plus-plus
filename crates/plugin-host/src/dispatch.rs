@@ -37,7 +37,8 @@ use crate::codepp_ext::{
     CODEPPM_SETCLIPBOARD,
 };
 use crate::ffi::{Hwnd, SCNotification};
-use crate::host::PluginHost;
+use crate::host::{is_plugin_cmd_id, PluginHost};
+use crate::idm::{IDM_LANG_USER, IDM_LANG_USER_LIMIT};
 
 /// `WM_USER` from `<winuser.h>`. Mirrored here so the dispatcher can
 /// be unit-tested without pulling the `windows` crate into a test
@@ -300,20 +301,6 @@ pub const USER_LANG_NAME: &str = "udf";
 /// What [`NPPM_GETLANGUAGEDESC`] answers for [`L_USER`], with the same
 /// suffix as [`USER_LANG_NAME`].
 pub const USER_LANG_DESC: &str = "User Defined language file";
-
-/// Notepad++'s `IDM_LANG_USER`, its `IDM_LANG + 180`: the command its
-/// Language menu's User Defined Language rows count from, which
-/// [`NPPM_GETNBUSERLANG`] hands a plugin. [`NPPM_MENUCOMMAND`] with
-/// `IDM_LANG_USER + 1 + i` switches the current buffer to the `i`-th UDL
-/// in the order the host lists them, for every `i` that keeps the
-/// command below [`IDM_LANG_USER_LIMIT`]. `IDM_LANG_USER` itself is
-/// Notepad++'s unnamed User Defined Language, which Code++ does not have.
-pub const IDM_LANG_USER: i32 = 46_180;
-
-/// Notepad++'s `IDM_LANG_USER_LIMIT`, its `IDM_LANG + 210`: the User
-/// Defined Language commands are the ids strictly between
-/// [`IDM_LANG_USER`] and this one.
-pub const IDM_LANG_USER_LIMIT: i32 = 46_210;
 
 // --- v1 NPPN_* set ---------------------------------------------------
 
@@ -1372,24 +1359,28 @@ pub trait HostServices {
     /// [`NPPM_GETNBUSERLANG`].
     fn user_lang_count(&self) -> i32;
 
-    /// Look up the keyboard shortcut for a built-in command id.
-    /// Drives [`NPPM_GETSHORTCUTBYCMDID`]. Returns the matching
-    /// `ShortcutKey` (Ctrl/Alt/Shift bits + virtual key) when
-    /// the host's accelerator table has a binding; `None` when
-    /// the cmd id is unknown to the host or has no accelerator.
+    /// The keyboard shortcut of a plugin's command. Drives
+    /// [`NPPM_GETSHORTCUTBYCMDID`]. Returns the matching
+    /// `ShortcutKey` (Ctrl/Alt/Shift bits + virtual key) when the
+    /// command has one; `None` when it has none, or no loaded plugin
+    /// published it.
+    ///
+    /// The dispatcher asks only for a plugin command id
+    /// ([`is_plugin_cmd_id`]), and refuses any other itself: Notepad++
+    /// answers this message for plugin commands only, and an id below
+    /// the plugin ranges is one of Code++'s own commands.
     fn shortcut_for_cmd_id(&self, cmd_id: i32) -> Option<crate::ffi::ShortcutKey>;
 
-    /// Remove every accelerator-table binding for `cmd_id`.
-    /// Drives [`NPPM_REMOVESHORTCUTBYCMDID`]. Returns `true` if
-    /// at least one binding was found and removed; `false` if
-    /// the cmd id had no binding (the table is left unchanged
-    /// in that case). Win32 has no in-place mutation API, so
-    /// the impl reads the table out via `CopyAcceleratorTableW`,
-    /// filters, and rebuilds via `CreateAcceleratorTableW` —
-    /// the new HACCEL replaces the old one and the old one is
-    /// destroyed. Other platforms (GTK / Cocoa, Phase 5) mutate
-    /// their action maps in place; the trait just reports the
-    /// outcome.
+    /// Remove the keyboard shortcut of a plugin's command. Drives
+    /// [`NPPM_REMOVESHORTCUTBYCMDID`]. Returns `true` if the command
+    /// had one and it no longer fires; `false` if it had none, in
+    /// which case nothing changes.
+    ///
+    /// The dispatcher passes only a plugin command id
+    /// ([`is_plugin_cmd_id`]), as Notepad++ does, so a plugin cannot
+    /// strip one of Code++'s own shortcuts. The shell's implementation
+    /// drops the command's entry from the plugin shortcut cache, which
+    /// every backend fires from, and on Win32 the accelerator too.
     fn remove_shortcut_for_cmd_id(&mut self, cmd_id: i32) -> bool;
 
     /// Show the tab-bar context menu for the active tab. Drives
@@ -1533,13 +1524,16 @@ pub trait HostServices {
     /// matches any module. Returns NULL if no entry matches.
     fn dock_hwnd_by_name(&self, name: &str, module_name: Option<&str>) -> crate::ffi::Hwnd;
 
-    /// Add a plugin-supplied icon to the host toolbar bound to
-    /// the given `cmd_id`. Drives [`NPPM_ADDTOOLBARICON`]. The
-    /// icon is added to the toolbar's HIMAGELIST via
-    /// `ImageList_ReplaceIcon` and a new `TBBUTTON` is appended
-    /// to the toolbar with `idCommand = cmd_id` so a click on
-    /// the new button posts `WM_COMMAND` with the plugin's id —
-    /// the same path Code++'s built-in toolbar buttons use.
+    /// Add a plugin-supplied icon to the host toolbar bound to the
+    /// given `cmd_id`. Drives [`NPPM_ADDTOOLBARICON`]. The dispatcher
+    /// passes only a plugin command id ([`is_plugin_cmd_id`]): a button
+    /// sends its id as a command when clicked, and any other id would
+    /// run one of Code++'s commands or nothing. On Win32 the icon is
+    /// added to the toolbar's HIMAGELIST via `ImageList_ReplaceIcon`
+    /// and a new `TBBUTTON` is appended to the toolbar with
+    /// `idCommand = cmd_id` so a click on the new button posts
+    /// `WM_COMMAND` with the plugin's id — the same path Code++'s
+    /// built-in toolbar buttons use.
     ///
     /// `hicon` is the plugin's `HICON` (Win32 32-bpp icon, the
     /// modern half of the upstream `toolbarIcons` struct). The
@@ -1977,10 +1971,17 @@ pub unsafe fn dispatch_nppm<S: HostServices>(
             // Returns: 1 on success, 0 on bad args / null
             //         icon / toolbar-add failure.
             //
+            // A plugin command only. A button sends its id as a
+            // command when clicked, and any other id is Code++'s or
+            // Notepad++'s, or on Win32 names one of Code++'s by its
+            // low 16 bits, so a button for it would run something the
+            // plugin's icon does not stand for. Notepad++ adds one
+            // whatever the id (DESIGN.md §7.4).
+            //
             // Reject NULL / negative lparam up front — same
             // kernel-mode-pointer guard the allocator pair and
             // shortcut/modeless messages use.
-            if lparam <= 0 {
+            if !is_plugin_cmd_id(wparam as i32) || lparam <= 0 {
                 return Some(0);
             }
             let icons = lparam as *const crate::ffi::ToolbarIcons;
@@ -3012,7 +3013,18 @@ pub unsafe fn dispatch_nppm<S: HostServices>(
             // removed, FALSE otherwise. Same `wparam as i32`
             // truncation parity with N++ — cmd ids are u16 in
             // Win32, well below i32::MAX.
-            isize::from(services.remove_shortcut_for_cmd_id(wparam as i32))
+            //
+            // A plugin command only. Notepad++ acts on plugin commands
+            // only too, though it answers TRUE for any id but 0,
+            // whether or not anything was removed. Any other id is one
+            // of Code++'s own commands, or names one by its low 16 bits
+            // on Win32, and a plugin could strip Code++'s own shortcuts
+            // with it — as it could until Phase 5 (DESIGN.md §7.4).
+            let cmd_id = wparam as i32;
+            if !is_plugin_cmd_id(cmd_id) {
+                return Some(0);
+            }
+            isize::from(services.remove_shortcut_for_cmd_id(cmd_id))
         }
 
         NPPM_GETSHORTCUTBYCMDID => {
@@ -3029,10 +3041,16 @@ pub unsafe fn dispatch_nppm<S: HostServices>(
             // on `write_unaligned`. Same kernel-mode-pointer
             // guard the cmd-id allocator and `NPPM_MSGTOPLUGIN`
             // already use.
-            if lparam <= 0 {
+            //
+            // A plugin command only, as in Notepad++: until Phase 5
+            // any other id was looked up in Win32's accelerator table,
+            // where a number of Code++'s own answered with one of its
+            // shortcuts (DESIGN.md §7.4).
+            let cmd_id = wparam as i32;
+            if !is_plugin_cmd_id(cmd_id) || lparam <= 0 {
                 return Some(0);
             }
-            let Some(shortcut) = services.shortcut_for_cmd_id(wparam as i32) else {
+            let Some(shortcut) = services.shortcut_for_cmd_id(cmd_id) else {
                 return Some(0);
             };
             // SAFETY: plugin promises lparam is a valid
@@ -4897,14 +4915,10 @@ mod tests {
         // above already guarantees: CODEPPMSG is WM_USER + 5000,
         // above NPPMSG + 200 and RUNCOMMAND_USER + 100.
         assert_eq!(NPPN_FIRST, 1000);
-        // The User Defined Language numbers, from upstream's
-        // `enum LangType` and its `menuCmdID.h` (`IDM_LANG` is
-        // `IDM + 6000`, `IDM` 40000). The checker in
-        // `tools/npp-abi-check/` reads neither file yet, so these were
-        // compared by hand (DESIGN.md §7.4).
+        // `L_USER`, from upstream's `enum LangType`, which the checker in
+        // `tools/npp-abi-check/` does not read yet, so it was compared by
+        // hand (DESIGN.md §7.4). The menu ids are pinned in `crate::idm`.
         assert_eq!(L_USER, 15);
-        assert_eq!(IDM_LANG_USER, 40_000 + 6_000 + 180);
-        assert_eq!(IDM_LANG_USER_LIMIT, 40_000 + 6_000 + 210);
     }
 
     #[test]
@@ -6292,7 +6306,7 @@ mod tests {
     #[test]
     fn allocate_cmd_id_writes_start_and_returns_one() {
         let mut s = MockServices {
-            next_alloc_cmd_id: 60_000,
+            next_alloc_cmd_id: 61_000,
             alloc_cmd_id_limit: 65_500,
             ..Default::default()
         };
@@ -6306,9 +6320,9 @@ mod tests {
             )
         };
         assert_eq!(r, Some(1));
-        assert_eq!(start, 60_000);
+        assert_eq!(start, 61_000);
         // Mock counter advanced by the requested count.
-        assert_eq!(s.next_alloc_cmd_id, 60_004);
+        assert_eq!(s.next_alloc_cmd_id, 61_004);
     }
 
     #[test]
@@ -6317,7 +6331,7 @@ mod tests {
         // non-overlapping ranges so two plugins don't collide on
         // the same id.
         let mut s = MockServices {
-            next_alloc_cmd_id: 60_000,
+            next_alloc_cmd_id: 61_000,
             alloc_cmd_id_limit: 65_500,
             ..Default::default()
         };
@@ -6327,9 +6341,9 @@ mod tests {
             dispatch_nppm(&mut s, NPPM_ALLOCATECMDID, 3, &raw mut a as isize);
             dispatch_nppm(&mut s, NPPM_ALLOCATECMDID, 5, &raw mut b as isize);
         }
-        assert_eq!(a, 60_000);
-        assert_eq!(b, 60_003);
-        assert_eq!(s.next_alloc_cmd_id, 60_008);
+        assert_eq!(a, 61_000);
+        assert_eq!(b, 61_003);
+        assert_eq!(s.next_alloc_cmd_id, 61_008);
     }
 
     #[test]
@@ -6351,7 +6365,7 @@ mod tests {
     #[test]
     fn allocate_cmd_id_zero_count_returns_zero() {
         let mut s = MockServices {
-            next_alloc_cmd_id: 60_000,
+            next_alloc_cmd_id: 61_000,
             alloc_cmd_id_limit: 65_500,
             ..Default::default()
         };
@@ -6363,7 +6377,7 @@ mod tests {
     #[test]
     fn allocate_cmd_id_null_lparam_returns_zero() {
         let mut s = MockServices {
-            next_alloc_cmd_id: 60_000,
+            next_alloc_cmd_id: 61_000,
             alloc_cmd_id_limit: 65_500,
             ..Default::default()
         };
@@ -6371,7 +6385,7 @@ mod tests {
         assert_eq!(r, Some(0));
         // Counter must not advance — the dispatcher rejects
         // before reaching the trait method.
-        assert_eq!(s.next_alloc_cmd_id, 60_000);
+        assert_eq!(s.next_alloc_cmd_id, 61_000);
     }
 
     #[test]
@@ -6381,13 +6395,13 @@ mod tests {
         // address would crash the host. The dispatcher's
         // `lparam <= 0` guard rejects up front.
         let mut s = MockServices {
-            next_alloc_cmd_id: 60_000,
+            next_alloc_cmd_id: 61_000,
             alloc_cmd_id_limit: 65_500,
             ..Default::default()
         };
         let r = unsafe { dispatch_nppm(&mut s, NPPM_ALLOCATECMDID, 4, -1isize) };
         assert_eq!(r, Some(0));
-        assert_eq!(s.next_alloc_cmd_id, 60_000);
+        assert_eq!(s.next_alloc_cmd_id, 61_000);
     }
 
     #[test]
@@ -6456,7 +6470,7 @@ mod tests {
         let mut s = MockServices {
             shortcuts: vec![
                 (
-                    1003,
+                    51_003,
                     ShortcutKey {
                         is_ctrl: 1,
                         is_alt: 0,
@@ -6465,7 +6479,7 @@ mod tests {
                     },
                 ),
                 (
-                    1005,
+                    51_005,
                     ShortcutKey {
                         is_ctrl: 1,
                         is_alt: 0,
@@ -6482,8 +6496,14 @@ mod tests {
             is_shift: 0xFF,
             key: 0xFF,
         };
-        let r =
-            unsafe { dispatch_nppm(&mut s, NPPM_GETSHORTCUTBYCMDID, 1003, &raw mut out as isize) };
+        let r = unsafe {
+            dispatch_nppm(
+                &mut s,
+                NPPM_GETSHORTCUTBYCMDID,
+                51_003,
+                &raw mut out as isize,
+            )
+        };
         assert_eq!(r, Some(1));
         assert_eq!(out.is_ctrl, 1);
         assert_eq!(out.is_alt, 0);
@@ -6506,7 +6526,7 @@ mod tests {
             dispatch_nppm(
                 &mut s,
                 NPPM_GETSHORTCUTBYCMDID,
-                9999, // unbound cmd id
+                51_999, // a plugin command id with no binding
                 &raw mut out as isize,
             )
         };
@@ -6518,19 +6538,35 @@ mod tests {
         assert_eq!(out.key, 0xAA);
     }
 
+    /// A mock with a binding for 51 003, so a dispatcher without the
+    /// pointer guard would write through the pointer, and a test of the
+    /// guard is not passed by a missing binding.
+    fn services_with_one_shortcut() -> MockServices {
+        let key = crate::ffi::ShortcutKey {
+            is_ctrl: 1,
+            is_alt: 0,
+            is_shift: 0,
+            key: b'N',
+        };
+        MockServices {
+            shortcuts: vec![(51_003, key)],
+            ..Default::default()
+        }
+    }
+
     #[test]
     fn get_shortcut_by_cmd_id_negative_lparam_returns_zero() {
         // Same kernel-mode-pointer guard the allocator pair and
         // MSGTOPLUGIN already use.
-        let mut s = MockServices::default();
-        let r = unsafe { dispatch_nppm(&mut s, NPPM_GETSHORTCUTBYCMDID, 1003, -1isize) };
+        let mut s = services_with_one_shortcut();
+        let r = unsafe { dispatch_nppm(&mut s, NPPM_GETSHORTCUTBYCMDID, 51_003, -1isize) };
         assert_eq!(r, Some(0));
     }
 
     #[test]
     fn get_shortcut_by_cmd_id_null_lparam_returns_zero() {
-        let mut s = MockServices::default();
-        let r = unsafe { dispatch_nppm(&mut s, NPPM_GETSHORTCUTBYCMDID, 1003, 0) };
+        let mut s = services_with_one_shortcut();
+        let r = unsafe { dispatch_nppm(&mut s, NPPM_GETSHORTCUTBYCMDID, 51_003, 0) };
         assert_eq!(r, Some(0));
     }
 
@@ -6542,7 +6578,7 @@ mod tests {
         let mut s = MockServices {
             shortcuts: vec![
                 (
-                    1003,
+                    51_003,
                     ShortcutKey {
                         is_ctrl: 1,
                         is_alt: 0,
@@ -6551,7 +6587,7 @@ mod tests {
                     },
                 ),
                 (
-                    1004,
+                    51_004,
                     ShortcutKey {
                         is_ctrl: 1,
                         is_alt: 0,
@@ -6562,12 +6598,12 @@ mod tests {
             ],
             ..Default::default()
         };
-        let r = unsafe { dispatch_nppm(&mut s, NPPM_REMOVESHORTCUTBYCMDID, 1003, 0) };
+        let r = unsafe { dispatch_nppm(&mut s, NPPM_REMOVESHORTCUTBYCMDID, 51_003, 0) };
         assert_eq!(r, Some(1));
         // The other binding stays intact — REMOVE only filters
         // out the matching cmd id.
         assert_eq!(s.shortcuts.len(), 1);
-        assert_eq!(s.shortcuts[0].0, 1004);
+        assert_eq!(s.shortcuts[0].0, 51_004);
     }
 
     #[test]
@@ -6575,7 +6611,7 @@ mod tests {
         use crate::ffi::ShortcutKey;
         let mut s = MockServices {
             shortcuts: vec![(
-                1003,
+                51_003,
                 ShortcutKey {
                     is_ctrl: 1,
                     is_alt: 0,
@@ -6585,11 +6621,83 @@ mod tests {
             )],
             ..Default::default()
         };
-        let r = unsafe { dispatch_nppm(&mut s, NPPM_REMOVESHORTCUTBYCMDID, 9999, 0) };
+        let r = unsafe { dispatch_nppm(&mut s, NPPM_REMOVESHORTCUTBYCMDID, 51_999, 0) };
         assert_eq!(r, Some(0));
         // The existing binding is untouched on a no-match
         // request.
         assert_eq!(s.shortcuts.len(), 1);
+    }
+
+    /// The shortcut and toolbar messages refuse an id that is not a
+    /// plugin command before the host is asked, as Notepad++'s shortcut
+    /// messages do: the mock has a binding for every id tried, and
+    /// would add any button, so only the dispatcher can refuse. An id
+    /// below the plugin ranges is one of Code++'s own commands, and one
+    /// past 65 535 names one by its low 16 bits on Win32.
+    #[test]
+    fn shortcut_and_toolbar_messages_refuse_ids_that_are_not_plugin_commands() {
+        use crate::ffi::{ShortcutKey, ToolbarIcons};
+        use crate::host::{PLUGIN_ALLOC_CMD_LIMIT, PLUGIN_CMD_ID_BASE, PLUGIN_CMD_ID_LIMIT};
+        use crate::idm::{IDM_EDIT_AUTOCOMPLETE, IDM_FILE_NEW};
+        let key = ShortcutKey {
+            is_ctrl: 1,
+            is_alt: 0,
+            is_shift: 0,
+            key: b'N',
+        };
+        let refused = [
+            1003,
+            65_536 + 1003,
+            IDM_FILE_NEW,
+            IDM_EDIT_AUTOCOMPLETE,
+            PLUGIN_CMD_ID_BASE - 1,
+            PLUGIN_CMD_ID_LIMIT,
+            PLUGIN_ALLOC_CMD_LIMIT,
+            -1,
+        ];
+        let mut s = MockServices {
+            shortcuts: refused.iter().map(|&id| (id, key)).collect(),
+            toolbar_icon_succeeds: true,
+            ..Default::default()
+        };
+        let mut icon = 0u8;
+        let icons = ToolbarIcons {
+            h_toolbar_bmp: std::ptr::null_mut(),
+            h_toolbar_icon: (&raw mut icon).cast(),
+        };
+        for id in refused {
+            // `-1` as a `WPARAM`, as a plugin would pass it.
+            let wparam = id as isize as usize;
+            let mut out = ShortcutKey {
+                is_ctrl: 0xAA,
+                is_alt: 0xAA,
+                is_shift: 0xAA,
+                key: 0xAA,
+            };
+            let got = unsafe {
+                dispatch_nppm(
+                    &mut s,
+                    NPPM_GETSHORTCUTBYCMDID,
+                    wparam,
+                    &raw mut out as isize,
+                )
+            };
+            assert_eq!(got, Some(0), "{id}");
+            assert_eq!(out.key, 0xAA, "{id}: a shortcut was written");
+            let removed = unsafe { dispatch_nppm(&mut s, NPPM_REMOVESHORTCUTBYCMDID, wparam, 0) };
+            assert_eq!(removed, Some(0), "{id}");
+            let added = unsafe {
+                dispatch_nppm(
+                    &mut s,
+                    NPPM_ADDTOOLBARICON,
+                    wparam,
+                    &raw const icons as isize,
+                )
+            };
+            assert_eq!(added, Some(0), "{id}");
+        }
+        assert_eq!(s.shortcuts.len(), refused.len(), "a binding was removed");
+        assert!(s.calls().is_empty(), "the host was asked: {:?}", s.calls());
     }
 
     // --- NPPM_MODELESSDIALOG ---
@@ -6668,9 +6776,9 @@ mod tests {
             h_toolbar_icon: 0xCAFE_BABE_usize as *mut core::ffi::c_void,
         };
         let icons_ptr = &raw const icons as isize;
-        let r = unsafe { dispatch_nppm(&mut s, NPPM_ADDTOOLBARICON, 60_001, icons_ptr) };
+        let r = unsafe { dispatch_nppm(&mut s, NPPM_ADDTOOLBARICON, 61_001, icons_ptr) };
         assert_eq!(r, Some(1));
-        assert_eq!(s.toolbar_icons, vec![(60_001, 0xCAFE_BABE_usize)]);
+        assert_eq!(s.toolbar_icons, vec![(61_001, 0xCAFE_BABE_usize)]);
     }
 
     #[test]
@@ -6689,7 +6797,7 @@ mod tests {
             h_toolbar_icon: core::ptr::null_mut(),
         };
         let icons_ptr = &raw const icons as isize;
-        let r = unsafe { dispatch_nppm(&mut s, NPPM_ADDTOOLBARICON, 60_001, icons_ptr) };
+        let r = unsafe { dispatch_nppm(&mut s, NPPM_ADDTOOLBARICON, 61_001, icons_ptr) };
         assert_eq!(r, Some(0));
         // Mock should not have been called — the dispatcher
         // short-circuited on the null-icon check.
@@ -6711,14 +6819,14 @@ mod tests {
             h_toolbar_icon: 0xBEEF_usize as *mut core::ffi::c_void,
         };
         let icons_ptr = &raw const icons as isize;
-        let r = unsafe { dispatch_nppm(&mut s, NPPM_ADDTOOLBARICON, 60_002, icons_ptr) };
+        let r = unsafe { dispatch_nppm(&mut s, NPPM_ADDTOOLBARICON, 61_002, icons_ptr) };
         assert_eq!(r, Some(0));
     }
 
     #[test]
     fn add_toolbar_icon_null_lparam_returns_zero() {
         let mut s = MockServices::default();
-        let r = unsafe { dispatch_nppm(&mut s, NPPM_ADDTOOLBARICON, 60_001, 0) };
+        let r = unsafe { dispatch_nppm(&mut s, NPPM_ADDTOOLBARICON, 61_001, 0) };
         assert_eq!(r, Some(0));
     }
 
@@ -6727,7 +6835,7 @@ mod tests {
         // Same kernel-mode-pointer guard as MODELESSDIALOG /
         // allocators / shortcut messages.
         let mut s = MockServices::default();
-        let r = unsafe { dispatch_nppm(&mut s, NPPM_ADDTOOLBARICON, 60_001, -1isize) };
+        let r = unsafe { dispatch_nppm(&mut s, NPPM_ADDTOOLBARICON, 61_001, -1isize) };
         assert_eq!(r, Some(0));
     }
 
@@ -7064,7 +7172,7 @@ mod tests {
         use crate::ffi::ShortcutKey;
         let mut s = MockServices {
             shortcuts: vec![(
-                1003,
+                51_003,
                 ShortcutKey {
                     is_ctrl: 1,
                     is_alt: 0,
@@ -7075,7 +7183,7 @@ mod tests {
             ..Default::default()
         };
         unsafe {
-            dispatch_nppm(&mut s, NPPM_REMOVESHORTCUTBYCMDID, 1003, 0);
+            dispatch_nppm(&mut s, NPPM_REMOVESHORTCUTBYCMDID, 51_003, 0);
         }
         let mut out = ShortcutKey {
             is_ctrl: 0xFF,
@@ -7083,8 +7191,14 @@ mod tests {
             is_shift: 0xFF,
             key: 0xFF,
         };
-        let r =
-            unsafe { dispatch_nppm(&mut s, NPPM_GETSHORTCUTBYCMDID, 1003, &raw mut out as isize) };
+        let r = unsafe {
+            dispatch_nppm(
+                &mut s,
+                NPPM_GETSHORTCUTBYCMDID,
+                51_003,
+                &raw mut out as isize,
+            )
+        };
         assert_eq!(r, Some(0));
         // Out-buffer untouched on miss (same invariant the
         // GETSHORTCUTBYCMDID-only test pinned).

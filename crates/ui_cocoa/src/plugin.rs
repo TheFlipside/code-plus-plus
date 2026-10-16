@@ -2951,7 +2951,7 @@ fn load_plugins_where(scope: LoadScope) {
         };
         if let Some(ready) = ready {
             notices.push(ready);
-            loaded_now.push(pending.idx);
+            loaded_now.push(pending.idx());
         }
     }
     with_state(|st| st.shell.after_plugin_loads());

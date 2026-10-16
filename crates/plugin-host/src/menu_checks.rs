@@ -97,16 +97,16 @@ mod tests {
     #[test]
     fn a_mark_is_recorded_only_for_a_published_command() {
         let mut checks = PluginMenuChecks::default();
-        checks.absorb(&[item(50_000, true, false), item(50_001, false, false)]);
-        assert!(checks.set(50_000, true));
-        assert_eq!(checks.get(50_000), Some(true));
-        assert!(!checks.set(50_001, true), "a separator is no command");
+        checks.absorb(&[item(51_000, true, false), item(51_001, false, false)]);
+        assert!(checks.set(51_000, true));
+        assert_eq!(checks.get(51_000), Some(true));
+        assert!(!checks.set(51_001, true), "a separator is no command");
         assert!(
             !checks.set(42_001, true),
             "a built-in IDM_* id is not mapped"
         );
         assert!(!checks.set(-1, false));
-        assert_eq!(checks.get(50_001), None);
+        assert_eq!(checks.get(51_001), None);
         assert_eq!(checks.get(42_001), None);
     }
 
@@ -116,13 +116,13 @@ mod tests {
     #[test]
     fn init2check_seeds_a_mark_without_overriding_one() {
         let mut checks = PluginMenuChecks::default();
-        checks.absorb(&[item(50_010, true, true), item(50_011, true, false)]);
-        assert_eq!(checks.get(50_010), Some(true), "_init2Check ticks it");
-        assert_eq!(checks.get(50_011), None, "no mark: drawn as a plain item");
-        assert!(checks.set(50_010, false));
-        checks.absorb(&[item(50_010, true, true)]);
+        checks.absorb(&[item(51_010, true, true), item(51_011, true, false)]);
+        assert_eq!(checks.get(51_010), Some(true), "_init2Check ticks it");
+        assert_eq!(checks.get(51_011), None, "no mark: drawn as a plain item");
+        assert!(checks.set(51_010, false));
+        checks.absorb(&[item(51_010, true, true)]);
         assert_eq!(
-            checks.get(50_010),
+            checks.get(51_010),
             Some(false),
             "the plugin's untick survives"
         );
@@ -134,8 +134,8 @@ mod tests {
     #[test]
     fn an_untick_is_recorded_as_a_mark() {
         let mut checks = PluginMenuChecks::default();
-        checks.absorb(&[item(50_020, true, false)]);
-        assert!(checks.set(50_020, false));
-        assert_eq!(checks.get(50_020), Some(false));
+        checks.absorb(&[item(51_020, true, false)]);
+        assert!(checks.set(51_020, false));
+        assert_eq!(checks.get(51_020), Some(false));
     }
 }

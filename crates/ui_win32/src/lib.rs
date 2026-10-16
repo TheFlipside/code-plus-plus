@@ -128,9 +128,25 @@ use codepp_editor::theme::{
     apply_brace_styles, apply_default_styles, apply_indent_guide_style, apply_line_number_margin,
 };
 use codepp_plugin_host::ffi::SCNotification;
+// The Notepad++ menu-command ids (IDM_*) plugins pass to
+// `NPPM_MENUCOMMAND` and `NPPM_SETMENUITEMCHECK`, the ones Code++ maps
+// onto a command of its own. They live in `codepp_plugin_host::idm`,
+// where `tools/npp-abi-check/check.py` compares each with Notepad++'s
+// own `menuCmdID.h`: until Phase 5 this crate kept copies of its own,
+// eleven of them wrong (DESIGN.md §7.4). A new mapping adds its
+// constant there.
+use codepp_plugin_host::idm::{
+    IDM_EDIT_COPY, IDM_EDIT_CUT, IDM_EDIT_DELETE, IDM_EDIT_PASTE, IDM_EDIT_REDO,
+    IDM_EDIT_SELECTALL, IDM_EDIT_UNDO, IDM_FILE_CLOSE, IDM_FILE_CLOSEALL, IDM_FILE_EXIT,
+    IDM_FILE_NEW, IDM_FILE_OPEN, IDM_FILE_PRINT, IDM_FILE_RELOAD, IDM_FILE_RENAME, IDM_FILE_SAVE,
+    IDM_FILE_SAVEALL, IDM_FILE_SAVEAS, IDM_FORMAT_ANSI, IDM_FORMAT_AS_UTF_8, IDM_FORMAT_UTF_16BE,
+    IDM_FORMAT_UTF_16LE, IDM_FORMAT_UTF_8, IDM_SEARCH_FIND, IDM_SEARCH_FINDINFILES,
+    IDM_SEARCH_FINDNEXT, IDM_SEARCH_GOTOLINE, IDM_SEARCH_REPLACE, IDM_VIEW_WRAP, IDM_VIEW_ZOOMIN,
+    IDM_VIEW_ZOOMOUT, IDM_VIEW_ZOOMRESTORE,
+};
 use codepp_plugin_host::{
-    Notification, NppData, PluginAdminEntry, CODEPPMSG, CODEPPMSG_RANGE, NPPMSG, NPPMSG_RANGE,
-    PLUGIN_ALLOC_CMD_LIMIT, PLUGIN_CMD_ID_BASE, RUNCOMMAND_RANGE, RUNCOMMAND_USER,
+    is_plugin_cmd_id, Notification, NppData, PluginAdminEntry, CODEPPMSG, CODEPPMSG_RANGE, NPPMSG,
+    NPPMSG_RANGE, RUNCOMMAND_RANGE, RUNCOMMAND_USER,
 };
 use codepp_scintilla_sys::{
     ScintillaDirectFunction, Scintilla_RegisterClasses, CARETSTYLE_INVISIBLE, SCI_ADDUNDOACTION,
@@ -262,20 +278,28 @@ use windows::Win32::UI::WindowsAndMessaging::{
 
 // --- Built-in menu command ids ----------------------------------------
 //
-// The host's built-in WM_COMMAND ids live in 1000..=1999. Plugin
-// command ids start at PLUGIN_CMD_ID_BASE = 50000, well above any
-// host-built-in. Two ranges inside 1000..=1999 are *dynamic* — the
-// cmd id encodes a parameter the WM_COMMAND handler decodes back:
+// The host's built-in WM_COMMAND ids live below 5000. Plugin command
+// ids start at PLUGIN_CMD_ID_BASE, well above them and above
+// Notepad++'s menu commands. None may be one of Notepad++'s own ids: a
+// plugin that sends one as a raw WM_COMMAND would run whatever Code++
+// put there. Notepad++ numbers all of its commands from 10001 up but
+// Print Now (1001, `IDM_FILE_PRINTNOW`), so these stay below 10001 and
+// off 1001.
 //
-//   ID_LANGUAGE_BASE..ID_LANGUAGE_END  → LangType id
-//   ID_WINDOW_BASE..ID_WINDOW_END      → tab index
+// Five ranges are *dynamic* — the cmd id encodes a parameter the
+// WM_COMMAND handler decodes back:
 //
-// The static ids below avoid those two ranges so a click on a static
-// item never collides with a dynamic one.
+//   ID_FILE_RECENT_BASE..=ID_FILE_RECENT_END    → recent-files slot
+//   ID_LANGUAGE_BASE..=ID_LANGUAGE_END          → LangType id
+//   ID_WINDOW_BASE..=ID_WINDOW_END              → tab index
+//   ID_UDL_ITEM_BASE..=ID_UDL_ITEM_END          → loaded UDL
+//   ID_PLUGIN_SHORTCUT_SHIM_BASE..=…_SHIM_END   → cached plugin chord
+//
+// The static ids below avoid those ranges so a click on a static item
+// never collides with a dynamic one.
 //
 // File (1000-1099)
 const ID_FILE_SAVE: u16 = 1000;
-const ID_FILE_EXIT: u16 = 1001;
 const ID_FILE_CLOSE: u16 = 1002;
 const ID_FILE_NEW: u16 = 1003;
 const ID_FILE_OPEN: u16 = 1004;
@@ -398,6 +422,10 @@ const ID_FILE_RESTORE_RECENT: u16 = 1066;
 const ID_FILE_OPEN_ALL_RECENT: u16 = 1067;
 /// File → Empty Recent Files List — drops every tracked path.
 const ID_FILE_EMPTY_RECENT: u16 = 1068;
+/// File → Exit. 1069 rather than the 1001 it had until Phase 5, which
+/// is Notepad++'s Print Now: a plugin printing without the dialog by a
+/// raw `WM_COMMAND` closed Code++ (DESIGN.md §7.4).
+const ID_FILE_EXIT: u16 = 1069;
 
 /// File → Load Session... — pick a Notepad++-shaped session XML from
 /// disk, parse its `<File>` list, and open every path referenced. The
@@ -570,12 +598,11 @@ const ID_UDL_ITEM_END: u16 = 3099;
 // internalID)` cache identity. Firing one loads every pending
 // plugin, resolves the identity to the real cmd id, re-posts it
 // as an ordinary `WM_COMMAND`, and rebuilds the table with real
-// ids (`refresh_plugin_accels`) so `NPPM_GETSHORTCUTBYCMDID`'s
-// live-HACCEL introspection sees plugin bindings under their
-// real ids from then on. The band sits in the free space between
+// ids (`refresh_plugin_accels`), so a second press dispatches the
+// real id directly. The band sits in the free space between
 // the last host menu id (`ID_UDL_ITEM_END` = 3099) and N++'s
-// `IDM_BASE` (40000); 800 ids comfortably exceeds any plausible
-// shortcut count while staying clear of both namespaces.
+// lowest id but Print Now (10001); 800 ids comfortably exceeds any
+// plausible shortcut count while staying clear of both namespaces.
 const ID_PLUGIN_SHORTCUT_SHIM_BASE: u16 = 3200;
 const ID_PLUGIN_SHORTCUT_SHIM_END: u16 = 3999;
 
@@ -1897,12 +1924,10 @@ struct Win32Ui {
     /// `DrawMenuBar`. Read-only after window creation.
     main_menu: HMENU,
     /// Pointer to `WindowState.accel_handle` so the dispatcher
-    /// can both read (via `CopyAcceleratorTableW`, used by
-    /// `NPPM_GETSHORTCUTBYCMDID`) and write (via the
+    /// can replace the live accelerator table (via the
     /// recreate-and-swap dance, used by
-    /// `NPPM_REMOVESHORTCUTBYCMDID`) the live accelerator
-    /// table. `Win32Ui` stays Copy by carrying the raw pointer
-    /// rather than a borrow.
+    /// `NPPM_REMOVESHORTCUTBYCMDID`). `Win32Ui` stays Copy by
+    /// carrying the raw pointer rather than a borrow.
     ///
     /// # Safety
     ///
@@ -1987,82 +2012,27 @@ struct Win32Ui {
     docmap_editor: EditorHandle,
 }
 
-// -----------------------------------------------------------------
-// Notepad++ ABI menu-command ids (IDM_*).
-//
-// These are the numeric values plugins pass to `NPPM_MENUCOMMAND` and
-// `NPPM_SETMENUITEMCHECK` (declared in
-// `plugins/nppcompat-headers/menuCmdID.h`). Kept as Rust constants
-// alongside Code++'s own [`ID_*`] block so the mapping function below
-// can be a single `match` without a magic-number soup. Only the ids
-// Code++ actually implements a target for are declared here; new
-// mappings add a matching constant when they land.
-//
-// The values MUST match `menuCmdID.h` exactly — a plugin compiled
-// against those constants sends those numeric ids over the ABI, and
-// a mismatch here would silently drop the dispatch.
-const IDM_BASE: i32 = 40000;
-const IDM_FILE: i32 = IDM_BASE + 1000;
-const IDM_EDIT: i32 = IDM_BASE + 2000;
-const IDM_SEARCH: i32 = IDM_BASE + 3000;
-const IDM_VIEW: i32 = IDM_BASE + 4000;
-const IDM_FORMAT: i32 = IDM_BASE + 5000;
-
-const IDM_FILE_NEW: i32 = IDM_FILE + 1;
-const IDM_FILE_OPEN: i32 = IDM_FILE + 2;
-const IDM_FILE_CLOSE: i32 = IDM_FILE + 3;
-const IDM_FILE_CLOSEALL: i32 = IDM_FILE + 4;
-const IDM_FILE_SAVE: i32 = IDM_FILE + 6;
-const IDM_FILE_SAVEALL: i32 = IDM_FILE + 7;
-const IDM_FILE_SAVEAS: i32 = IDM_FILE + 8;
-const IDM_FILE_PRINT: i32 = IDM_FILE + 9;
-const IDM_FILE_EXIT: i32 = IDM_FILE + 11;
-const IDM_FILE_RELOAD: i32 = IDM_FILE + 14;
-const IDM_FILE_RENAME: i32 = IDM_FILE + 17;
-
-const IDM_EDIT_CUT: i32 = IDM_EDIT + 1;
-const IDM_EDIT_COPY: i32 = IDM_EDIT + 2;
-const IDM_EDIT_UNDO: i32 = IDM_EDIT + 3;
-const IDM_EDIT_REDO: i32 = IDM_EDIT + 4;
-const IDM_EDIT_PASTE: i32 = IDM_EDIT + 5;
-const IDM_EDIT_DELETE: i32 = IDM_EDIT + 6;
-const IDM_EDIT_SELECTALL: i32 = IDM_EDIT + 7;
-
-const IDM_SEARCH_FIND: i32 = IDM_SEARCH + 1;
-const IDM_SEARCH_FINDNEXT: i32 = IDM_SEARCH + 2;
-const IDM_SEARCH_REPLACE: i32 = IDM_SEARCH + 3;
-const IDM_SEARCH_GOTOLINE: i32 = IDM_SEARCH + 4;
-const IDM_SEARCH_FINDINFILES: i32 = IDM_SEARCH + 9;
-
-const IDM_VIEW_ZOOMIN: i32 = IDM_VIEW + 3;
-const IDM_VIEW_ZOOMOUT: i32 = IDM_VIEW + 4;
-const IDM_VIEW_ZOOMRESTORE: i32 = IDM_VIEW + 5;
-const IDM_VIEW_WRAP: i32 = IDM_VIEW + 7;
-
-const IDM_FORMAT_ANSI: i32 = IDM_FORMAT + 1;
-const IDM_FORMAT_UTF_8: i32 = IDM_FORMAT + 2;
-const IDM_FORMAT_UTF_16BE: i32 = IDM_FORMAT + 3;
-const IDM_FORMAT_UTF_16LE: i32 = IDM_FORMAT + 4;
-const IDM_FORMAT_AS_UTF_8: i32 = IDM_FORMAT + 5;
-
-/// Returns `true` if `idm` falls inside the plugin-owned cmd-id
-/// range — either the `FuncItem` band (from `getFuncsArray`,
-/// starting at [`PLUGIN_CMD_ID_BASE`]) or the `NPPM_ALLOCATECMDID`
-/// pool (which caps at [`PLUGIN_ALLOC_CMD_LIMIT`]). Ids outside this
-/// range are either built-in `IDM_*` values (below the base) or
-/// garbage (above the limit).
+/// The `WM_COMMAND` id a plugin means by `idm` in `NPPM_MENUCOMMAND`
+/// or `NPPM_SETMENUITEMCHECK`: a Notepad++ menu command mapped onto
+/// Code++'s own ([`map_npp_idm_to_local`]), a plugin's own command as
+/// it is, or `None` for anything else, which the caller drops.
 ///
-/// **Upper bound matters.** `main_wnd_proc`'s `WM_COMMAND` handler
-/// keys off only the low 16 bits of `wparam`, so an `idm` above
-/// `u16::MAX` posted through `dispatch_npp_menu_command` would
-/// truncate down and alias onto whatever built-in `ID_*` sits at
-/// that low id (e.g. `ID_FILE_SAVE = 1000`). Refusing values past
-/// the alloc-pool ceiling makes buggy plugins fail closed
-/// (`dispatch_npp_menu_command` returns `false` on the unknown id)
-/// instead of silently triggering an unrelated host command.
-#[cfg(target_os = "windows")]
-fn is_plugin_cmd_id(idm: i32) -> bool {
-    (PLUGIN_CMD_ID_BASE..=PLUGIN_ALLOC_CMD_LIMIT).contains(&idm)
+/// **Anything else must be dropped, not passed on.** A plugin may name
+/// any number, and `main_wnd_proc`'s `WM_COMMAND` handler keys off only
+/// the low 16 bits of `wparam`. A Notepad++ id Code++ does not map, or
+/// a number past `u16::MAX`, would otherwise reach whatever Code++
+/// command or plugin command sits at that id: a plugin's command, for
+/// Notepad++'s auto-completion commands at 50000 to 50011 until Phase 5
+/// moved the plugin range above them, or Code++'s own `ID_FILE_SAVE`,
+/// 1000, for `65_536 + 1000`.
+fn npp_menu_target(idm: i32) -> Option<u32> {
+    if let Some(local) = map_npp_idm_to_local(idm) {
+        return Some(u32::from(local));
+    }
+    if is_plugin_cmd_id(idm) {
+        return u32::try_from(idm).ok();
+    }
+    None
 }
 
 /// Translate a Notepad++-ABI `IDM_*` command id into the Code++
@@ -2071,9 +2041,10 @@ fn is_plugin_cmd_id(idm: i32) -> bool {
 /// (e.g. Notepad++ features Code++ doesn't implement yet).
 ///
 /// Plugin-allocated cmd ids (from `getFuncsArray` `FuncItem` entries
-/// or `NPPM_ALLOCATECMDID`) are **not** mapped — the caller detects
-/// those via [`is_plugin_cmd_id`] and passes them through untouched
-/// so a plugin's own menu items dispatch through the same route.
+/// or `NPPM_ALLOCATECMDID`) are **not** mapped — [`npp_menu_target`]
+/// detects those with `is_plugin_cmd_id` and passes them through
+/// untouched so a plugin's own menu items dispatch through the same
+/// route.
 fn map_npp_idm_to_local(idm: i32) -> Option<u16> {
     match idm {
         IDM_FILE_NEW => Some(ID_FILE_NEW),
@@ -2104,8 +2075,11 @@ fn map_npp_idm_to_local(idm: i32) -> Option<u16> {
         IDM_VIEW_ZOOMRESTORE => Some(ID_VIEW_ZOOMRESET),
         IDM_VIEW_WRAP => Some(ID_VIEW_WORDWRAP),
         IDM_FORMAT_ANSI => Some(ID_ENCODING_ANSI),
-        IDM_FORMAT_UTF_8 => Some(ID_ENCODING_UTF8),
-        IDM_FORMAT_AS_UTF_8 => Some(ID_ENCODING_UTF8_BOM),
+        // Notepad++'s names mislead: its `IDM_FORMAT_UTF_8` is UTF-8 with
+        // the byte-order mark and `IDM_FORMAT_AS_UTF_8` without. Until
+        // Phase 5 these two were paired the other way round.
+        IDM_FORMAT_UTF_8 => Some(ID_ENCODING_UTF8_BOM),
+        IDM_FORMAT_AS_UTF_8 => Some(ID_ENCODING_UTF8),
         IDM_FORMAT_UTF_16LE => Some(ID_ENCODING_UTF16_LE),
         IDM_FORMAT_UTF_16BE => Some(ID_ENCODING_UTF16_BE),
         _ => None,
@@ -2980,41 +2954,6 @@ impl UiPlatform for Win32Ui {
         true
     }
 
-    fn shortcut_for_cmd_id(&self, cmd_id: i32) -> Option<codepp_plugin_host::ShortcutKey> {
-        // Live introspection of the current accelerator table —
-        // reads the same HACCEL the message pump consults via
-        // `TranslateAcceleratorW`. When
-        // `NPPM_REMOVESHORTCUTBYCMDID` rebuilds the table the
-        // change shows up here on the next call without any
-        // cache invalidation: there's no cache.
-        //
-        // SAFETY: `self.accel_handle` was set by
-        // `WindowState::split` (or the wnd_proc construction
-        // sites) to point at `WindowState.accel_handle`. The
-        // dereference reads the live HACCEL on the UI thread.
-        // See `Win32Ui.accel_handle` field doc for the full
-        // safety argument. `CopyAcceleratorTableW` is a
-        // read-only Win32 query that doesn't re-enter
-        // wnd_proc.
-        let haccel = unsafe { *self.accel_handle };
-        if haccel.is_invalid() {
-            return None;
-        }
-        let count = unsafe { CopyAcceleratorTableW(haccel, None) };
-        if count <= 0 {
-            return None;
-        }
-        let mut entries: Vec<ACCEL> = vec![ACCEL::default(); count as usize];
-        let written = unsafe { CopyAcceleratorTableW(haccel, Some(&mut entries)) };
-        if written <= 0 {
-            return None;
-        }
-        entries.truncate(written as usize);
-        let needle = cmd_id as u16;
-        let entry = entries.iter().find(|a| a.cmd == needle)?;
-        Some(decode_accel_to_shortcut_key(entry))
-    }
-
     fn register_modeless_dialog(&mut self, dlg: codepp_plugin_host::Hwnd, register: bool) -> bool {
         // The plugin's `Hwnd` opaque pointer is the same
         // `*mut c_void` Win32 ABI uses for `HWND` — wrap it
@@ -3666,8 +3605,11 @@ impl UiPlatform for Win32Ui {
         // slot fresh on every iteration so the removed binding
         // stops translating on the very next keystroke.
         //
-        // SAFETY: same UI-thread, single-mutator invariant as
-        // `shortcut_for_cmd_id` above. The destroy-old step
+        // SAFETY: `self.accel_handle` was set by
+        // `WindowState::split` (or the wnd_proc construction
+        // sites) to point at `WindowState.accel_handle`, and is
+        // dereferenced on the UI thread only; see the
+        // `Win32Ui.accel_handle` field doc. The destroy-old step
         // happens AFTER the new HACCEL is written, so the
         // pump (which can in principle race the recreate on a
         // future async-dispatched plugin call) never reads a
@@ -3686,7 +3628,12 @@ impl UiPlatform for Win32Ui {
             return false;
         }
         entries.truncate(written as usize);
-        let needle = cmd_id as u16;
+        // The shell passes plugin command ids only, which all fit; an
+        // id that did not would otherwise name a command by its low 16
+        // bits, one of Code++'s own among them.
+        let Ok(needle) = u16::try_from(cmd_id) else {
+            return false;
+        };
         let before = entries.len();
         entries.retain(|a| a.cmd != needle);
         if entries.len() == before {
@@ -3883,30 +3830,11 @@ impl UiPlatform for Win32Ui {
 
     #[cfg(target_os = "windows")]
     fn dispatch_npp_menu_command(&mut self, idm: i32) -> bool {
-        // Resolve the built-in mapping first. Plugin-allocated cmd
-        // ids (FuncItem entries or `NPPM_ALLOCATECMDID` allocations)
-        // land inside the range checked by [`is_plugin_cmd_id`];
-        // those are already installed as menu items owned by the
-        // plugin's own submenu and can be dispatched as-is. Unmapped
-        // built-in ids AND ids past the plugin-alloc ceiling get
-        // logged and dropped — the alternative (posting an
-        // unrecognised WM_COMMAND) would either hit the fall-through
-        // arm or, worse, collide with an unrelated Code++ ID_* value
-        // via `main_wnd_proc`'s low-16-bit `WM_COMMAND` keying.
-        let target: u32 = if let Some(local) = map_npp_idm_to_local(idm) {
-            u32::from(local)
-        } else if is_plugin_cmd_id(idm) {
-            // Plugin-allocated cmd id — safe to pass through: it
-            // was minted by our own allocator (or came out of the
-            // plugin's own FuncItem table) and points at an item
-            // in the plugin's submenu. `idm as u32` widens
-            // losslessly because `is_plugin_cmd_id` guaranteed
-            // `idm >= PLUGIN_CMD_ID_BASE`, which is positive.
-            #[allow(clippy::cast_sign_loss)]
-            {
-                idm as u32
-            }
-        } else {
+        // A Notepad++ command maps onto Code++'s own, and a plugin's
+        // command — already installed as an item in the plugin's own
+        // submenu — dispatches as it is. Every other id is logged and
+        // dropped; `npp_menu_target` says why.
+        let Some(target) = npp_menu_target(idm) else {
             tracing::trace!(idm, "NPPM_MENUCOMMAND: no target for idm");
             return false;
         };
@@ -3940,23 +3868,11 @@ impl UiPlatform for Win32Ui {
 
     #[cfg(target_os = "windows")]
     fn set_npp_menu_item_check(&mut self, idm: i32, checked: bool) -> bool {
-        // Same id-shape decoding as `dispatch_npp_menu_command`:
-        // built-in ids go through the mapping table, plugin cmd
-        // ids pass through (bounded by `is_plugin_cmd_id`), and
-        // everything else is rejected with a trace log. Rejection
-        // is symmetric with `dispatch_npp_menu_command` even though
-        // `CheckMenuItem` itself doesn't truncate — a plugin
-        // sending garbage-past-the-alloc-ceiling is a bug either
-        // way, and failing closed on both paths keeps the two
-        // dispatch shapes consistent.
-        let target: u32 = if let Some(local) = map_npp_idm_to_local(idm) {
-            u32::from(local)
-        } else if is_plugin_cmd_id(idm) {
-            #[allow(clippy::cast_sign_loss)]
-            {
-                idm as u32
-            }
-        } else {
+        // The same decoding as `dispatch_npp_menu_command`, and the
+        // same refusal: `CheckMenuItem` does not truncate an id, but
+        // marking the item of whatever command sits at an id the
+        // plugin did not mean is as wrong as running it.
+        let Some(target) = npp_menu_target(idm) else {
             tracing::trace!(idm, "NPPM_SETMENUITEMCHECK: no target for idm");
             return false;
         };
@@ -7636,7 +7552,8 @@ unsafe fn handle_plugin_shortcut_shim(hwnd: HWND, shim_id: u16) {
     // menus and rebuilds the accelerator table, so the chord that
     // fired under a shim id now binds to the plugin's real cmd id
     // (and leaves the shim map): a second press dispatches directly,
-    // and NPPM_GETSHORTCUTBYCMDID sees the binding under its real id.
+    // and NPPM_REMOVESHORTCUTBYCMDID finds the binding under its real
+    // id.
     unsafe { load_pending_plugins(hwnd, npp_data) };
     // Resolve the real command and post it, so the ordinary plugin
     // WM_COMMAND arm dispatches it with no borrow held.
@@ -7873,8 +7790,9 @@ unsafe fn build_plugin_submenu(
         }
         let label_w: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
         // `cmd_id` is i32 (signed) but AppendMenuW expects usize.
-        // Plugin cmd_ids are always positive (assigned from
-        // PLUGIN_CMD_ID_BASE = 50000), so the cast is value-preserving.
+        // Plugin cmd_ids are always positive (assigned upward from
+        // `codepp_plugin_host::PLUGIN_CMD_ID_BASE`), so the cast is
+        // value-preserving.
         let id = func.cmd_id as usize;
         // SAFETY: `submenu` is the HMENU we just created;
         // `label_w` is a local null-terminated wide string that
@@ -17153,41 +17071,7 @@ fn track_window_geometry(hwnd: HWND, shell: &mut Shell, wparam_size_state: u32) 
     shell.set_window_geometry(geom);
 }
 
-/// Run the Code++ Win32 event loop. Blocks until the user exits.
-///
-/// Decode a Win32 `ACCEL` entry into the plugin-visible
-/// `ShortcutKey` shape. The `fVirt` byte packs the modifier
-/// flags (`FCONTROL` / `FSHIFT` / `FALT`) plus `FVIRTKEY`; the
-/// modifier bits map 1:1 to N++'s `ShortcutKey.is_*` fields.
-/// `ACCEL.key` is the virtual-key code as `u16`; `ShortcutKey`
-/// declares the field as `u8`, so we truncate — virtual-key
-/// codes fit in a byte (the entire `VK_*` namespace is below
-/// 0xFF).
-fn decode_accel_to_shortcut_key(a: &ACCEL) -> codepp_plugin_host::ShortcutKey {
-    let bits = a.fVirt.0;
-    if a.key > 0xFF {
-        // Today's `VK_*` namespace tops out at 0xFE, so this
-        // branch is unreachable. The warn-log is for the
-        // hypothetical future-Microsoft-expansion case —
-        // without it the `as u8` truncation below would
-        // silently drop the high byte and a plugin would read
-        // a wrong `ShortcutKey.key` with no diagnostic.
-        tracing::warn!(
-            cmd = a.cmd,
-            key = a.key,
-            "ACCEL.key exceeds u8 range; ShortcutKey.key truncates to low byte"
-        );
-    }
-    codepp_plugin_host::ShortcutKey {
-        is_ctrl: u8::from((bits & FCONTROL.0) != 0),
-        is_alt: u8::from((bits & FALT.0) != 0),
-        is_shift: u8::from((bits & FSHIFT.0) != 0),
-        key: a.key as u8,
-    }
-}
-
-/// Build an `ACCEL` for a plugin shortcut — the inverse of
-/// [`decode_accel_to_shortcut_key`]. `cmd` is the id the table
+/// Build an `ACCEL` for a plugin shortcut. `cmd` is the id the table
 /// entry fires (a real plugin `cmd_id`, or a shim id from the
 /// [`ID_PLUGIN_SHORTCUT_SHIM_BASE`] band while the plugin is
 /// unloaded). Every plugin accelerator is a virtual-key entry
@@ -17211,13 +17095,13 @@ fn shortcut_key_to_accel(ctrl: bool, alt: bool, shift: bool, key: u8, cmd: u16) 
 }
 
 /// True for an accelerator `cmd` that belongs to the plugin
-/// subsystem — a real plugin command id (≥ [`PLUGIN_CMD_ID_BASE`])
-/// or a pre-load shim id. [`refresh_plugin_accels`] strips exactly
+/// subsystem — a plugin command id ([`is_plugin_cmd_id`]) or a
+/// pre-load shim id. [`refresh_plugin_accels`] strips exactly
 /// these before re-adding the current plugin set, so a host
 /// accelerator (including one a prior `NPPM_REMOVESHORTCUTBYCMDID`
 /// deleted) is never disturbed by a plugin-side rebuild.
 fn is_plugin_accel_cmd(cmd: u16) -> bool {
-    i32::from(cmd) >= PLUGIN_CMD_ID_BASE
+    is_plugin_cmd_id(i32::from(cmd))
         || (ID_PLUGIN_SHORTCUT_SHIM_BASE..=ID_PLUGIN_SHORTCUT_SHIM_END).contains(&cmd)
 }
 
@@ -17231,7 +17115,7 @@ fn is_plugin_accel_cmd(cmd: u16) -> bool {
 /// loaded, command resolves) or to a freshly-assigned shim id
 /// (not yet loaded — the pre-load case the whole feature exists
 /// for). A chord whose real cmd id doesn't fit a `u16` is skipped
-/// (unreachable: plugin cmd ids live in 50000..=65500), as is one
+/// (unreachable: every plugin cmd id is below `u16::MAX`), as is one
 /// that would overflow the shim band.
 fn build_plugin_accel_entries(
     shell: &Shell,
@@ -17346,15 +17230,11 @@ fn funcitem_name_to_string(name: &[u16]) -> String {
 }
 
 /// Build the host's default accelerator table — the keyboard
-/// shortcuts the message pump consults via `TranslateAcceleratorW`.
-/// Single source of truth for both the initial `HACCEL` creation
-/// and `Win32Ui::shortcut_for_cmd_id`'s live introspection: the
-/// `WM_KEYDOWN` path consults this table via the live HACCEL on
-/// `WindowState`, and `NPPM_GETSHORTCUTBYCMDID` reads from the
-/// same handle through `CopyAcceleratorTableW`. When
-/// `NPPM_REMOVESHORTCUTBYCMDID` removes a binding the recreate
-/// path filters this set and rebuilds; subsequent calls observe
-/// the updated set automatically.
+/// shortcuts the message pump consults via `TranslateAcceleratorW`,
+/// through the live HACCEL on `WindowState`. Plugin chords are added
+/// to it ([`refresh_plugin_accels`]), and when
+/// `NPPM_REMOVESHORTCUTBYCMDID` removes a plugin command's binding
+/// the recreate path filters the live table and rebuilds it.
 ///
 /// The covered set is exactly the commands Scintilla doesn't
 /// already bind natively (Ctrl+X / C / V / Z / Y / A live
@@ -17546,6 +17426,8 @@ fn build_default_accel_table() -> Vec<ACCEL> {
     ]
 }
 
+/// Run the Code++ Win32 event loop. Blocks until the user exits.
+///
 /// `initial_path` (if `Some`) is queued for opening immediately after
 /// the window is shown — same code path as drag-and-drop and as
 /// session-restore. Used for Phase 2 demo verification and for
@@ -20232,7 +20114,7 @@ unsafe fn load_plugins_where(hwnd: HWND, npp_data: NppData, scope: PluginLoadSco
         };
         if let Some(ready) = ready {
             notices.push(ready);
-            loaded_now.push(pending.idx);
+            loaded_now.push(pending.idx());
         }
     }
     // Everything a plugin may look at from its notification handlers
@@ -27102,18 +26984,17 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                             return LRESULT(0);
                         }
                         // Plugin menu-command dispatch. Plugin cmd-ids
-                        // start at PLUGIN_CMD_ID_BASE (50000) — well
-                        // above any host built-in. Look up the
-                        // callback through the borrow, **then drop
-                        // the borrow before invoking**: a plugin's
-                        // PluginCmd is allowed to SendMessage(NPPM_*)
-                        // back into our wnd_proc, which would
-                        // re-enter and materialize a second
-                        // &mut WindowState from the same raw pointer
-                        // (aliasing UB). Splitting into a lookup
-                        // phase and an invoke phase keeps the
-                        // re-entrant call sound.
-                        if cmd_i32 >= PLUGIN_CMD_ID_BASE {
+                        // ([`is_plugin_cmd_id`]) sit well above any
+                        // host built-in. Look up the callback through
+                        // the borrow, **then drop the borrow before
+                        // invoking**: a plugin's PluginCmd is allowed
+                        // to SendMessage(NPPM_*) back into our
+                        // wnd_proc, which would re-enter and
+                        // materialize a second &mut WindowState from
+                        // the same raw pointer (aliasing UB).
+                        // Splitting into a lookup phase and an invoke
+                        // phase keeps the re-entrant call sound.
+                        if is_plugin_cmd_id(cmd_i32) {
                             let command = if let Some(state) = state_from_hwnd(hwnd) {
                                 state.shell.lookup_plugin_command(cmd_i32)
                             } else {
@@ -28694,11 +28575,27 @@ mod cf_html_tests {
 #[cfg(test)]
 mod plugin_accel_tests {
     use super::{
-        build_plugin_accel_entries, decode_accel_to_shortcut_key, funcitem_name_to_string,
-        is_plugin_accel_cmd, shortcut_key_to_accel, ID_PLUGIN_SHORTCUT_SHIM_BASE,
-        ID_PLUGIN_SHORTCUT_SHIM_END, ID_UDL_ITEM_END, PLUGIN_CMD_ID_BASE,
+        build_plugin_accel_entries, funcitem_name_to_string, is_plugin_accel_cmd,
+        shortcut_key_to_accel, ACCEL, FALT, FCONTROL, FSHIFT, ID_PLUGIN_SHORTCUT_SHIM_BASE,
+        ID_PLUGIN_SHORTCUT_SHIM_END, ID_UDL_ITEM_END,
     };
+    use codepp_plugin_host::PLUGIN_CMD_ID_BASE;
     use std::sync::Arc;
+
+    /// Decode an `ACCEL` back into the chord it binds, the inverse of
+    /// `shortcut_key_to_accel`, so a test can check what a table entry
+    /// fires on. The `fVirt` byte packs the modifier flags (`FCONTROL`
+    /// / `FSHIFT` / `FALT`) plus `FVIRTKEY`, and `ACCEL.key` is the
+    /// virtual-key code, which fits a byte.
+    fn decode_accel_to_shortcut_key(a: &ACCEL) -> codepp_plugin_host::ShortcutKey {
+        let bits = a.fVirt.0;
+        codepp_plugin_host::ShortcutKey {
+            is_ctrl: u8::from((bits & FCONTROL.0) != 0),
+            is_alt: u8::from((bits & FALT.0) != 0),
+            is_shift: u8::from((bits & FSHIFT.0) != 0),
+            key: u8::try_from(a.key).expect("a virtual-key code fits a byte"),
+        }
+    }
 
     /// A cached chord for a discovered-but-unloaded plugin must install
     /// under a shim id (no real `cmd_id` exists pre-load) and be
@@ -28781,8 +28678,9 @@ mod plugin_accel_tests {
             (true, false, true, 0x7A),    // Ctrl+Shift+Z
             (false, false, false, 0x75),  // F6 bare
         ] {
-            let accel = shortcut_key_to_accel(ctrl, alt, shift, key, 50_123);
-            assert_eq!(accel.cmd, 50_123);
+            let cmd = (PLUGIN_CMD_ID_BASE + 123) as u16;
+            let accel = shortcut_key_to_accel(ctrl, alt, shift, key, cmd);
+            assert_eq!(accel.cmd, cmd);
             let sk = decode_accel_to_shortcut_key(&accel);
             assert_eq!(sk.is_ctrl != 0, ctrl);
             assert_eq!(sk.is_alt != 0, alt);
@@ -28795,7 +28693,7 @@ mod plugin_accel_tests {
     fn is_plugin_accel_cmd_covers_real_and_shim_bands() {
         // Real plugin command ids.
         assert!(is_plugin_accel_cmd(PLUGIN_CMD_ID_BASE as u16));
-        assert!(is_plugin_accel_cmd(50_500));
+        assert!(is_plugin_accel_cmd((PLUGIN_CMD_ID_BASE + 500) as u16));
         // Shim band.
         assert!(is_plugin_accel_cmd(ID_PLUGIN_SHORTCUT_SHIM_BASE));
         assert!(is_plugin_accel_cmd(ID_PLUGIN_SHORTCUT_SHIM_END));
@@ -28852,8 +28750,16 @@ mod colour_helpers_tests {
 
 #[cfg(test)]
 mod idm_mapping_tests {
+    use codepp_plugin_host::idm::{
+        IDM_EDIT_AUTOCOMPLETE, IDM_EDIT_FUNCCALLTIP_NEXT, IDM_FILE_PRINTNOW,
+        IDM_VIEW_GOTO_ANOTHER_VIEW,
+    };
+    use codepp_plugin_host::{
+        PLUGIN_ALLOC_CMD_BASE, PLUGIN_ALLOC_CMD_LIMIT, PLUGIN_CMD_ID_BASE, PLUGIN_CMD_ID_LIMIT,
+    };
+
     use super::{
-        is_plugin_cmd_id, map_npp_idm_to_local, IDM_EDIT_COPY, IDM_EDIT_CUT, IDM_EDIT_DELETE,
+        map_npp_idm_to_local, npp_menu_target, IDM_EDIT_COPY, IDM_EDIT_CUT, IDM_EDIT_DELETE,
         IDM_EDIT_PASTE, IDM_EDIT_REDO, IDM_EDIT_SELECTALL, IDM_EDIT_UNDO, IDM_FILE_CLOSE,
         IDM_FILE_CLOSEALL, IDM_FILE_EXIT, IDM_FILE_NEW, IDM_FILE_OPEN, IDM_FILE_PRINT,
         IDM_FILE_RELOAD, IDM_FILE_RENAME, IDM_FILE_SAVE, IDM_FILE_SAVEALL, IDM_FILE_SAVEAS,
@@ -28864,34 +28770,11 @@ mod idm_mapping_tests {
         ID_EDIT_REDO, ID_EDIT_SELECTALL, ID_EDIT_UNDO, ID_ENCODING_ANSI, ID_ENCODING_UTF16_BE,
         ID_ENCODING_UTF16_LE, ID_ENCODING_UTF8, ID_ENCODING_UTF8_BOM, ID_FILE_CLOSE,
         ID_FILE_CLOSE_ALL, ID_FILE_EXIT, ID_FILE_NEW, ID_FILE_OPEN, ID_FILE_PRINT, ID_FILE_RELOAD,
-        ID_FILE_RENAME, ID_FILE_SAVE, ID_FILE_SAVE_ALL, ID_FILE_SAVE_AS, ID_SEARCH_FIND,
-        ID_SEARCH_FINDINFILES, ID_SEARCH_FINDNEXT, ID_SEARCH_GOTOLINE, ID_SEARCH_REPLACE,
-        ID_VIEW_WORDWRAP, ID_VIEW_ZOOMIN, ID_VIEW_ZOOMOUT, ID_VIEW_ZOOMRESET,
-        PLUGIN_ALLOC_CMD_LIMIT, PLUGIN_CMD_ID_BASE,
+        ID_FILE_RENAME, ID_FILE_SAVE, ID_FILE_SAVE_ALL, ID_FILE_SAVE_AS,
+        ID_PLUGIN_SHORTCUT_SHIM_END, ID_SEARCH_FIND, ID_SEARCH_FINDINFILES, ID_SEARCH_FINDNEXT,
+        ID_SEARCH_GOTOLINE, ID_SEARCH_REPLACE, ID_VIEW_WORDWRAP, ID_VIEW_ZOOMIN, ID_VIEW_ZOOMOUT,
+        ID_VIEW_ZOOMRESET,
     };
-
-    /// The N++ ABI numeric constants must match `menuCmdID.h` exactly —
-    /// a divergence would silently drop the dispatch (plugins ship a
-    /// specific number on the wire; the mapping table has to match it).
-    #[test]
-    fn idm_base_values_match_npp_abi() {
-        // File section: IDM_BASE(40000) + 1000 + slot.
-        assert_eq!(IDM_FILE_NEW, 41001);
-        assert_eq!(IDM_FILE_OPEN, 41002);
-        assert_eq!(IDM_FILE_SAVE, 41006);
-        assert_eq!(IDM_FILE_EXIT, 41011);
-        // Edit section: IDM_BASE + 2000 + slot.
-        assert_eq!(IDM_EDIT_CUT, 42001);
-        assert_eq!(IDM_EDIT_UNDO, 42003);
-        // Search section: IDM_BASE + 3000 + slot.
-        assert_eq!(IDM_SEARCH_FIND, 43001);
-        assert_eq!(IDM_SEARCH_FINDINFILES, 43009);
-        // View section: IDM_BASE + 4000 + slot.
-        assert_eq!(IDM_VIEW_WRAP, 44007);
-        // Format (encoding) section: IDM_BASE + 5000 + slot.
-        assert_eq!(IDM_FORMAT_ANSI, 45001);
-        assert_eq!(IDM_FORMAT_UTF_8, 45002);
-    }
 
     /// Every entry in the File / Edit / Search / View / Format
     /// sections we care about maps to the equivalent Code++ `ID_*`
@@ -28959,19 +28842,21 @@ mod idm_mapping_tests {
             Some(ID_VIEW_ZOOMRESET)
         );
         assert_eq!(map_npp_idm_to_local(IDM_VIEW_WRAP), Some(ID_VIEW_WORDWRAP));
-        // Format / encoding — the AS_UTF_8 → UTF8_BOM mapping is
-        // the load-bearing cross-name pairing here.
+        // Format / encoding — Notepad++'s `IDM_FORMAT_UTF_8` is UTF-8
+        // with the byte-order mark and `IDM_FORMAT_AS_UTF_8` without,
+        // whatever the names suggest; the cross-name pairing is the
+        // load-bearing part.
         assert_eq!(
             map_npp_idm_to_local(IDM_FORMAT_ANSI),
             Some(ID_ENCODING_ANSI)
         );
         assert_eq!(
             map_npp_idm_to_local(IDM_FORMAT_UTF_8),
-            Some(ID_ENCODING_UTF8)
+            Some(ID_ENCODING_UTF8_BOM)
         );
         assert_eq!(
             map_npp_idm_to_local(IDM_FORMAT_AS_UTF_8),
-            Some(ID_ENCODING_UTF8_BOM)
+            Some(ID_ENCODING_UTF8)
         );
         assert_eq!(
             map_npp_idm_to_local(IDM_FORMAT_UTF_16LE),
@@ -28989,15 +28874,23 @@ mod idm_mapping_tests {
     /// falling through into an unrelated Code++ command.
     #[test]
     fn unmapped_idm_returns_none() {
-        // Random unmapped IDM_* — the SETTING / TOOLS / MACRO / RUN
-        // section bases from menuCmdID.h have no mapped children.
-        assert_eq!(map_npp_idm_to_local(46000), None); // IDM_SETTING
-        assert_eq!(map_npp_idm_to_local(47000), None); // IDM_TOOLS
-        assert_eq!(map_npp_idm_to_local(48000), None); // IDM_MACRO
-        assert_eq!(map_npp_idm_to_local(49000), None); // IDM_RUN
-                                                       // Middle of the IDM_FILE range that's not a wired command
-                                                       // (IDM_FILE_LOADSESSION == 41012).
+        // Unmapped IDM_* — Notepad++'s Language, About, Settings, Tools
+        // and Run section bases have no mapped children.
+        for base in [46_000, 47_000, 48_000, 48_500, 49_000] {
+            assert_eq!(map_npp_idm_to_local(base), None, "{base}");
+        }
+        // Middle of the IDM_FILE range that's not a wired command
+        // (IDM_FILE_LOADSESSION == 41012).
         assert_eq!(map_npp_idm_to_local(41012), None);
+        // The numbers this crate used before Phase 5 for Print, Find in
+        // Files and Encode in ANSI, which are Notepad++'s Close All to
+        // the Left, Go to Matching Brace and Convert EOL to Windows.
+        for old in [41_009, 43_009, 45_001] {
+            assert_eq!(map_npp_idm_to_local(old), None, "{old}");
+        }
+        // Notepad++'s auto-completion commands, which Code++ has no
+        // command for.
+        assert_eq!(map_npp_idm_to_local(IDM_EDIT_AUTOCOMPLETE), None);
         // Plugin-cmd space is intentionally NOT in the mapping —
         // the dispatcher passes those through untouched.
         assert_eq!(map_npp_idm_to_local(PLUGIN_CMD_ID_BASE), None);
@@ -29007,46 +28900,684 @@ mod idm_mapping_tests {
         assert_eq!(map_npp_idm_to_local(-1), None);
     }
 
-    /// `is_plugin_cmd_id` accepts every id in the plugin-owned
-    /// range [`PLUGIN_CMD_ID_BASE`, `PLUGIN_ALLOC_CMD_LIMIT`] and
-    /// rejects everything else. The upper bound matters: without it,
-    /// a plugin sending an id past the alloc-pool ceiling would
-    /// truncate through `WM_COMMAND`'s low-16-bit key in
-    /// `main_wnd_proc` and alias onto a small built-in `ID_*` value
-    /// (e.g. `ID_FILE_SAVE = 1000`), silently triggering the wrong
-    /// action. Failing closed here keeps buggy plugins from firing
-    /// unrelated host commands.
+    /// What a plugin's `NPPM_MENUCOMMAND` or `NPPM_SETMENUITEMCHECK`
+    /// reaches: a mapped Notepad++ command reaches Code++'s, a plugin's
+    /// command reaches itself, and every other id reaches nothing.
+    /// Notepad++'s auto-completion commands above all, which until
+    /// Phase 5 sat inside the plugin range and ran a plugin's command
+    /// (DESIGN.md §7.4), and an id whose low 16 bits are one of Code++'s
+    /// own, which `main_wnd_proc`'s `WM_COMMAND` would run.
     #[test]
-    fn plugin_cmd_id_range_bounds_are_closed() {
-        // Below the range — built-in IDM_* section, garbage, negative.
-        assert!(!is_plugin_cmd_id(0));
-        assert!(!is_plugin_cmd_id(-1));
-        assert!(!is_plugin_cmd_id(PLUGIN_CMD_ID_BASE - 1));
-        // Inside the range — FuncItem base and alloc pool both count.
-        assert!(is_plugin_cmd_id(PLUGIN_CMD_ID_BASE));
-        assert!(is_plugin_cmd_id(PLUGIN_CMD_ID_BASE + 100));
-        assert!(is_plugin_cmd_id(PLUGIN_ALLOC_CMD_LIMIT));
-        // Above the range — the WM_COMMAND truncation collision zone.
-        // A hypothetical `PLUGIN_ALLOC_CMD_LIMIT + 1` (65_501) with
-        // its low 16 bits (65_501 & 0xFFFF = 65_501) is above u16::MAX
-        // and would truncate; larger values are the real collision
-        // (e.g. 66536 & 0xFFFF = 1000, aliasing ID_FILE_SAVE).
-        assert!(!is_plugin_cmd_id(PLUGIN_ALLOC_CMD_LIMIT + 1));
-        assert!(!is_plugin_cmd_id(65_536 + i32::from(super::ID_FILE_SAVE)));
-        assert!(!is_plugin_cmd_id(i32::MAX));
+    fn a_menu_command_reaches_only_what_the_plugin_meant() {
+        assert_eq!(npp_menu_target(IDM_FILE_NEW), Some(u32::from(ID_FILE_NEW)));
+        for plugin in [
+            PLUGIN_CMD_ID_BASE,
+            PLUGIN_CMD_ID_LIMIT - 1,
+            PLUGIN_ALLOC_CMD_BASE,
+            PLUGIN_ALLOC_CMD_LIMIT - 1,
+        ] {
+            assert_eq!(
+                npp_menu_target(plugin),
+                u32::try_from(plugin).ok(),
+                "{plugin}"
+            );
+        }
+        for other in [
+            IDM_EDIT_AUTOCOMPLETE,
+            IDM_EDIT_FUNCCALLTIP_NEXT,
+            // Notepad++'s first Scintilla key command.
+            PLUGIN_CMD_ID_LIMIT,
+            PLUGIN_CMD_ID_BASE - 1,
+            PLUGIN_ALLOC_CMD_LIMIT,
+            65_536 + i32::from(super::ID_FILE_SAVE),
+            0,
+            -1,
+            i32::MAX,
+        ] {
+            assert_eq!(npp_menu_target(other), None, "{other}");
+        }
     }
 
-    /// The plugin-cmd threshold must sit above every `IDM_*` section
-    /// base so plugin-allocated ids can't accidentally collide with
-    /// a mapping-table entry. Highest `IDM_*` section base in
-    /// `menuCmdID.h` is `IDM_RUN` (49000); `PLUGIN_CMD_ID_BASE` is
-    /// `50_000` so the two ranges stay disjoint with a comfortable
-    /// buffer. Enforced at compile time — a bump of
-    /// `PLUGIN_CMD_ID_BASE` that violated this would fail to
-    /// compile. The upper bound is also asserted here so a shrink
-    /// of the alloc pool below the range floor is caught early.
-    const _: () = assert!(PLUGIN_CMD_ID_BASE > 49_999);
-    const _: () = assert!(PLUGIN_ALLOC_CMD_LIMIT >= PLUGIN_CMD_ID_BASE);
+    /// Every command id of Code++'s own, the highest being the end of
+    /// the shortcut shims, sits below the plugin range, so a number
+    /// tells a plugin's command from Code++'s own — which
+    /// `main_wnd_proc` and `is_plugin_accel_cmd` rely on.
+    #[test]
+    fn code_plus_plus_commands_sit_below_the_plugin_range() {
+        assert!(i32::from(ID_PLUGIN_SHORTCUT_SHIM_END) < PLUGIN_CMD_ID_BASE);
+    }
+
+    /// No Code++ command is numbered on one of Notepad++'s, so a plugin
+    /// that sends a Notepad++ id as a raw `WM_COMMAND`, a common way to
+    /// drive Notepad++, reaches none of Code++'s commands. Notepad++
+    /// numbers all of its commands from 10001 up
+    /// (`IDM_VIEW_GOTO_ANOTHER_VIEW`), its menus' from `IDM`, but for
+    /// Print Now (`IDM_FILE_PRINTNOW`, 1001), which was Code++'s File →
+    /// Exit until Phase 5, so a plugin printing without the dialog
+    /// closed the editor. Code++'s ids must sit below 10001 and off
+    /// 1001, and no range of them may take in 1001.
+    ///
+    /// A source scan of every file in `src/` ([`scan_source`]), whole,
+    /// with comments and string literals removed: the ids are constants
+    /// added by hand all over the crate, and no test module defines one,
+    /// so a constant after a test module is read too. [`read_ids`] reads
+    /// the definitions and fails on any it cannot read rather than skip
+    /// it. [`id_ranges`] reads the ranges the code decodes between two
+    /// `ID_` constants, whatever its bounds are named, in the forms it
+    /// knows: a range expression, and a pair of comparisons joined by
+    /// `&&`, or by `||` for a range's complement. A range written another
+    /// way, through nested `if`s, `clamp` or a literal bound, is not read,
+    /// which is why no id may end in `_FIRST`, `_LAST` or another suffix
+    /// of [`BOUND_SUFFIXES`]: a `_BASE` and `_END` pair is checked
+    /// whatever form decodes it.
+    #[test]
+    fn no_code_plus_plus_command_is_a_notepad_plus_plus_id() {
+        let src_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut ids = Vec::new();
+        let mut decoded = Vec::new();
+        let mut files = 0;
+        for entry in std::fs::read_dir(&src_dir).expect("ui_win32's src directory") {
+            let path = entry.expect("a directory entry").path();
+            if path.extension().is_none_or(|ext| ext != "rs") {
+                continue;
+            }
+            files += 1;
+            let source = std::fs::read_to_string(&path).expect("a source file");
+            let (file_ids, file_ranges) =
+                scan_source(&source).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+            ids.extend(file_ids);
+            decoded.extend(file_ranges);
+        }
+        assert!(
+            files > 1,
+            "found {files} source files in {}",
+            src_dir.display()
+        );
+        assert!(ids.len() >= 50, "found only {} command ids", ids.len());
+        let print_now = u16::try_from(IDM_FILE_PRINTNOW).expect("Print Now fits a WM_COMMAND");
+        if let Err(e) = check_ids(&ids, &decoded, print_now) {
+            panic!("{e}");
+        }
+        assert!(
+            decoded.len() >= 6,
+            "found only {} ranges decoded",
+            decoded.len()
+        );
+        assert!(
+            ids.iter().filter(|(n, _)| n.ends_with("_BASE")).count() >= 2,
+            "found fewer than two `_BASE` and `_END` pairs"
+        );
+    }
+
+    /// Command ids by name, as [`read_ids`] reads them.
+    type Ids = Vec<(String, u16)>;
+    /// Ranges between two ids, as `(low, high, inclusive)`, as
+    /// [`id_ranges`] reads them.
+    type Ranges = Vec<(String, String, bool)>;
+
+    /// The ids one source file defines and the ranges it decodes, read
+    /// from the whole file, test modules included, with its comments and
+    /// string literals removed.
+    fn scan_source(source: &str) -> Result<(Ids, Ranges), String> {
+        use super::plugin_reentry_guards::code_without_strings;
+        let code = code_without_strings(source);
+        Ok((read_ids(&code)?, id_ranges(&code)?))
+    }
+
+    /// Counts of a range's slots, sized from its bounds: not ids.
+    const CAP_NAMES: [&str; 2] = ["ID_LANGUAGE_CAP", "ID_WINDOW_CAP"];
+
+    /// The one form of an id definition [`read_ids`] reads. Held here
+    /// because a string continued over a line end is read as code from
+    /// its second line on, and this one would then be taken for an id.
+    const READABLE_FORM: &str = "const ID_NAME: u16 = 1234;";
+
+    /// Suffixes that commonly name a range's bound, refused so that a
+    /// range's bounds are named `_BASE` and `_END`, a pair [`check_ids`]
+    /// checks whatever form the code decodes it in. No list holds every
+    /// word a bound could be named by, and `_STOP`, `_TO` and `_FROM` are
+    /// left out because a command id can end in one (`ID_MACRO_STOP`
+    /// does).
+    const BOUND_SUFFIXES: [&str; 13] = [
+        "_FIRST", "_LAST", "_START", "_BEGIN", "_MIN", "_MAX", "_LIMIT", "_LO", "_HI", "_LOW",
+        "_HIGH", "_LOWER", "_UPPER",
+    ];
+
+    /// The `ID_` command ids defined in `code`, which holds no comments
+    /// or string literals, read from one form, `const ID_NAME: u16 =
+    /// 1234;` on a line of its own, the two caps of [`CAP_NAMES`] aside.
+    /// Any other definition of an `ID_` constant is an error, a `static`,
+    /// a `pub` one, another type, a value that is not a number or one
+    /// split over lines among them, rather than an id skipped.
+    fn read_ids(code: &str) -> Result<Ids, String> {
+        // One space between words, so a definition split over lines is
+        // still counted, and must then be one this reads.
+        let words = code.split_whitespace().collect::<Vec<_>>().join(" ");
+        let defined = words.matches("const ID_").count() + words.matches("static ID_").count();
+        let mut ids = Vec::new();
+        let mut read = 0;
+        for line in code.lines().map(str::trim) {
+            if !line.contains("const ID_") && !line.contains("static ID_") {
+                continue;
+            }
+            read += 1;
+            if CAP_NAMES
+                .iter()
+                .any(|cap| line.starts_with(&format!("const {cap}: usize = ")))
+            {
+                continue;
+            }
+            let id = line
+                .strip_prefix("const ID_")
+                .and_then(|rest| rest.split_once(": u16 = "))
+                .and_then(|(name, value)| {
+                    let value = value.strip_suffix(';')?.replace('_', "");
+                    Some((format!("ID_{name}"), value.parse::<u16>().ok()?))
+                })
+                .ok_or_else(|| {
+                    format!("`{line}` is not an id this test can read; write `{READABLE_FORM}`")
+                })?;
+            if let Some(suffix) = BOUND_SUFFIXES.iter().find(|s| id.0.ends_with(*s)) {
+                return Err(format!(
+                    "{} ends in `{suffix}`: name a range's bounds `_BASE` and `_END`",
+                    id.0
+                ));
+            }
+            ids.push(id);
+        }
+        if read == defined {
+            Ok(ids)
+        } else {
+            Err("an `ID_` definition is split over lines".to_string())
+        }
+    }
+
+    /// That no id is Print Now or among Notepad++'s, that every range
+    /// `decoded` names is between two ids, low to high, and does not
+    /// take in Print Now, and that every `_BASE` has its `_END` and the
+    /// other way round, with the same two conditions.
+    fn check_ids(
+        ids: &[(String, u16)],
+        decoded: &[(String, String, bool)],
+        print_now: u16,
+    ) -> Result<(), String> {
+        for (name, value) in ids {
+            if *value == print_now {
+                return Err(format!("{name} is Notepad++'s Print Now"));
+            }
+            if i32::from(*value) >= IDM_VIEW_GOTO_ANOTHER_VIEW {
+                return Err(format!("{name} ({value}) is among Notepad++'s ids"));
+            }
+        }
+        let named = |name: &str| ids.iter().find(|(n, _)| n == name).map(|&(_, v)| v);
+        let bound = |name: &str| {
+            named(name).ok_or_else(|| format!("a range is decoded over {name}, not an id"))
+        };
+        // Inclusive or not, a range's high bound is an id, and the loop
+        // above refused any id that is Print Now, so `..=` is the test.
+        for (lo_name, hi_name, _) in decoded {
+            let (lo, hi) = (bound(lo_name)?, bound(hi_name)?);
+            if lo > hi {
+                return Err(format!("{lo_name} is above {hi_name}"));
+            }
+            if (lo..=hi).contains(&print_now) {
+                return Err(format!(
+                    "the range {lo_name}..{hi_name} takes in Notepad++'s Print Now"
+                ));
+            }
+        }
+        for (name, _) in ids.iter().filter(|(n, _)| n.ends_with("_END")) {
+            let base_name = format!("{}_BASE", name.trim_end_matches("_END"));
+            if named(&base_name).is_none() {
+                return Err(format!("{name} has no {base_name}"));
+            }
+        }
+        for (name, base) in ids.iter().filter(|(n, _)| n.ends_with("_BASE")) {
+            let end_name = format!("{}_END", name.trim_end_matches("_BASE"));
+            let end = named(&end_name).ok_or_else(|| format!("{name} has no {end_name}"))?;
+            if *base > end {
+                return Err(format!("{name} is above {end_name}"));
+            }
+            if (*base..=end).contains(&print_now) {
+                return Err(format!(
+                    "{name}..={end_name} takes in Notepad++'s Print Now"
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    /// The `ID_` names in an operand, in order, without repeats.
+    fn id_names(operand: &str) -> Vec<String> {
+        let mut names: Vec<String> = Vec::new();
+        let is_ident = |c: char| c.is_ascii_alphanumeric() || c == '_';
+        for word in operand.split(|c: char| !is_ident(c)) {
+            if word.starts_with("ID_") && !names.iter().any(|n| n == word) {
+                names.push(word.to_string());
+            }
+        }
+        names
+    }
+
+    /// The one `ID_` name an operand of a range or a comparison holds,
+    /// `None` if it holds none, and an error if it holds several, since
+    /// then which is the bound cannot be told.
+    fn the_id_in(operand: &str) -> Result<Option<String>, String> {
+        let names = id_names(operand);
+        match names.len() {
+            0 => Ok(None),
+            1 => Ok(names.into_iter().next()),
+            _ => Err(format!(
+                "`{}` names several ids; which is the bound cannot be told",
+                operand.trim()
+            )),
+        }
+    }
+
+    /// The operand ending at byte `end` of `code`: back to the first
+    /// delimiter outside brackets, so `u32::from(ID_X)` and
+    /// `(ID_X as u32)` are whole operands.
+    fn operand_before(code: &str, end: usize) -> &str {
+        let bytes = code.as_bytes();
+        let mut depth = 0usize;
+        let mut start = end;
+        while start > 0 {
+            let b = bytes[start - 1];
+            match b {
+                b')' | b']' => depth += 1,
+                b'(' | b'[' if depth > 0 => depth -= 1,
+                b'(' | b'[' | b'{' | b'}' | b',' | b';' | b'=' | b'&' | b'|' | b'!' | b'<'
+                | b'>'
+                    if depth == 0 =>
+                {
+                    break
+                }
+                _ => {}
+            }
+            start -= 1;
+        }
+        &code[start..end]
+    }
+
+    /// The operand starting at byte `start` of `code`: up to the first
+    /// delimiter outside brackets.
+    fn operand_after(code: &str, start: usize) -> &str {
+        let bytes = code.as_bytes();
+        let mut depth = 0usize;
+        let mut stop = start;
+        while stop < bytes.len() {
+            let b = bytes[stop];
+            match b {
+                b'(' | b'[' => depth += 1,
+                b')' | b']' if depth > 0 => depth -= 1,
+                b')' | b']' | b'{' | b'}' | b',' | b';' | b'&' | b'|' | b'=' | b'<' | b'>'
+                    if depth == 0 =>
+                {
+                    break
+                }
+                _ => {}
+            }
+            stop += 1;
+        }
+        &code[start..stop]
+    }
+
+    /// Every range `code` decodes between two `ID_` constants, as
+    /// `(low, high, inclusive)`, whatever its bounds are wrapped in: a
+    /// range expression `A..B` or `A..=B` (`ID_X..=ID_Y`,
+    /// `u32::from(ID_X)..=u32::from(ID_Y)`, `(ID_X as u32)..(ID_Y as
+    /// u32)`), a pair of comparisons joined by `&&`, in either order and
+    /// either direction (`id >= ID_X && id <= ID_Y`), and a pair joined
+    /// by `||` that tests for the range's complement (`id < ID_X || id >
+    /// ID_Y`), read as inclusive at both ends, which errs towards
+    /// refusing. `code` holds no comments or string literals. An operand
+    /// that names several ids is an error, but in a `||` pair only when
+    /// the other comparison names an id: `offset < 0 || offset >
+    /// i32::from(ID_X_END - ID_X_BASE)` is a size check, written either
+    /// way round, and no range.
+    fn id_ranges(code: &str) -> Result<Ranges, String> {
+        let mut ranges = Vec::new();
+        let mut from = 0;
+        while let Some(offset) = code[from..].find("..") {
+            let at = from + offset;
+            from = at + 2;
+            let inclusive = code[at + 2..].starts_with('=');
+            let low = the_id_in(operand_before(code, at))?;
+            let high = the_id_in(operand_after(code, at + 2 + usize::from(inclusive)))?;
+            if let (Some(low), Some(high)) = (low, high) {
+                ranges.push((low, high, inclusive));
+            }
+        }
+        let mut from = 0;
+        while let Some(offset) = code[from..].find("&&") {
+            let at = from + offset;
+            from = at + 2;
+            let (left, right) = (
+                comparison_before(code, at)?,
+                comparison_after(code, at + 2)?,
+            );
+            let (Some(left), Some(right)) = (left, right) else {
+                continue;
+            };
+            let (low, high) = match (left, right) {
+                (Bound::Low(low), Bound::High(high, inclusive))
+                | (Bound::High(high, inclusive), Bound::Low(low)) => (low, (high, inclusive)),
+                _ => continue,
+            };
+            ranges.push((low, high.0, high.1));
+        }
+        let mut from = 0;
+        while let Some(offset) = code[from..].find("||") {
+            let at = from + offset;
+            from = at + 2;
+            let (left, right) = match (comparison_before(code, at), comparison_after(code, at + 2))
+            {
+                (Ok(Some(left)), Ok(Some(right))) => (left, right),
+                // With no id on one side, the other is a size check.
+                (Ok(None), _) | (_, Ok(None)) => continue,
+                (Err(several), _) | (_, Err(several)) => return Err(several),
+            };
+            // Below the low bound or above the high one: the bound a
+            // comparison sets on what it refuses is the other bound of
+            // the range it lets through.
+            let (low, high) = match (left, right) {
+                (Bound::High(low, _), Bound::Low(high))
+                | (Bound::Low(high), Bound::High(low, _)) => (low, high),
+                _ => continue,
+            };
+            ranges.push((low, high, true));
+        }
+        Ok(ranges)
+    }
+
+    /// Which bound of a range a comparison sets, and on which id.
+    enum Bound {
+        /// `x >= ID_A`, `x > ID_A`, `ID_A <= x` or `ID_A < x`: taken as
+        /// inclusive, which errs towards refusing.
+        Low(String),
+        /// `x <= ID_B` (inclusive), `x < ID_B`, or the same reversed.
+        High(String, bool),
+    }
+
+    /// The comparison whose text is `clause`, if one side of it names an
+    /// `ID_` constant: which bound it sets.
+    fn bound_of(clause: &str) -> Result<Option<Bound>, String> {
+        for (op, low_on_right, inclusive) in [
+            (">=", true, true),
+            ("<=", false, true),
+            (">", true, false),
+            ("<", false, false),
+        ] {
+            let Some(at) = clause.find(op) else { continue };
+            let (lhs, rhs) = (&clause[..at], &clause[at + op.len()..]);
+            let (lhs, rhs) = (the_id_in(lhs)?, the_id_in(rhs)?);
+            return Ok(match (lhs, rhs) {
+                (None, Some(id)) if low_on_right => Some(Bound::Low(id)),
+                (None, Some(id)) => Some(Bound::High(id, inclusive)),
+                (Some(id), None) if low_on_right => Some(Bound::High(id, inclusive)),
+                (Some(id), None) => Some(Bound::Low(id)),
+                _ => None,
+            });
+        }
+        Ok(None)
+    }
+
+    /// The comparison ending at the `&&` or `||` at byte `at` of
+    /// `code`: back to the first delimiter outside brackets, an
+    /// assignment's `=` and a match arm's `=>` among them. The `=` of
+    /// `<=`, `>=`, `==` and `!=` is part of the comparison.
+    fn comparison_before(code: &str, at: usize) -> Result<Option<Bound>, String> {
+        let bytes = code.as_bytes();
+        let mut depth = 0usize;
+        let mut start = at;
+        while start > 0 {
+            let prev = bytes[start - 1];
+            match prev {
+                b')' | b']' => depth += 1,
+                b'(' | b'[' if depth > 0 => depth -= 1,
+                b'(' | b'[' | b'{' | b'}' | b',' | b';' | b'&' | b'|' if depth == 0 => break,
+                b'=' if depth == 0 => {
+                    let after = bytes.get(start).copied();
+                    let before = start.checked_sub(2).map(|i| bytes[i]);
+                    if after == Some(b'>') {
+                        // A match arm: the clause begins after its `=>`.
+                        return bound_of(&code[start + 1..at]);
+                    }
+                    let operator =
+                        after == Some(b'=') || matches!(before, Some(b'<' | b'>' | b'=' | b'!'));
+                    if !operator {
+                        break;
+                    }
+                }
+                _ => {}
+            }
+            start -= 1;
+        }
+        bound_of(&code[start..at])
+    }
+
+    /// The comparison starting after the `&&` or `||` that ends at byte
+    /// `start` of `code`: up to the first delimiter outside brackets, a
+    /// match arm's `=>` among them.
+    fn comparison_after(code: &str, start: usize) -> Result<Option<Bound>, String> {
+        let bytes = code.as_bytes();
+        let mut depth = 0usize;
+        let mut stop = start;
+        while stop < bytes.len() {
+            match bytes[stop] {
+                b'(' | b'[' => depth += 1,
+                b')' | b']' if depth > 0 => depth -= 1,
+                b')' | b']' | b'{' | b'}' | b',' | b';' | b'&' | b'|' if depth == 0 => break,
+                b'=' if depth == 0 && bytes.get(stop + 1) == Some(&b'>') => break,
+                _ => {}
+            }
+            stop += 1;
+        }
+        bound_of(&code[start..stop])
+    }
+
+    #[test]
+    fn the_range_scan_reads_each_form_it_knows() {
+        // One string per line: a string continued over a line end is read
+        // as code from its second line on, by the scan above as well.
+        let code = [
+            "if (ID_A_BASE..=ID_A_END).contains(&c) {} let r = ID_B .. ID_C; let x = 1..2;",
+            "for id in u32::from(ID_D)..=u32::from(ID_E) {}",
+            "let y = (ID_F as u32)..(ID_G as u32);",
+            "if id >= u32::from(ID_H) && id <= u32::from(ID_I) {}",
+            "let z = ID_J <= id && id < ID_K;",
+            "if id < ID_L && id >= ID_M { }",
+            "if a == ID_N && b == ID_O {}",
+            "match c { ID_P => x >= ID_Q && x < ID_R, _ => false };",
+            "match d { ID_S => x == ID_T && y < ID_U, _ => false };",
+            "f(ID_V, ID_W..ID_X);",
+            "if ok && id >= ID_Y && id <= ID_Z { g(ID_AA) }",
+            "if x == ID_AB && id >= ID_AC && id <= ID_AD {}",
+            "if ID_AE > id && id >= ID_AF {}",
+            "let s = max(ID_AG, ID_AG)..ID_AH;",
+            "match c { v if v >= ID_AI && v < ID_AJ => ID_AK, _ => 0 };",
+            "if id < ID_AL || id > ID_AM { return; }",
+            "if !(ID_AN > id || ID_AO <= id) {}",
+            "if id > ID_AT || id < ID_AU {}",
+            "if offset < 0 || offset > i32::from(ID_AP_END - ID_AP_BASE) {}",
+            "if offset > i32::from(ID_AV_END - ID_AV_BASE) || offset < 0 {}",
+            "if id < ID_AW || id < ID_AX {} if id > ID_AY || id >= ID_AZ {}",
+            "if k == ID_BA || id >= ID_BB && id <= ID_BC {}",
+            "if id >= ID_BD && id <= ID_BE || k == ID_BF {}",
+            "let t = move || ID_AQ; if a == ID_AR || b == ID_AS {}",
+        ]
+        .join("\n");
+        let ranges = id_ranges(&code).expect("every operand names at most one id");
+        let expect =
+            |lo: &str, hi: &str, inclusive: bool| (lo.to_string(), hi.to_string(), inclusive);
+        assert_eq!(
+            ranges,
+            vec![
+                expect("ID_A_BASE", "ID_A_END", true),
+                expect("ID_B", "ID_C", false),
+                expect("ID_D", "ID_E", true),
+                expect("ID_F", "ID_G", false),
+                expect("ID_W", "ID_X", false),
+                expect("ID_AG", "ID_AH", false),
+                expect("ID_H", "ID_I", true),
+                expect("ID_J", "ID_K", false),
+                expect("ID_M", "ID_L", false),
+                expect("ID_Q", "ID_R", false),
+                expect("ID_Y", "ID_Z", true),
+                expect("ID_AC", "ID_AD", true),
+                expect("ID_AF", "ID_AE", false),
+                expect("ID_AI", "ID_AJ", false),
+                expect("ID_BB", "ID_BC", true),
+                expect("ID_BD", "ID_BE", true),
+                expect("ID_AL", "ID_AM", true),
+                expect("ID_AN", "ID_AO", true),
+                expect("ID_AU", "ID_AT", true),
+            ]
+        );
+        for several in [
+            "let r = (ID_A + ID_B)..ID_C;",
+            "if id >= ID_A && id <= ID_B + ID_C {}",
+            "if id < ID_A || id > ID_B + ID_C {}",
+            "if id < ID_A + ID_B || id > ID_C {}",
+            "if id < ID_BG + ID_BH || id > ID_BI + ID_BJ {}",
+        ] {
+            assert!(id_ranges(several).is_err(), "read `{several}`");
+        }
+    }
+
+    /// A whole file is read, so an id defined after a test module, or
+    /// in one, is seen, and its comments and string literals are not.
+    #[test]
+    fn a_whole_source_file_is_scanned() {
+        let source = [
+            "// const ID_COMMENTED: u16 = 1001;",
+            "let s = \"const ID_QUOTED: u16 = 1001;\";",
+            "#[cfg(test)]",
+            "mod t {",
+            "    const ID_LATE: u16 = 1001;",
+            "}",
+        ]
+        .join("\n");
+        let (ids, ranges) = scan_source(&source).expect("the sample is readable");
+        assert_eq!(ids, vec![("ID_LATE".to_string(), 1001)]);
+        assert!(ranges.is_empty());
+    }
+
+    #[test]
+    fn the_id_reader_refuses_what_it_cannot_read() {
+        assert_eq!(
+            read_ids("const ID_A: u16 = 1_000;\nconst ID_LANGUAGE_CAP: usize = 4;\n"),
+            Ok(vec![("ID_A".to_string(), 1000)])
+        );
+        for unreadable in [
+            "pub const ID_A: u16 = 1000;",
+            "pub(crate) const ID_A: u16 = 1000;",
+            "static ID_A: u16 = 1000;",
+            "const ID_A: u32 = 1000;",
+            "const ID_A: usize = 1001;",
+            "const ID_A:u16 = 1000;",
+            "const ID_A: u16 = 0x3E8;",
+            "const ID_A: u16 = ID_B + 1;",
+            "const ID_A: u16 = 1000; const ID_B: u16 = 1002;",
+            "const ID_A: u16 =\n    1000;",
+            "const\n    ID_A: u16 = 1000;",
+        ] {
+            assert!(read_ids(unreadable).is_err(), "read `{unreadable}`");
+        }
+        for suffix in [
+            "_FIRST", "_LAST", "_START", "_BEGIN", "_MIN", "_MAX", "_LIMIT", "_LO", "_HI", "_LOW",
+            "_HIGH", "_LOWER", "_UPPER",
+        ] {
+            let bound = format!("const ID_X{suffix}: u16 = 1000;");
+            assert!(read_ids(&bound).is_err(), "read `{bound}`");
+        }
+        // A command may end in a word that could name a bound elsewhere.
+        assert!(read_ids("const ID_MACRO_STOP: u16 = 1000;").is_ok());
+    }
+
+    #[test]
+    fn the_id_check_refuses_every_bad_shape() {
+        let ids = |list: &[(&str, u16)]| {
+            list.iter()
+                .map(|&(n, v)| (n.to_string(), v))
+                .collect::<Vec<_>>()
+        };
+        let range =
+            |lo: &str, hi: &str, inclusive: bool| vec![(lo.to_string(), hi.to_string(), inclusive)];
+        let good = ids(&[
+            ("ID_A", 1000),
+            ("ID_B", 1002),
+            ("ID_C_BASE", 1036),
+            ("ID_C_END", 1045),
+        ]);
+        assert_eq!(
+            check_ids(&good, &range("ID_C_BASE", "ID_C_END", true), 1001),
+            Ok(())
+        );
+        assert_eq!(
+            check_ids(&good, &range("ID_B", "ID_C_BASE", true), 1001),
+            Ok(())
+        );
+        for (list, decoded) in [
+            (ids(&[("ID_A", 1001)]), vec![]),
+            (ids(&[("ID_A", 10_001)]), vec![]),
+            (good.clone(), range("ID_A", "ID_B", false)),
+            (good.clone(), range("ID_A", "ID_B", true)),
+            (good.clone(), range("ID_B", "ID_A", true)),
+            (good.clone(), range("ID_A", "ID_UNKNOWN", true)),
+            (ids(&[("ID_X_END", 1999)]), vec![]),
+            (ids(&[("ID_X_BASE", 1500)]), vec![]),
+            (ids(&[("ID_X_BASE", 1000), ("ID_X_END", 1002)]), vec![]),
+            (ids(&[("ID_X_BASE", 1500), ("ID_X_END", 1400)]), vec![]),
+        ] {
+            assert!(
+                check_ids(&list, &decoded, 1001).is_err(),
+                "{list:?} {decoded:?}"
+            );
+        }
+    }
+
+    /// The Notepad++ ids come from `codepp_plugin_host::idm`, which the
+    /// ABI checker compares with Notepad++'s `menuCmdID.h`, and this
+    /// crate keeps no copy of its own, in any of its source files. A
+    /// private copy, which nothing compared with anything, is how eleven
+    /// of them came to be wrong (DESIGN.md §7.4).
+    #[test]
+    fn the_notepad_plus_plus_ids_come_from_plugin_host() {
+        use super::plugin_reentry_guards::{code_only, production_src};
+        let src_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut scanned = 0;
+        for entry in std::fs::read_dir(&src_dir).expect("ui_win32's src directory") {
+            let path = entry.expect("a directory entry").path();
+            if path.extension().is_none_or(|ext| ext != "rs") {
+                continue;
+            }
+            let source = std::fs::read_to_string(&path).expect("a source file");
+            let production = source.split("#[cfg(test)]").next().unwrap_or("");
+            // One space between words, so neither a line break nor a run
+            // of spaces between `const` and the name hides a definition.
+            let words = code_only(production)
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ");
+            assert!(
+                !words.contains("const IDM") && !words.contains("static IDM"),
+                "{} defines a Notepad++ menu id of its own; add it to \
+                 `codepp_plugin_host::idm`, where the ABI checker compares it",
+                path.display()
+            );
+            scanned += 1;
+        }
+        assert!(
+            scanned > 1,
+            "found {scanned} source files in {}",
+            src_dir.display()
+        );
+        assert!(
+            code_only(production_src()).contains("use codepp_plugin_host::idm::{"),
+            "the Notepad++ menu ids are no longer imported from `codepp_plugin_host::idm`"
+        );
+    }
 }
 
 #[cfg(test)]
@@ -32073,25 +32604,25 @@ mod plugin_menu_tests {
     #[test]
     fn a_plugin_submenu_honours_init2check_separators_and_shortcuts() {
         let funcs = [
-            func("Checked", 50_000, 1, true),
-            func("unused", 50_001, 0, false),
-            func("Plain", 50_002, 0, true),
+            func("Checked", 51_000, 1, true),
+            func("unused", 51_001, 0, false),
+            func("Plain", 51_002, 0, true),
         ];
         let sub = unsafe {
             build_plugin_submenu(&funcs, |id| {
-                (id == 50_002).then(|| "Ctrl+Alt+P".to_string())
+                (id == 51_002).then(|| "Ctrl+Alt+P".to_string())
             })
         }
         .expect("CreateMenu");
         assert_eq!(labels(sub), vec!["Checked", "----", "Plain\tCtrl+Alt+P"]);
         let state = |id: u32| unsafe { GetMenuState(sub, id, MF_BYCOMMAND) };
         assert_ne!(
-            state(50_000) & MF_CHECKED.0,
+            state(51_000) & MF_CHECKED.0,
             0,
             "_init2Check was not honoured"
         );
         assert_eq!(
-            state(50_002) & MF_CHECKED.0,
+            state(51_002) & MF_CHECKED.0,
             0,
             "an item started checked without asking"
         );

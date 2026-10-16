@@ -23,6 +23,8 @@
 //! --workspace` produces but `cargo test -p codepp-plugin-host` does not.
 //! Run after a workspace build:
 //! `cargo test -p codepp-plugin-host --test cppexport_e2e -- --ignored`.
+//! A test fails, rather than skips, when the library is not there: a run
+//! that reaches an ignored test asked for it.
 
 #![cfg(target_os = "linux")]
 // The mock routes many message numbers to the same `0` ("unhandled")
@@ -244,26 +246,30 @@ extern "C" fn mock_dispatch(hwnd: *mut c_void, msg: u32, wparam: usize, lparam: 
     }
 }
 
-/// Locate `libcppexport.so` under the workspace `target/<profile>/`.
-fn built_plugin() -> Option<PathBuf> {
-    let ws = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .parent()?
-        .parent()?
-        .to_path_buf();
-    for profile in ["debug", "release"] {
-        let p = ws.join("target").join(profile).join("libcppexport.so");
-        if p.exists() {
-            return Some(p);
-        }
-    }
-    None
+/// `libcppexport.so`, where a build with this test binary's target
+/// directory and profile puts it: beside the `deps` folder the test
+/// binary is in.
+fn built_plugin() -> PathBuf {
+    let exe = std::env::current_exe().expect("the test binary's path");
+    let profile = exe
+        .parent()
+        .and_then(std::path::Path::parent)
+        .expect("the test binary is in <target>/<profile>/deps");
+    let so = profile.join("libcppexport.so");
+    assert!(
+        so.exists(),
+        "{} is not built: run `cargo build --workspace` first, in the tests' \
+         profile (`--release` for a release run)",
+        so.display()
+    );
+    so
 }
 
 /// Load the real `.so` and return the host holding it, staged into the
 /// `<dir>/<stem>.so` layout discovery requires. Keeps the `tempdir`
 /// alive by returning it alongside.
-fn load_cppexport() -> Option<(PluginHost, tempfile::TempDir)> {
-    let so = built_plugin()?;
+fn load_cppexport() -> (PluginHost, tempfile::TempDir) {
+    let so = built_plugin();
     let tmp = tempfile::tempdir().unwrap();
     let plugin_dir = tmp.path().join("cppexport");
     std::fs::create_dir_all(&plugin_dir).unwrap();
@@ -280,7 +286,7 @@ fn load_cppexport() -> Option<(PluginHost, tempfile::TempDir)> {
     };
     host.load_blocking(0, npp_data, Some(mock_dispatch))
         .expect("cppexport should load");
-    Some((host, tmp))
+    (host, tmp)
 }
 
 /// Invoke the `FuncItem` at `idx` in the (single) loaded plugin's array.
@@ -301,10 +307,7 @@ fn invoke_cmd(host: &PluginHost, idx: usize) {
 #[test]
 #[ignore = "needs `cargo build --workspace` to produce libcppexport.so first"]
 fn cppexport_copy_html_sends_rendered_html_via_setclipboard() {
-    let Some((host, _tmp)) = load_cppexport() else {
-        eprintln!("skipping: libcppexport.so not built (run `cargo build --workspace`)");
-        return;
-    };
+    let (host, _tmp) = load_cppexport();
     RECORDED
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -330,10 +333,7 @@ fn cppexport_copy_html_sends_rendered_html_via_setclipboard() {
 #[test]
 #[ignore = "needs `cargo build --workspace` to produce libcppexport.so first"]
 fn cppexport_export_html_sends_bytes_via_exportsavedialog() {
-    let Some((host, _tmp)) = load_cppexport() else {
-        eprintln!("skipping: libcppexport.so not built (run `cargo build --workspace`)");
-        return;
-    };
+    let (host, _tmp) = load_cppexport();
     RECORDED
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)

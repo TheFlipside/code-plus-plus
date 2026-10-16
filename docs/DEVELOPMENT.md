@@ -391,7 +391,7 @@ On Windows set `APPDATA` instead. On macOS only `HOME` moves it; keep
 `CARGO_HOME` and `RUSTUP_HOME` pointing at the real ones when you override
 it, or rustup installs a fresh toolchain into the scratch home.
 
-### Add or change an `NPPM_*` / `NPPN_*` / docking constant
+### Add or change an `NPPM_*` / `NPPN_*` / docking constant or menu id
 
 Verify the number against Notepad++'s published headers, mechanically:
 
@@ -399,15 +399,42 @@ Verify the number against Notepad++'s published headers, mechanically:
 python tools/npp-abi-check/check.py
 ```
 
-It fetches upstream's `Notepad_plus_msgs.h` and diffs both places
-Code++ declares the message ABI — `crates/plugin-host/src/dispatch.rs`
-and `plugins/nppcompat-headers/Notepad_plus_msgs.h` — reporting any
-name whose number disagrees. A second pass fetches upstream's
-`Docking.h` and `dockingResource.h` and diffs the docking constants
-(`DMN_*`, `DWS_*`, `CONT_*`, `DOCKCONT_MAX`) in
-`plugins/nppcompat-headers/Docking.h`, `crates/plugin-host/src/ffi.rs`
-and `crates/plugin-sdk/src/lib.rs`. For an offline run pass local
-copies with `--header`, `--docking-header` and `--docking-resource`.
+It fetches upstream's `Notepad_plus_msgs.h` and diffs every place Code++
+declares the message ABI — `crates/plugin-host/src/dispatch.rs`,
+`plugins/nppcompat-headers/Notepad_plus_msgs.h`, and the few messages
+`crates/plugin-sdk/src/lib.rs` repeats — reporting any name whose number
+disagrees. A second pass fetches upstream's `Docking.h` and
+`dockingResource.h` and diffs the docking constants (`DMN_*`, `DWS_*`,
+`CONT_*`, `DOCKCONT_MAX`) in `plugins/nppcompat-headers/Docking.h`,
+`crates/plugin-host/src/ffi.rs` and `crates/plugin-sdk/src/lib.rs`. A
+third pass fetches upstream's `menuCmdID.h` and diffs the `IDM_*` menu
+command ids in `plugins/nppcompat-headers/menuCmdID.h` and
+`crates/plugin-host/src/idm.rs`, which is where `ui_win32` takes the ids
+it maps for `NPPM_MENUCOMMAND`. In every pass a name of ours that
+upstream does not define fails (a message upstream renamed while keeping
+its number is only listed as renamed, as long as upstream's new name
+keeps that number), and so does a declaration in a form the check does
+not read: a Code++ addition needs a name of its own outside Notepad++'s,
+as `CODEPPM_*` messages have. The message pass compares the bases the
+messages count from, `NPPMSG`, `RUNCOMMAND_USER` and `NPPN_FIRST`, too,
+by the number each stands for, and a `WM_USER` of our own against
+upstream's own, or Windows' 0x0400 when upstream defines none. Every C
+header is read as the C lexer leaves it for the preprocessor's
+directives, so a definition kept in a comment or a string does not
+count, and a name of ours that either side defines twice, in any
+spelling, fails; one of upstream's we do not use is only warned of. A
+header the check cannot read the way a compiler does, such as one with a
+comment or a string never closed, a `%:` directive, a trigraph or a raw
+string, or an upstream header with a conditional directive or any
+directive but a definition, `#undef`, `#pragma once` or an include of a
+plain header name, ends the run with a message naming it, and a
+definition that uses a macro whose body has a `+`, `<` or `|` outside
+its parentheses, which a compiler substitutes as text, fails as one the
+check could not evaluate. For an offline run pass local copies with
+`--header`, `--docking-header`, `--docking-resource` and
+`--menu-header`. Run it by its path, as above: it imports
+`abi_sources.py`, beside it, and `python -I` or `-P` leaves that folder
+off the import path.
 
 This is not optional diligence. Six message numbers were wrong for
 two phases, three of them landing on *other* real Notepad++ messages,
@@ -416,11 +443,33 @@ constants against the same hand-written literals. The docking family
 then turned out to have drifted the same way — `DMN_FIRST` was
 `0x1000` against upstream's 1050, so no `DMN_*` the host sent was
 recognisable — because the checker did not read the docking headers
-yet. An in-tree plugin compiled against the same constants cannot
-catch this; only a comparison with upstream (or a probe plugin
-loaded into a real Notepad++) can. A wrong number is
-not an unanswered message — it is a different message answered
+yet. The menu ids were worse again: eleven of the 32 Win32 mapped were
+wrong, several on other Notepad++ commands, and so were 27 in the
+compat `menuCmdID.h`. An in-tree plugin compiled against the same
+constants cannot catch this; only a comparison with upstream (or a
+probe plugin loaded into a real Notepad++) can. A wrong number is not
+an unanswered message — it is a different message answered
 confidently. See DESIGN.md §7.4.
+
+When changing the checker itself, keep both its files clean under black,
+isort, flake8, pylint and `mypy --strict`, all at their default
+settings, as `check.py`'s docstring asks. `abi_sources.py` reads the
+sources and `check.py` runs the passes, which keeps each under pylint's
+1000-line limit. pylint would have caught a bug in the first draft of
+the menu pass that, after one mismatch, hid the rest of the pass's
+report. And keep its work linear in the size of what it reads: half of
+that comes off the network, and a backtracking regular expression, a
+resolution by repeated passes and Python's own parser, handed a long
+f-string, each turned a crafted header under the 1 MiB cap into a minute
+or more of CPU until they were replaced or screened. So it hands the
+parser only an expression of at most 1024 characters, every one of them
+one a constant is written with, and keeps the parser's warnings off the
+terminal. For the same reason a download is one request, answered
+`200 OK` without a redirect and framed by a `Content-Length`, as
+upstream's are, and the run's downloads have two minutes between them;
+and the checker bounds every value it evaluates, escapes a server's
+error text and cuts it short, and prints what the console cannot encode
+escaped. Keep those too.
 
 Nothing from upstream is vendored: the tool fetches, prints names and
 integers, and writes nothing into the tree.
