@@ -1144,10 +1144,19 @@ struct DocMapScrollDrag {
 /// so the proc stays a thin forwarder.
 #[derive(Debug, Clone, Copy)]
 struct TabDrag {
-    /// Index in `Shell.tabs` of the tab the user grabbed. Updated
-    /// after every successful neighbour-swap so subsequent
-    /// `WM_MOUSEMOVE`s "carry" the dragged tab toward the cursor.
-    source_idx: usize,
+    /// **`Tab.id`** of the tab the user grabbed, not its index in
+    /// `Shell.tabs`, for the reason [`WindowState::tab_close_armed`]
+    /// is keyed on the id. A drag spans many messages, and what is
+    /// dispatched between two of them can reorder or shrink the tab
+    /// list: a `WM_APP_WAKE` drain whose landing moves tabs (the
+    /// pinned repair and its mirror, a first load's tab inserted
+    /// beside the work it found, a failed open's tab removed), or a
+    /// keyboard close, which mouse capture does not hold back. An
+    /// index would then name whichever tab slid into the grabbed
+    /// one's slot, and the drag would carry that tab instead until
+    /// the button came up. Each `WM_MOUSEMOVE` finds the tab again
+    /// with [`tab_drag_source_idx`].
+    source_id: i32,
     /// Cursor X in tab-control client coords at the moment the
     /// user pressed. Movement past `TAB_DRAG_THRESHOLD_PX` from
     /// this anchor flips `threshold_passed` and starts the
@@ -4808,6 +4817,45 @@ fn resolve_tab_arm_commit(
         (Some(a), Some(r)) if a == r => tabs.iter().position(|t| t.id == a),
         _ => None,
     }
+}
+
+/// Where the tab a drag carries sits now: the index in `tabs` of the
+/// tab whose id is `source_id`. `None` when the drag has to end, which
+/// is when that tab was closed, or is pinned now — a landing can apply
+/// the pin its session recorded for the file while the user drags it.
+/// A pinned tab is one `Shell::move_tab` refuses to move and the press
+/// would not have armed a drag on.
+///
+/// Pure inspector, for the same reason as [`resolve_tab_arm_commit`].
+fn tab_drag_source_idx(tabs: &[Tab], source_id: i32) -> Option<usize> {
+    let idx = tabs.iter().position(|t| t.id == source_id)?;
+    (!tabs[idx].pinned).then_some(idx)
+}
+
+/// Carry the tab at `from` toward `to` one neighbour at a time, each
+/// step a [`Shell::move_tab`], which keeps `active_tab` on the same
+/// buffer and refuses a step into the pinned prefix — so a drag toward
+/// a pinned tab stops at the boundary. With high-frequency mousemove
+/// delivery the steps read as a smooth animation even when the cursor
+/// jumps several cells at once. Returns whether anything moved, so the
+/// caller resyncs the strip only when it has to.
+///
+/// `from` must be the dragged tab's index *now*, from
+/// [`tab_drag_source_idx`]; an index kept from an earlier message can
+/// name another tab.
+fn carry_tab_toward(shell: &mut Shell, from: usize, to: usize) -> bool {
+    let max_steps = shell.tabs.len();
+    let mut at = from;
+    let mut steps = 0;
+    while at != to && steps < max_steps {
+        let next = if at < to { at + 1 } else { at - 1 };
+        if !shell.move_tab(at, next) {
+            break;
+        }
+        at = next;
+        steps += 1;
+    }
+    steps > 0
 }
 
 /// # Safety
@@ -24061,10 +24109,11 @@ extern "system" fn tab_subclass_proc(
                         // still falls through to
                         // `DefSubclassProc` so the tab activates
                         // normally.
-                        let is_pinned = state.shell.tabs.get(idx).is_some_and(|t| t.pinned);
-                        if !is_pinned {
+                        //
+                        // Armed on `Tab.id` — see the field docstring.
+                        if let Some(tab) = state.shell.tabs.get(idx).filter(|t| !t.pinned) {
                             state.tab_drag = Some(TabDrag {
-                                source_idx: idx,
+                                source_id: tab.id,
                                 start_x: x,
                                 threshold_passed: false,
                             });
@@ -24133,19 +24182,19 @@ extern "system" fn tab_subclass_proc(
                 }
                 if let Some(state) = state_from_hwnd(parent) {
                     if let Some(mut drag) = state.tab_drag {
-                        // Defensive: another input path could
-                        // shrink `tabs` mid-drag (e.g., a Ctrl+W
-                        // close — keyboard messages aren't gated
-                        // by mouse capture, so they keep flowing
-                        // to the main window). If our recorded
-                        // source index no longer points at a
-                        // live tab, abandon the drag rather than
-                        // burning O(N) `move_tab` no-ops on
-                        // every subsequent mousemove.
-                        if drag.source_idx >= state.shell.tabs.len() {
+                        // Find the grabbed tab where it is now: a
+                        // drain or a keyboard close since the last
+                        // mousemove may have moved it. Gone (closed)
+                        // or pinned (a landing applied the pin its
+                        // session recorded), the drag ends rather
+                        // than carry another tab or burn `move_tab`
+                        // refusals on every mousemove.
+                        let Some(source_idx) =
+                            tab_drag_source_idx(&state.shell.tabs, drag.source_id)
+                        else {
                             state.tab_drag = None;
                             return DefSubclassProc(hwnd, msg, wparam, lparam);
-                        }
+                        };
                         // Promote click → drag once the user has
                         // crossed the move threshold. Sticky once
                         // set — wiggling back over the source
@@ -24157,32 +24206,7 @@ extern "system" fn tab_subclass_proc(
                         }
                         if drag.threshold_passed {
                             if let Some(target_idx) = hit {
-                                // Bubble the dragged tab toward the
-                                // cursor one neighbour at a time —
-                                // each iteration calls `move_tab`
-                                // (which adjusts `active_tab` for
-                                // us) and re-syncs the visible tab
-                                // strip. With high-frequency
-                                // mousemove delivery this still
-                                // reads as a smooth animation,
-                                // even when the cursor jumps
-                                // several cells at once.
-                                let max_steps = state.shell.tabs.len();
-                                let mut steps = 0;
-                                while drag.source_idx != target_idx && steps < max_steps {
-                                    let next = if drag.source_idx < target_idx {
-                                        drag.source_idx + 1
-                                    } else {
-                                        drag.source_idx - 1
-                                    };
-                                    if state.shell.move_tab(drag.source_idx, next) {
-                                        drag.source_idx = next;
-                                    } else {
-                                        break;
-                                    }
-                                    steps += 1;
-                                }
-                                if steps > 0 {
+                                if carry_tab_toward(&mut state.shell, source_idx, target_idx) {
                                     force_tab_strip_resync(state);
                                 }
                             }
@@ -30295,6 +30319,177 @@ mod tab_arm_commit_tests {
         // release hit must not accidentally commit anything.
         let tabs = vec![mk(3)];
         assert_eq!(resolve_tab_arm_commit(&tabs, None, None), None);
+    }
+}
+
+#[cfg(test)]
+mod tab_drag_tests {
+    //! A tab drag is keyed on the grabbed tab's `Tab.id` and finds the
+    //! tab again on every `WM_MOUSEMOVE`, because what is dispatched
+    //! between two mousemoves — a `WM_APP_WAKE` drain whose landing
+    //! moves tabs, a keyboard close — can shift it. Keyed on an index,
+    //! the drag carried whichever tab slid into the grabbed one's slot
+    //! (DESIGN.md §7.4). The two helpers are tested directly, the
+    //! carry against a real `Shell` so `move_tab`'s rules are the real
+    //! ones; the wiring in the subclass proc, which no headless test
+    //! can drive, is pinned in the source.
+
+    use super::plugin_reentry_guards::{
+        block_after, code_without_strings, fn_body, production_src,
+    };
+    use super::{carry_tab_toward, tab_drag_source_idx};
+    use codepp_shell::{Shell, Tab};
+    use std::sync::Arc;
+
+    fn mk(id: i32) -> Tab {
+        Tab {
+            id,
+            ..Tab::default()
+        }
+    }
+
+    fn ids(tabs: &[Tab]) -> Vec<i32> {
+        tabs.iter().map(|t| t.id).collect()
+    }
+
+    #[test]
+    fn the_drag_finds_its_tab_where_it_is_now() {
+        let tabs = vec![mk(1), mk(2), mk(3), mk(4)];
+        assert_eq!(tab_drag_source_idx(&tabs, 2), Some(1));
+        // A landing moved a tab in front of the grabbed one.
+        let moved = vec![mk(3), mk(1), mk(2), mk(4)];
+        assert_eq!(tab_drag_source_idx(&moved, 2), Some(2));
+        // A tab in front of it closed.
+        let shrunk = vec![mk(1), mk(3), mk(2)];
+        assert_eq!(tab_drag_source_idx(&shrunk, 2), Some(2));
+    }
+
+    #[test]
+    fn a_closed_tab_ends_the_drag() {
+        // The grabbed tab is gone, and another sits at its old index:
+        // the drag must end rather than carry that one.
+        let tabs = vec![mk(1), mk(3), mk(4)];
+        assert_eq!(tab_drag_source_idx(&tabs, 2), None);
+    }
+
+    #[test]
+    fn a_tab_pinned_mid_drag_ends_the_drag() {
+        let mut pinned = mk(2);
+        pinned.pinned = true;
+        let tabs = vec![pinned, mk(1), mk(3)];
+        assert_eq!(tab_drag_source_idx(&tabs, 2), None);
+    }
+
+    fn shell_with(tabs: Vec<Tab>, active: usize) -> Shell {
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).expect("a shell");
+        shell.tabs = tabs;
+        shell.active_tab = Some(active);
+        shell
+    }
+
+    /// The bug, end to end through the shell. The user grabs tab 2,
+    /// which the press activated; before the next mousemove a landing
+    /// applies the pin its session recorded for tab 3, and the pinned
+    /// repair moves tab 3 to the front — `Shell::set_pinned` is the
+    /// same move. The grabbed tab now sits one slot to the right, and
+    /// the slot it was grabbed at holds tab 1. Carried by its id, tab 2
+    /// is the one that moves.
+    #[test]
+    fn a_reorder_mid_drag_still_carries_the_grabbed_tab() {
+        let mut shell = shell_with(vec![mk(1), mk(2), mk(3), mk(4)], 1);
+        let grabbed_at = tab_drag_source_idx(&shell.tabs, 2).unwrap();
+        assert!(shell.set_pinned(2, true), "the reorder did not happen");
+        assert_eq!(ids(&shell.tabs), [3, 1, 2, 4]);
+        assert_eq!(
+            shell.tabs[grabbed_at].id, 1,
+            "the precondition: the grabbed tab's old index names another tab"
+        );
+
+        let from = tab_drag_source_idx(&shell.tabs, 2).unwrap();
+        assert!(carry_tab_toward(&mut shell, from, 3));
+        assert_eq!(ids(&shell.tabs), [3, 1, 4, 2], "the wrong tab was carried");
+        assert_eq!(
+            shell.active_tab,
+            Some(3),
+            "the active tab did not follow the carried one"
+        );
+    }
+
+    #[test]
+    fn the_carry_stops_at_the_pinned_prefix() {
+        let mut pinned = mk(1);
+        pinned.pinned = true;
+        let mut shell = shell_with(vec![pinned, mk(2), mk(3)], 2);
+        assert!(carry_tab_toward(&mut shell, 2, 0));
+        assert_eq!(ids(&shell.tabs), [1, 3, 2]);
+        // Already as far as it can go, and onto itself: nothing moves.
+        assert!(!carry_tab_toward(&mut shell, 1, 0));
+        assert!(!carry_tab_toward(&mut shell, 1, 1));
+        assert_eq!(ids(&shell.tabs), [1, 3, 2]);
+    }
+
+    /// The drag state holds the grabbed tab's id and no index, the press
+    /// arms it with the id, and every mousemove finds the tab again
+    /// before it carries it. An index kept in the state, or a carry
+    /// from anything but the index found on this mousemove, compiles
+    /// and drags correctly until something moves a tab mid-drag.
+    /// Comments and string contents are removed before matching, so a
+    /// quoted or commented copy of the pinned code cannot stand in for
+    /// it.
+    #[test]
+    fn the_drag_is_keyed_on_the_tab_id() {
+        let squash = |s: &str| {
+            code_without_strings(s)
+                .split_whitespace()
+                .collect::<String>()
+        };
+        let src = production_src();
+        // The whole field list, so an index of any integer type cannot
+        // come back beside the id. A new field needs adding here.
+        assert_eq!(
+            squash(&block_after(src, "struct TabDrag {")),
+            "{source_id:i32,start_x:i32,threshold_passed:bool,}",
+            "`TabDrag`'s fields changed; it must record the grabbed tab's id and no index, \
+             since a reorder mid-drag makes an index name another tab"
+        );
+
+        let proc = fn_body(src, "tab_subclass_proc");
+        let down = squash(&block_after(&proc, "WM_LBUTTONDOWN => {"));
+        assert!(
+            down.contains("state.tab_drag=Some(TabDrag{source_id:tab.id,"),
+            "the press no longer arms the drag with the grabbed tab's id"
+        );
+        let mv = squash(&block_after(&proc, "WM_MOUSEMOVE => {"));
+        let find = mv
+            .find("letSome(source_idx)=tab_drag_source_idx(&state.shell.tabs,drag.source_id)else{")
+            .expect("the mousemove no longer finds the grabbed tab by its id");
+        let carry = mv
+            .find("carry_tab_toward(&mutstate.shell,source_idx,target_idx)")
+            .expect("the mousemove no longer carries the tab it found");
+        assert!(
+            find < carry,
+            "the mousemove carries before it finds the grabbed tab"
+        );
+        // Nothing rebinds or reassigns the index between the two.
+        assert_eq!(
+            mv.matches("(source_idx)=").count(),
+            1,
+            "the mousemove binds `source_idx` twice; the carry may start from the second"
+        );
+        assert!(
+            !mv[find..carry].contains("source_idx="),
+            "the mousemove replaces the index it found before carrying from it"
+        );
+        assert_eq!(
+            mv.matches("carry_tab_toward(").count(),
+            1,
+            "a second carry in the mousemove may start from another index"
+        );
+        assert!(
+            !mv.contains("move_tab("),
+            "the mousemove moves tabs itself, around the id lookup"
+        );
     }
 }
 
