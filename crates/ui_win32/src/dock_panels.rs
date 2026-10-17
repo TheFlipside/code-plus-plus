@@ -58,7 +58,9 @@ use windows::Win32::Graphics::Gdi::{
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Controls::NMHDR;
-use windows::Win32::UI::Input::KeyboardAndMouse::{GetKeyState, ReleaseCapture, SetCapture};
+use windows::Win32::UI::Input::KeyboardAndMouse::{
+    GetFocus, GetKeyState, ReleaseCapture, SetCapture, SetFocus,
+};
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, GetClassNameW, GetClientRect, GetCursorPos,
     GetParent, GetWindowLongPtrW, GetWindowRect, LoadCursorW, RegisterClassExW,
@@ -69,7 +71,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     WM_MOUSEMOVE, WM_PAINT, WM_SETCURSOR, WM_SIZE, WNDCLASSEXW, WS_CHILD, WS_CLIPCHILDREN,
     WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_POPUP, WS_THICKFRAME,
 };
-use windows::Win32::UI::WindowsAndMessaging::{IsWindow, SendMessageW, WM_NOTIFY};
+use windows::Win32::UI::WindowsAndMessaging::{IsWindow, IsWindowVisible, SendMessageW, WM_NOTIFY};
 
 use crate::{
     dialog_bg_brush, relayout_now, state_from_hwnd, sync_docmap_to_active_tab, toolbar,
@@ -827,6 +829,164 @@ impl Drop for NoticeDelivery {
                 }
             });
         }
+    }
+}
+
+thread_local! {
+    /// The plugin panel a `NPPM_DMMSHOW` or `NPPM_DMMVIEWOTHERTAB` asked
+    /// to give keyboard focus — see [`request_panel_focus`].
+    static PANEL_FOCUS: std::cell::Cell<Option<DockPanel>> = const { std::cell::Cell::new(None) };
+    /// Set while [`apply_requested_panel_focus`] is moving focus on this
+    /// thread. See [`PanelFocusing`].
+    static PANEL_FOCUSING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Marks [`apply_requested_panel_focus`] as moving focus on this
+/// thread, so a request made from inside the move is dropped rather
+/// than applied there.
+///
+/// `SetFocus` sends `WM_SETFOCUS` to the panel synchronously, and a
+/// plugin may answer it with `NPPM_DMMSHOW` for that same panel — to
+/// make sure it is in front, say — after moving focus to one of its
+/// own controls. Applied in turn, that request would move focus back to
+/// the panel, which sends `WM_SETFOCUS` again, with nothing bounding
+/// the depth: the `DMN_CLOSE` recursion `DmnCloseGuard` latches, in
+/// another message. In that case the panel the outer move is focusing
+/// is the one the plugin asked for anyway; a handler that shows a
+/// different panel gets it shown but not focused. RAII so the flag
+/// clears on the unwinding path too.
+struct PanelFocusing;
+
+impl PanelFocusing {
+    /// `None` when a move is already under way on this thread.
+    fn enter() -> Option<Self> {
+        if PANEL_FOCUSING.with(std::cell::Cell::get) {
+            return None;
+        }
+        PANEL_FOCUSING.with(|f| f.set(true));
+        Some(Self)
+    }
+}
+
+impl Drop for PanelFocusing {
+    fn drop(&mut self) {
+        PANEL_FOCUSING.with(|f| f.set(false));
+    }
+}
+
+/// Ask for `panel`'s content to take keyboard focus once
+/// [`apply_dock_layout`] has put it on screen.
+///
+/// Notepad++ moves focus to a panel's `hClient` whenever a plugin shows
+/// it with `NPPM_DMMSHOW` or brings it forward with
+/// `NPPM_DMMVIEWOTHERTAB`, even when it is already in front — measured
+/// with a probe plugin in Notepad++ 8.9.8.1 (DESIGN.md §7.4). A plugin
+/// whose command opens a console expects what the user types next to
+/// land in it. The handlers run inside the NPPM dispatch, before the
+/// window tree has caught up and while the panel may still be hidden —
+/// `NPPM_DMMVIEWOTHERTAB` shows a hidden one — so they only record the
+/// request; the `wnd_proc` arm applies it with
+/// [`apply_requested_panel_focus`] after its reconcile.
+///
+/// One request is held at a time, and the last one wins: a plugin that
+/// shows two panels in one dispatch focuses the second, which is where
+/// Notepad++, moving focus at each show, leaves it too. Every NPPM arm
+/// applies whatever is held when its dispatch ends, so one nested inside
+/// another — a plugin answering a notification the outer dispatch set
+/// off — may apply the outer request; it does so after its own
+/// reconcile, so the panel is on screen by then either way. The panel
+/// is recorded rather than its window, so a request that outlives its
+/// registration finds nothing instead of a reused handle.
+pub(crate) fn request_panel_focus(panel: DockPanel) {
+    PANEL_FOCUS.with(|f| f.set(Some(panel)));
+}
+
+/// Give keyboard focus to the panel [`request_panel_focus`] named, if
+/// it is still registered and its content is on screen, and forget the
+/// request either way. A request made while this is moving focus is
+/// dropped — see [`PanelFocusing`].
+///
+/// # Safety
+///
+/// `main_hwnd` must be the main window. UI thread only, with no
+/// `WindowState` borrow live: this takes one, and `SetFocus` sends
+/// `WM_KILLFOCUS` / `WM_SETFOCUS` synchronously, which reach window
+/// procedures that take their own.
+pub(crate) unsafe fn apply_requested_panel_focus(main_hwnd: HWND) {
+    let Some(panel) = PANEL_FOCUS.with(std::cell::Cell::take) else {
+        return;
+    };
+    let Some(_focusing) = PanelFocusing::enter() else {
+        tracing::debug!(
+            panel = panel.persist_key(),
+            "panel focus requested during a focus move; dropped"
+        );
+        return;
+    };
+    let client = unsafe { state_from_hwnd(main_hwnd) }.and_then(|state| {
+        state
+            .dock_dialogs
+            .iter()
+            .find(|e| e.panel == panel)
+            .map(|e| e.h_client)
+    });
+    let Some(client) = client else {
+        tracing::debug!(
+            panel = panel.persist_key(),
+            "panel focus requested for a panel no longer registered; dropped"
+        );
+        return;
+    };
+    if unsafe { IsWindowVisible(client) }.as_bool() {
+        let _ = unsafe { SetFocus(Some(client)) };
+    } else {
+        tracing::debug!(
+            panel = panel.persist_key(),
+            "panel focus requested for a panel not on screen; dropped"
+        );
+    }
+}
+
+/// The window with keyboard focus on this thread, for [`return_focus`].
+pub(crate) fn focus_now() -> HWND {
+    // SAFETY: `GetFocus` takes no arguments and reads only this
+    // thread's input state.
+    unsafe { GetFocus() }
+}
+
+/// Put keyboard focus back on `before` if a plugin load pass moved it.
+///
+/// Notepad++ loads its plugins at startup and restores their panels by
+/// running each one's command, which shows the panel and moves focus
+/// there; then it activates the session's buffer, which puts focus back
+/// on the editor, so by `NPPN_READY` it is there again — measured with a
+/// probe plugin in Notepad++ 8.9.8.1. Code++ loads a plugin when it is
+/// first needed, so a pass can run in the middle of a session, and
+/// without this a restored panel's command, or a plugin showing its
+/// panel from `NPPN_TBMODIFICATION`, would leave what the user types
+/// next going into a panel they never asked for. A null `before` does
+/// nothing; the load pass passes the editor instead when no window of
+/// the thread had focus, which is so while Code++ is in the background.
+/// At startup `run` also focuses the editor once the pass is over.
+///
+/// A `before` that has been destroyed, or hidden, during the pass is
+/// left alone too, and focus stays where the pass put it: `SetFocus`
+/// focuses a hidden window as readily as a shown one, and what the user
+/// types next would go nowhere they could see.
+///
+/// # Safety
+///
+/// UI thread only, with no `WindowState` borrow live: `SetFocus` sends
+/// `WM_KILLFOCUS` / `WM_SETFOCUS` synchronously.
+pub(crate) unsafe fn return_focus(before: HWND) {
+    if before.is_invalid()
+        || !unsafe { IsWindow(Some(before)) }.as_bool()
+        || !unsafe { IsWindowVisible(before) }.as_bool()
+    {
+        return;
+    }
+    if focus_now() != before {
+        let _ = unsafe { SetFocus(Some(before)) };
     }
 }
 
@@ -2148,5 +2308,116 @@ mod tests {
         // Dragging down (+y): grows Top, shrinks Bottom.
         assert_eq!(side_drag_size(DockSide::Top, 150, (0, 25)), 175);
         assert_eq!(side_drag_size(DockSide::Bottom, 150, (0, 25)), 125);
+    }
+
+    /// The latch admits one focus move per thread at a time and clears
+    /// when the move ends, the unwinding path included.
+    #[test]
+    fn the_focus_latch_admits_one_move_and_clears() {
+        let outer = PanelFocusing::enter().expect("no move under way");
+        assert!(
+            PanelFocusing::enter().is_none(),
+            "a nested move was admitted"
+        );
+        drop(outer);
+        assert!(PanelFocusing::enter().is_some(), "the latch did not clear");
+        let caught = std::panic::catch_unwind(|| {
+            let _focusing = PanelFocusing::enter();
+            panic!("inside a move");
+        });
+        assert!(caught.is_err());
+        assert!(
+            PanelFocusing::enter().is_some(),
+            "an unwinding move left the latch set"
+        );
+    }
+
+    /// The move takes the latch before it focuses anything, and drops the
+    /// request when the latch is taken: the order that keeps a plugin's
+    /// `WM_SETFOCUS` handler from recursing through `NPPM_DMMSHOW`.
+    #[test]
+    fn the_focus_move_is_latched_before_it_focuses() {
+        use crate::plugin_reentry_guards::{code_without_strings, fn_body};
+        let src = include_str!("dock_panels.rs");
+        let src = &src[..src.find("#[cfg(test)]").expect("test module")];
+        let body = code_without_strings(&fn_body(src, "apply_requested_panel_focus"));
+        let take = body
+            .find("PANEL_FOCUS.with(std::cell::Cell::take)")
+            .expect("the move no longer takes the request");
+        let latch = body
+            .find("let Some(_focusing) = PanelFocusing::enter() else {")
+            .expect("the move no longer takes the latch, or ignores it");
+        let focus = body
+            .find("SetFocus(Some(client))")
+            .expect("the move no longer focuses the panel");
+        assert!(
+            take < latch && latch < focus,
+            "the request must be taken, then the latch, then the focus moved"
+        );
+    }
+
+    /// `return_focus` puts focus back on the window it was given, and
+    /// leaves it alone when that window is null — the startup case —
+    /// gone, or hidden.
+    #[test]
+    fn return_focus_puts_focus_back_unless_there_is_nowhere_to_put_it() {
+        use windows::Win32::UI::WindowsAndMessaging::{WINDOW_STYLE, WS_VISIBLE};
+        unsafe {
+            let instance = GetModuleHandleW(None).unwrap_or_default();
+            // Shown, because a hidden window is one `return_focus`
+            // refuses; off screen, and never activated by a click or
+            // listed in the taskbar, so a test run shows nothing.
+            let edit = |parent: Option<HWND>, visible: bool| {
+                let shown = if visible {
+                    WS_VISIBLE
+                } else {
+                    WINDOW_STYLE::default()
+                };
+                CreateWindowExW(
+                    if parent.is_some() {
+                        WINDOW_EX_STYLE::default()
+                    } else {
+                        WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE
+                    },
+                    w!("EDIT"),
+                    PCWSTR::null(),
+                    shown | if parent.is_some() { WS_CHILD } else { WS_POPUP },
+                    if parent.is_some() { 0 } else { -32000 },
+                    if parent.is_some() { 0 } else { -32000 },
+                    50,
+                    20,
+                    parent,
+                    None,
+                    Some(instance.into()),
+                    None,
+                )
+                .expect("edit control")
+            };
+            let top = edit(None, true);
+            let a = edit(Some(top), true);
+            let b = edit(Some(top), true);
+            let hidden = edit(Some(top), false);
+            let gone = edit(Some(top), true);
+            let _ = DestroyWindow(gone);
+
+            let _ = SetFocus(Some(a));
+            assert_eq!(focus_now(), a, "the test cannot give focus to a window");
+            return_focus(b);
+            assert_eq!(
+                focus_now(),
+                b,
+                "focus did not go back to the window it was before"
+            );
+            return_focus(HWND::default());
+            assert_eq!(focus_now(), b, "a null window took focus away");
+            return_focus(gone);
+            assert_eq!(focus_now(), b, "a destroyed window took focus away");
+            return_focus(hidden);
+            assert_eq!(focus_now(), b, "a hidden window took focus away");
+            return_focus(b);
+            assert_eq!(focus_now(), b);
+
+            let _ = DestroyWindow(top);
+        }
     }
 }

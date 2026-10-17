@@ -123,6 +123,15 @@ test still runs (directory junctions don't need the privilege), but
 it exercises a different reject path (`ERROR_ACCESS_DENIED` on the
 directory open) and would still pass even if the flag were removed.
 
+### 2.7 An interactive desktop
+
+Some `ui_win32` tests create real windows and move keyboard focus
+between them — `return_focus_puts_focus_back_unless_there_is_nowhere_to_put_it`
+among them. `SetFocus` needs a window station with an interactive
+desktop, so run the suite from a logged-in session. A runner installed
+as a service, with no desktop, can fail those tests rather than skip
+them; give the `windows`-label runner a logged-in session.
+
 ---
 
 ## 3. Linux
@@ -563,13 +572,31 @@ so a build anywhere else compiles them to an *empty* rlib and verifies
 nothing. The Windows check names `codepp-ui-win32` rather than the
 workspace because `codepp-app`'s and the plugins' build scripts compile
 a Windows resource with `rc.exe` for that target, which the variable
-does not skip. `ui_gtk` cannot be checked this way: the GTK bindings'
-own build scripts, which the variable does not reach, need the target's
-GTK development files through `pkg-config`, so check it on Linux, or in
-a Linux container. The same holds for `codepp-platform` on a Linux
-target, and so for nearly every crate above it: its plugin panel key
-takes its HMAC from GLib through `glib-sys`, whose build script needs
-the target's GLib development files.
+does not skip. The GTK bindings' own build scripts, which the variable
+does not reach, ask `pkg-config` for the target's GTK development
+files, and so does `codepp-platform`'s on a Linux target, through
+`glib-sys`, for the HMAC its plugin panel key takes from GLib. So
+nearly every crate needs them for a Linux check. The bindings use
+`system-deps`, which skips `pkg-config` for a library whose
+`SYSTEM_DEPS_<NAME>_NO_PKG_CONFIG` is set, as long as
+`SYSTEM_DEPS_<NAME>_LIB` names a library to link. A type check links
+nothing, so any name will do, and these ten cover the workspace:
+
+```sh
+for n in GLIB_2_0 GOBJECT_2_0 GIO_2_0 GDK_PIXBUF_2_0 CAIRO CAIRO_GOBJECT \
+         PANGO ATK GDK_3_0 GTK_3_0; do
+  export SYSTEM_DEPS_${n}_NO_PKG_CONFIG=1 SYSTEM_DEPS_${n}_LIB=x
+done
+CODEPP_SKIP_NATIVE_BUILD=1 cargo check --workspace --all-targets \
+    --target x86_64-unknown-linux-gnu
+```
+
+The names are the bindings' `[package.metadata.system-deps]` keys in
+shouty snake case, so `gtk+_3_0` is `GTK_3_0`. If an update of the
+bindings adds a library, the check fails in that `-sys` crate's build
+script; add the key its `Cargo.toml` names. Like the skipped native
+build, the placeholder names break anything that links, so keep them
+out of a real Linux build.
 
 `cargo check` never links, so skipping the native build costs nothing
 there. Anything that *does* link — a binary or a test target — fails

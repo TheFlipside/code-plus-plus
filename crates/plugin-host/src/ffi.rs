@@ -378,10 +378,10 @@ pub struct TbData {
     /// Either way the plugin owns its lifetime: the host never
     /// destroys it.
     pub h_client: *mut c_void,
-    /// Wide-char display title. Used for the panel's caption and
-    /// as the lookup key for `NPPM_DMMGETPLUGINHWNDBYNAME` and
-    /// `NPPM_DMMVIEWOTHERTAB`. Plugin owns the buffer; host reads
-    /// on every UPDATEDISPINFO and on lookup.
+    /// Wide-char display title. Used for the panel's caption, and
+    /// it is the window name `NPPM_DMMGETPLUGINHWNDBYNAME` and
+    /// `NPPM_DMMVIEWOTHERTAB` compare. Plugin owns the buffer; the
+    /// host reads it at registration and on every UPDATEDISPINFO.
     pub psz_name: *const u16,
     /// Index of the plugin's `FuncItem` that opens this panel —
     /// upstream's convention, which Notepad++ relies on to reopen a
@@ -411,9 +411,9 @@ pub struct TbData {
     /// The plugin's library file name, extension included
     /// (`"MyPlugin.dll"`, `"MyPlugin.so"` on Linux, `"MyPlugin.dylib"`
     /// on macOS) — upstream's contract, since Notepad++ persists the
-    /// string and finds the plugin again by it. Used by
-    /// `GETPLUGINHWNDBYNAME`'s second argument (the optional
-    /// module-name disambiguator). Plugin owns the buffer.
+    /// string and finds the plugin again by it. It is also what
+    /// `NPPM_DMMGETPLUGINHWNDBYNAME`'s lParam names, compared
+    /// regardless of ASCII case. Plugin owns the buffer.
     pub psz_module_name: *const u16,
 }
 

@@ -377,6 +377,9 @@ typedef struct sessionInfo_ {
 /* v3: show the panel previously registered for the `hClient`
  *     HWND in lParam (wParam unused). A panel that is already
  *     visible but behind another tab is brought to the front.
+ *     On Windows `hClient` then takes keyboard focus, every time,
+ *     even when the panel was already in front, as in Notepad++.
+ *     On Linux and macOS focus stays where it was, for now.
  *     Returns 1 on success, 0 if the HWND isn't registered. */
 #define NPPM_DMMSHOW                      (NPPMSG + 30)
 /* v3: hide the panel previously registered for the `hClient`
@@ -432,11 +435,13 @@ typedef struct sessionInfo_ {
 #define NPPM_LOADSESSION                  (NPPMSG + 34)
 /* v3: bring the dock panel named at lParam to the front of
  *     whatever container it shares (wParam unused). The name is
- *     the pszName the panel was registered with. A hidden panel is
+ *     the pszName the panel was registered with, matched exactly,
+ *     case included, as Notepad++ matches it. A hidden panel is
  *     shown; a panel alone in its container is already frontmost,
- *     so the call succeeds and changes nothing.
+ *     so the call succeeds and changes nothing. Focus moves to the
+ *     panel as for NPPM_DMMSHOW.
  *     Returns 1 if a panel by that name is registered, 0
- *     otherwise. */
+ *     otherwise; Notepad++ returns 1 either way (measured). */
 #define NPPM_DMMVIEWOTHERTAB              (NPPMSG + 35)
 
 /* File operations -------------------------------------------------- */
@@ -511,14 +516,27 @@ typedef struct toolbarIcons_ {
  *     to read the real kernel version. Falls back to `WV_WIN10` if
  *     the probe fails. */
 #define NPPM_GETWINDOWSVERSION            (NPPMSG + 42)
-/* v3: look up a registered docking dialog's `hClient` by display
- *     name. wParam: TCHAR* module name (or NULL = match any
- *     module's registration). lParam: TCHAR* dialog name
- *     (required, the value the registering tTbData supplied as
- *     pszName). Returns the matching hClient HWND, or 0 if no
- *     entry matches. Plugins use this to discover whether
- *     another plugin's docked dialog is up — the standard
- *     dependency-discovery pattern in N++. */
+/* v3: look up a registered docking dialog's `hClient` by the
+ *     module that registered it.
+ *     wParam: TCHAR* window name — the pszName it was registered
+ *             with — or NULL for the module's first panel.
+ *     lParam: TCHAR* module name — the pszModuleName it was
+ *             registered with, the plugin's file name with its
+ *             extension ("NppExec.dll"). Required: NULL returns 0.
+ *     Both names are compared regardless of ASCII case, and only
+ *     ASCII case: "NPPEXEC.DLL" finds "NppExec.dll", but "ö" does
+ *     not find "Ö". An empty window name is a name, not NULL; a
+ *     name the host cannot decode (an unpaired surrogate or a
+ *     U+FFFD) finds nothing.
+ *     Returns the matching hClient, or 0 if no registration
+ *     matches. Plugins use this to find another plugin's docked
+ *     dialog. Measured against Notepad++ 8.9.8.1. With a NULL
+ *     wParam and several panels it answers the first in its own
+ *     container order — a panel docked on the right before one
+ *     docked at the bottom, whichever registered first — where
+ *     Code++ answers the module's first registration.
+ *     Code++ read the two arguments the other way round, and
+ *     compared them case included, until Phase 5. */
 #define NPPM_DMMGETPLUGINHWNDBYNAME       (NPPMSG + 43)
 #define NPPM_MAKECURRENTBUFFERDIRTY       (NPPMSG + 44)
 #define NPPM_GETENABLETHEMETEXTUREFUNC    (NPPMSG + 45)  /* deprecated upstream */

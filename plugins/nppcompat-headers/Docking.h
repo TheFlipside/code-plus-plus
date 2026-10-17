@@ -61,11 +61,13 @@ extern "C" {
  * pszModuleName must be the plugin's own DLL file name INCLUDING the
  * ".dll" extension — what Notepad++'s own header requires, because it
  * persists that string and uses it to find the plugin again on the
- * next start. dlgID is the index of the plugin's FuncItem that opens
- * this panel, for the same reason: a panel that was open when the host
- * last quit is brought back by the host RUNNING FuncItem[dlgID] at the
- * next start — after NPPN_TBMODIFICATION, before NPPN_READY, and even
- * if the plugin registered the panel itself in between. Both Code++
+ * next start. pszModuleName is also the name
+ * NPPM_DMMGETPLUGINHWNDBYNAME finds the plugin's panels by. dlgID is
+ * the index of the plugin's FuncItem that opens this panel, for the
+ * same reason: a panel that was open when the host last quit is
+ * brought back by the host RUNNING FuncItem[dlgID] at the next start
+ * — after NPPN_TBMODIFICATION, before NPPN_READY, and even if the
+ * plugin registered the panel itself in between. Both Code++
  * and Notepad++ do this. So dlgID must name a command that shows this
  * panel, and never an unrelated one, which would run on every start.
  * A toggle works when it goes by the plugin's own record of whether

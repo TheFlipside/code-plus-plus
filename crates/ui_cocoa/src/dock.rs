@@ -246,13 +246,13 @@ struct PluginPanel {
     /// `codepp_plugin_host::DockDialogParams::tb_data` for the lifetime
     /// contract the plugin owes it.
     tb_data: *const codepp_plugin_host::TbData,
-    /// `pszName`, raw — the lookup key `NPPM_DMMVIEWOTHERTAB` and
-    /// `NPPM_DMMGETPLUGINHWNDBYNAME` match, because a plugin knows only
-    /// what it registered. The caption shows the sanitized form the
-    /// panel identity carries.
+    /// `pszName`, raw — what `NPPM_DMMVIEWOTHERTAB` matches and
+    /// `NPPM_DMMGETPLUGINHWNDBYNAME` compares a window name with, because
+    /// a plugin knows only what it registered. The caption shows the
+    /// sanitized form the panel identity carries.
     name: String,
-    /// `pszModuleName`, raw — the optional disambiguator for
-    /// `NPPM_DMMGETPLUGINHWNDBYNAME`.
+    /// `pszModuleName`, raw — the module `NPPM_DMMGETPLUGINHWNDBYNAME`
+    /// names.
     module_name: String,
     /// Registry index of the plugin that registered the panel — the one
     /// whose route the registration came in by, or that the host was
@@ -2386,13 +2386,26 @@ pub(crate) fn view_plugin_panel(name: &str) -> bool {
     .unwrap_or(false)
 }
 
-/// `NPPM_DMMGETPLUGINHWNDBYNAME`: the handle registered under the raw
-/// `name`, and under `module` too when one is given.
-pub(crate) fn plugin_panel_handle(name: &str, module: Option<&str>) -> Option<*mut c_void> {
+/// `NPPM_DMMGETPLUGINHWNDBYNAME`: the handle of the first standing
+/// registration, in the order they were made, that `module` registered
+/// — under the window name `window` when one is given. See
+/// [`codepp_plugin_host::docking::answers_hwnd_lookup`] for the match.
+pub(crate) fn plugin_panel_handle_by_module(
+    module: &str,
+    window: Option<&str>,
+) -> Option<*mut c_void> {
     with_dock(|d| {
         d.plugin_panels
             .iter()
-            .find(|p| p.live() && p.name == name && module.is_none_or(|m| m == p.module_name))
+            .find(|p| {
+                p.live()
+                    && codepp_plugin_host::docking::answers_hwnd_lookup(
+                        &p.module_name,
+                        &p.name,
+                        module,
+                        window,
+                    )
+            })
             .map(|p| p.handle)
     })
     .flatten()
@@ -2407,7 +2420,7 @@ pub(crate) fn plugin_panel_tb_data(
 }
 
 /// Take a re-read `pszName` / `pszModuleName` for the panel registered
-/// for `handle`: the keys `NPPM_DMMVIEWOTHERTAB` and
+/// for `handle`: what `NPPM_DMMVIEWOTHERTAB` and
 /// `NPPM_DMMGETPLUGINHWNDBYNAME` match, which a plugin addresses by its
 /// *current* name.
 ///

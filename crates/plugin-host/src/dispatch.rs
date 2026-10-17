@@ -500,11 +500,12 @@ pub struct DockDialogParams {
 /// new buffers and ask the host to notice.
 #[derive(Debug, Clone, Default)]
 pub struct DockDispInfo {
-    /// `psz_name` — the panel caption and the
-    /// `NPPM_DMMGETPLUGINHWNDBYNAME` lookup key.
+    /// `psz_name` — the panel caption, and the window name
+    /// `NPPM_DMMGETPLUGINHWNDBYNAME` and `NPPM_DMMVIEWOTHERTAB`
+    /// compare.
     pub name: String,
-    /// `psz_module_name` — the optional disambiguator for that
-    /// same lookup.
+    /// `psz_module_name` — the module `NPPM_DMMGETPLUGINHWNDBYNAME`
+    /// names.
     pub module_name: String,
     /// `psz_add_info` — `None` for a null or empty buffer.
     pub add_info: Option<String>,
@@ -1517,12 +1518,19 @@ pub trait HostServices {
         false
     }
 
-    /// Look up a registered plugin dock dialog's `h_client` by
-    /// display name. Drives [`NPPM_DMMGETPLUGINHWNDBYNAME`].
-    /// `module_name` (optional) disambiguates when two plugins
-    /// register dialogs with the same `psz_name` — `None`
-    /// matches any module. Returns NULL if no entry matches.
-    fn dock_hwnd_by_name(&self, name: &str, module_name: Option<&str>) -> crate::ffi::Hwnd;
+    /// Look up a registered plugin dock dialog's `h_client` by the
+    /// module that registered it and, when `window_name` is given, by
+    /// its window name too. Drives [`NPPM_DMMGETPLUGINHWNDBYNAME`].
+    ///
+    /// `module_name` is `tTbData.pszModuleName` as the panel registered
+    /// it — the plugin's file name, extension included — and is always
+    /// given. `window_name` is its `pszName`; `None` asks for whichever
+    /// of the module's panels is found first. An implementation walks
+    /// its registrations in the order they were made, matches each with
+    /// [`crate::docking::answers_hwnd_lookup`], and answers the first
+    /// match; NULL if none does.
+    fn dock_hwnd_by_module(&self, module_name: &str, window_name: Option<&str>)
+        -> crate::ffi::Hwnd;
 
     /// Add a plugin-supplied icon to the host toolbar bound to the
     /// given `cmd_id`. Drives [`NPPM_ADDTOOLBARICON`]. The dispatcher
@@ -2654,34 +2662,45 @@ pub unsafe fn dispatch_nppm<S: HostServices>(
         }
 
         NPPM_DMMGETPLUGINHWNDBYNAME => {
-            // wparam: TCHAR* module name (or NULL — match any).
-            // lparam: TCHAR* dialog name (required).
-            // Returns: HWND of the matching plugin's h_client,
-            //         or 0 if no registration matches.
+            // wparam: TCHAR* window name (`pszName`), or NULL for the
+            //         module's first panel.
+            // lparam: TCHAR* module name (`pszModuleName`), required:
+            //         NULL answers NULL.
+            // Returns: the matching panel's h_client, or 0 if no
+            //         registration matches.
             //
-            // Same kernel-mode-pointer guard on lparam as
-            // VIEWOTHERTAB. wparam is allowed to be NULL (means
-            // "match any module") but a negative wparam is
-            // also rejected — kernel-mode pointer protection
-            // applies symmetrically to both string args.
-            if lparam <= 0 {
+            // Notepad++'s order, and it is the reverse of what a
+            // reader of the message's name might guess; Code++ had it
+            // the other way round until Phase 5 (DESIGN.md §7.4). Both
+            // strings are compared regardless of ASCII case, and a
+            // non-NULL string is compared whatever it holds, the empty
+            // one included: only NULL stands for "any window".
+            //
+            // A negative pointer on either side is a kernel-mode one,
+            // kept out of `wide_ptr_to_string` as VIEWOTHERTAB keeps
+            // it. On wparam it answers 0 rather than reading as NULL,
+            // which would widen a garbage window name into "any of the
+            // module's panels".
+            //
+            // A string `wide_ptr_to_string` refuses to decode — one
+            // holding an unpaired surrogate or a U+FFFD — answers 0 too,
+            // rather than comparing as the empty name it would otherwise
+            // read as.
+            if lparam <= 0 || (wparam as isize) < 0 {
                 return Some(0);
             }
-            let name = unsafe { wide_ptr_to_string(lparam as *const u16) };
-            if name.is_empty() {
+            let Some(module_name) = (unsafe { decode_wide_ptr(lparam as *const u16) }) else {
                 return Some(0);
-            }
-            let module_name = if wparam == 0 || (wparam as isize) < 0 {
+            };
+            let window_name = if wparam == 0 {
                 None
             } else {
-                let s = unsafe { wide_ptr_to_string(wparam as *const u16) };
-                if s.is_empty() {
-                    None
-                } else {
-                    Some(s)
-                }
+                let Some(name) = (unsafe { decode_wide_ptr(wparam as *const u16) }) else {
+                    return Some(0);
+                };
+                Some(name)
             };
-            services.dock_hwnd_by_name(&name, module_name.as_deref()) as isize
+            services.dock_hwnd_by_module(&module_name, window_name.as_deref()) as isize
         }
 
         NPPM_GETLANGUAGENAME => {
@@ -3241,14 +3260,30 @@ pub unsafe fn dispatch_nppm<S: HostServices>(
 /// reroute the open to a *different* valid path that shares the
 /// non-surrogate prefix. Empty-string return makes the caller's
 /// error path hit (it null-checks the result before forwarding).
+/// A caller to which `""` is a value like any other uses
+/// [`decode_wide_ptr`], which tells the two apart.
 ///
 /// # Safety
 ///
 /// `p` must be either NULL or a valid pointer to a null-terminated
 /// (or at-least-`MAX_PATH_TCHARS`-long) sequence of `u16` values.
-unsafe fn wide_ptr_to_string(mut p: *const u16) -> String {
+unsafe fn wide_ptr_to_string(p: *const u16) -> String {
+    unsafe { decode_wide_ptr(p) }.unwrap_or_default()
+}
+
+/// [`wide_ptr_to_string`], answering `None` for a string it refuses to
+/// decode — one holding an unpaired surrogate, or a U+FFFD, which it
+/// cannot tell from one — where `wide_ptr_to_string` answers `""`. A
+/// NULL `p` reads as `Some("")`, as it does there. For a lookup, where
+/// `""` is a name like any other and must not stand in for "could not
+/// read it".
+///
+/// # Safety
+///
+/// As for [`wide_ptr_to_string`].
+unsafe fn decode_wide_ptr(mut p: *const u16) -> Option<String> {
     if p.is_null() {
-        return String::new();
+        return Some(String::new());
     }
     let mut units = Vec::with_capacity(64);
     let mut count = 0usize;
@@ -3274,9 +3309,9 @@ unsafe fn wide_ptr_to_string(mut p: *const u16) -> String {
             len = units.len(),
             "plugin-supplied wide string contained invalid surrogates; rejecting",
         );
-        return String::new();
+        return None;
     }
-    s
+    Some(s)
 }
 
 /// The command id `NPPM_MENUCOMMAND` uses for the `index`-th User
@@ -4201,13 +4236,17 @@ mod tests {
                 .iter()
                 .any(|(h, _, _, _)| *h == h_client as usize)
         }
-        fn dock_hwnd_by_name(&self, name: &str, module_name: Option<&str>) -> crate::ffi::Hwnd {
-            for (h, n, m, _) in &self.dock_dialogs {
-                if n == name && module_name.is_none_or(|mn| mn == m) {
-                    return *h as crate::ffi::Hwnd;
-                }
-            }
-            core::ptr::null_mut()
+        fn dock_hwnd_by_module(
+            &self,
+            module_name: &str,
+            window_name: Option<&str>,
+        ) -> crate::ffi::Hwnd {
+            self.dock_dialogs
+                .iter()
+                .find(|(_, n, m, _)| {
+                    crate::docking::answers_hwnd_lookup(m, n, module_name, window_name)
+                })
+                .map_or(core::ptr::null_mut(), |(h, ..)| *h as crate::ffi::Hwnd)
         }
     }
 
@@ -7087,6 +7126,34 @@ mod tests {
         assert_eq!(r, Some(0));
     }
 
+    /// Sends `NPPM_DMMGETPLUGINHWNDBYNAME` with Notepad++'s argument
+    /// order: the window name in wParam, NULL for none, and the module
+    /// name in lParam.
+    fn hwnd_by_name(s: &mut MockServices, window: Option<&str>, module: &str) -> Option<isize> {
+        let window = window.map(make_wide);
+        let module = make_wide(module);
+        let wparam = window.as_ref().map_or(0, |w| w.as_ptr() as usize);
+        unsafe {
+            dispatch_nppm(
+                s,
+                NPPM_DMMGETPLUGINHWNDBYNAME,
+                wparam,
+                module.as_ptr() as isize,
+            )
+        }
+    }
+
+    fn two_plugins_three_panels() -> MockServices {
+        MockServices {
+            dock_dialogs: vec![
+                (0xCAFE, "Console".into(), "NppExec.dll".into(), true),
+                (0xBEEF, "Output".into(), "NppFTP.dll".into(), true),
+                (0xF00D, "Console".into(), "NppFTP.dll".into(), true),
+            ],
+            ..Default::default()
+        }
+    }
+
     #[test]
     fn dmm_get_hwnd_by_name_negative_lparam_returns_zero() {
         let mut s = MockServices::default();
@@ -7094,74 +7161,164 @@ mod tests {
         assert_eq!(r, Some(0));
     }
 
+    /// A negative wParam is a kernel-mode pointer, not a NULL: it must
+    /// not widen the lookup to the module's first panel. Without the
+    /// guard this test does not fail an assertion: the dispatcher reads
+    /// through `usize::MAX` and the test process dies of it, which
+    /// catches the regression as surely.
     #[test]
-    fn dmm_get_hwnd_by_name_finds_match() {
-        let mut s = MockServices {
-            dock_dialogs: vec![
-                (0xCAFE, "Console".into(), "NppExec".into(), true),
-                (0xBEEF, "Output".into(), "NppFTP".into(), true),
-            ],
-            ..Default::default()
-        };
-        let name = make_wide("Output");
+    fn dmm_get_hwnd_by_name_negative_wparam_returns_zero() {
+        let mut s = two_plugins_three_panels();
+        let module = make_wide("NppExec.dll");
         let r = unsafe {
             dispatch_nppm(
                 &mut s,
                 NPPM_DMMGETPLUGINHWNDBYNAME,
-                0,
-                name.as_ptr() as isize,
+                usize::MAX,
+                module.as_ptr() as isize,
             )
         };
-        assert_eq!(r, Some(0xBEEF_isize));
+        assert_eq!(r, Some(0));
     }
 
+    /// The module is lParam and is required: a NULL lParam answers 0
+    /// even with a window name every registration would match.
     #[test]
-    fn dmm_get_hwnd_by_name_with_module_disambiguates() {
-        // Two plugins register dialogs with the same display
-        // name. The wparam module-name selects between them.
-        let mut s = MockServices {
-            dock_dialogs: vec![
-                (0x1111, "Output".into(), "PluginA".into(), true),
-                (0x2222, "Output".into(), "PluginB".into(), true),
-            ],
-            ..Default::default()
-        };
-        let name = make_wide("Output");
-        let module_b = make_wide("PluginB");
+    fn dmm_get_hwnd_by_name_null_lparam_returns_zero() {
+        let mut s = two_plugins_three_panels();
+        let window = make_wide("Console");
         let r = unsafe {
             dispatch_nppm(
                 &mut s,
                 NPPM_DMMGETPLUGINHWNDBYNAME,
-                module_b.as_ptr() as usize,
-                name.as_ptr() as isize,
+                window.as_ptr() as usize,
+                0,
             )
         };
-        assert_eq!(r, Some(0x2222_isize));
+        assert_eq!(r, Some(0));
+    }
+
+    /// Both names given: the module's panel of that window name, not
+    /// another module's panel of the same name.
+    #[test]
+    fn dmm_get_hwnd_by_name_finds_the_modules_window() {
+        let mut s = two_plugins_three_panels();
+        assert_eq!(
+            hwnd_by_name(&mut s, Some("Console"), "NppFTP.dll"),
+            Some(0xF00D_isize)
+        );
+        assert_eq!(
+            hwnd_by_name(&mut s, Some("Console"), "NppExec.dll"),
+            Some(0xCAFE_isize)
+        );
+    }
+
+    /// A NULL wParam asks for the module's first panel, in the order
+    /// the panels were registered.
+    #[test]
+    fn dmm_get_hwnd_by_name_null_wparam_returns_the_modules_first_panel() {
+        let mut s = two_plugins_three_panels();
+        assert_eq!(hwnd_by_name(&mut s, None, "NppFTP.dll"), Some(0xBEEF_isize));
+        assert_eq!(
+            hwnd_by_name(&mut s, None, "NppExec.dll"),
+            Some(0xCAFE_isize)
+        );
+    }
+
+    /// The order Code++ used to read the message in — window name in
+    /// lParam, module in wParam — must not find anything: that is the
+    /// order no plugin built against Notepad++'s header sends.
+    #[test]
+    fn dmm_get_hwnd_by_name_does_not_read_the_window_as_the_module() {
+        let mut s = two_plugins_three_panels();
+        assert_eq!(hwnd_by_name(&mut s, Some("NppFTP.dll"), "Output"), Some(0));
+        assert_eq!(hwnd_by_name(&mut s, None, "Console"), Some(0));
+    }
+
+    /// Both names compare regardless of ASCII case, as Notepad++'s
+    /// `_wcsicmp` compares them.
+    #[test]
+    fn dmm_get_hwnd_by_name_ignores_ascii_case() {
+        let mut s = two_plugins_three_panels();
+        assert_eq!(
+            hwnd_by_name(&mut s, Some("OUTPUT"), "nppftp.DLL"),
+            Some(0xBEEF_isize)
+        );
+        assert_eq!(
+            hwnd_by_name(&mut s, None, "NPPEXEC.dll"),
+            Some(0xCAFE_isize)
+        );
+    }
+
+    /// An empty window name is compared like any other, so it finds no
+    /// panel here; only NULL stands for "the first".
+    #[test]
+    fn dmm_get_hwnd_by_name_empty_window_is_not_null() {
+        let mut s = two_plugins_three_panels();
+        assert_eq!(hwnd_by_name(&mut s, Some(""), "NppExec.dll"), Some(0));
+    }
+
+    /// A name the host cannot decode answers 0, on either side, rather
+    /// than reading as `""` and finding a panel registered with an empty
+    /// name or module — which a real `""` does find.
+    #[test]
+    fn dmm_get_hwnd_by_name_undecodable_names_find_nothing() {
+        let mut s = MockServices {
+            dock_dialogs: vec![
+                (0x1111, String::new(), "NppExec.dll".into(), true),
+                (0x2222, "Console".into(), String::new(), true),
+            ],
+            ..Default::default()
+        };
+        // The control: a real empty string is a name.
+        assert_eq!(
+            hwnd_by_name(&mut s, Some(""), "NppExec.dll"),
+            Some(0x1111_isize)
+        );
+        assert_eq!(
+            hwnd_by_name(&mut s, Some("Console"), ""),
+            Some(0x2222_isize)
+        );
+
+        let module = make_wide("NppExec.dll");
+        let window = make_wide("Console");
+        // A lone surrogate, a good prefix with a bad tail, and a literal
+        // U+FFFD, which the decoder cannot tell from a substituted one.
+        let undecodable: [Vec<u16>; 3] = [
+            vec![0xD800, 0],
+            vec![u16::from(b'C'), u16::from(b'o'), 0xDC00, 0],
+            vec![u16::from(b'C'), 0xFFFD, 0],
+        ];
+        for bad in &undecodable {
+            let undecodable_window = unsafe {
+                dispatch_nppm(
+                    &mut s,
+                    NPPM_DMMGETPLUGINHWNDBYNAME,
+                    bad.as_ptr() as usize,
+                    module.as_ptr() as isize,
+                )
+            };
+            assert_eq!(undecodable_window, Some(0), "window {bad:04X?}");
+            let undecodable_module = unsafe {
+                dispatch_nppm(
+                    &mut s,
+                    NPPM_DMMGETPLUGINHWNDBYNAME,
+                    window.as_ptr() as usize,
+                    bad.as_ptr() as isize,
+                )
+            };
+            assert_eq!(undecodable_module, Some(0), "module {bad:04X?}");
+        }
     }
 
     #[test]
     fn dmm_get_hwnd_by_name_no_match_returns_zero() {
-        let mut s = MockServices {
-            dock_dialogs: vec![(0xCAFE, "Console".into(), "NppExec".into(), true)],
-            ..Default::default()
-        };
-        let name = make_wide("DoesNotExist");
-        let r = unsafe {
-            dispatch_nppm(
-                &mut s,
-                NPPM_DMMGETPLUGINHWNDBYNAME,
-                0,
-                name.as_ptr() as isize,
-            )
-        };
-        assert_eq!(r, Some(0));
-    }
-
-    #[test]
-    fn dmm_get_hwnd_by_name_null_lparam_returns_zero() {
-        let mut s = MockServices::default();
-        let r = unsafe { dispatch_nppm(&mut s, NPPM_DMMGETPLUGINHWNDBYNAME, 0, 0) };
-        assert_eq!(r, Some(0));
+        let mut s = two_plugins_three_panels();
+        assert_eq!(
+            hwnd_by_name(&mut s, Some("DoesNotExist"), "NppExec.dll"),
+            Some(0)
+        );
+        assert_eq!(hwnd_by_name(&mut s, None, "Missing.dll"), Some(0));
     }
 
     #[test]

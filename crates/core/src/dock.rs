@@ -96,9 +96,11 @@ pub struct PluginPanelIdent {
     /// The plugin's module name (`tTbData.pszModuleName`), which is
     /// what disambiguates two plugins offering the same panel name.
     pub module: String,
-    /// The panel's display name (`tTbData.pszName`), shown on the
-    /// caption and the tab, and the key `NPPM_DMMVIEWOTHERTAB` and
-    /// `NPPM_DMMGETPLUGINHWNDBYNAME` look up.
+    /// The panel's display name (`tTbData.pszName`), sanitized, shown
+    /// on the caption and the tab. `NPPM_DMMVIEWOTHERTAB` and
+    /// `NPPM_DMMGETPLUGINHWNDBYNAME` compare the name the plugin
+    /// registered instead, which each backend keeps raw beside the
+    /// registration: a plugin knows only what it sent.
     pub name: String,
     /// [`DockPanel::persist_key`]'s answer, precomputed so it can be
     /// returned as `&'static str` like the built-in panels'.

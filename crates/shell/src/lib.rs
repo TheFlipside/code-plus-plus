@@ -582,14 +582,15 @@ pub trait UiPlatform {
         false
     }
 
-    /// Look up a registered docking dialog by display name
-    /// (and optional module-name disambiguator). Drives
-    /// `NPPM_DMMGETPLUGINHWNDBYNAME`. Returns the registered
-    /// `h_client` HWND, or NULL if no entry matches.
-    fn dock_hwnd_by_name(
+    /// Look up a registered docking dialog by the module that
+    /// registered it and, when `window_name` is given, by its window
+    /// name. Drives `NPPM_DMMGETPLUGINHWNDBYNAME`. Returns the
+    /// registered `h_client`, or NULL if no entry matches; see
+    /// `HostServices::dock_hwnd_by_module` for the matching rule.
+    fn dock_hwnd_by_module(
         &self,
-        _name: &str,
-        _module_name: Option<&str>,
+        _module_name: &str,
+        _window_name: Option<&str>,
     ) -> codepp_plugin_host::Hwnd {
         core::ptr::null_mut()
     }
@@ -1428,9 +1429,9 @@ pub fn sanitize_str_for_display(s: &str) -> String {
 /// precedent): `pszName` comes from a library the user dropped into a
 /// folder, and a caption is a display sink, so bidi overrides and
 /// friends are substituted rather than rendered. A backend keeps the
-/// *unsanitized* name beside the registration, because that is the
-/// `NPPM_DMMGETPLUGINHWNDBYNAME` lookup key — substituting there would
-/// make a plugin unable to find its own panel.
+/// *unsanitized* name beside the registration, because that is what
+/// `NPPM_DMMGETPLUGINHWNDBYNAME` compares a window name with —
+/// substituting there would make a plugin unable to find its own panel.
 ///
 /// Shared by every backend that hosts plugin panels, because it is half
 /// of the panel's identity (see [`intern_plugin_dock_panel`]): two
@@ -10766,8 +10767,12 @@ impl<U: UiPlatform> HostServices for HostBridge<'_, U> {
         self.ui.view_other_dock_tab(name)
     }
 
-    fn dock_hwnd_by_name(&self, name: &str, module_name: Option<&str>) -> codepp_plugin_host::Hwnd {
-        self.ui.dock_hwnd_by_name(name, module_name)
+    fn dock_hwnd_by_module(
+        &self,
+        module_name: &str,
+        window_name: Option<&str>,
+    ) -> codepp_plugin_host::Hwnd {
+        self.ui.dock_hwnd_by_module(module_name, window_name)
     }
 
     fn trigger_tab_context_menu(&mut self, view: i32, tab_idx: i32) -> bool {
@@ -12456,10 +12461,10 @@ mod tests {
             true
         }
         #[cfg(target_os = "windows")]
-        fn dock_hwnd_by_name(
+        fn dock_hwnd_by_module(
             &self,
-            _name: &str,
-            _module_name: Option<&str>,
+            _module_name: &str,
+            _window_name: Option<&str>,
         ) -> codepp_plugin_host::Hwnd {
             core::ptr::null_mut()
         }

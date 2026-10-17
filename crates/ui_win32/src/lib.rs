@@ -1185,9 +1185,8 @@ const TAB_DRAG_THRESHOLD_PX: i32 = 4;
 /// child and adopts it as the content of a [`DockPanel::Plugin`],
 /// which from then on is an ordinary dock panel — it docks, floats,
 /// tabs with the host's own panels and persists in `session.xml`.
-/// `name` is the panel's caption; `module_name` is kept so
-/// `NPPM_DMMGETPLUGINHWNDBYNAME` can disambiguate when two plugins
-/// register dialogs with the same display name.
+/// `name` is the panel's caption; `name` and `module_name` together
+/// are what `NPPM_DMMGETPLUGINHWNDBYNAME` finds the panel by.
 ///
 /// `u_mask`'s `DWS_DF_CONT_*` nibble is acted on — see
 /// [`codepp_plugin_host::docking::dock_side_from_u_mask`] — but the `pszAddInfo` add-info string
@@ -1216,15 +1215,15 @@ struct DockEntry {
     /// retains lifetime ownership; the host MUST NOT
     /// `DestroyWindow` it.
     h_client: HWND,
-    /// Display title — also the lookup key for
-    /// `NPPM_DMMGETPLUGINHWNDBYNAME`. Owned `String`, decoded
+    /// Display title — also the window name
+    /// `NPPM_DMMGETPLUGINHWNDBYNAME` compares. Owned `String`, decoded
     /// from the plugin's `pszName` at registration and refreshed
     /// on every `NPPM_DMMUPDATEDISPINFO`.
     ///
-    /// This is the **value**, not the label: it is matched
-    /// verbatim by `dock_hwnd_by_name` and by
-    /// `view_other_dock_tab`, both of which a plugin addresses with
-    /// the string it registered, while the panel's caption shows
+    /// This is the **value**, not the label: `view_other_dock_tab`
+    /// matches it verbatim and `dock_hwnd_by_module` regardless of
+    /// ASCII case, and a plugin addresses both with the string it
+    /// registered, while the panel's caption shows
     /// `codepp_shell::plugin_dock_title`'s sanitized rendering of it. A
     /// plugin-supplied string reaching a caption is a display
     /// sink like any other — same split the workspace tree and
@@ -1233,8 +1232,8 @@ struct DockEntry {
     /// The plugin's `pszModuleName`, verbatim — by upstream's
     /// contract its DLL file name *including* `.dll`, though a
     /// plugin may send anything and this is only ever compared, never
-    /// parsed. The optional disambiguator for the two-arg form of
-    /// `NPPM_DMMGETPLUGINHWNDBYNAME`.
+    /// parsed. The module `NPPM_DMMGETPLUGINHWNDBYNAME` names, and
+    /// which it compares regardless of ASCII case.
     module_name: String,
     /// `tTbData.dlg_id`, kept verbatim. It is deliberately *not*
     /// what `DMN_CLOSE` puts in `nmhdr.idFrom` — upstream sends 0
@@ -3517,6 +3516,9 @@ impl UiPlatform for Win32Ui {
             // dispatch borrow ends. See `Win32Ui::dock_dirty`.
             *self.dock_dirty = true;
         }
+        // And the panel takes focus once it is on screen, as in
+        // Notepad++ — see `dock_panels::request_panel_focus`.
+        dock_panels::request_panel_focus(panel);
         true
     }
 
@@ -3555,6 +3557,7 @@ impl UiPlatform for Win32Ui {
             (*self.dock_layout).activate(panel);
             *self.dock_dirty = true;
         }
+        dock_panels::request_panel_focus(panel);
         true
     }
 
@@ -3598,16 +3601,28 @@ impl UiPlatform for Win32Ui {
         true
     }
 
-    fn dock_hwnd_by_name(&self, name: &str, module_name: Option<&str>) -> codepp_plugin_host::Hwnd {
-        unsafe {
-            let dialogs = &*self.dock_dialogs;
-            for entry in dialogs {
-                if entry.name == name && module_name.is_none_or(|m| m == entry.module_name) {
-                    return entry.h_client.0;
-                }
-            }
-        }
-        core::ptr::null_mut()
+    fn dock_hwnd_by_module(
+        &self,
+        module_name: &str,
+        window_name: Option<&str>,
+    ) -> codepp_plugin_host::Hwnd {
+        // SAFETY: `dock_dialogs` is alive while `Win32Ui` is in scope
+        // and is UI-thread-only — see the field doc.
+        let dialogs = unsafe { &*self.dock_dialogs };
+        // A registration outlives a window its plugin destroyed — §7.4
+        // tracks that — so a dead one is passed over rather than handed
+        // back as a handle Windows may since have given another window.
+        dialogs
+            .iter()
+            .find(|entry| {
+                codepp_plugin_host::docking::answers_hwnd_lookup(
+                    &entry.module_name,
+                    &entry.name,
+                    module_name,
+                    window_name,
+                ) && unsafe { IsWindow(Some(entry.h_client)) }.as_bool()
+            })
+            .map_or(core::ptr::null_mut(), |entry| entry.h_client.0)
     }
 
     fn remove_shortcut_for_cmd_id(&mut self, cmd_id: i32) -> bool {
@@ -20266,12 +20281,29 @@ unsafe fn load_plugins_where(hwnd: HWND, npp_data: NppData, scope: PluginLoadSco
     // notice and READY, the panels these plugins had open come back —
     // see `restore_plugin_panels` — except those whose command
     // Preferences → Security's guard withholds, which it notes here.
+    // A restored panel's command shows its panel, and a shown panel
+    // takes focus; once the restore is over, focus goes back where it
+    // was before the pass, which is where Notepad++ has it by READY —
+    // see `dock_panels::return_focus`.
+    // With Code++ in the background no window of this thread has focus,
+    // and the editor is where it belongs when the user comes back.
     let mut withheld: Vec<DockPanel> = Vec::new();
+    let focus_before = match dock_panels::focus_now() {
+        h if !h.is_invalid() => h,
+        _ => unsafe { state_from_hwnd(hwnd) }.map_or(HWND::default(), |s| s.scintilla_hwnd),
+    };
     let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         notices.deliver(
             npp_data.npp_handle,
             || unsafe { state_from_hwnd(hwnd) }.and_then(|s| s.shell.active_buffer_id()),
-            || unsafe { restore_plugin_panels(hwnd, &restore, &mut withheld) },
+            || {
+                // A panic in the restore is contained here, not by
+                // `deliver`, so that focus still goes back.
+                let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
+                    restore_plugin_panels(hwnd, &restore, &mut withheld);
+                }));
+                unsafe { dock_panels::return_focus(focus_before) };
+            },
         );
     }));
     // Only now, after READY: a plugin may register its panel from
@@ -27798,6 +27830,9 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                     if dock_dirty {
                         dock_panels::apply_dock_layout(hwnd);
                     }
+                    // A shown panel takes focus only now that the
+                    // reconcile has put it on screen.
+                    dock_panels::apply_requested_panel_focus(hwnd);
                     if let Some(state) = state_from_hwnd(hwnd) {
                         let tab_hwnd = state.tab_hwnd;
                         let moved: Vec<usize> = state
@@ -33432,5 +33467,129 @@ mod udl_rescan_guards {
             read += 1;
         }
         assert!(read > 5, "the check read only {read} source files");
+    }
+}
+
+#[cfg(test)]
+mod panel_focus_guards {
+    //! Source-level guards for where a plugin panel takes keyboard
+    //! focus. Notepad++ focuses a panel's `hClient` on every
+    //! `NPPM_DMMSHOW` and `NPPM_DMMVIEWOTHERTAB`, and after a load pass
+    //! focus is back where it was by `NPPN_READY` (DESIGN.md §7.4). Both
+    //! halves are orderings: a focus applied before the reconcile finds
+    //! the panel still hidden, and a focus returned outside the restore
+    //! slot either undoes a command a plugin's READY handler ran or
+    //! leaves the restore's focus in place. Every order compiles, and
+    //! the difference needs a real plugin sending real messages to see,
+    //! so it is pinned here; the probe runs in DESIGN.md §7.4 are the
+    //! behavioural check.
+
+    use super::plugin_reentry_guards::{code_without_strings, fn_body, production_src};
+
+    /// `text` with every whitespace character removed, so a guard can
+    /// pin a sequence of statements without pinning its layout.
+    fn squashed(text: &str) -> String {
+        text.chars().filter(|c| !c.is_whitespace()).collect()
+    }
+
+    /// Showing a panel and bringing it forward both ask for focus, as
+    /// the last thing they do before succeeding — so no early return
+    /// and no condition can sit between the show and the request —
+    /// and hiding one does not.
+    #[test]
+    fn show_and_view_ask_for_focus_and_hide_does_not() {
+        let src = production_src();
+        for name in ["show_dock_dialog", "view_other_dock_tab"] {
+            let body = squashed(&code_without_strings(&fn_body(src, name)));
+            assert!(
+                body.ends_with("}dock_panels::request_panel_focus(panel);true}"),
+                "`{name}` no longer asks for focus as its last step before `true`"
+            );
+        }
+        let hide = code_without_strings(&fn_body(src, "hide_dock_dialog"));
+        assert!(
+            !hide.contains("request_panel_focus"),
+            "`hide_dock_dialog` asks for focus for the panel it hides"
+        );
+    }
+
+    /// The request is applied in one place: the NPPM arm, after its
+    /// reconcile has put the panel on screen and before the arm hands
+    /// control to a deferred dialog.
+    #[test]
+    fn focus_is_applied_after_the_reconcile() {
+        let src = code_without_strings(production_src());
+        assert_eq!(
+            src.matches("apply_requested_panel_focus(").count(),
+            1,
+            "the panel focus request is applied somewhere other than the NPPM arm"
+        );
+        let marked = src
+            .find("let dock_dirty = state_from_hwnd(hwnd)")
+            .expect("the NPPM arm no longer reads the dock-dirty mark");
+        let reconcile = marked
+            + src[marked..]
+                .find("dock_panels::apply_dock_layout(hwnd);")
+                .expect("the NPPM arm no longer reconciles");
+        let focus = src
+            .find("dock_panels::apply_requested_panel_focus(hwnd);")
+            .expect("the NPPM arm no longer applies the focus request");
+        let dialogs = marked
+            + src[marked..]
+                .find("present_deferred_dialogs(hwnd);")
+                .expect("the NPPM arm no longer presents deferred dialogs");
+        assert!(
+            reconcile < focus && focus < dialogs,
+            "the focus request must be applied after the reconcile and before the \
+             deferred dialogs"
+        );
+        // Straight after the reconcile's `if`, and outside it: a panel
+        // already in front leaves nothing dirty and must still be
+        // focused.
+        assert!(
+            squashed(&src[marked..dialogs]).contains(
+                "ifdock_dirty{dock_panels::apply_dock_layout(hwnd);}\
+                 dock_panels::apply_requested_panel_focus(hwnd);"
+            ),
+            "the focus request is no longer applied unconditionally, straight after the \
+             reconcile"
+        );
+    }
+
+    /// A load pass notes the focus before any plugin hears of it and
+    /// puts it back inside the restore slot, after the restore — not
+    /// after `deliver` returns, which would also undo what a plugin did
+    /// from `NPPN_READY`.
+    #[test]
+    fn a_load_pass_returns_focus_inside_the_restore_slot() {
+        let body = code_without_strings(&fn_body(production_src(), "load_plugins_where"));
+        let noted = body
+            .find("let focus_before = match dock_panels::focus_now() {")
+            .expect("the load pass no longer notes the focus");
+        let deliver = body
+            .find("notices.deliver(")
+            .expect("the load pass no longer delivers its notifications");
+        let restore = body
+            .find("restore_plugin_panels(hwnd, &restore, &mut withheld);")
+            .expect("the load pass no longer restores panels");
+        let back = body
+            .find("dock_panels::return_focus(focus_before)")
+            .expect("the load pass no longer returns the focus");
+        let end = deliver + super::plugin_reentry_guards::statement_end(&body[deliver..], 0);
+        assert!(
+            noted < deliver && deliver < restore && restore < back && back < end,
+            "the focus must be noted before the notifications and returned inside the \
+             restore slot, after the restore"
+        );
+        // And unconditionally, as the slot's last step, outside the
+        // restore's own panic boundary so a panic there cannot skip it.
+        assert!(
+            squashed(&body[deliver..end]).contains(
+                "restore_plugin_panels(hwnd,&restore,&mutwithheld);}));\
+                 unsafe{dock_panels::return_focus(focus_before)};}"
+            ),
+            "the restore slot no longer returns the focus as its last step, outside the \
+             restore's panic boundary"
+        );
     }
 }

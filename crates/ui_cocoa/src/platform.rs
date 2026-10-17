@@ -944,8 +944,13 @@ impl UiPlatform for CocoaUi {
         crate::plugin::update_dock_disp_info(h_client)
     }
 
-    fn dock_hwnd_by_name(&self, name: &str, module_name: Option<&str>) -> codepp_plugin_host::Hwnd {
-        crate::dock::plugin_panel_handle(name, module_name).unwrap_or(std::ptr::null_mut())
+    fn dock_hwnd_by_module(
+        &self,
+        module_name: &str,
+        window_name: Option<&str>,
+    ) -> codepp_plugin_host::Hwnd {
+        crate::dock::plugin_panel_handle_by_module(module_name, window_name)
+            .unwrap_or(std::ptr::null_mut())
     }
 
     fn set_npp_menu_item_check(&mut self, idm: i32, checked: bool) -> bool {

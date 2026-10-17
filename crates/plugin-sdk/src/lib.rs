@@ -288,16 +288,19 @@ pub const NPPM_GETFULLPATHFROMBUFFERID: u32 = NPPMSG + 58;
 pub const NPPM_DMMREGASDCKDLG: u32 = NPPMSG + 33;
 
 /// `NPPM_DMMSHOW(0, hClient)` — show the panel registered for
-/// `hClient`. Registration alone does not show it.
+/// `hClient`. Registration alone does not show it. On Windows the
+/// panel then takes keyboard focus, as in Notepad++.
 pub const NPPM_DMMSHOW: u32 = NPPMSG + 30;
 
 /// `NPPM_DMMHIDE(0, hClient)` — hide it again. The registration
 /// survives, so a later [`NPPM_DMMSHOW`] re-shows.
 pub const NPPM_DMMHIDE: u32 = NPPMSG + 31;
 
-/// `NPPM_DMMVIEWOTHERTAB(0, *wchar)` — bring the panel with that
-/// display name to the front of whatever container it shares. Returns
-/// non-zero if a panel by that name exists.
+/// `NPPM_DMMVIEWOTHERTAB(0, *wchar)` — bring the panel registered
+/// under that `psz_name`, matched exactly, to the front of whatever
+/// container it shares, showing it if it was hidden. Focus moves as
+/// for [`NPPM_DMMSHOW`]. Returns non-zero if a panel by that name
+/// exists.
 pub const NPPM_DMMVIEWOTHERTAB: u32 = NPPMSG + 35;
 
 /// `NPPM_DMMUPDATEDISPINFO(0, hClient)` — the plugin has re-pointed

@@ -19,9 +19,11 @@
 //! [`delivery_order`] the order they go out in. So do two rules for a
 //! backend's delivery queue: [`still_applies`], whether a notice that
 //! waited behind a plugin's handler is still worth sending, and
-//! [`MAX_NOTICES_PER_DELIVERY`], how many one delivery may send. A
-//! backend supplies only the mechanism — whom to send them to and when
-//! it is safe to.
+//! [`MAX_NOTICES_PER_DELIVERY`], how many one delivery may send. And so
+//! does the rule `NPPM_DMMGETPLUGINHWNDBYNAME` finds a panel by,
+//! [`answers_hwnd_lookup`]. A backend supplies only the mechanism — whom
+//! to send them to and when it is safe to, and which registrations to
+//! walk.
 
 use codepp_core::dock::{
     DockContainer, DockFrame, DockLayout, DockLocation, DockPanel, DockRect, DockSide,
@@ -368,6 +370,37 @@ pub fn dmn_name(code: u32) -> &'static str {
         DMN_FLOATDROPPED => "DMN_FLOATDROPPED",
         _ => "DMN_?",
     }
+}
+
+/// Whether a registered plugin panel answers `NPPM_DMMGETPLUGINHWNDBYNAME`
+/// for `module` and, when the plugin gave one, `window`.
+///
+/// `panel_module` and `panel_name` are what the panel registered with,
+/// `tTbData.pszModuleName` and `pszName`. The message names the module in
+/// its lParam and the window in its wParam, and a NULL wParam asks for
+/// whichever of the module's panels is found first, so `window` is
+/// `None` then. Each backend walks its own registrations with this, in
+/// the order they were made, and answers the first that matches.
+///
+/// Both strings are compared regardless of ASCII case. Notepad++ compares
+/// them with `_wcsicmp`, which in the C locale folds A to Z and nothing
+/// else; whether it runs in another locale was not checked. A module
+/// name is the plugin's file name, `NppExec.dll`, and Windows' own file
+/// names compare regardless of case, so a plugin asking for
+/// `nppexec.dll` finds the panel as it does in Notepad++.
+///
+/// An empty `window` is compared like any other name: `Some("")`
+/// matches only a panel registered with an empty name, never every
+/// panel the module has. Only `None` stands for "any".
+#[must_use]
+pub fn answers_hwnd_lookup(
+    panel_module: &str,
+    panel_name: &str,
+    module: &str,
+    window: Option<&str>,
+) -> bool {
+    panel_module.eq_ignore_ascii_case(module)
+        && window.is_none_or(|window| panel_name.eq_ignore_ascii_case(window))
 }
 
 #[cfg(test)]
@@ -930,5 +963,79 @@ mod tests {
         assert_eq!(dmn_name(DMN_FLOATDROPPED), "DMN_FLOATDROPPED");
         assert_eq!(dmn_name(DMN_CLOSE), "DMN_CLOSE");
         assert_eq!(dmn_name(0), "DMN_?");
+    }
+
+    /// The module decides, and the window narrows it only when given —
+    /// as `NPPM_DMMGETPLUGINHWNDBYNAME` reads a NULL wParam.
+    #[test]
+    fn a_lookup_names_the_module_and_optionally_the_window() {
+        assert!(answers_hwnd_lookup(
+            "NppExec.dll",
+            "Console",
+            "NppExec.dll",
+            None
+        ));
+        assert!(answers_hwnd_lookup(
+            "NppExec.dll",
+            "Console",
+            "NppExec.dll",
+            Some("Console")
+        ));
+        assert!(!answers_hwnd_lookup(
+            "NppExec.dll",
+            "Console",
+            "NppExec.dll",
+            Some("Output")
+        ));
+        // The window alone finds nothing: a lookup must name the module.
+        assert!(!answers_hwnd_lookup(
+            "NppExec.dll",
+            "Console",
+            "NppFTP.dll",
+            Some("Console")
+        ));
+    }
+
+    /// Both strings compare regardless of ASCII case, as `_wcsicmp`
+    /// compares them in the C locale; other letters keep their case.
+    #[test]
+    fn a_lookup_ignores_ascii_case_and_only_ascii_case() {
+        assert!(answers_hwnd_lookup(
+            "NppExec.dll",
+            "Console",
+            "NPPEXEC.DLL",
+            Some("console")
+        ));
+        assert!(!answers_hwnd_lookup(
+            "Ärger.dll",
+            "Ölfeld",
+            "ärger.dll",
+            None
+        ));
+        assert!(!answers_hwnd_lookup(
+            "Ärger.dll",
+            "Ölfeld",
+            "Ärger.dll",
+            Some("ölfeld")
+        ));
+    }
+
+    /// An empty string is a name like any other: it finds a panel
+    /// registered with an empty name, and does not stand for "any".
+    #[test]
+    fn an_empty_window_name_is_compared_not_taken_for_any() {
+        assert!(!answers_hwnd_lookup(
+            "NppExec.dll",
+            "Console",
+            "NppExec.dll",
+            Some("")
+        ));
+        assert!(answers_hwnd_lookup(
+            "NppExec.dll",
+            "",
+            "NppExec.dll",
+            Some("")
+        ));
+        assert!(!answers_hwnd_lookup("NppExec.dll", "Console", "", None));
     }
 }
