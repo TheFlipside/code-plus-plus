@@ -440,8 +440,11 @@ typedef struct sessionInfo_ {
  *     shown; a panel alone in its container is already frontmost,
  *     so the call succeeds and changes nothing. Focus moves to the
  *     panel as for NPPM_DMMSHOW.
- *     Returns 1 if a panel by that name is registered, 0
- *     otherwise; Notepad++ returns 1 either way (measured). */
+ *     Returns 1 whether or not a panel by that name is registered,
+ *     as Notepad++ does (measured), so the answer cannot tell a
+ *     plugin its panel exists; keep track of your own registrations.
+ *     Returns 0 only for a NULL or kernel-range lParam, which the
+ *     host does not read. */
 #define NPPM_DMMVIEWOTHERTAB              (NPPMSG + 35)
 
 /* File operations -------------------------------------------------- */

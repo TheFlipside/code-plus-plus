@@ -329,7 +329,15 @@ Drag my tab onto the other panel.";
     /// Ask the host to bring the *first* panel to the front of whatever
     /// container it is in — `NPPM_DMMVIEWOTHERTAB`, by the name the
     /// panel currently has.
+    ///
+    /// The host answers 1 for any name, as Notepad++ does, so the
+    /// answer cannot say whether the panel exists; the plugin's own
+    /// record of its registration has to.
     pub fn view_other_tab() {
+        if !REGISTERED.load(Ordering::Acquire) {
+            sdk::set_status("Example Hello: show the dock panel first");
+            return;
+        }
         let name = if RENAMED.load(Ordering::Acquire) {
             TITLE_B.as_ptr()
         } else {
@@ -337,22 +345,18 @@ Drag my tab onto the other panel.";
         };
         // SAFETY: the title arrays are `static` and NUL-terminated; the
         // host reads the string during the call and does not retain it.
-        let shown = unsafe {
+        unsafe {
             sdk::SendMessageW(
                 sdk::npp_handle(),
                 sdk::NPPM_DMMVIEWOTHERTAB,
                 0,
                 name as isize,
-            )
-        };
-        if shown == 0 {
-            sdk::set_status("Example Hello: the host knows no panel by that name");
-        } else {
-            // The host shows the panel if it was closed, so its menu
-            // item is ticked here exactly as after "Show Dock Panel".
-            crate::imp::set_item_check(crate::imp::CMD_SHOW_DOCK_PANEL, true);
-            sdk::set_status("Example Hello: switched to the other panel");
+            );
         }
+        // The host shows the panel if it was closed, so its menu item
+        // is ticked here exactly as after "Show Dock Panel".
+        crate::imp::set_item_check(crate::imp::CMD_SHOW_DOCK_PANEL, true);
+        sdk::set_status("Example Hello: switched to the other panel");
     }
 
     /// Re-point `psz_name` at the other title and ask the host to
@@ -1561,7 +1565,15 @@ mod win {
     /// container; this then switches the visible tab, which is what
     /// the message is for. With them in separate containers it still
     /// does the useful half — brings the named panel into view.
+    ///
+    /// The host answers 1 for any name, as Notepad++ does, so the
+    /// answer cannot say whether the panel exists; the plugin's own
+    /// record of its registration has to.
     pub fn view_other_tab() {
+        if !REGISTERED.load(Ordering::Acquire) {
+            sdk::set_status("Example Hello: show the dock panel first");
+            return;
+        }
         // The name is the plugin's own `pszName`, which is how the
         // host indexes the panel.
         let name = if RENAMED.load(Ordering::Acquire) {
@@ -1572,22 +1584,18 @@ mod win {
         // SAFETY: the title arrays are `static` and NUL-terminated;
         // the host reads the string during the call and does not
         // retain it.
-        let shown = unsafe {
+        unsafe {
             sdk::SendMessageW(
                 sdk::npp_handle(),
                 sdk::NPPM_DMMVIEWOTHERTAB,
                 0,
                 name as isize,
-            )
-        };
-        if shown == 0 {
-            sdk::set_status("Example Hello: the host knows no panel by that name");
-        } else {
-            // The host shows the panel if it was closed, so its menu
-            // item is ticked here exactly as after "Show Dock Panel".
-            crate::imp::set_item_check(crate::imp::CMD_SHOW_DOCK_PANEL, true);
-            sdk::set_status("Example Hello: switched to the other panel");
+            );
         }
+        // The host shows the panel if it was closed, so its menu
+        // item is ticked here exactly as after "Show Dock Panel".
+        crate::imp::set_item_check(crate::imp::CMD_SHOW_DOCK_PANEL, true);
+        sdk::set_status("Example Hello: switched to the other panel");
     }
 
     /// Nothing reaches `messageProc` for the panels here: on Windows the

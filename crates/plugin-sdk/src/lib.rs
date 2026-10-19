@@ -299,8 +299,10 @@ pub const NPPM_DMMHIDE: u32 = NPPMSG + 31;
 /// `NPPM_DMMVIEWOTHERTAB(0, *wchar)` — bring the panel registered
 /// under that `psz_name`, matched exactly, to the front of whatever
 /// container it shares, showing it if it was hidden. Focus moves as
-/// for [`NPPM_DMMSHOW`]. Returns non-zero if a panel by that name
-/// exists.
+/// for [`NPPM_DMMSHOW`]. Returns non-zero for any name the host can
+/// read, one nobody registered included, as Notepad++ does, so it
+/// cannot tell a plugin that its panel exists. Returns zero only for a
+/// null or kernel-range pointer, which the host does not read.
 pub const NPPM_DMMVIEWOTHERTAB: u32 = NPPMSG + 35;
 
 /// `NPPM_DMMUPDATEDISPINFO(0, hClient)` — the plugin has re-pointed

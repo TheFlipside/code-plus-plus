@@ -1512,7 +1512,10 @@ pub trait HostServices {
     /// changes nothing.
     ///
     /// Returns `true` if a panel by that name exists and is now
-    /// showing; `false` if no registered panel has that name.
+    /// showing; `false` if no registered panel has that name. The
+    /// answer does not reach the plugin: the message answers `1`
+    /// either way, as Notepad++'s does, and the dispatcher only logs
+    /// a `false`.
     fn view_other_dock_tab(&mut self, name: &str) -> bool {
         let _ = name;
         false
@@ -2648,17 +2651,34 @@ pub unsafe fn dispatch_nppm<S: HostServices>(
         NPPM_DMMVIEWOTHERTAB => {
             // wparam: unused. lparam: TCHAR* dialog name. Brings
             // that panel to the front of its container.
+            // Returns: 1 for any name, one no panel is registered
+            // under included; 0 only for an lparam it cannot read.
+            //
+            // Notepad++ answers TRUE whatever the name matched
+            // (measured, for a name nobody registered and for one in
+            // the wrong case), so a plugin built against it cannot
+            // have learnt anything from the answer, and one that
+            // checks it has only ever seen TRUE. Code++ answered 0
+            // for a name it did not find until the maintainer asked
+            // for Notepad++'s answer (DESIGN.md §7.4). Whether a
+            // panel was found is still logged, since the answer no
+            // longer says.
             //
             // `<= 0` rejects both NULL and kernel-mode-pointer
-            // negatives before `wide_ptr_to_string` dereferences.
+            // negatives before `wide_ptr_to_string` dereferences;
+            // that is not a name at all, and keeps its 0.
             if lparam <= 0 {
                 return Some(0);
             }
             let name = unsafe { wide_ptr_to_string(lparam as *const u16) };
-            if name.is_empty() {
-                return Some(0);
+            // An empty name — or one `wide_ptr_to_string` refused to
+            // decode, which it reads as empty — names no panel the
+            // backend is asked about, but it is still a name nobody
+            // registered, and answers as one.
+            if !name.is_empty() && !services.view_other_dock_tab(&name) {
+                tracing::debug!(name = ?name, "NPPM_DMMVIEWOTHERTAB: no panel by that name");
             }
-            isize::from(services.view_other_dock_tab(&name))
+            1
         }
 
         NPPM_DMMGETPLUGINHWNDBYNAME => {
@@ -4235,6 +4255,17 @@ mod tests {
             self.dock_dialogs
                 .iter()
                 .any(|(h, _, _, _)| *h == h_client as usize)
+        }
+        fn view_other_dock_tab(&mut self, name: &str) -> bool {
+            self.record(format!("view_other_dock_tab({name:?})"));
+            // Exact match, case included, as the real backends compare.
+            for entry in &mut self.dock_dialogs {
+                if entry.1 == name {
+                    entry.3 = true;
+                    return true;
+                }
+            }
+            false
         }
         fn dock_hwnd_by_module(
             &self,
@@ -7101,29 +7132,72 @@ mod tests {
         assert_eq!(r, Some(0));
     }
 
-    #[test]
-    fn dmm_view_other_tab_declines_when_the_backend_hosts_no_panels() {
-        // `MockServices` takes the trait's default, which is what
-        // a backend that hosts no plugin panel would answer — none
-        // of the three does today, but a new one inherits it. This
-        // pins the *decline*, not the message: the real arms show
-        // the named panel and make it their group's active tab, and
-        // are exercised end to end by `example-hello`.
-        let mut s = MockServices::default();
-        let name = make_wide("Console");
-        let r = unsafe { dispatch_nppm(&mut s, NPPM_DMMVIEWOTHERTAB, 0, name.as_ptr() as isize) };
-        assert_eq!(r, Some(0));
+    /// Sends `NPPM_DMMVIEWOTHERTAB` with `units` — a NUL-terminated
+    /// wide string — in lParam.
+    fn view_other_tab(s: &mut MockServices, units: &[u16]) -> Option<isize> {
+        unsafe { dispatch_nppm(s, NPPM_DMMVIEWOTHERTAB, 0, units.as_ptr() as isize) }
     }
 
     #[test]
-    fn dmm_view_other_tab_negative_lparam_returns_zero() {
+    fn dmm_view_other_tab_shows_a_registered_panel_and_answers_one() {
+        let mut s = MockServices {
+            dock_dialogs: vec![(0xCAFE, "Console".into(), "NppExec".into(), false)],
+            ..Default::default()
+        };
+        assert_eq!(view_other_tab(&mut s, &make_wide("Console")), Some(1));
+        assert_eq!(s.calls(), vec![r#"view_other_dock_tab("Console")"#]);
+        assert!(s.dock_dialogs[0].3, "the backend was asked and showed it");
+    }
+
+    #[test]
+    fn dmm_view_other_tab_answers_one_for_a_name_nobody_registered() {
+        // Notepad++'s answer, measured: TRUE whatever the name
+        // matched, for a name nobody registered and for one in the
+        // wrong case. The backend is still asked, and still says no.
+        let mut s = MockServices {
+            dock_dialogs: vec![(0xCAFE, "Console".into(), "NppExec".into(), false)],
+            ..Default::default()
+        };
+        assert_eq!(view_other_tab(&mut s, &make_wide("Nobody")), Some(1));
+        assert_eq!(view_other_tab(&mut s, &make_wide("console")), Some(1));
+        assert_eq!(
+            s.calls(),
+            vec![
+                r#"view_other_dock_tab("Nobody")"#,
+                r#"view_other_dock_tab("console")"#,
+            ]
+        );
+        assert!(!s.dock_dialogs[0].3, "neither name shows the panel");
+    }
+
+    #[test]
+    fn dmm_view_other_tab_answers_one_for_an_empty_or_undecodable_name_without_asking() {
+        // Neither names a panel the backend could find, so it is not
+        // asked; both are still names nobody registered, and answer
+        // as one. An unpaired surrogate is a string
+        // `wide_ptr_to_string` refuses to decode.
+        let mut s = MockServices::default();
+        assert_eq!(view_other_tab(&mut s, &[0]), Some(1));
+        assert_eq!(
+            view_other_tab(&mut s, &[u16::from(b'A'), 0xD800, 0]),
+            Some(1)
+        );
+        assert!(s.calls().is_empty(), "{:?}", s.calls());
+    }
+
+    #[test]
+    fn dmm_view_other_tab_null_or_negative_lparam_returns_zero() {
         // Same kernel-mode-pointer guard the rest of the DMM
         // family uses. A negative `lparam` on Win64 is a
         // kernel-mode pointer; we never let it reach
-        // `wide_ptr_to_string`.
+        // `wide_ptr_to_string`. Neither it nor NULL is a name, so
+        // neither takes the answer a name nobody registered gets.
         let mut s = MockServices::default();
-        let r = unsafe { dispatch_nppm(&mut s, NPPM_DMMVIEWOTHERTAB, 0, -1isize) };
-        assert_eq!(r, Some(0));
+        for lparam in [0, -1isize] {
+            let r = unsafe { dispatch_nppm(&mut s, NPPM_DMMVIEWOTHERTAB, 0, lparam) };
+            assert_eq!(r, Some(0), "lparam {lparam}");
+        }
+        assert!(s.calls().is_empty(), "{:?}", s.calls());
     }
 
     /// Sends `NPPM_DMMGETPLUGINHWNDBYNAME` with Notepad++'s argument
