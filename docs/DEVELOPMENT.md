@@ -125,14 +125,18 @@ directory open) and would still pass even if the flag were removed.
 
 ### 2.7 Tests that need a shown window
 
-On the `windows` CI runner, a test that created a child window with
-`WS_VISIBLE`, under a popup created the same way, failed a precondition
-that `IsWindowVisible` answers TRUE for it and FALSE for a sibling
-created without. The likelier reading is that the shown window read as
-hidden: that also explains the test's earlier failure, where focus was
-not given back to it. Why was not identified. On a developer machine
-the same test passed alone, in the full suite, on a second desktop, and
-launched with `SW_HIDE`.
+The `windows` CI runner is installed as a Windows service, so its tests
+presumably run in session 0, which has no interactive desktop; the
+session was not checked on the runner. There, a test that created a
+child window with `WS_VISIBLE`, under a popup created the same way,
+failed a precondition that `IsWindowVisible` answers TRUE for it and
+FALSE for a sibling created without. The likelier reading is that the
+shown window read as hidden: that also explains the test's earlier
+failure, where focus was not given back to it. Whether and how session
+0 causes that was not measured: creating a service-like window station
+locally needs administrator rights. On a developer machine the same
+test passed alone, in the full suite, on a second desktop, and launched
+with `SW_HIDE`.
 
 The `return_focus` test in `dock_panels.rs` therefore sets `WS_VISIBLE`
 in its windows' styles with `SetWindowLongPtrW`, which is all
