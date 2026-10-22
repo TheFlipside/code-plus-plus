@@ -979,27 +979,36 @@ pub(crate) fn focus_now() -> HWND {
 /// UI thread only, with no `WindowState` borrow live: `SetFocus` sends
 /// `WM_KILLFOCUS` / `WM_SETFOCUS` synchronously.
 pub(crate) unsafe fn return_focus(before: HWND) {
-    if let Some(window) = focus_to_return(before, focus_now()) {
+    if let Some(window) = focus_to_return(before, window_is_shown(before), focus_now()) {
         // SAFETY: the caller is on the UI thread with no `WindowState`
         // borrow live, as `# Safety` requires.
         let _ = unsafe { SetFocus(Some(window)) };
     }
 }
 
-/// The window [`return_focus`] gives focus to when `now` has it:
-/// `before`, unless it is null, destroyed or hidden, or already has it.
-///
-/// Apart from `return_focus` so a test can check every case on real
-/// windows without moving focus, which a test cannot rely on in every
-/// session.
-fn focus_to_return(before: HWND, now: HWND) -> Option<HWND> {
+/// Whether `window` is a window that is not destroyed and reads as
+/// shown: it and every ancestor, the desktop window included, have
+/// `WS_VISIBLE`.
+fn window_is_shown(window: HWND) -> bool {
     // SAFETY: `IsWindow` and `IsWindowVisible` take any handle value:
     // they only read the handle table and window styles, and answer
     // FALSE for a handle that names no window.
-    let usable = !before.is_invalid()
-        && unsafe { IsWindow(Some(before)) }.as_bool()
-        && unsafe { IsWindowVisible(before) }.as_bool();
-    (usable && now != before).then_some(before)
+    !window.is_invalid()
+        && unsafe { IsWindow(Some(window)) }.as_bool()
+        && unsafe { IsWindowVisible(window) }.as_bool()
+}
+
+/// The window [`return_focus`] gives focus to when `now` has it:
+/// `before`, if it is shown (`before_shown`, from [`window_is_shown`])
+/// and does not have focus already.
+///
+/// Apart from the queries so a test can check the decision without
+/// windows. On a desktop whose desktop window does not read as shown,
+/// presumably the Windows CI runner's, no window reads as shown, so a
+/// test of the queries alone cannot reach the case that gives focus
+/// back there.
+fn focus_to_return(before: HWND, before_shown: bool, now: HWND) -> Option<HWND> {
+    (before_shown && now != before).then_some(before)
 }
 
 pub(crate) fn side_index(side: DockSide) -> usize {
@@ -2368,28 +2377,82 @@ mod tests {
         );
     }
 
-    /// `return_focus` puts focus back on the window it was given, and
-    /// leaves it alone when that window is null — the startup case —
-    /// gone, hidden, or has focus already.
-    ///
-    /// Real windows, but neither focus nor visibility goes through the
-    /// window manager. The test asks `focus_to_return` what
-    /// `return_focus` would do rather than moving focus, and marks its
-    /// windows visible by setting `WS_VISIBLE` in their styles, which
-    /// is all `IsWindowVisible` reads. On the Windows CI runner, windows
-    /// created with `WS_VISIBLE` failed the precondition below, most
-    /// likely by reading as hidden, which would also explain the
-    /// earlier failure there, with focus left alone. The cause was not
-    /// identified; the test passed on a developer machine alone, in the
-    /// full suite, on a second desktop and launched with `SW_HIDE`.
+    /// `return_focus` gives focus back to the window it was given when
+    /// that window is shown and focus is elsewhere or nowhere, and not
+    /// when it is not shown or has focus already. No windows: the
+    /// handles are only compared, so this runs the same on every runner.
     #[test]
-    fn return_focus_puts_focus_back_unless_there_is_nowhere_to_put_it() {
-        use windows::Win32::UI::WindowsAndMessaging::{GWL_STYLE, WS_VISIBLE};
+    fn focus_goes_back_only_to_a_shown_window_without_it() {
+        let before = HWND(0x1010 as *mut c_void);
+        let elsewhere = HWND(0x2020 as *mut c_void);
+        for now in [elsewhere, HWND::default()] {
+            assert_eq!(
+                focus_to_return(before, true, now),
+                Some(before),
+                "focus did not go back to the window it was before"
+            );
+            assert_eq!(
+                focus_to_return(before, false, now),
+                None,
+                "a window that is not shown took focus"
+            );
+        }
+        assert_eq!(
+            focus_to_return(before, true, before),
+            None,
+            "focus was moved onto the window that has it"
+        );
+    }
+
+    /// `return_focus` decides with the real queries: the two tests that
+    /// follow check `focus_to_return` and `window_is_shown` apart, and
+    /// neither would notice a call site that passed a constant instead.
+    #[test]
+    fn return_focus_decides_with_the_window_and_focus_it_reads() {
+        use crate::plugin_reentry_guards::{code_without_strings, fn_body};
+        let src = include_str!("dock_panels.rs");
+        let src = &src[..src.find("#[cfg(test)]").expect("test module")];
+        // Whitespace and a trailing comma dropped on both sides, so a
+        // rustfmt rewrap of the call, which adds the comma, does not fail
+        // the guard.
+        let squash = |s: &str| s.split_whitespace().collect::<String>().replace(",)", ")");
+        let body = squash(&code_without_strings(&fn_body(src, "return_focus")));
+        assert!(
+            body.contains(&squash(
+                "focus_to_return(before, window_is_shown(before), focus_now())"
+            )),
+            "return_focus must decide on whether `before` is shown and where focus is now"
+        );
+    }
+
+    /// `window_is_shown`, which decides whether `return_focus` may give
+    /// focus back, refuses a null handle — the startup case — a
+    /// destroyed window and a hidden one, and accepts a shown one.
+    ///
+    /// The shown case is checked only where the desktop window reads as
+    /// shown. `IsWindowVisible` walks a window's ancestors up to and
+    /// including the desktop window, and on the Windows CI runner, which
+    /// runs as a Windows service, it answered FALSE for a window that,
+    /// like its top-level parent, had `WS_VISIBLE`: by elimination no
+    /// window there reads as shown. A null desktop handle turns the
+    /// check off too, since `IsWindowVisible` answers FALSE for it. The
+    /// decision built on this is tested without windows above, on every
+    /// runner.
+    #[test]
+    fn a_window_is_shown_unless_it_is_null_destroyed_or_hidden() {
+        use windows::Win32::UI::WindowsAndMessaging::{
+            GetAncestor, GA_PARENT, GWL_STYLE, WINDOW_STYLE, WS_VISIBLE,
+        };
         unsafe {
             let instance = GetModuleHandleW(None).unwrap_or_default();
             // Off screen, and never activated by a click or listed in
             // the taskbar, so a test run shows nothing.
-            let edit = |parent: Option<HWND>| {
+            let edit = |parent: Option<HWND>, visible: bool| {
+                let shown = if visible {
+                    WS_VISIBLE
+                } else {
+                    WINDOW_STYLE::default()
+                };
                 CreateWindowExW(
                     if parent.is_some() {
                         WINDOW_EX_STYLE::default()
@@ -2398,7 +2461,7 @@ mod tests {
                     },
                     w!("EDIT"),
                     PCWSTR::null(),
-                    if parent.is_some() { WS_CHILD } else { WS_POPUP },
+                    shown | if parent.is_some() { WS_CHILD } else { WS_POPUP },
                     if parent.is_some() { 0 } else { -32000 },
                     if parent.is_some() { 0 } else { -32000 },
                     50,
@@ -2410,56 +2473,31 @@ mod tests {
                 )
                 .expect("edit control")
             };
-            let style = |w: HWND| GetWindowLongPtrW(w, GWL_STYLE);
-            let top = edit(None);
-            let a = edit(Some(top));
-            let b = edit(Some(top));
-            let hidden = edit(Some(top));
-            let gone = edit(Some(top));
+            let top = edit(None, true);
+            let shown = edit(Some(top), true);
+            let hidden = edit(Some(top), false);
+            let gone = edit(Some(top), true);
             let _ = DestroyWindow(gone);
-            // `b` and every ancestor marked visible, `hidden` not: the
-            // visible window is the one `return_focus` gives focus back
-            // to, and a hidden one is one it refuses.
-            for w in [top, b] {
-                SetWindowLongPtrW(w, GWL_STYLE, style(w) | WS_VISIBLE.0 as isize);
-            }
 
             assert!(
-                IsWindowVisible(b).as_bool() && !IsWindowVisible(hidden).as_bool(),
-                "precondition: the window marked visible reads as visible, the hidden \
-                 one not; styles: top {:#010x}, b {:#010x}, hidden {:#010x}",
-                style(top),
-                style(b),
-                style(hidden),
+                !window_is_shown(HWND::default()),
+                "a null handle read as shown"
             );
+            assert!(!window_is_shown(gone), "a destroyed window read as shown");
+            assert!(!window_is_shown(hidden), "a hidden window read as shown");
 
-            for now in [a, HWND::default()] {
-                assert_eq!(
-                    focus_to_return(b, now),
-                    Some(b),
-                    "focus did not go back to the window it was before"
-                );
-                assert_eq!(
-                    focus_to_return(HWND::default(), now),
-                    None,
-                    "a null window took focus away"
-                );
-                assert_eq!(
-                    focus_to_return(gone, now),
-                    None,
-                    "a destroyed window took focus away"
-                );
-                assert_eq!(
-                    focus_to_return(hidden, now),
-                    None,
-                    "a hidden window took focus away"
+            let desktop = GetAncestor(top, GA_PARENT);
+            if IsWindowVisible(desktop).as_bool() {
+                let style = |w: HWND| GetWindowLongPtrW(w, GWL_STYLE);
+                assert!(
+                    window_is_shown(shown),
+                    "a shown window read as hidden; styles: desktop {:#010x}, \
+                     top {:#010x}, window {:#010x}",
+                    style(desktop),
+                    style(top),
+                    style(shown),
                 );
             }
-            assert_eq!(
-                focus_to_return(b, b),
-                None,
-                "focus was moved onto the window that has it"
-            );
 
             let _ = DestroyWindow(top);
         }

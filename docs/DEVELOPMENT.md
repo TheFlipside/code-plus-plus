@@ -125,27 +125,28 @@ directory open) and would still pass even if the flag were removed.
 
 ### 2.7 Tests that need a shown window
 
-The `windows` CI runner is installed as a Windows service, so its tests
-presumably run in session 0, which has no interactive desktop; the
-session was not checked on the runner. There, a test that created a
-child window with `WS_VISIBLE`, under a popup created the same way,
-failed a precondition that `IsWindowVisible` answers TRUE for it and
-FALSE for a sibling created without. The likelier reading is that the
-shown window read as hidden: that also explains the test's earlier
-failure, where focus was not given back to it. Whether and how session
-0 causes that was not measured: creating a service-like window station
+No window reads as visible on the `windows` CI runner. It is installed
+as a Windows service, so its tests presumably run in session 0, which
+has no interactive desktop; the session was not checked on the runner.
+There, `IsWindowVisible` answered FALSE for a child window that, like
+its top-level parent, had `WS_VISIBLE` in its style, as read back with
+`GetWindowLongPtrW`. `IsWindowVisible` checks the window's
+ancestors up to and including the desktop window, so by elimination the
+desktop window there does not have `WS_VISIBLE`. That was not observed
+directly, and neither was why: creating a service-like window station
 locally needs administrator rights. On a developer machine the same
 test passed alone, in the full suite, on a second desktop, and launched
 with `SW_HIDE`.
 
-The `return_focus` test in `dock_panels.rs` therefore sets `WS_VISIBLE`
-in its windows' styles with `SetWindowLongPtrW`, which is all
-`IsWindowVisible` reads, and prints the styles if the precondition
-still fails. If that holds on the runner, do the same in any test that
-needs a window to read as visible. A test should not move keyboard
-focus and assert where it went either, since that depends on the window
-manager too: test what the code decides, as `focus_to_return` lets that
-test do, and leave the `SetFocus` call itself to a live run.
+So a test cannot make a window read as visible on the runner, neither by
+creating it with `WS_VISIBLE` nor by setting the bit with
+`SetWindowLongPtrW`. Pass the visibility in to the code that decides,
+and test that decision without windows; check a query like
+`IsWindowVisible` against a shown window only where the desktop window
+reads as visible, as the `return_focus` tests in `dock_panels.rs` do.
+A test should not move keyboard focus and assert where it went either,
+since that depends on the window manager too: leave the `SetFocus` call
+itself to a live run.
 
 ---
 
