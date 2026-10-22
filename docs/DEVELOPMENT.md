@@ -123,14 +123,17 @@ test still runs (directory junctions don't need the privilege), but
 it exercises a different reject path (`ERROR_ACCESS_DENIED` on the
 directory open) and would still pass even if the flag were removed.
 
-### 2.7 An interactive desktop
+### 2.7 Tests and keyboard focus
 
-Some `ui_win32` tests create real windows and move keyboard focus
-between them — `return_focus_puts_focus_back_unless_there_is_nowhere_to_put_it`
-among them. `SetFocus` needs a window station with an interactive
-desktop, so run the suite from a logged-in session. A runner installed
-as a service, with no desktop, can fail those tests rather than skip
-them; give the `windows`-label runner a logged-in session.
+Some `ui_win32` tests create real windows, but none should move
+keyboard focus and assert where it went. Whether `SetFocus` takes can
+depend on whether the window's top-level ancestor can be activated, and
+that depends on the session the tests run in, which a test cannot
+control. A focus test that did this passed locally, on a second desktop
+and in the full suite, and failed on the `windows` CI runner; what about
+the runner's session made it fail was not identified. Test what
+the code decides instead, as `focus_to_return` in `dock_panels.rs`
+does, and leave the `SetFocus` call itself to a live run.
 
 ---
 

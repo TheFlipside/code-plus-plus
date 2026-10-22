@@ -2799,7 +2799,7 @@ These are not blockers for the phase that surfaced them, but get addressed in Ph
   **Verified.**
   * Three unit tests of the rule.
   * Ten dispatcher tests in place of five. Among them are one that pins the old order to answer nothing, and one that a name which fails to decode finds nothing while a real empty name finds its panel.
-  * A test of `return_focus` against real windows on a test thread, and one of the focus latch, the unwinding path included.
+  * A test of `return_focus` against real windows on a test thread, and one of the focus latch, the unwinding path included. *(Since changed: the `return_focus` test moved focus and asserted where it went, which passed on this machine, on a second desktop and in the full suite, and failed on the Windows CI runner from `7825c79`, which added it, on, with focus left where it was. Whether `SetFocus` takes can depend on whether the session lets the test's top-level window be activated, which a test cannot control, and the runner's session was never identified. The decision now lives in `focus_to_return`, which the test asks about the same real windows without moving focus; three mutations, dropping the visibility check, dropping the already-has-focus check and refusing everything, each fail it. The `SetFocus` call itself is left to the live runs above. Removing the null or the `IsWindow` check survives, since `IsWindowVisible` answers FALSE for both, as it did before.)*
   * Four source guards:
     * the show and view handlers ask for focus as their last step before succeeding, and the hide handler does not;
     * the focus is applied once, unconditionally, straight after the reconcile's `if` and before deferred dialogs;

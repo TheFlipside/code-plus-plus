@@ -979,15 +979,28 @@ pub(crate) fn focus_now() -> HWND {
 /// UI thread only, with no `WindowState` borrow live: `SetFocus` sends
 /// `WM_KILLFOCUS` / `WM_SETFOCUS` synchronously.
 pub(crate) unsafe fn return_focus(before: HWND) {
-    if before.is_invalid()
-        || !unsafe { IsWindow(Some(before)) }.as_bool()
-        || !unsafe { IsWindowVisible(before) }.as_bool()
-    {
-        return;
+    if let Some(window) = focus_to_return(before, focus_now()) {
+        // SAFETY: the caller is on the UI thread with no `WindowState`
+        // borrow live, as `# Safety` requires.
+        let _ = unsafe { SetFocus(Some(window)) };
     }
-    if focus_now() != before {
-        let _ = unsafe { SetFocus(Some(before)) };
-    }
+}
+
+/// The window [`return_focus`] gives focus to when `now` has it:
+/// `before`, unless it is null, destroyed or hidden, or already has it.
+///
+/// Apart from `return_focus` so a test can check every case on real
+/// windows without moving focus. Whether `SetFocus` takes depends on
+/// the session's activation state, which a test cannot control: a test
+/// that moved focus passed locally and failed on the Windows CI runner.
+fn focus_to_return(before: HWND, now: HWND) -> Option<HWND> {
+    // SAFETY: `IsWindow` and `IsWindowVisible` take any handle value:
+    // they only read the handle table and window styles, and answer
+    // FALSE for a handle that names no window.
+    let usable = !before.is_invalid()
+        && unsafe { IsWindow(Some(before)) }.as_bool()
+        && unsafe { IsWindowVisible(before) }.as_bool();
+    (usable && now != before).then_some(before)
 }
 
 pub(crate) fn side_index(side: DockSide) -> usize {
@@ -2358,7 +2371,13 @@ mod tests {
 
     /// `return_focus` puts focus back on the window it was given, and
     /// leaves it alone when that window is null — the startup case —
-    /// gone, or hidden.
+    /// gone, hidden, or has focus already.
+    ///
+    /// Real windows, but no focus moves: the test asks
+    /// `focus_to_return` what `return_focus` would do. Moving focus
+    /// needs the top-level window activated, which depends on the
+    /// session the test runs in; an earlier version that moved it
+    /// passed locally and failed on the Windows CI runner.
     #[test]
     fn return_focus_puts_focus_back_unless_there_is_nowhere_to_put_it() {
         use windows::Win32::UI::WindowsAndMessaging::{WINDOW_STYLE, WS_VISIBLE};
@@ -2400,22 +2419,38 @@ mod tests {
             let gone = edit(Some(top), true);
             let _ = DestroyWindow(gone);
 
-            let _ = SetFocus(Some(a));
-            assert_eq!(focus_now(), a, "the test cannot give focus to a window");
-            return_focus(b);
-            assert_eq!(
-                focus_now(),
-                b,
-                "focus did not go back to the window it was before"
+            assert!(
+                IsWindowVisible(b).as_bool() && !IsWindowVisible(hidden).as_bool(),
+                "precondition: the shown window reads as visible, the hidden one not"
             );
-            return_focus(HWND::default());
-            assert_eq!(focus_now(), b, "a null window took focus away");
-            return_focus(gone);
-            assert_eq!(focus_now(), b, "a destroyed window took focus away");
-            return_focus(hidden);
-            assert_eq!(focus_now(), b, "a hidden window took focus away");
-            return_focus(b);
-            assert_eq!(focus_now(), b);
+
+            for now in [a, HWND::default()] {
+                assert_eq!(
+                    focus_to_return(b, now),
+                    Some(b),
+                    "focus did not go back to the window it was before"
+                );
+                assert_eq!(
+                    focus_to_return(HWND::default(), now),
+                    None,
+                    "a null window took focus away"
+                );
+                assert_eq!(
+                    focus_to_return(gone, now),
+                    None,
+                    "a destroyed window took focus away"
+                );
+                assert_eq!(
+                    focus_to_return(hidden, now),
+                    None,
+                    "a hidden window took focus away"
+                );
+            }
+            assert_eq!(
+                focus_to_return(b, b),
+                None,
+                "focus was moved onto the window that has it"
+            );
 
             let _ = DestroyWindow(top);
         }
