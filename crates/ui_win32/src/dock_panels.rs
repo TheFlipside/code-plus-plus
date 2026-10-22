@@ -990,9 +990,8 @@ pub(crate) unsafe fn return_focus(before: HWND) {
 /// `before`, unless it is null, destroyed or hidden, or already has it.
 ///
 /// Apart from `return_focus` so a test can check every case on real
-/// windows without moving focus. Whether `SetFocus` takes depends on
-/// the session's activation state, which a test cannot control: a test
-/// that moved focus passed locally and failed on the Windows CI runner.
+/// windows without moving focus, which a test cannot rely on in every
+/// session.
 fn focus_to_return(before: HWND, now: HWND) -> Option<HWND> {
     // SAFETY: `IsWindow` and `IsWindowVisible` take any handle value:
     // they only read the handle table and window styles, and answer
@@ -2373,25 +2372,24 @@ mod tests {
     /// leaves it alone when that window is null — the startup case —
     /// gone, hidden, or has focus already.
     ///
-    /// Real windows, but no focus moves: the test asks
-    /// `focus_to_return` what `return_focus` would do. Moving focus
-    /// needs the top-level window activated, which depends on the
-    /// session the test runs in; an earlier version that moved it
-    /// passed locally and failed on the Windows CI runner.
+    /// Real windows, but neither focus nor visibility goes through the
+    /// window manager. The test asks `focus_to_return` what
+    /// `return_focus` would do rather than moving focus, and marks its
+    /// windows visible by setting `WS_VISIBLE` in their styles, which
+    /// is all `IsWindowVisible` reads. On the Windows CI runner, windows
+    /// created with `WS_VISIBLE` failed the precondition below, most
+    /// likely by reading as hidden, which would also explain the
+    /// earlier failure there, with focus left alone. The cause was not
+    /// identified; the test passed on a developer machine alone, in the
+    /// full suite, on a second desktop and launched with `SW_HIDE`.
     #[test]
     fn return_focus_puts_focus_back_unless_there_is_nowhere_to_put_it() {
-        use windows::Win32::UI::WindowsAndMessaging::{WINDOW_STYLE, WS_VISIBLE};
+        use windows::Win32::UI::WindowsAndMessaging::{GWL_STYLE, WS_VISIBLE};
         unsafe {
             let instance = GetModuleHandleW(None).unwrap_or_default();
-            // Shown, because a hidden window is one `return_focus`
-            // refuses; off screen, and never activated by a click or
-            // listed in the taskbar, so a test run shows nothing.
-            let edit = |parent: Option<HWND>, visible: bool| {
-                let shown = if visible {
-                    WS_VISIBLE
-                } else {
-                    WINDOW_STYLE::default()
-                };
+            // Off screen, and never activated by a click or listed in
+            // the taskbar, so a test run shows nothing.
+            let edit = |parent: Option<HWND>| {
                 CreateWindowExW(
                     if parent.is_some() {
                         WINDOW_EX_STYLE::default()
@@ -2400,7 +2398,7 @@ mod tests {
                     },
                     w!("EDIT"),
                     PCWSTR::null(),
-                    shown | if parent.is_some() { WS_CHILD } else { WS_POPUP },
+                    if parent.is_some() { WS_CHILD } else { WS_POPUP },
                     if parent.is_some() { 0 } else { -32000 },
                     if parent.is_some() { 0 } else { -32000 },
                     50,
@@ -2412,16 +2410,27 @@ mod tests {
                 )
                 .expect("edit control")
             };
-            let top = edit(None, true);
-            let a = edit(Some(top), true);
-            let b = edit(Some(top), true);
-            let hidden = edit(Some(top), false);
-            let gone = edit(Some(top), true);
+            let style = |w: HWND| GetWindowLongPtrW(w, GWL_STYLE);
+            let top = edit(None);
+            let a = edit(Some(top));
+            let b = edit(Some(top));
+            let hidden = edit(Some(top));
+            let gone = edit(Some(top));
             let _ = DestroyWindow(gone);
+            // `b` and every ancestor marked visible, `hidden` not: the
+            // visible window is the one `return_focus` gives focus back
+            // to, and a hidden one is one it refuses.
+            for w in [top, b] {
+                SetWindowLongPtrW(w, GWL_STYLE, style(w) | WS_VISIBLE.0 as isize);
+            }
 
             assert!(
                 IsWindowVisible(b).as_bool() && !IsWindowVisible(hidden).as_bool(),
-                "precondition: the shown window reads as visible, the hidden one not"
+                "precondition: the window marked visible reads as visible, the hidden \
+                 one not; styles: top {:#010x}, b {:#010x}, hidden {:#010x}",
+                style(top),
+                style(b),
+                style(hidden),
             );
 
             for now in [a, HWND::default()] {

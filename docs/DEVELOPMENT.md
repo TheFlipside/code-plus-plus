@@ -123,17 +123,25 @@ test still runs (directory junctions don't need the privilege), but
 it exercises a different reject path (`ERROR_ACCESS_DENIED` on the
 directory open) and would still pass even if the flag were removed.
 
-### 2.7 Tests and keyboard focus
+### 2.7 Tests that need a shown window
 
-Some `ui_win32` tests create real windows, but none should move
-keyboard focus and assert where it went. Whether `SetFocus` takes can
-depend on whether the window's top-level ancestor can be activated, and
-that depends on the session the tests run in, which a test cannot
-control. A focus test that did this passed locally, on a second desktop
-and in the full suite, and failed on the `windows` CI runner; what about
-the runner's session made it fail was not identified. Test what
-the code decides instead, as `focus_to_return` in `dock_panels.rs`
-does, and leave the `SetFocus` call itself to a live run.
+On the `windows` CI runner, a test that created a child window with
+`WS_VISIBLE`, under a popup created the same way, failed a precondition
+that `IsWindowVisible` answers TRUE for it and FALSE for a sibling
+created without. The likelier reading is that the shown window read as
+hidden: that also explains the test's earlier failure, where focus was
+not given back to it. Why was not identified. On a developer machine
+the same test passed alone, in the full suite, on a second desktop, and
+launched with `SW_HIDE`.
+
+The `return_focus` test in `dock_panels.rs` therefore sets `WS_VISIBLE`
+in its windows' styles with `SetWindowLongPtrW`, which is all
+`IsWindowVisible` reads, and prints the styles if the precondition
+still fails. If that holds on the runner, do the same in any test that
+needs a window to read as visible. A test should not move keyboard
+focus and assert where it went either, since that depends on the window
+manager too: test what the code decides, as `focus_to_return` lets that
+test do, and leave the `SetFocus` call itself to a live run.
 
 ---
 
