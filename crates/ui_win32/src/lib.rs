@@ -26581,23 +26581,26 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                         //      Confirm Reload dialog, the stale
                         //      version they were keeping.
                         //
-                        // The path is read with the dirty bit, before the
-                        // question, and the reload goes to that path: the
+                        // The tab is read with the dirty bit, before the
+                        // question, and the reload goes to that tab: the
                         // question's modal pump can run a plugin's
                         // cross-thread `SendMessage`, which may switch
                         // tabs, and the Yes is consent to discard the
-                        // edits of the file the question was about.
-                        let (path, dirty) = if let Some(state) = state_from_hwnd(hwnd) {
-                            let (path, cached_dirty) = state
-                                .shell
-                                .active()
-                                .map_or((None, false), |t| (t.path.clone(), t.dirty));
+                        // edits of the tab the question was about. By id
+                        // rather than by path, so a tab closed meanwhile
+                        // is not opened again, and the reload cannot land
+                        // on another tab holding the same file.
+                        let (tab, dirty) = if let Some(state) = state_from_hwnd(hwnd) {
+                            let (tab, cached_dirty) =
+                                state.shell.active().map_or((None, false), |t| {
+                                    (t.path.is_some().then_some(t.id), t.dirty)
+                                });
                             let dirty = state.editor.send(SCI_GETMODIFY, 0, 0) != 0 || cached_dirty;
-                            (path, dirty)
+                            (tab, dirty)
                         } else {
                             (None, false)
                         };
-                        if let Some(path) = path {
+                        if let Some(tab) = tab {
                             // Only the question's Yes is consent to discard
                             // unsaved work. With nothing unsaved nothing is
                             // asked, and the reload goes unconfirmed, so an
@@ -26618,7 +26621,7 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                                 if let Some(state) = state_from_hwnd(hwnd) {
                                     let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(
                                         || {
-                                            state.shell.request_reload(path, consent);
+                                            state.shell.request_reload_tab(tab, consent);
                                         },
                                     ));
                                 }
@@ -31445,12 +31448,15 @@ mod plugin_reentry_guards {
         );
     }
 
-    /// File → Reload reads the path with the dirty bit, before its
-    /// question, and reloads that path: the question's modal pump can run
+    /// File → Reload reads the tab with the dirty bit, before its
+    /// question, and reloads that tab: the question's modal pump can run
     /// a plugin's cross-thread `SendMessage` that switches tabs, and the
-    /// Yes is consent to discard the edits of the file it was about.
+    /// Yes is consent to discard the edits of the tab it was about. By the
+    /// tab's id, not its path: keyed by path, the reload went to the first
+    /// tab holding the file, and a tab closed while the question was up
+    /// had its file opened again.
     #[test]
-    fn file_reload_reloads_the_file_it_asked_about() {
+    fn file_reload_reloads_the_tab_it_asked_about() {
         let src = production_src();
         let start = src
             .find("ID_FILE_RELOAD => {")
@@ -31461,17 +31467,17 @@ mod plugin_reentry_guards {
             + start;
         let arm = code_only(&src[start..end]);
         let sampled = arm
-            .find("let (path, dirty) =")
-            .expect("File → Reload no longer reads the path with the dirty bit");
+            .find("let (tab, dirty) =")
+            .expect("File → Reload no longer reads the tab with the dirty bit");
         let asked = arm
             .find("show_yes_no_dialog(")
             .expect("File → Reload no longer asks before discarding edits");
         let reloaded = arm
-            .find("request_reload(path, consent)")
-            .expect("File → Reload no longer reloads the path it read");
+            .find("request_reload_tab(tab, consent)")
+            .expect("File → Reload no longer reloads the tab it read");
         assert!(
             sampled < asked && asked < reloaded,
-            "read the path, ask, then reload that path"
+            "read the tab, ask, then reload that tab"
         );
         assert_eq!(
             arm.matches(".active()").count(),
@@ -31490,6 +31496,10 @@ mod plugin_reentry_guards {
             "File → Reload no longer counts what Scintilla knows is modified as unsaved"
         );
         assert!(
+            squashed.contains("(t.path.is_some().then_some(t.id),t.dirty)"),
+            "File → Reload no longer reads the id of a tab with a file to reload"
+        );
+        assert!(
             squashed.contains(
                 "letconsent=if!dirty{Some(codepp_shell::ReloadConsent::Unconfirmed)}\
                  elseifshow_yes_no_dialog(hwnd,\"ReloadfromDisk\",\
@@ -31501,13 +31511,13 @@ mod plugin_reentry_guards {
         );
         assert!(
             block_after(&arm, "if let Some(consent) = consent {")
-                .contains("request_reload(path, consent)"),
+                .contains("request_reload_tab(tab, consent)"),
             "File → Reload reloads whatever the answer"
         );
         assert_eq!(
-            arm.matches("request_reload(").count(),
+            arm.matches("request_reload").count(),
             1,
-            "File → Reload reloads on a path other than its answer's"
+            "File → Reload reloads outside its answer, or by path"
         );
         assert!(
             !arm.contains("confirm_reload("),
@@ -31533,7 +31543,7 @@ mod plugin_reentry_guards {
         assert!(
             yes.contains("shell.confirm_reload(&mut ui, path);")
                 && arm.matches("confirm_reload(").count() == 1
-                && !arm.contains("request_reload(")
+                && !arm.contains("request_reload")
                 && !arm.contains(".active()"),
             "the reload prompt no longer passes its Yes, and only its Yes, to \
              `Shell::confirm_reload` for the file it named"

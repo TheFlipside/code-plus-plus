@@ -1903,12 +1903,13 @@ mod gesture_delivery_guard {
         );
     }
 
-    /// Both reloads keyed by the file the question named. The watcher's
-    /// prompt asks about any open file, and File → Reload's question runs
-    /// a loop in which plugin code can move the front; a Yes is consent
-    /// to discard that file's edits, and nobody else's.
+    /// Both reloads go to what the question named: the watcher's prompt to
+    /// the file, File → Reload to the tab, by its id. The watcher's prompt
+    /// asks about any open file, and File → Reload's question runs a loop
+    /// in which plugin code can move the front; a Yes is consent to
+    /// discard that tab's edits, and nobody else's.
     #[test]
-    fn a_reload_goes_to_the_file_it_asked_about() {
+    fn a_reload_goes_to_what_it_asked_about() {
         let lib = source(include_str!("lib.rs"));
         let prompt = block_after(
             &fn_body(&lib, "present_dialog"),
@@ -1920,6 +1921,7 @@ mod gesture_delivery_guard {
         assert!(
             yes.contains("confirm_reload(&mut ui, path.clone())")
                 && prompt.matches("confirm_reload(").count() == 1
+                && !prompt.contains("request_reload")
                 && !prompt.contains(".active()"),
             "the reload prompt no longer reloads, on a Yes only, the file it named"
         );
@@ -1927,7 +1929,7 @@ mod gesture_delivery_guard {
         let body = fn_body(&menu, "on_reload");
         let sampled = body
             .find("let sample =")
-            .expect("File → Reload no longer reads the path before asking");
+            .expect("File → Reload no longer reads the tab before asking");
         let frozen = body
             .find("let _freeze = crate::DrainFreeze::new();")
             .expect("File → Reload no longer holds a freeze while it asks");
@@ -1935,8 +1937,8 @@ mod gesture_delivery_guard {
             .find("crate::message_dialog(")
             .expect("File → Reload no longer asks before discarding edits");
         let reloaded = body
-            .find("request_reload(path, consent)")
-            .expect("File → Reload no longer reloads the path it read");
+            .find("request_reload_tab(tab, consent)")
+            .expect("File → Reload no longer reloads the tab it read");
         let drained = statement_at(
             &body,
             "drain_shell();",
@@ -1944,7 +1946,7 @@ mod gesture_delivery_guard {
         );
         assert!(
             sampled < frozen && frozen < asked && asked < reloaded && reloaded < drained,
-            "read the path, ask under the freeze, reload that path, then drain"
+            "read the tab, ask under the freeze, reload that tab, then drain"
         );
         assert_eq!(
             body.matches(".active()").count(),
@@ -1966,15 +1968,19 @@ mod gesture_delivery_guard {
                 ")==gtk::ResponseType::Yes).then_some(codepp_shell::ReloadConsent::Confirmed)}\
                  else{Some(codepp_shell::ReloadConsent::Unconfirmed)};"
             ) && squashed.contains(
-                "ifletSome(consent)=consent{with_state(|st|st.shell.request_reload(path,consent));}"
+                "ifletSome(consent)=consent{with_state(|st|st.shell.request_reload_tab(tab,consent));}"
             ) && !body.contains("confirm_reload("),
             "File → Reload no longer reloads only on the answer to its question, or confirms \
              a reload nobody was asked about"
         );
         assert_eq!(
-            body.matches("request_reload(").count(),
+            body.matches("request_reload").count(),
             1,
-            "File → Reload requests a reload outside its answer"
+            "File → Reload requests a reload outside its answer, or by path"
+        );
+        assert!(
+            squashed.contains("t.path.is_some().then_some((t.id,unsaved))"),
+            "File → Reload no longer reads the id of a tab with a file to reload"
         );
         // Unsaved work is the live modify bit, the cached one, or a
         // crash-recovered buffer, which sits at its save point: a reload

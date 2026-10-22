@@ -3025,23 +3025,25 @@ fn on_load_session() {
 /// nothing and goes unconfirmed, so an edit typed while the load is
 /// under way survives it rather than vanishing with no undo.
 ///
-/// The path is read with the dirty bit, before the question, and the
-/// reload goes to that path rather than to whichever tab is in front once
+/// The tab is read with the dirty bit, before the question, and the
+/// reload goes to that tab rather than to whichever tab is in front once
 /// it is answered: the dialog's loop runs plugin code, a switch made there
 /// moves the front, and the Yes is consent to discard the edits of the
-/// file the question was about. The freeze holds off a worker's drain
-/// while the dialog is up, as the close prompt's does, and the drain after
-/// it runs on a No as well, to replay what the freeze held back.
+/// tab the question was about. By the tab's id rather than its path, so a
+/// tab closed meanwhile is not opened again, and the reload cannot land
+/// on another tab holding the same file. The freeze holds off a worker's
+/// drain while the dialog is up, as the close prompt's does, and the drain
+/// after it runs on a No as well, to replay what the freeze held back.
 fn on_reload() {
     let sample = with_state(|st| {
         let live_dirty = st.editor.send(codepp_scintilla_sys::SCI_GETMODIFY, 0, 0) != 0;
         st.shell.active().and_then(|t| {
             let unsaved = live_dirty || t.dirty || st.shell.is_unsaved_restore(t.id);
-            t.path.clone().map(|path| (path, unsaved))
+            t.path.is_some().then_some((t.id, unsaved))
         })
     })
     .flatten();
-    let Some((path, unsaved)) = sample else {
+    let Some((tab, unsaved)) = sample else {
         // Untitled, or no tab: nothing on disk to reload from.
         return;
     };
@@ -3061,7 +3063,7 @@ fn on_reload() {
         Some(codepp_shell::ReloadConsent::Unconfirmed)
     };
     if let Some(consent) = consent {
-        with_state(|st| st.shell.request_reload(path, consent));
+        with_state(|st| st.shell.request_reload_tab(tab, consent));
     }
     drain_shell();
 }

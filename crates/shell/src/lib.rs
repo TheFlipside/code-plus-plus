@@ -4358,6 +4358,10 @@ impl Shell {
     /// `save_current_to_disk`. `NoActivePath` here means "no active
     /// tab to save", not "the active tab has no path" — Save As
     /// works regardless of whether the tab was titled.
+    ///
+    /// [`ShellError::AlreadyOpen`] refuses a path another tab holds or
+    /// is loading, which would leave two tabs on one file (see
+    /// `tab_for_path`); nothing is written then.
     pub fn save_buffer_as<U: UiPlatform>(
         &mut self,
         ui: &mut U,
@@ -4375,6 +4379,20 @@ impl Shell {
         // is not enough there, because a reload in flight keeps one.
         if self.active().is_some_and(|t| t.pending_load.is_some()) {
             return Err(ShellError::LoadInFlight);
+        }
+        // Refuse a file another tab has open, or is loading: the write
+        // would leave two tabs on one path, and a reload, the deletion
+        // notice or a close would then act on the first of them. Saving
+        // the tab to its own path is not a second tab, and goes ahead.
+        // Notepad++'s Save As refuses the same file ("The file is already
+        // opened in Notepad++.", read from its `fileSaveAs`, not measured)
+        // and also brings that file's tab to the front, which this leaves
+        // to the user.
+        if self
+            .tab_for_path(&new_path)
+            .is_some_and(|idx| Some(idx) != self.active_tab)
+        {
+            return Err(ShellError::AlreadyOpen);
         }
 
         let (old_path, encoding) = {
@@ -4668,6 +4686,39 @@ impl Shell {
         self.open_file_replacing_scratch(path, false)
     }
 
+    /// The tab that holds `path`, or that is loading it for the first
+    /// time ([`Self::first_loads`]), compared exactly.
+    ///
+    /// **At most one tab answers for a path**, and every lookup by path
+    /// relies on it: the reload prompt, `NPPM_RELOADFILE`, the file
+    /// watcher's deletion notice and the unwatch on close each act on the
+    /// first tab holding the path. Each way a tab gets a path is gated:
+    /// * a first load's landing, in place or through `divert_first_load`,
+    ///   by the open, which switches to a tab that already has the file or
+    ///   is loading it ([`Self::open_file_replacing_scratch`]);
+    /// * Save As, which refuses a file another tab has
+    ///   ([`Self::save_buffer_as`]);
+    /// * a session's restore, which leaves each file to the first record
+    ///   naming it (`dedupe_session_paths`) before
+    ///   [`Self::restore_dirty_with_text`] builds a tab with its file.
+    ///
+    /// A reload keeps the path its tab already has.
+    ///
+    /// The comparison is exact, so it holds for one spelling of a path:
+    /// one file reached by two (`C:\a.txt` and `c:\A.TXT`, a link, a short
+    /// name) can still be in two tabs.
+    ///
+    /// A first load is matched through its tab's `pending_load`, so the
+    /// record of a load whose tab has since closed answers nothing.
+    fn tab_for_path(&self, path: &Path) -> Option<usize> {
+        self.titled_tab_for_path(path).or_else(|| {
+            self.first_loads
+                .iter()
+                .filter(|(_, p)| p.as_path() == path)
+                .find_map(|(req, _)| self.tabs.iter().position(|t| t.pending_load == Some(*req)))
+        })
+    }
+
     /// [`Self::open_file`], but allowed to consume a pristine scratch
     /// buffer instead of opening beside it.
     ///
@@ -4703,18 +4754,14 @@ impl Shell {
         path: PathBuf,
         editor_is_pristine: bool,
     ) -> OpenFileOutcome {
-        // De-duplicate: if the path is already open in some tab,
-        // switch to that tab rather than allocating a fresh one.
-        // Without this, the user can stack identical-content tabs
-        // by repeatedly Open-dialoging the same file — and Reload
-        // (which routes through `confirm_reload` → `open_file` for
-        // the not-yet-open case) would create duplicates of the
-        // file the user is reloading.
-        if let Some(idx) = self
-            .tabs
-            .iter()
-            .position(|t| t.path.as_deref() == Some(path.as_path()))
-        {
+        // De-duplicate: if the path is already open in some tab, or is
+        // still loading into one, switch to that tab rather than
+        // allocating a fresh one. One tab per file is what every lookup
+        // by path relies on (see `tab_for_path`); a second open of a
+        // file whose first load was still in flight used to make a
+        // second tab, and a reload, a deletion or a close then acted on
+        // whichever of the two came first.
+        if let Some(idx) = self.tab_for_path(&path) {
             return if self.switch_to_tab(idx) {
                 OpenFileOutcome::SwitchedToExisting(idx)
             } else {
@@ -5206,20 +5253,20 @@ impl Shell {
     /// returned in [`PendingDialog::ConfirmReload`], which the file
     /// watcher raises and a plugin's reload with the alert flag raises
     /// too. File → Reload asks its own question and passes its answer
-    /// through [`Self::request_reload`] with the path of the tab it
-    /// asked about. Keyed by path rather than by "the active tab" on
-    /// purpose: the question runs a modal loop, plugin code can move the
-    /// focus while it is up, and the consent the user gave is for the
-    /// file the question named.
+    /// through [`Self::request_reload_tab`] with the tab it asked about.
+    /// Keyed by path rather than by "the active tab" on purpose: the
+    /// question runs a modal loop, plugin code can move the focus while
+    /// it is up, and the consent the user gave is for the file the
+    /// question named. At most one tab holds a path
+    /// ([`Self::tab_for_path`]), so the path names that tab.
     ///
     /// Marks the matching tab's `pending_load` so `apply_load_result`
     /// overwrites its contents in place when the loader completes; it
     /// creates no tab when the path is open, which it always is for
     /// the watcher's prompt (the watcher fires only for watched files,
     /// which are open files). A plugin's `NPPM_RELOADFILE` with the
-    /// alert flag can name any path, though, and a path found in no
-    /// tab falls through to [`Self::open_file`], which will
-    /// deduplicate or open as appropriate.
+    /// alert flag can name any path, though, and that goes as
+    /// [`Self::request_reload`] describes.
     ///
     /// **The consent is decided here, from what the tab holds when the
     /// Yes arrives.** The Yes agrees to discard the unsaved work the
@@ -5233,48 +5280,88 @@ impl Shell {
     /// discard such text with no undo. Decided in the shell rather than
     /// at each backend's Yes arm so the three cannot drift on it.
     pub fn confirm_reload<U: UiPlatform>(&mut self, ui: &mut U, path: PathBuf) {
-        let unsaved = self
-            .tabs
-            .iter()
-            .position(|t| t.path.as_deref() == Some(path.as_path()))
-            .is_some_and(|idx| self.holds_unsaved_work(ui, idx));
-        let consent = if unsaved {
+        let Some(idx) = self.titled_tab_for_path(&path) else {
+            self.request_reload(path, ReloadConsent::Unconfirmed);
+            return;
+        };
+        let consent = if self.holds_unsaved_work(ui, idx) {
             ReloadConsent::Confirmed
         } else {
             ReloadConsent::Unconfirmed
         };
-        self.request_reload(path, consent);
+        let id = self.tabs[idx].id;
+        self.request_reload_tab(id, consent);
     }
 
     /// Requeue `path` through the loader onto the tab that holds it,
     /// recording whether unsaved work may yield to the result.
     /// [`Self::confirm_reload`] decides the consent for a prompt's Yes
-    /// from what the tab holds; the other callers are File → Reload,
-    /// which passes the answer to its own question, and a plugin's
-    /// `NPPM_RELOADFILE` / `NPPM_RELOADBUFFERID` with the alert flag
-    /// clear, which carries none. See [`Tab::reload_confirmed`] for what
-    /// each buys.
+    /// from what the tab holds; the other caller is a plugin's
+    /// `NPPM_RELOADFILE` with the alert flag clear, which carries none.
+    /// See [`Tab::reload_confirmed`] for what each buys. A caller that
+    /// knows the tab, as File → Reload and `NPPM_RELOADBUFFERID` do, goes
+    /// through [`Self::request_reload_tab`] instead.
+    ///
+    /// A file no tab has is opened, for stale-watcher scenarios and a
+    /// plugin naming any path. A file still loading into a tab for the
+    /// first time is left to that load: the tab has nothing to reload yet,
+    /// and going through the open would switch to the loading tab, which a
+    /// reload request has no business doing.
     pub fn request_reload(&mut self, path: PathBuf, consent: ReloadConsent) {
-        let Some(idx) = self
-            .tabs
-            .iter()
-            .position(|t| t.path.as_deref() == Some(path.as_path()))
-        else {
-            // Fallback for stale-watcher scenarios: the path isn't
-            // in the tab list, so open it fresh. The dedupe-rebind
-            // outcome can't fire here (we just proved above that no
-            // tab holds this path), so the discarded return value
-            // is genuinely nothing the UI needs to react to.
+        let Some(idx) = self.titled_tab_for_path(&path) else {
+            if self.tab_for_path(&path).is_some() {
+                tracing::debug!(path = ?path, "reload of a file still loading; the load reads it");
+                return;
+            }
+            // The path is in no tab, so open it; the outcome is the
+            // backend's next rebind and drain to pick up.
             let _ = self.open_file(path);
             return;
         };
-        let Some(req_id) = self.loader.open(path) else {
-            return;
+        let id = self.tabs[idx].id;
+        self.request_reload_tab(id, consent);
+    }
+
+    /// Requeue the file of the tab with buffer id `id` through the
+    /// loader, recording whether unsaved work may yield to the result
+    /// (see [`Tab::reload_confirmed`]). Returns whether a reload was
+    /// requested: not for an id no tab has, a tab with no file, or a
+    /// loader that refused the request.
+    ///
+    /// **Keyed by the tab, not its path**, for the callers that know
+    /// which tab they mean: File → Reload, whose question names the tab
+    /// in front when it was asked, and `NPPM_RELOADBUFFERID`, which names
+    /// a buffer. Keyed by path, the reload went to the first tab holding
+    /// the path, so with two tabs on one file a Yes to discard one tab's
+    /// edits discarded the other's. One tab per path is now kept
+    /// ([`Self::tab_for_path`]), and this keeps the reload on the tab the
+    /// user or plugin named even if that ever fails. It also leaves alone
+    /// a tab closed while File → Reload's question was up, where a path
+    /// would have fallen through to opening the file again.
+    pub fn request_reload_tab(&mut self, id: i32, consent: ReloadConsent) -> bool {
+        let Some(idx) = self.tabs.iter().position(|t| t.id == id) else {
+            tracing::debug!(buffer_id = id, "reload of a buffer no tab has");
+            return false;
         };
-        if let Some(tab) = self.tabs.get_mut(idx) {
-            tab.pending_load = Some(req_id);
-            tab.reload_confirmed = consent == ReloadConsent::Confirmed;
-        }
+        let Some(path) = self.tabs[idx].path.clone() else {
+            return false;
+        };
+        let Some(req_id) = self.loader.open(path) else {
+            return false;
+        };
+        let tab = &mut self.tabs[idx];
+        tab.pending_load = Some(req_id);
+        tab.reload_confirmed = consent == ReloadConsent::Confirmed;
+        true
+    }
+
+    /// The tab whose file is `path`, compared exactly: the one
+    /// [`Self::tab_for_path`] finds, minus a first load in flight, which
+    /// has no file to reload yet.
+    fn titled_tab_for_path(&self, path: &Path) -> Option<usize> {
+        self.tabs
+            .iter()
+            .position(|t| t.path.as_deref() == Some(path))
     }
 
     /// Whether `idx`'s buffer holds work that is not on disk.
@@ -6338,11 +6425,10 @@ impl Shell {
                 // it here is enough to close the data-loss hazard.
                 // Single mut-borrow walk: flip `Tab.dirty` inside
                 // the `find` closure and hand the id back out for
-                // the notification push below. Path uniqueness
-                // across tabs is enforced elsewhere (open-file
-                // dedup activates the existing tab rather than
-                // creating a duplicate), so at most one tab can
-                // match.
+                // the notification push below. At most one tab holds
+                // a path (see `tab_for_path` for what keeps it so).
+                // A second tab on the file used to be possible: it
+                // went unflagged here, and closed with no prompt.
                 let matched_id = self
                     .tabs
                     .iter_mut()
@@ -8288,6 +8374,7 @@ impl Shell {
         backups_dir: Option<&Path>,
         budget: u64,
     ) -> Vec<SessionRestoreEntry> {
+        dedupe_session_paths(&mut session);
         normalize_session_pinning(&mut session);
         // Cap restored tabs at `MAX_SESSION_TABS` to prevent a
         // tampered or runaway session.xml from queuing thousands
@@ -8632,6 +8719,10 @@ impl Shell {
         stored_lang: Option<i32>,
         pinned: bool,
     ) -> usize {
+        debug_assert!(
+            self.tab_for_path(&path).is_none(),
+            "a restore put a file another tab holds into a second tab"
+        );
         let id = self.allocate_buffer_id();
         self.adopt_restored_backup(id, &RestoredBackupKey::File(path.clone()));
         let new_idx = self.tabs.len();
@@ -9526,6 +9617,102 @@ fn normalize_session_pinning(session: &mut Session) {
     session.tabs = order.iter().filter_map(|&i| tabs[i].take()).collect();
 }
 
+/// Leave each file in a freshly parsed [`Session`] to the first record
+/// that names it, so a restore cannot put one file in two tabs
+/// (see [`Shell::tab_for_path`]).
+///
+/// A later record for the same file holding a backup is kept as an
+/// untitled buffer, numbered after every number the session uses: its
+/// text exists only in that backup, and the divert of a first load keeps
+/// such work the same way (`divert_first_load`). A later record with no
+/// backup is the file again, already open in the first record's tab, and
+/// is dropped. `session.active` follows its record, or, for a dropped
+/// one, the first record's, so it still names a record the restore turns
+/// into a tab at the same index.
+///
+/// Code++ wrote two records for one file only while two tabs could hold
+/// it, so this meets a session saved before that was closed, or a
+/// hand-edited one.
+fn dedupe_session_paths(session: &mut Session) {
+    #[derive(Clone, Copy)]
+    enum Fate {
+        Keep,
+        Untitle,
+        /// Dropped; the old index of the first record for its file.
+        Drop(usize),
+    }
+    let fates: Vec<Fate> = {
+        let mut first_of: HashMap<&Path, usize> = HashMap::new();
+        session
+            .tabs
+            .iter()
+            .enumerate()
+            .map(|(i, t)| {
+                let Some(path) = t.path.as_deref() else {
+                    return Fate::Keep;
+                };
+                match first_of.entry(path) {
+                    std::collections::hash_map::Entry::Vacant(v) => {
+                        v.insert(i);
+                        Fate::Keep
+                    }
+                    std::collections::hash_map::Entry::Occupied(_) if t.backup.is_some() => {
+                        Fate::Untitle
+                    }
+                    std::collections::hash_map::Entry::Occupied(o) => Fate::Drop(*o.get()),
+                }
+            })
+            .collect()
+    };
+    // With nothing named twice the session is left as it was, an
+    // out-of-range front included: `normalize_session_pinning` and the
+    // backends' bounds checks deal with that as they always have.
+    if fates.iter().all(|f| matches!(f, Fate::Keep)) {
+        return;
+    }
+    let mut used: HashSet<u32> = session.tabs.iter().filter_map(|t| t.untitled_seq).collect();
+    let mut next_seq = 1u32;
+    let mut new_index: Vec<Option<usize>> = vec![None; fates.len()];
+    let (mut untitled, mut dropped) = (0usize, 0usize);
+    for (i, (mut t, fate)) in std::mem::take(&mut session.tabs)
+        .into_iter()
+        .zip(fates.iter().copied())
+        .enumerate()
+    {
+        match fate {
+            Fate::Keep => {}
+            Fate::Untitle => {
+                while !used.insert(next_seq) {
+                    next_seq += 1;
+                }
+                t.path = None;
+                t.untitled_seq = Some(next_seq);
+                untitled += 1;
+            }
+            Fate::Drop(_) => {
+                dropped += 1;
+                continue;
+            }
+        }
+        new_index[i] = Some(session.tabs.len());
+        session.tabs.push(t);
+    }
+    // One line for the whole session: a crafted one can name a file
+    // hundreds of thousands of times.
+    tracing::warn!(
+        kept_as_untitled = untitled,
+        dropped,
+        "session names a file more than once; each file goes to its first record"
+    );
+    session.active = session.active.and_then(|front| {
+        let stands_for = match fates.get(front)? {
+            Fate::Drop(first) => *first,
+            Fate::Keep | Fate::Untitle => front,
+        };
+        new_index.get(stands_for).copied().flatten()
+    });
+}
+
 /// Reject backup filenames that contain a path separator, parent-
 /// directory traversal, drive-letter prefixes, Windows reserved
 /// device names, or other shapes that would let a tampered
@@ -9812,6 +9999,7 @@ fn prune_unreferenced_backups(dir: &Path, keep: &HashSet<&str>) {
 ///   watchers"); no user paths.
 /// * `NoActivePath` — no payload, no path data.
 /// * `LoadInFlight` — no payload, no path data.
+/// * `AlreadyOpen` — no payload, no path data.
 /// * `Encoding(s)` — surfaces `codepp_core::encoding::encode`
 ///   errors. Describes byte-level encoding failures (e.g. "char
 ///   '⠿' not representable in windows-1252"); no paths.
@@ -9844,6 +10032,10 @@ pub enum ShellError {
     /// wrong. On Win32 a Ctrl+S in that moment reports "the file is still
     /// loading" rather than opening Save As.
     LoadInFlight,
+    /// Save As named a file another tab has open, or is loading. A write
+    /// would leave two tabs on one path, and every lookup by path acts on
+    /// the first of them. Notepad++'s Save As refuses the same file.
+    AlreadyOpen,
     Encoding(String),
     Io(String),
     Session(String),
@@ -9855,6 +10047,7 @@ impl std::fmt::Display for ShellError {
             ShellError::WatcherInit(s) => write!(f, "watcher init failed: {s}"),
             ShellError::NoActivePath => write!(f, "no active file path"),
             ShellError::LoadInFlight => write!(f, "the file is still loading"),
+            ShellError::AlreadyOpen => write!(f, "the file is already open in another tab"),
             ShellError::Encoding(s) => write!(f, "encoding error: {s}"),
             ShellError::Io(s) => write!(f, "I/O error: {s}"),
             ShellError::Session(s) => write!(f, "session error: {s}"),
@@ -10328,12 +10521,12 @@ impl<U: UiPlatform> HostServices for HostBridge<'_, U> {
         // (no path) report -1 from `NPPM_GETFULLPATHFROMBUFFERID`
         // and similarly are not reloadable here — there's nothing
         // to re-read off disk.
-        let Some(path) = self
+        let Some((tab_id, path)) = self
             .shell
             .tabs
             .iter()
             .find(|t| t.id as isize == id)
-            .and_then(|t| t.path.clone())
+            .and_then(|t| t.path.clone().map(|p| (t.id, p)))
         else {
             return false;
         };
@@ -10368,9 +10561,12 @@ impl<U: UiPlatform> HostServices for HostBridge<'_, U> {
         // buffer with unsaved edits — or crash-recovered content, which
         // reads clean but exists nowhere else — declines the load and
         // logs it; N++ would overwrite. The plugin can ask with the
-        // alert flag to have the user decide.
-        self.shell.request_reload(path, ReloadConsent::Unconfirmed);
-        true
+        // alert flag to have the user decide. Keyed by the buffer the
+        // plugin named rather than its path, so the reload cannot land on
+        // another tab holding the same file. FALSE only if the loader
+        // refused the request.
+        self.shell
+            .request_reload_tab(tab_id, ReloadConsent::Unconfirmed)
     }
 
     fn set_buffer_encoding(&mut self, id: isize, unimode: i32) -> bool {
@@ -17541,47 +17737,265 @@ mod tests {
         );
     }
 
+    /// A second open of a file whose first load is still in flight goes to
+    /// the tab loading it. The duplicate check used to look only at files
+    /// that had landed, so two quick opens, a plugin's `NPPM_DOOPEN` sent
+    /// twice or a session naming one file twice gave the file two tabs,
+    /// and every lookup by path then acted on the first: File → Reload on
+    /// the second discarded the first one's edits, and the deletion notice
+    /// left the second free to close without a prompt.
     #[test]
-    fn open_file_dedupe_known_limitation_for_in_flight_load() {
-        // Pinning a known limitation: opening the same file twice in
-        // quick succession *before the first load completes* can
-        // produce two tabs. The de-dupe branch in `open_file` keys
-        // on `tab.path`, which is `None` while the load is still
-        // in flight, so the second call falls through. The reuse-
-        // empty-active branch is also gated on
-        // `pending_load.is_none()`, which is false during the
-        // first request's flight, so the second call allocates a
-        // fresh tab.
-        //
-        // Fixing this cleanly needs a `pending_path: Option<PathBuf>`
-        // on `Tab` (or a Shell-side `HashMap<RequestId, PathBuf>`)
-        // so de-dupe can see the in-flight path before it lands —
-        // tracked for a follow-up commit. The user-visible report
-        // that motivated the de-dupe (Reload creating duplicates,
-        // see `confirm_reload`) doesn't go through this path: it
-        // already targets the matching tab directly.
+    fn a_second_open_of_a_file_still_loading_goes_to_its_tab() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("once.txt");
+        let other = dir.path().join("other.txt");
         std::fs::write(&path, "x\n").unwrap();
-
+        std::fs::write(&other, "y\n").unwrap();
         let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
         let mut shell = Shell::new(wake).unwrap();
         let mut ui = FakeUi::default();
-        shell.open_file(path.clone());
-        shell.open_file(path.clone());
-        drain_until(
-            &mut shell,
-            &mut ui,
-            |u, _| u.set_text_calls.len() >= 2,
-            Duration::from_secs(2),
-        );
-        // Today's behaviour: 2 tabs both holding the same path.
-        // When the limitation is fixed, this assertion flips to 1
-        // and the test renames; the test stays as the regression
-        // gate.
+
+        assert!(matches!(
+            shell.open_file(path.clone()),
+            OpenFileOutcome::Loading
+        ));
+        // Nothing lands before a drain, so the first load is in flight for
+        // everything below.
+        assert!(matches!(
+            shell.open_file(path.clone()),
+            OpenFileOutcome::AlreadyActive
+        ));
+        assert!(matches!(
+            shell.open_file(other.clone()),
+            OpenFileOutcome::Loading
+        ));
+        assert!(matches!(
+            shell.open_file(path.clone()),
+            OpenFileOutcome::SwitchedToExisting(0)
+        ));
         assert_eq!(shell.tabs.len(), 2);
-        assert_eq!(shell.tabs[0].path.as_deref(), Some(path.as_path()));
-        assert_eq!(shell.tabs[1].path.as_deref(), Some(path.as_path()));
+        assert_eq!(shell.active_tab, Some(0));
+
+        drain_until_loads_settle(&mut shell, &mut ui);
+        let paths: Vec<Option<PathBuf>> = shell.tabs.iter().map(|t| t.path.clone()).collect();
+        assert_eq!(paths, [Some(path), Some(other)]);
+    }
+
+    /// The record of a first load whose tab has closed names no tab, so the
+    /// file opens again into a tab of its own rather than switching to some
+    /// other tab, and the record goes when the closed tab's load comes back.
+    #[test]
+    fn a_file_whose_loading_tab_closed_opens_again() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("again.txt");
+        std::fs::write(&path, "x\n").unwrap();
+        let (mut shell, mut ui, _files, paths) = open_settled(&["other.txt"]);
+
+        assert!(matches!(
+            shell.open_file(path.clone()),
+            OpenFileOutcome::Loading
+        ));
+        assert!(shell.close_active_tab().is_some());
+        assert_eq!(shell.tabs.len(), 1, "precondition: the loading tab closed");
+        assert!(matches!(
+            shell.open_file(path.clone()),
+            OpenFileOutcome::Loading
+        ));
+        assert_eq!(shell.tabs.len(), 2);
+        assert_eq!(shell.active_tab, Some(1));
+
+        drain_until_loads_settle(&mut shell, &mut ui);
+        let held: Vec<Option<PathBuf>> = shell.tabs.iter().map(|t| t.path.clone()).collect();
+        assert_eq!(held, [Some(paths[0].clone()), Some(path)]);
+        assert!(
+            shell.first_loads.is_empty(),
+            "a first load's record outlived it"
+        );
+    }
+
+    /// A reload asked for by path while the file is still loading into a
+    /// tab for the first time is left to that load. Through the open it
+    /// switched to the loading tab, so a plugin's `NPPM_RELOADFILE` or the
+    /// reload prompt moved the tab in front.
+    #[test]
+    fn a_reload_of_a_file_still_loading_is_left_to_the_load() {
+        let dir = tempfile::tempdir().unwrap();
+        let late = dir.path().join("late.txt");
+        std::fs::write(&late, "late\n").unwrap();
+        let (mut shell, mut ui, _files, _paths) = open_settled(&["a.txt"]);
+        assert!(matches!(
+            shell.open_file(late.clone()),
+            OpenFileOutcome::Loading
+        ));
+        let loading = shell.tabs[1].pending_load;
+        assert!(loading.is_some(), "precondition: the file is still loading");
+        assert!(shell.switch_to_tab(0));
+        shell.bind_active_view(&mut ui);
+
+        shell.request_reload(late.clone(), ReloadConsent::Unconfirmed);
+        shell.confirm_reload(&mut ui, late);
+        assert_eq!(shell.active_tab, Some(0), "a reload moved the tab in front");
+        assert_eq!(shell.tabs.len(), 2);
+        assert_eq!(
+            shell.tabs[1].pending_load, loading,
+            "a second load was started"
+        );
+        drain_until_loads_settle(&mut shell, &mut ui);
+    }
+
+    /// Save As refuses a file another tab has open, or is still loading,
+    /// as Notepad++'s does: written, it left two tabs on one path. Nothing
+    /// is written then, and the tab keeps its file. Saving a tab to its own
+    /// path is not a second tab, and goes ahead. A plugin's
+    /// `NPPM_SAVECURRENTFILEAS` is refused the same way.
+    #[test]
+    fn save_as_refuses_a_file_another_tab_has() {
+        use codepp_plugin_host::dispatch::NPPM_SAVECURRENTFILEAS;
+        let dir = tempfile::tempdir().unwrap();
+        let a = dir.path().join("a.txt");
+        let b = dir.path().join("b.txt");
+        let c = dir.path().join("c.txt");
+        std::fs::write(&a, "A\n").unwrap();
+        std::fs::write(&b, "B\n").unwrap();
+        std::fs::write(&c, "C\n").unwrap();
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+        shell.open_file(a.clone());
+        shell.open_file(b.clone());
+        drain_until_loads_settle(&mut shell, &mut ui);
+        assert_eq!(shell.active_tab, Some(1));
+        shell.bind_active_view(&mut ui);
+        shell.take_notifications();
+
+        let r = shell.save_buffer_as(&mut ui, a.clone());
+        assert!(matches!(r, Err(ShellError::AlreadyOpen)), "{r:?}");
+        assert_eq!(std::fs::read_to_string(&a).unwrap(), "A\n");
+        assert_eq!(shell.tabs[1].path.as_deref(), Some(b.as_path()));
+        assert!(
+            shell.take_notifications().is_empty(),
+            "a refused Save As announces nothing"
+        );
+
+        // Its own path is its own.
+        shell.save_buffer_as(&mut ui, b.clone()).unwrap();
+        assert_eq!(shell.tabs[1].path.as_deref(), Some(b.as_path()));
+
+        // A file still loading into another tab is that tab's.
+        shell.open_file(c.clone());
+        assert!(shell.tabs[2].pending_load.is_some(), "precondition");
+        assert!(shell.switch_to_tab(1));
+        shell.bind_active_view(&mut ui);
+        let r = shell.save_buffer_as(&mut ui, c.clone());
+        assert!(matches!(r, Err(ShellError::AlreadyOpen)), "{r:?}");
+        assert_eq!(std::fs::read_to_string(&c).unwrap(), "C\n");
+
+        let wide: Vec<u16> = a
+            .to_string_lossy()
+            .encode_utf16()
+            .chain(std::iter::once(0))
+            .collect();
+        // SAFETY: wparam is the asCopy BOOL; lparam points at a
+        // NUL-terminated UTF-16 path that outlives the call.
+        let r = unsafe {
+            shell.dispatch_plugin_message(
+                &mut ui,
+                HostHandles::null(),
+                NPPM_SAVECURRENTFILEAS,
+                0,
+                wide.as_ptr() as isize,
+            )
+        };
+        assert_eq!(r, Some(0), "the plugin is told the save did not happen");
+        assert_eq!(std::fs::read_to_string(&a).unwrap(), "A\n");
+        assert_eq!(shell.tabs[1].path.as_deref(), Some(b.as_path()));
+    }
+
+    /// File → Reload and `NPPM_RELOADBUFFERID` reload the tab they name,
+    /// not the first tab holding its file. Two tabs on one file is a state
+    /// no route makes any more, so it is built by hand here: the reload by
+    /// id is what still lands on the right tab if one ever does. Keyed by
+    /// path, a Yes to discard the second tab's edits discarded the first's
+    /// and left the second as it was.
+    #[test]
+    fn a_reload_by_tab_reloads_that_tab_beside_another_on_its_file() {
+        use codepp_plugin_host::dispatch::NPPM_RELOADBUFFERID;
+        let dir = tempfile::tempdir().unwrap();
+        let a = dir.path().join("a.txt");
+        let b = dir.path().join("b.txt");
+        std::fs::write(&a, "v1\n").unwrap();
+        std::fs::write(&b, "B\n").unwrap();
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+        shell.open_file(a.clone());
+        shell.open_file(b.clone());
+        drain_until_loads_settle(&mut shell, &mut ui);
+        shell.tabs[1].path = Some(a.clone());
+        for i in [0, 1] {
+            assert!(shell.switch_to_tab(i) || shell.active_tab == Some(i));
+            shell.bind_active_view(&mut ui);
+        }
+        let (doc0, doc1) = (shell.tabs[0].scintilla_doc, shell.tabs[1].scintilla_doc);
+        let id1 = shell.tabs[1].id;
+        for (doc, text) in [
+            (doc0, "edits in the first\n"),
+            (doc1, "edits in the second\n"),
+        ] {
+            ui.replace_doc_text(doc, text);
+            ui.doc_dirty.insert(doc, true);
+        }
+        std::fs::write(&a, "v2\n").unwrap();
+
+        // The Yes to File → Reload's question on the second, in front.
+        assert_eq!(shell.active_tab, Some(1));
+        assert!(shell.request_reload_tab(id1, ReloadConsent::Confirmed));
+        assert!(shell.tabs[0].pending_load.is_none());
+        assert!(shell.tabs[1].pending_load.is_some());
+        drain_until_loads_settle(&mut shell, &mut ui);
+        assert!(
+            !ui.released_docs.contains(&doc0),
+            "the first tab's document was let go"
+        );
+        assert_eq!(ui.capture_text_from_doc(doc0), "edits in the first\n");
+        assert_eq!(
+            ui.get_buffer_text(),
+            "v2\n",
+            "the second tab shows the file"
+        );
+
+        // A plugin's silent reload of the second goes to the second, which
+        // keyed by path it did not: the first holds the file too. The
+        // install above set the second document's save point, which the
+        // fixture's per-document override does not model.
+        ui.doc_dirty.insert(doc1, false);
+        std::fs::write(&a, "v3\n").unwrap();
+        // SAFETY: id in wparam, BOOL in lparam; no pointers.
+        let r = unsafe {
+            shell.dispatch_plugin_message(
+                &mut ui,
+                HostHandles::null(),
+                NPPM_RELOADBUFFERID,
+                id1 as usize,
+                0,
+            )
+        };
+        assert_eq!(r, Some(1));
+        assert!(shell.tabs[0].pending_load.is_none());
+        assert!(shell.tabs[1].pending_load.is_some());
+        drain_until_loads_settle(&mut shell, &mut ui);
+        assert_eq!(ui.capture_text_from_doc(doc0), "edits in the first\n");
+        assert_eq!(
+            ui.get_buffer_text(),
+            "v3\n",
+            "the second tab shows the newer file"
+        );
+
+        // A tab gone by the time of the reload is not opened again.
+        let tabs = shell.tabs.len();
+        assert!(!shell.request_reload_tab(id1 + 1000, ReloadConsent::Confirmed));
+        assert_eq!(shell.tabs.len(), tabs);
+        assert!(shell.tabs.iter().all(|t| t.pending_load.is_none()));
     }
 
     #[test]
@@ -21381,9 +21795,29 @@ mod tests {
         assert_eq!(active, Some(3));
     }
 
-    /// A file opened twice while its first open still loads has two tabs
-    /// loading it. The session names it once, and a tab in front that is
-    /// loading it takes the front with that one record.
+    /// Start a second first load of `path` into a tab of its own and bring
+    /// it to the front, as an open of a file still loading did before such
+    /// an open went to the tab loading it. No route makes the state any
+    /// more; the tests that build it by hand pin the defences that still
+    /// hold if one ever does.
+    fn open_again_by_hand(shell: &mut Shell, path: &Path) {
+        let req = shell
+            .loader
+            .open(path.to_path_buf())
+            .expect("the loader takes the request");
+        shell.first_loads.insert(req, path.to_path_buf());
+        let id = shell.allocate_buffer_id();
+        shell.tabs.push(Tab {
+            id,
+            pending_load: Some(req),
+            ..Tab::default()
+        });
+        shell.active_tab = Some(shell.tabs.len() - 1);
+    }
+
+    /// Two tabs loading one file, which no route makes any more (see
+    /// `open_again_by_hand`): the session names it once, and a tab in front
+    /// that is loading it takes the front with that one record.
     #[test]
     fn a_session_saved_while_one_file_loads_twice_names_it_once() {
         let dir = tempfile::tempdir().unwrap();
@@ -21392,7 +21826,7 @@ mod tests {
         let backups = tempfile::tempdir().unwrap();
         let (mut shell, mut ui, _files, _paths) = open_settled(&["a.txt"]);
         shell.open_file(path.clone());
-        shell.open_file(path);
+        open_again_by_hand(&mut shell, &path);
         assert_eq!(shell.tabs.len(), 3, "precondition: two tabs load the file");
         assert_eq!(shell.active_tab, Some(2));
 
@@ -21671,8 +22105,9 @@ mod tests {
     }
 
     /// A file a titled tab already holds is not recorded again for a tab
-    /// still loading it, and that tab, in front, takes the front with the
-    /// titled tab's record.
+    /// still loading it, a state no route makes any more (see
+    /// `open_again_by_hand`), and that tab, in front, takes the front with
+    /// the titled tab's record.
     #[test]
     fn a_file_a_titled_tab_holds_is_not_recorded_again_for_a_tab_loading_it() {
         let dir = tempfile::tempdir().unwrap();
@@ -21683,7 +22118,7 @@ mod tests {
         let mut shell = Shell::new(wake).unwrap();
         let mut ui = FakeUi::default();
         shell.open_file(path.clone());
-        shell.open_file(path);
+        open_again_by_hand(&mut shell, &path);
         land_next_load(&mut shell, &mut ui);
         assert_eq!(
             (
@@ -23881,6 +24316,134 @@ mod tests {
                 format!("open {}", y.display()),
             ]
         );
+    }
+
+    /// A session naming one file twice leaves the file to the first record.
+    /// A later record holding a backup becomes an untitled buffer numbered
+    /// past every number the session uses, so its text survives; a later
+    /// one with none is dropped. The recorded front follows its record, or
+    /// the first record's for a dropped one. Restored as written, such a
+    /// session gave the file two tabs.
+    #[test]
+    fn a_session_naming_a_file_twice_leaves_it_to_the_first_record() {
+        let a = PathBuf::from("/s/a.txt");
+        let b = PathBuf::from("/s/b.txt");
+        let clean = |p: &Path| codepp_core::Tab {
+            path: Some(p.to_path_buf()),
+            ..codepp_core::Tab::default()
+        };
+        let shape = |s: &Session| -> Vec<(Option<PathBuf>, Option<u32>, Option<String>)> {
+            s.tabs
+                .iter()
+                .map(|t| (t.path.clone(), t.untitled_seq, t.backup.clone()))
+                .collect()
+        };
+        let records = vec![
+            clean(&a),
+            record(None, Some(1), "new 1@T"),
+            record(Some(&a), None, "a.txt@T"),
+            clean(&b),
+            record(Some(&a), None, "a.txt~2@T"),
+            clean(&a),
+            record(None, Some(3), "new 3@T"),
+        ];
+        let expected = vec![
+            (Some(a.clone()), None, None),
+            (None, Some(1), Some("new 1@T".to_string())),
+            (None, Some(2), Some("a.txt@T".to_string())),
+            (Some(b.clone()), None, None),
+            (None, Some(4), Some("a.txt~2@T".to_string())),
+            (None, Some(3), Some("new 3@T".to_string())),
+        ];
+        // The front on each old index, and where it ends up.
+        for (front, moved) in [
+            (0, Some(0)),
+            (1, Some(1)),
+            (2, Some(2)),
+            (3, Some(3)),
+            (4, Some(4)),
+            (5, Some(0)),
+            (6, Some(5)),
+            (7, None),
+        ] {
+            let mut session = Session::new();
+            session.tabs.clone_from(&records);
+            session.active = Some(front);
+            dedupe_session_paths(&mut session);
+            assert_eq!(shape(&session), expected, "front {front}");
+            assert_eq!(session.active, moved, "front {front}");
+        }
+
+        // A session with no file twice is left as it is.
+        let mut session = Session::new();
+        session.tabs = vec![clean(&a), clean(&b), record(None, None, "Untitled@T")];
+        session.active = Some(2);
+        let before = shape(&session);
+        dedupe_session_paths(&mut session);
+        assert_eq!(shape(&session), before);
+        assert_eq!(session.active, Some(2));
+    }
+
+    /// Restored, a session naming one file twice gives the file one tab,
+    /// and a later record's backup comes back as an untitled buffer
+    /// beside it. Without the dedupe, both cases also trip
+    /// `restore_dirty_with_text`'s assertion that no other tab holds or
+    /// loads its file: the first restores a backup over a file still
+    /// loading, the second one over a file restored already.
+    #[test]
+    fn a_restored_session_naming_a_file_twice_gives_it_one_tab() {
+        let dir = tempfile::tempdir().unwrap();
+        let backups = dir.path().join("backup");
+        std::fs::create_dir_all(&backups).unwrap();
+        let x = dir.path().join("x.txt");
+        std::fs::write(&x, "on disk\n").unwrap();
+        std::fs::write(backups.join("x.txt@2026-10-09_110000"), "first\n").unwrap();
+        std::fs::write(backups.join("x.txt~2@2026-10-09_110000"), "second\n").unwrap();
+        let clean = codepp_core::Tab {
+            path: Some(x.clone()),
+            ..codepp_core::Tab::default()
+        };
+        for (records, expected) in [
+            (
+                vec![
+                    clean.clone(),
+                    record(Some(&x), None, "x.txt@2026-10-09_110000"),
+                ],
+                vec![
+                    format!("open {}", x.display()),
+                    "untitled Some(1): \"first\\n\"".to_string(),
+                ],
+            ),
+            (
+                vec![
+                    record(Some(&x), None, "x.txt@2026-10-09_110000"),
+                    clean.clone(),
+                    record(Some(&x), None, "x.txt~2@2026-10-09_110000"),
+                ],
+                vec![
+                    format!("dirty {}: \"first\\n\"", x.display()),
+                    "untitled Some(1): \"second\\n\"".to_string(),
+                ],
+            ),
+        ] {
+            let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+            let mut shell = Shell::new(wake).unwrap();
+            let mut ui = FakeUi::default();
+            let mut session = Session::new();
+            session.tabs = records;
+            let entries = shell.restore_entries(session, Some(&backups), MAX_RESTORED_BACKUP_BYTES);
+            let described: Vec<String> = entries.iter().map(describe).collect();
+            assert_eq!(described, expected);
+            restore_tabs(&mut shell, &mut ui, entries);
+            drain_until_loads_settle(&mut shell, &mut ui);
+            let holding = shell
+                .tabs
+                .iter()
+                .filter(|t| t.path.as_deref() == Some(x.as_path()))
+                .count();
+            assert_eq!(holding, 1, "{expected:?}");
+            assert_eq!(shell.tabs.len(), 2, "{expected:?}");
+        }
     }
 
     /// One restore reads at most its budget of backup text in all. Past it,

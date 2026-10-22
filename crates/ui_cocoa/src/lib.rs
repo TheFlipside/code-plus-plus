@@ -3810,20 +3810,22 @@ pub(crate) fn action_close_tab() -> bool {
 /// work, which the reload discards — Win32's and `ui_gtk`'s question. It
 /// discarded the edits without asking until Phase 5.
 ///
-/// The path is read with the dirty state, before the question, and the
-/// reload goes to that path rather than to whichever tab is in front once
+/// The tab is read with the dirty state, before the question, and the
+/// reload goes to that tab rather than to whichever tab is in front once
 /// it is answered: the alert's run loop runs plugin code, a switch made
 /// there moves the front, and Reload is consent to discard the edits of
-/// the file the question was about. The drain after it runs on Cancel as
-/// well, to replay what the alert's freeze held back.
+/// the tab the question was about. By the tab's id rather than its path,
+/// so a tab closed meanwhile is not opened again, and the reload cannot
+/// land on another tab holding the same file. The drain after it runs on
+/// Cancel as well, to replay what the alert's freeze held back.
 pub(crate) fn action_reload() {
     let sample = with_state(|st| {
         st.shell
             .active()
-            .and_then(|t| t.path.clone().map(|path| (path, t.dirty)))
+            .and_then(|t| t.path.is_some().then_some((t.id, t.dirty)))
     })
     .flatten();
-    let Some((path, cached_dirty)) = sample else {
+    let Some((tab, cached_dirty)) = sample else {
         // Untitled, or no tab: nothing on disk to reload from.
         return;
     };
@@ -3844,7 +3846,7 @@ pub(crate) fn action_reload() {
         None
     };
     if let Some(consent) = consent {
-        with_state(|st| st.shell.request_reload(path, consent));
+        with_state(|st| st.shell.request_reload_tab(tab, consent));
     }
     drain_shell();
 }
@@ -5043,23 +5045,25 @@ mod source_invariants {
         );
     }
 
-    /// File → Reload reads the path before its question, asks under a
-    /// freeze when there are unsaved edits, and reloads that path: the
-    /// alert's run loop runs plugin code, which can move the front, and
-    /// Reload is consent to discard the edits of the file it was about.
+    /// File → Reload reads the tab before its question, asks under a
+    /// freeze when there are unsaved edits, and reloads that tab, by its
+    /// id: the alert's run loop runs plugin code, which can move the
+    /// front, and Reload is consent to discard the edits of the tab it was
+    /// about. Keyed by path, the reload went to the first tab holding the
+    /// file, and a tab closed meanwhile had its file opened again.
     #[test]
-    fn file_reload_asks_and_reloads_the_file_it_asked_about() {
+    fn file_reload_asks_and_reloads_the_tab_it_asked_about() {
         let src = production_src();
         let body = code_only(&fn_body(src, "action_reload"));
         let sampled = body
             .find("let sample =")
-            .expect("File → Reload no longer reads the path before asking");
+            .expect("File → Reload no longer reads the tab before asking");
         let asked = body
             .find("confirm_reload_discarding_edits()")
             .expect("File → Reload no longer asks before discarding edits");
         let reloaded = body
-            .find("request_reload(path, consent)")
-            .expect("File → Reload no longer reloads the path it read");
+            .find("request_reload_tab(tab, consent)")
+            .expect("File → Reload no longer reloads the tab it read");
         let drained = statement_at(
             &body,
             "drain_shell();",
@@ -5067,7 +5071,7 @@ mod source_invariants {
         );
         assert!(
             sampled < asked && asked < reloaded && reloaded < drained,
-            "read the path, ask, reload that path, then drain"
+            "read the tab, ask, reload that tab, then drain"
         );
         assert_eq!(
             body.matches(".active()").count(),
@@ -5088,16 +5092,20 @@ mod source_invariants {
                      elseifconfirm_reload_discarding_edits(){\
                      Some(codepp_shell::ReloadConsent::Confirmed)}else{None};\
                      ifletSome(consent)=consent{\
-                     with_state(|st|st.shell.request_reload(path,consent));}"
+                     with_state(|st|st.shell.request_reload_tab(tab,consent));}"
                 )
                 && !body.contains("confirm_reload("),
             "File → Reload no longer reloads only on the answer to its question, or confirms \
              a reload nobody was asked about"
         );
         assert_eq!(
-            body.matches("request_reload(").count(),
+            body.matches("request_reload").count(),
             1,
-            "File → Reload requests a reload outside its answer"
+            "File → Reload requests a reload outside its answer, or by path"
+        );
+        assert!(
+            squashed.contains("t.path.is_some().then_some((t.id,t.dirty))"),
+            "File → Reload no longer reads the id of a tab with a file to reload"
         );
         let ask = code_only(&fn_body(src, "confirm_reload_discarding_edits"));
         let frozen = ask
@@ -5130,7 +5138,7 @@ mod source_invariants {
         assert!(
             reload.contains("shell.confirm_reload(&mut ui, path.clone());")
                 && arm.matches("confirm_reload(").count() == 1
-                && !arm.contains("request_reload(")
+                && !arm.contains("request_reload")
                 && !arm.contains(".active()"),
             "the reload prompt no longer passes its Yes, and only its Yes, to \
              `Shell::confirm_reload` for the file it named"
