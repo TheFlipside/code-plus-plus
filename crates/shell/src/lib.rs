@@ -12320,6 +12320,18 @@ mod tests {
         /// written against the global flag alone can look like it
         /// covers a guard while never exercising it.
         doc_dirty: std::collections::HashMap<isize, bool>,
+        /// Scintilla's reference count on each live document the fixture
+        /// knows, as the backends drive it: `SCI_CREATEDOCUMENT` hands
+        /// back a document at 1, the view's `SCI_SETDOCPOINTER` takes one
+        /// on the document it binds and drops its one on the document it
+        /// leaves, and `SCI_RELEASEDOCUMENT` drops one. See
+        /// [`FakeUi::assert_documents_accounted_for`] for what a test
+        /// checks with it.
+        doc_refs: std::collections::HashMap<isize, u32>,
+        /// Documents whose count reached zero. Scintilla deletes such a
+        /// document there and then, so any later use of its pointer is a
+        /// use-after-free; the fixture panics on one instead.
+        freed_docs: std::collections::HashSet<isize>,
         /// Recorded N++-ABI menu command ids dispatched through
         /// `dispatch_npp_menu_command` — one entry per call, in
         /// order. Lets `NPPM_MENUCOMMAND` tests assert the
@@ -12347,26 +12359,207 @@ mod tests {
         toolbar_buttons: Vec<i32>,
     }
 
+    /// The fixture's model of Scintilla's document reference counts.
+    ///
+    /// Without it a shell test could not see the state the use-after-free
+    /// fixed by the tab-switch change started from: a document released
+    /// while the view still shows it, held by the view alone, so that the
+    /// view's next move frees it (DESIGN.md §7.4). The fixture recorded
+    /// releases and freed nothing, so every pointer stayed usable for ever.
+    ///
+    /// Document 0 is the view's own startup document, which Code++ never
+    /// names, so it is not counted: the first bind frees it unseen.
+    impl FakeUi {
+        /// Panic if `doc` was freed, and start counting one the fixture
+        /// did not create. A test that writes a document pointer into a
+        /// `Tab` by hand gives that tab the one reference whoever created
+        /// the document would hold. Such a pointer must not be one
+        /// [`FakeUi::create_document`] will hand out later: if nothing
+        /// touches it first, the fixture creates it again at 1 and the
+        /// at-rest check sees two holders for one reference.
+        fn check_live(&mut self, doc: isize, what: &str) {
+            assert!(
+                !self.freed_docs.contains(&doc),
+                "{what} used document {doc} after it was freed"
+            );
+            self.doc_refs.entry(doc).or_insert(1);
+        }
+
+        /// `SCI_CREATEDOCUMENT`: a new document at a count of 1, the
+        /// caller's. Never a pointer the fixture has handed out or been
+        /// handed before, freed ones included, so a use of a freed pointer
+        /// cannot pass for a use of a new document.
+        fn create_document(&mut self) -> isize {
+            loop {
+                self.next_fake_doc += 1;
+                let doc = self.next_fake_doc;
+                if !self.doc_refs.contains_key(&doc) && !self.freed_docs.contains(&doc) {
+                    self.doc_refs.insert(doc, 1);
+                    return doc;
+                }
+            }
+        }
+
+        /// `SCI_RELEASEDOCUMENT`, and the release half of
+        /// `SCI_SETDOCPOINTER`: drop one reference, and delete the
+        /// document at zero.
+        fn drop_ref(&mut self, doc: isize, what: &str) {
+            self.check_live(doc, what);
+            let count = self
+                .doc_refs
+                .get_mut(&doc)
+                .expect("check_live counts the document");
+            *count -= 1;
+            if *count > 0 {
+                return;
+            }
+            // The view holds a reference on the document it shows, so its
+            // count cannot reach zero while shown unless something released
+            // a reference it did not own, leaving Scintilla's view on freed
+            // memory.
+            assert_ne!(
+                doc, self.current_doc,
+                "{what} freed document {doc}, which the view still shows"
+            );
+            self.doc_refs.remove(&doc);
+            self.doc_text.remove(&doc);
+            self.doc_dirty.remove(&doc);
+            self.freed_docs.insert(doc);
+        }
+
+        /// `SCI_SETDOCPOINTER` onto `doc`, which must not be the document
+        /// already bound. Scintilla drops the view's reference on the
+        /// outgoing document before it takes one on the incoming
+        /// (`Editor::SetDocPointer`), so binding the bound document again
+        /// would free one held by the view alone and then bind the freed
+        /// pointer. Every backend skips that bind, and so does
+        /// [`UiPlatform::activate_tab`] here.
+        ///
+        /// The fixture works in the other order: it takes the incoming
+        /// reference and moves the view first, so that [`FakeUi::drop_ref`]
+        /// can refuse to free the document the view shows. With the two
+        /// documents distinct, which the assertion holds, the counts come
+        /// out as Scintilla's.
+        fn set_doc_pointer(&mut self, doc: isize) {
+            assert_ne!(doc, self.current_doc, "rebinding the bound document");
+            self.check_live(doc, "SCI_SETDOCPOINTER");
+            *self
+                .doc_refs
+                .get_mut(&doc)
+                .expect("check_live counts the document") += 1;
+            let outgoing = self.current_doc;
+            if outgoing != 0 {
+                self.doc_text.insert(outgoing, self.buffer_text.clone());
+            }
+            self.current_doc = doc;
+            self.buffer_text = self.doc_text.get(&doc).cloned().unwrap_or_default();
+            if outgoing != 0 {
+                self.drop_ref(outgoing, "SCI_SETDOCPOINTER");
+            }
+        }
+
+        /// What a helper that reads or writes `doc` costs in references:
+        /// nothing, but `doc` has to be live. A backend binds `doc`, does
+        /// its work and binds the outgoing document again, holding a
+        /// reference of its own on that one across the swap (the
+        /// [`UiPlatform::release_doc`] contract), so the counts come out
+        /// as they went in.
+        fn visit_doc(&mut self, doc: isize, what: &str) {
+            if doc != 0 {
+                self.check_live(doc, what);
+            }
+        }
+
+        /// Check, at a point where the shell has finished what it was
+        /// doing, that every document is where Scintilla would need it:
+        ///
+        /// - no tab holds a freed document;
+        /// - each live document has exactly one reference per holder, a
+        ///   tab or the view, so none has leaked and none is short of one
+        ///   its holders will release;
+        /// - the view shows a document a tab owns. One that no tab owns
+        ///   is held by the view alone: what is typed into it belongs to
+        ///   no buffer, and the view's next move frees it.
+        ///
+        /// A close is not at rest until the UI has released the closed
+        /// tab's document and bound the tab now in front, which
+        /// [`finish_close`] does.
+        fn assert_documents_accounted_for(&self, shell: &Shell) {
+            for tab in &shell.tabs {
+                assert!(
+                    !self.freed_docs.contains(&tab.scintilla_doc),
+                    "tab {} holds document {}, which was freed",
+                    tab.id,
+                    tab.scintilla_doc,
+                );
+            }
+            // In pointer order, so a state with several faults reports the
+            // same one every run.
+            let mut counted: Vec<(isize, u32)> =
+                self.doc_refs.iter().map(|(&d, &c)| (d, c)).collect();
+            counted.sort_unstable();
+            for (doc, count) in counted {
+                let tabs = shell.tabs.iter().filter(|t| t.scintilla_doc == doc).count();
+                let holders = tabs + usize::from(doc == self.current_doc);
+                assert_eq!(
+                    count as usize,
+                    holders,
+                    "document {doc} has {count} references and {holders} holders \
+                     ({tabs} tabs, the view {})",
+                    if doc == self.current_doc {
+                        "on it"
+                    } else {
+                        "elsewhere"
+                    },
+                );
+            }
+            if self.current_doc != 0 {
+                assert!(
+                    shell
+                        .tabs
+                        .iter()
+                        .any(|t| t.scintilla_doc == self.current_doc),
+                    "the view shows document {}, which no tab owns",
+                    self.current_doc,
+                );
+            }
+        }
+    }
+
+    /// The rest of a close, as every backend does it once
+    /// [`Shell::close_active_tab`] has returned: release the closed tab's
+    /// document, open `new 1` if no tab is left, and bind the tab now in
+    /// front. The close is then at rest, so every document must be
+    /// accounted for. Keep it in step with the backends' close paths:
+    /// `handle_close_active_tab_inner` in `ui_win32`, `close_active_tab` in
+    /// `ui_gtk` and `action_close_tab` in `ui_cocoa`.
+    fn finish_close(shell: &mut Shell, ui: &mut FakeUi, closed: &ClosedTab) {
+        ui.release_doc(closed.scintilla_doc);
+        if shell.active_tab.is_none() {
+            shell.new_untitled(ui);
+        }
+        shell.bind_active_view(ui);
+        ui.assert_documents_accounted_for(shell);
+    }
+
     impl UiPlatform for FakeUi {
         fn activate_tab(&mut self, idx: usize, scintilla_doc: isize) -> isize {
-            // If the tab already has a doc, keep it; otherwise hand
-            // out a fresh fake pointer (the real Win32 impl calls
-            // SCI_CREATEDOCUMENT here).
-            let bound = if scintilla_doc != 0 {
-                scintilla_doc
+            // If the tab already has a doc, keep it; otherwise create
+            // one, as every backend does with `SCI_CREATEDOCUMENT`. A
+            // created document starts empty, so the view shows nothing
+            // until the shell fills it.
+            let bound = if scintilla_doc == 0 {
+                self.create_document()
             } else {
-                self.next_fake_doc += 1;
-                self.next_fake_doc
+                scintilla_doc
             };
-            // Park the outgoing document's text and adopt the incoming
-            // one's — empty for a document that has just been created,
-            // which is what `SCI_CREATEDOCUMENT` hands back.
-            if self.current_doc != 0 {
-                self.doc_text
-                    .insert(self.current_doc, self.buffer_text.clone());
+            // Binding the bound document again is skipped, as on every
+            // backend: `SCI_SETDOCPOINTER` with it is not a no-op.
+            if bound == self.current_doc {
+                self.check_live(bound, "activate_tab");
+            } else {
+                self.set_doc_pointer(bound);
             }
-            self.current_doc = bound;
-            self.buffer_text = self.doc_text.get(&bound).cloned().unwrap_or_default();
             self.activate_tab_calls.push((idx, scintilla_doc, bound));
             bound
         }
@@ -12665,6 +12858,7 @@ mod tests {
             core::ptr::null_mut()
         }
         fn capture_text_from_doc(&mut self, scintilla_doc: isize) -> String {
+            self.visit_doc(scintilla_doc, "capture_text_from_doc");
             if scintilla_doc == self.current_doc {
                 return self.buffer_text.clone();
             }
@@ -12679,12 +12873,14 @@ mod tests {
             if scintilla_doc == 0 {
                 return false;
             }
+            self.visit_doc(scintilla_doc, "is_doc_dirty");
             self.doc_dirty
                 .get(&scintilla_doc)
                 .copied()
                 .unwrap_or(self.dirty)
         }
         fn replace_doc_text(&mut self, doc: isize, text: &str) -> bool {
+            self.visit_doc(doc, "replace_doc_text");
             self.doc_text.insert(doc, text.to_string());
             if doc == self.current_doc {
                 self.buffer_text = text.to_string();
@@ -12696,16 +12892,20 @@ mod tests {
             true
         }
         fn release_doc(&mut self, doc: isize) {
-            // Record only. The fixture deliberately does not model the
-            // free — whether a real release frees now or at the next
-            // rebind depends on the binding state, which is exactly the
-            // refcount subtlety the trait docs pin on the backends.
             self.released_docs.push(doc);
+            // 0 is the "never materialised" sentinel, ignored by every
+            // backend. Any other document loses the tab's reference, and
+            // is freed now unless the view still shows it, in which case
+            // the view's next move frees it.
+            if doc != 0 {
+                self.drop_ref(doc, "release_doc");
+            }
         }
         fn convert_doc_eols(&mut self, doc: isize, eol: codepp_core::Eol) -> bool {
             if doc == 0 {
                 return false;
             }
+            self.visit_doc(doc, "convert_doc_eols");
             // Model the conversion on the per-document text so a test
             // can read the converted buffer back, the way the shell's
             // save path would — and model `SCI_CONVERTEOLS` leaving the
@@ -12765,14 +12965,135 @@ mod tests {
         let deadline = Instant::now() + timeout;
         let mut all_pending = Vec::new();
         while Instant::now() < deadline {
-            let p = shell.drain(ui);
-            all_pending.extend(p);
+            all_pending.extend(drain_checked(shell, ui));
             if predicate(ui, &all_pending) {
                 return all_pending;
             }
             std::thread::sleep(Duration::from_millis(20));
         }
         all_pending
+    }
+
+    /// One [`Shell::drain`], then the at-rest check. A drain is a point at
+    /// rest: whatever landed has been bound, released or left for the
+    /// activation, so every document must be accounted for after it
+    /// ([`FakeUi::assert_documents_accounted_for`]). Every test drains
+    /// through here or [`drain_until`]. A test that hands
+    /// [`Shell::apply_load_result`] a result it made itself does not go
+    /// through a drain, and is not checked.
+    fn drain_checked(shell: &mut Shell, ui: &mut FakeUi) -> Vec<PendingDialog> {
+        let pending = shell.drain(ui);
+        ui.assert_documents_accounted_for(shell);
+        pending
+    }
+
+    /// The fixture counts document references the way Scintilla does,
+    /// which every at-rest check depends on, so it is pinned on its own:
+    /// a created document is its creator's and, once bound, the view's
+    /// too; a release of a bound document leaves it to the view, whose
+    /// next move frees it; and a freed pointer is never handed out again.
+    #[test]
+    fn the_fixture_counts_document_references_as_scintilla_does() {
+        let mut ui = FakeUi::default();
+        let a = ui.activate_tab(0, 0);
+        assert_eq!(ui.doc_refs[&a], 2, "the creator's and the view's");
+        let b = ui.activate_tab(1, 0);
+        assert_eq!(ui.doc_refs[&a], 1, "the view moved off it");
+        assert_eq!(ui.doc_refs[&b], 2);
+
+        ui.release_doc(a);
+        assert!(
+            ui.freed_docs.contains(&a),
+            "an unbound document goes at once"
+        );
+        ui.release_doc(b);
+        assert_eq!(ui.doc_refs[&b], 1, "a bound one is left to the view");
+        assert!(!ui.freed_docs.contains(&b));
+
+        let c = ui.activate_tab(2, 0);
+        assert!(ui.freed_docs.contains(&b), "and goes when the view moves");
+        assert!(c != a && c != b, "a freed pointer is not handed out again");
+
+        // Rebinding the bound document, and a helper's visit, cost nothing.
+        ui.activate_tab(2, c);
+        assert!(!ui.is_doc_dirty(c));
+        assert_eq!(ui.doc_refs[&c], 2);
+    }
+
+    /// Any use of a freed document panics, as a use-after-free would.
+    #[test]
+    #[should_panic(expected = "after it was freed")]
+    fn the_fixture_refuses_a_freed_document() {
+        let mut ui = FakeUi::default();
+        let a = ui.activate_tab(0, 0);
+        ui.activate_tab(1, 0);
+        ui.release_doc(a);
+        ui.capture_text_from_doc(a);
+    }
+
+    /// A release the view's own reference did not leave room for: the
+    /// bound document released once by its tab and once more, which in
+    /// Scintilla frees it under the view.
+    #[test]
+    #[should_panic(expected = "which the view still shows")]
+    fn the_fixture_refuses_to_free_the_document_the_view_shows() {
+        let mut ui = FakeUi::default();
+        let a = ui.activate_tab(0, 0);
+        ui.release_doc(a);
+        ui.release_doc(a);
+    }
+
+    /// Binding the bound document again, which Scintilla would free
+    /// before binding it if the view held the last reference. The
+    /// fixture's `activate_tab` skips it, as every backend does, so only
+    /// a direct `SCI_SETDOCPOINTER` reaches the refusal.
+    #[test]
+    #[should_panic(expected = "rebinding the bound document")]
+    fn the_fixture_refuses_to_rebind_the_bound_document() {
+        let mut ui = FakeUi::default();
+        let a = ui.activate_tab(0, 0);
+        ui.set_doc_pointer(a);
+    }
+
+    /// The state the use-after-free the tab-switch change fixed started
+    /// from: a tab's document released while the view still shows it.
+    /// Nothing is freed yet, so only the at-rest check can see it.
+    #[test]
+    #[should_panic(expected = "which no tab owns")]
+    fn the_at_rest_check_refuses_a_view_on_a_document_no_tab_owns() {
+        let mut shell = shell_with_synthetic_tabs(1, Some(0));
+        let mut ui = FakeUi::default();
+        shell.bind_active_view(&mut ui);
+        let doc = shell.tabs[0].scintilla_doc;
+        shell.tabs[0].scintilla_doc = 0;
+        ui.release_doc(doc);
+        ui.assert_documents_accounted_for(&shell);
+    }
+
+    /// A document created for a tab that never recorded it is a leak.
+    #[test]
+    #[should_panic(expected = "has 1 references and 0 holders")]
+    fn the_at_rest_check_refuses_a_leaked_document() {
+        let mut shell = shell_with_synthetic_tabs(2, Some(0));
+        let mut ui = FakeUi::default();
+        shell.bind_active_view(&mut ui);
+        let _unrecorded = ui.activate_tab(1, 0);
+        ui.activate_tab(0, shell.tabs[0].scintilla_doc);
+        ui.assert_documents_accounted_for(&shell);
+    }
+
+    /// A tab left holding a document that was freed under it.
+    #[test]
+    #[should_panic(expected = "which was freed")]
+    fn the_at_rest_check_refuses_a_tab_holding_a_freed_document() {
+        let mut shell = shell_with_synthetic_tabs(2, Some(1));
+        let mut ui = FakeUi::default();
+        shell.active_tab = Some(0);
+        shell.bind_active_view(&mut ui);
+        shell.active_tab = Some(1);
+        shell.bind_active_view(&mut ui);
+        ui.release_doc(shell.tabs[0].scintilla_doc);
+        ui.assert_documents_accounted_for(&shell);
     }
 
     #[test]
@@ -13365,13 +13686,15 @@ mod tests {
         // detection + decode. After this pass the active tab
         // sees the saved encoding (Utf16LeBom) and the same text.
         // `close_active_tab` is synchronous (data-model only); no
-        // intermediate drain needed before the re-open. Capture
-        // the baseline `set_text_calls` count and wait for *one
+        // intermediate drain needed before the re-open. The UI's half
+        // of the close fills the `new 1` it opens, so capture the
+        // baseline `set_text_calls` count after it and wait for *one
         // more* to land — `>= 2` would be satisfied prematurely
         // if the first open's load happened to push more than
         // one chunk.
+        let closed = shell.close_active_tab().expect("a tab to close");
+        finish_close(&mut shell, &mut ui, &closed);
         let baseline = ui.set_text_calls.len();
-        shell.close_active_tab();
         shell.open_file(path.clone());
         drain_until(
             &mut shell,
@@ -13592,7 +13915,7 @@ mod tests {
         let deadline = Instant::now() + Duration::from_secs(2);
         while shell.tabs.iter().any(|t| t.pending_load.is_some()) {
             assert!(Instant::now() < deadline, "loads did not complete in time");
-            let _ = shell.drain(&mut ui);
+            let _ = drain_checked(&mut shell, &mut ui);
             std::thread::sleep(Duration::from_millis(20));
         }
         // The second open moved `active_tab` before the first load
@@ -13686,7 +14009,7 @@ mod tests {
         let deadline = Instant::now() + Duration::from_secs(2);
         while shell.tabs[0].pending_load.is_some() {
             assert!(Instant::now() < deadline, "reload did not complete in time");
-            let _ = shell.drain(&mut ui);
+            let _ = drain_checked(&mut shell, &mut ui);
             std::thread::sleep(Duration::from_millis(20));
         }
         assert_eq!(ui.get_buffer_text(), "on disk\n");
@@ -13733,7 +14056,7 @@ mod tests {
         let deadline = Instant::now() + Duration::from_secs(2);
         while shell.tabs[0].pending_load.is_some() {
             assert!(Instant::now() < deadline, "reload did not complete in time");
-            let _ = shell.drain(&mut ui);
+            let _ = drain_checked(&mut shell, &mut ui);
             std::thread::sleep(Duration::from_millis(20));
         }
         assert_eq!(
@@ -13752,7 +14075,7 @@ mod tests {
         let deadline = Instant::now() + Duration::from_secs(2);
         while shell.tabs[0].pending_load.is_some() {
             assert!(Instant::now() < deadline, "reload did not complete in time");
-            let _ = shell.drain(&mut ui);
+            let _ = drain_checked(&mut shell, &mut ui);
             std::thread::sleep(Duration::from_millis(20));
         }
         assert_eq!(ui.get_buffer_text(), "on disk\n");
@@ -13779,7 +14102,7 @@ mod tests {
         let deadline = Instant::now() + Duration::from_secs(2);
         while shell.tabs.iter().any(|t| t.pending_load.is_some()) {
             assert!(Instant::now() < deadline, "loads did not complete in time");
-            let _ = shell.drain(&mut ui);
+            let _ = drain_checked(&mut shell, &mut ui);
             std::thread::sleep(Duration::from_millis(20));
         }
         let bg_id = shell.tabs[0].id as isize;
@@ -13796,7 +14119,7 @@ mod tests {
         let deadline = Instant::now() + Duration::from_secs(2);
         while shell.tabs[0].pending_load.is_some() {
             assert!(Instant::now() < deadline, "reload did not complete in time");
-            let _ = shell.drain(&mut ui);
+            let _ = drain_checked(&mut shell, &mut ui);
             std::thread::sleep(Duration::from_millis(20));
         }
         assert_eq!(
@@ -13812,7 +14135,7 @@ mod tests {
         let deadline = Instant::now() + Duration::from_secs(2);
         while shell.tabs[0].pending_load.is_some() {
             assert!(Instant::now() < deadline, "reload did not complete in time");
-            let _ = shell.drain(&mut ui);
+            let _ = drain_checked(&mut shell, &mut ui);
             std::thread::sleep(Duration::from_millis(20));
         }
         assert_eq!(
@@ -13848,7 +14171,7 @@ mod tests {
         let deadline = Instant::now() + Duration::from_secs(2);
         while shell.tabs.iter().any(|t| t.pending_load.is_some()) {
             assert!(Instant::now() < deadline, "loads did not complete in time");
-            let _ = shell.drain(&mut ui);
+            let _ = drain_checked(&mut shell, &mut ui);
             std::thread::sleep(Duration::from_millis(20));
         }
         let bg_id = shell.tabs[0].id;
@@ -13867,7 +14190,7 @@ mod tests {
         let deadline = Instant::now() + Duration::from_secs(2);
         while shell.tabs[0].pending_load.is_some() {
             assert!(Instant::now() < deadline, "reload did not complete in time");
-            let _ = shell.drain(&mut ui);
+            let _ = drain_checked(&mut shell, &mut ui);
             std::thread::sleep(Duration::from_millis(20));
         }
         assert_eq!(
@@ -15596,6 +15919,7 @@ mod tests {
         assert_eq!(closed.closed_idx, 0);
         assert!(shell.tabs.is_empty());
         assert_eq!(shell.active_tab, None);
+        finish_close(&mut shell, &mut ui, &closed);
     }
 
     /// The UI releases the closed tab's document, so two tabs sharing
@@ -15686,6 +16010,7 @@ mod tests {
         // Right-neighbour took the closed slot's index.
         assert_eq!(shell.active_tab, Some(1));
         assert_eq!(shell.tabs[1].path.as_ref(), Some(&c));
+        finish_close(&mut shell, &mut ui, &closed);
     }
 
     #[test]
@@ -15718,6 +16043,7 @@ mod tests {
         assert_eq!(shell.tabs.len(), 1);
         assert_eq!(shell.active_tab, Some(0));
         assert_eq!(shell.tabs[0].path.as_ref(), Some(&a));
+        finish_close(&mut shell, &mut ui, &closed);
     }
 
     #[test]
@@ -15768,6 +16094,7 @@ mod tests {
             notifications[2],
             Notification::BufferActivated { buffer_id } if buffer_id == new_active_id
         ));
+        finish_close(&mut shell, &mut ui, &closed);
     }
 
     #[test]
@@ -15792,7 +16119,7 @@ mod tests {
         let _ = shell.take_notifications();
 
         let closed_id = shell.tabs[0].id as isize;
-        let _ = shell.close_active_tab().expect("close");
+        let closed = shell.close_active_tab().expect("close");
         let notifications = shell.take_notifications();
         assert_eq!(notifications.len(), 2);
         assert!(matches!(
@@ -15803,6 +16130,7 @@ mod tests {
             notifications[1],
             Notification::FileClosed { buffer_id } if buffer_id == closed_id
         ));
+        finish_close(&mut shell, &mut ui, &closed);
     }
 
     #[test]
@@ -17540,7 +17868,11 @@ mod tests {
         // Switch to the middle tab and Save All.
         shell.active_tab = Some(1);
         ui.buffer_text = "saved\n".to_string();
-        let _ = shell.save_all(&mut ui);
+        // Save All reports a panic in one tab's save as that tab's error,
+        // so an empty list is also what says the fixture found no freed
+        // document in the saves.
+        let errors = shell.save_all(&mut ui);
+        assert!(errors.is_empty(), "{errors:?}");
 
         // Active tab is preserved. The intermediate switches happen
         // but the final state is the user-visible one they started.
@@ -17588,7 +17920,8 @@ mod tests {
         shell.new_untitled(&mut ui); // seq 3
                                      // Close the first tab (seq 1).
         shell.active_tab = Some(0);
-        shell.close_active_tab();
+        let closed = shell.close_active_tab().expect("a tab to close");
+        finish_close(&mut shell, &mut ui, &closed);
         // The remaining tabs should be seqs 2 and 3.
         let remaining: Vec<Option<u32>> = shell.tabs.iter().map(|t| t.untitled_seq).collect();
         assert_eq!(remaining, vec![Some(2), Some(3)]);
@@ -17795,7 +18128,8 @@ mod tests {
             shell.open_file(path.clone()),
             OpenFileOutcome::Loading
         ));
-        assert!(shell.close_active_tab().is_some());
+        let closed = shell.close_active_tab().expect("a tab to close");
+        finish_close(&mut shell, &mut ui, &closed);
         assert_eq!(shell.tabs.len(), 1, "precondition: the loading tab closed");
         assert!(matches!(
             shell.open_file(path.clone()),
@@ -18122,7 +18456,7 @@ mod tests {
         shell.open_file_replacing_scratch(second.clone(), true);
         let deadline = Instant::now() + Duration::from_secs(10);
         while Instant::now() < deadline {
-            shell.drain(&mut ui);
+            drain_checked(&mut shell, &mut ui);
             if shell.tabs.len() == 2 && shell.tabs.iter().all(|t| t.pending_load.is_none()) {
                 break;
             }
@@ -18245,7 +18579,7 @@ mod tests {
         shell.open_file(other.clone());
         let deadline = Instant::now() + Duration::from_secs(10);
         while Instant::now() < deadline {
-            shell.drain(&mut ui);
+            drain_checked(&mut shell, &mut ui);
             if shell.tabs.len() == 2 && shell.tabs.iter().all(|t| t.pending_load.is_none()) {
                 break;
             }
@@ -18265,7 +18599,7 @@ mod tests {
         shell.request_reload(recovered.clone(), ReloadConsent::Unconfirmed);
         let deadline = Instant::now() + Duration::from_secs(10);
         while Instant::now() < deadline {
-            shell.drain(&mut ui);
+            drain_checked(&mut shell, &mut ui);
             if shell.tabs.iter().all(|t| t.pending_load.is_none()) {
                 break;
             }
@@ -18449,7 +18783,7 @@ mod tests {
         shell.open_file_replacing_scratch(second.clone(), true);
         let deadline = Instant::now() + Duration::from_secs(10);
         while Instant::now() < deadline {
-            shell.drain(&mut ui);
+            drain_checked(&mut shell, &mut ui);
             if shell.tabs.len() == 2 && shell.tabs.iter().all(|t| t.pending_load.is_none()) {
                 break;
             }
@@ -18467,7 +18801,7 @@ mod tests {
         shell.request_reload(first.clone(), ReloadConsent::Unconfirmed);
         let deadline = Instant::now() + Duration::from_secs(10);
         while Instant::now() < deadline {
-            shell.drain(&mut ui);
+            drain_checked(&mut shell, &mut ui);
             if shell.tabs.iter().all(|t| t.pending_load.is_none()) {
                 break;
             }
@@ -18518,7 +18852,7 @@ mod tests {
         shell.open_file_replacing_scratch(second.clone(), true);
         let deadline = Instant::now() + Duration::from_secs(10);
         while Instant::now() < deadline {
-            shell.drain(&mut ui);
+            drain_checked(&mut shell, &mut ui);
             if shell.tabs.len() == 2 && shell.tabs.iter().all(|t| t.pending_load.is_none()) {
                 break;
             }
@@ -18543,7 +18877,7 @@ mod tests {
         shell.confirm_reload(&mut ui, first.clone());
         let deadline = Instant::now() + Duration::from_secs(10);
         while Instant::now() < deadline {
-            shell.drain(&mut ui);
+            drain_checked(&mut shell, &mut ui);
             if shell.tabs.iter().all(|t| t.pending_load.is_none()) {
                 break;
             }
@@ -18605,7 +18939,7 @@ mod tests {
         let deadline = Instant::now() + Duration::from_secs(10);
         while shell.tabs.iter().any(|t| t.pending_load.is_some()) {
             assert!(Instant::now() < deadline, "loads did not complete in time");
-            let _ = shell.drain(&mut ui);
+            let _ = drain_checked(&mut shell, &mut ui);
             std::thread::sleep(Duration::from_millis(20));
         }
         assert_eq!(shell.active_tab, Some(1));
@@ -18620,7 +18954,7 @@ mod tests {
         let deadline = Instant::now() + Duration::from_secs(10);
         while shell.tabs[0].pending_load.is_some() {
             assert!(Instant::now() < deadline, "reload did not complete in time");
-            let _ = shell.drain(&mut ui);
+            let _ = drain_checked(&mut shell, &mut ui);
             std::thread::sleep(Duration::from_millis(20));
         }
         assert!(
@@ -18668,7 +19002,7 @@ mod tests {
         shell.open_file_replacing_scratch(second.clone(), true);
         let deadline = Instant::now() + Duration::from_secs(10);
         while Instant::now() < deadline {
-            shell.drain(&mut ui);
+            drain_checked(&mut shell, &mut ui);
             if shell.tabs.len() == 2 && shell.tabs.iter().all(|t| t.pending_load.is_none()) {
                 break;
             }
@@ -18712,7 +19046,7 @@ mod tests {
         let deadline = Instant::now() + Duration::from_secs(10);
         while shell.tabs[0].pending_load.is_some() {
             assert!(Instant::now() < deadline, "reload did not complete in time");
-            let _ = shell.drain(&mut ui);
+            let _ = drain_checked(&mut shell, &mut ui);
             std::thread::sleep(Duration::from_millis(20));
         }
         assert_eq!(
@@ -18775,7 +19109,7 @@ mod tests {
         let deadline = Instant::now() + Duration::from_secs(2);
         while shell.tabs[0].pending_load.is_some() {
             assert!(Instant::now() < deadline);
-            let _ = shell.drain(&mut ui);
+            let _ = drain_checked(&mut shell, &mut ui);
             std::thread::sleep(Duration::from_millis(20));
         }
     }
@@ -18801,7 +19135,7 @@ mod tests {
         let deadline = Instant::now() + Duration::from_secs(10);
         while shell.tabs.iter().any(|t| t.pending_load.is_some()) {
             assert!(Instant::now() < deadline, "loads did not complete in time");
-            let _ = shell.drain(&mut ui);
+            let _ = drain_checked(&mut shell, &mut ui);
             std::thread::sleep(Duration::from_millis(20));
         }
         let id0 = shell.tabs[0].id;
@@ -18825,7 +19159,7 @@ mod tests {
         let deadline = Instant::now() + Duration::from_secs(10);
         while shell.tabs[0].pending_load.is_some() {
             assert!(Instant::now() < deadline, "reload did not complete in time");
-            let _ = shell.drain(&mut ui);
+            let _ = drain_checked(&mut shell, &mut ui);
             std::thread::sleep(Duration::from_millis(20));
         }
         assert_eq!(ui.get_buffer_text(), "FIRST v2\n");
@@ -18881,7 +19215,7 @@ mod tests {
         let deadline = Instant::now() + Duration::from_secs(2);
         while shell.tabs[0].pending_load.is_some() {
             assert!(Instant::now() < deadline, "reload did not complete in time");
-            let _ = shell.drain(&mut ui);
+            let _ = drain_checked(&mut shell, &mut ui);
             std::thread::sleep(Duration::from_millis(20));
         }
         assert_eq!(
@@ -18896,7 +19230,7 @@ mod tests {
         let deadline = Instant::now() + Duration::from_secs(2);
         while shell.tabs[0].pending_load.is_some() {
             assert!(Instant::now() < deadline, "reload did not complete in time");
-            let _ = shell.drain(&mut ui);
+            let _ = drain_checked(&mut shell, &mut ui);
             std::thread::sleep(Duration::from_millis(20));
         }
         assert_eq!(ui.get_buffer_text(), "changed on disk\n");
@@ -18918,7 +19252,7 @@ mod tests {
         let deadline = Instant::now() + Duration::from_secs(10);
         while shell.tabs[0].pending_load.is_some() {
             assert!(Instant::now() < deadline, "load did not complete in time");
-            let _ = shell.drain(&mut ui);
+            let _ = drain_checked(&mut shell, &mut ui);
             std::thread::sleep(Duration::from_millis(20));
         }
         // The buffer holds an edit, so the Yes is consent.
@@ -18929,7 +19263,7 @@ mod tests {
         let deadline = Instant::now() + Duration::from_secs(10);
         while shell.tabs[0].pending_load.is_some() {
             assert!(Instant::now() < deadline, "reload did not fail in time");
-            let _ = shell.drain(&mut ui);
+            let _ = drain_checked(&mut shell, &mut ui);
             std::thread::sleep(Duration::from_millis(20));
         }
         assert!(
@@ -18982,7 +19316,7 @@ mod tests {
         let deadline = Instant::now() + Duration::from_secs(10);
         while shell.tabs.iter().any(|t| t.pending_load.is_some()) {
             assert!(Instant::now() < deadline, "loads did not complete in time");
-            let _ = shell.drain(&mut ui);
+            let _ = drain_checked(&mut shell, &mut ui);
             std::thread::sleep(Duration::from_millis(20));
         }
         // Give A a document, then put B back in front.
@@ -19004,7 +19338,7 @@ mod tests {
         let deadline = Instant::now() + Duration::from_secs(10);
         while shell.tabs[0].pending_load.is_some() {
             assert!(Instant::now() < deadline, "reload did not complete in time");
-            let _ = shell.drain(&mut ui);
+            let _ = drain_checked(&mut shell, &mut ui);
             std::thread::sleep(Duration::from_millis(20));
         }
         assert!(
@@ -19076,7 +19410,7 @@ mod tests {
         // state.
         let deadline = Instant::now() + Duration::from_secs(10);
         while Instant::now() < deadline {
-            shell.drain(&mut ui);
+            drain_checked(&mut shell, &mut ui);
             if shell.tabs.len() == 2 && shell.tabs.iter().all(|t| t.pending_load.is_none()) {
                 break;
             }
@@ -19458,10 +19792,12 @@ mod tests {
 
         // Closing one frees a slot; the next New succeeds again.
         shell.active_tab = Some(0);
-        shell.close_active_tab();
+        let closed = shell.close_active_tab().expect("a tab to close");
+        finish_close(&mut shell, &mut ui, &closed);
         assert_eq!(shell.tabs.len(), MAX_OPEN_TABS - 1);
         shell.new_untitled(&mut ui);
         assert_eq!(shell.tabs.len(), MAX_OPEN_TABS);
+        ui.assert_documents_accounted_for(&shell);
     }
 
     #[test]
@@ -19903,7 +20239,7 @@ mod tests {
     fn drain_until_loads_settle(shell: &mut Shell, ui: &mut FakeUi) {
         let deadline = Instant::now() + Duration::from_secs(10);
         loop {
-            shell.drain(ui);
+            drain_checked(shell, ui);
             if shell.tabs.iter().all(|t| t.pending_load.is_none()) {
                 return;
             }
@@ -22082,11 +22418,12 @@ mod tests {
             1,
             "precondition: one load in flight"
         );
-        assert!(shell.close_active_tab().is_some());
+        let closed = shell.close_active_tab().expect("a tab to close");
+        finish_close(&mut shell, &mut ui, &closed);
         let deadline = Instant::now() + Duration::from_secs(10);
         while !shell.first_loads.is_empty() {
             assert!(Instant::now() < deadline, "the stale result never came");
-            shell.drain(&mut ui);
+            drain_checked(&mut shell, &mut ui);
             std::thread::sleep(Duration::from_millis(20));
         }
     }
@@ -22102,6 +22439,8 @@ mod tests {
             std::thread::sleep(Duration::from_millis(10));
         };
         shell.apply_load_result(ui, result, &mut Vec::new());
+        // A landing is at rest once applied, as a drain is.
+        ui.assert_documents_accounted_for(shell);
     }
 
     /// A file a titled tab already holds is not recorded again for a tab
@@ -25258,7 +25597,7 @@ mod tests {
             false, // not pinned
         );
 
-        let pending = shell.drain(&mut ui);
+        let pending = drain_checked(&mut shell, &mut ui);
         let confirm_reload_count = pending
             .iter()
             .filter(|d| matches!(d, PendingDialog::ConfirmReload(p) if p == &path))
@@ -25392,7 +25731,7 @@ mod tests {
             None,  // no persisted lang override — defaults to L_TEXT
             false, // not pinned
         );
-        let pending = shell.drain(&mut ui);
+        let pending = drain_checked(&mut shell, &mut ui);
         let n = pending
             .iter()
             .filter(|d| matches!(d, PendingDialog::Error { .. }))
@@ -25425,7 +25764,7 @@ mod tests {
             false, // not pinned
         );
 
-        let pending = shell.drain(&mut ui);
+        let pending = drain_checked(&mut shell, &mut ui);
         let confirm_reload_count = pending
             .iter()
             .filter(|d| matches!(d, PendingDialog::ConfirmReload(_)))
@@ -25859,7 +26198,7 @@ mod tests {
         let deadline = std::time::Instant::now() + Duration::from_secs(10);
         let mut done = false;
         while !done && std::time::Instant::now() < deadline {
-            let _ = shell.drain(&mut ui);
+            let _ = drain_checked(&mut shell, &mut ui);
             for ev in shell.take_fif_events() {
                 if matches!(ev, FifEvent::Done { .. }) {
                     done = true;
@@ -26744,7 +27083,7 @@ mod tests {
                 started.elapsed() < Duration::from_secs(10),
                 "the loads did not settle"
             );
-            dialogs.extend(shell.drain(&mut ui));
+            dialogs.extend(drain_checked(&mut shell, &mut ui));
             std::thread::sleep(Duration::from_millis(20));
         }
         assert!(
