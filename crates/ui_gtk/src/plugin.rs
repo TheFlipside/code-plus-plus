@@ -1663,9 +1663,13 @@ enum LoadScope {
     RestoredPanels,
 }
 
-/// Lazy-load every pending plugin. See [`load_plugins_where`].
+/// Lazy-load every pending plugin (see [`load_plugins_where`]), then
+/// rebuild the Plugins menu, which may be up: a menu opened while the
+/// pass ran says it is loading until the pass ends
+/// ([`on_plugins_menu_shown`]). The startup restore does the same.
 fn load_pending_plugins() {
     load_plugins_where(LoadScope::All);
+    refresh_plugins_menu();
 }
 
 /// Load the plugins whose dock panels the restored session had open,
@@ -1681,8 +1685,11 @@ fn load_pending_plugins() {
 /// supply even when nothing loads, so no group is left on screen empty.
 pub(crate) fn restore_panel_plugins() {
     load_plugins_where(LoadScope::RestoredPanels);
+    // A plugin of this pass may run a loop of its own, inside which the
+    // Plugins menu can be opened; it said it was loading.
+    refresh_plugins_menu();
     // The load may have absorbed shortcut defaults; make their chords
-    // live, as `ensure_loaded_and_rebuild` does after a lazy load.
+    // live, as `queue_menu_load` does after a lazy load.
     rebuild_plugin_accel_group();
 }
 
@@ -1726,6 +1733,10 @@ pub(crate) fn restore_panel_plugins() {
 /// every plugin loaded by then — the one that was inside `setInfo`
 /// included — and the layout it saves still has those panels open.
 fn load_plugins_where(scope: LoadScope) {
+    // Counted for the length of the pass, so the Plugins menu says a load
+    // is under way while one runs, and starts no pass of its own inside
+    // it — see `on_plugins_menu_shown`.
+    let _pass = LoadPass::begin();
     // Holding the borrow across the whole load used to make this
     // unnecessary: a wake landing mid-load found the state borrowed and
     // deferred itself. Dropping the borrow between steps gives that up,
@@ -2152,25 +2163,146 @@ fn park_unsupplied_plugin_panels() {
     }
 }
 
-/// Lazy-load every pending plugin and rebuild the Plugins menu from the
-/// loaded set. Called from the Plugins menu's `show` handler.
-pub(crate) fn ensure_loaded_and_rebuild(menu: &gtk::Menu) {
-    // Load pending plugins, installing the GTK routing callback into each
-    // (the SDK handshake) so their `SendMessage` reaches us.
-    load_pending_plugins();
-    rebuild_menu(menu);
-    // The load may have absorbed new plugin-shortcut defaults; rebuild
-    // the accel group so their chords become live this session (Win32
-    // does the equivalent `refresh_plugin_accels` after its populate).
-    rebuild_plugin_accel_group();
-    // NPPN_READY fired inside `load_pending_plugins`, outside any
-    // borrow; anything a plugin queued back is drained on the next
-    // wake. Not when a quit stopped the load: the plugins it loaded may
-    // never have heard READY, and the quit, not a queued notification,
-    // should be what they hear next.
-    if !crate::quit_requested() {
-        crate::drain_shell();
+thread_local! {
+    /// Set from the moment the Plugins menu's `show` hands its lazy load
+    /// to an idle until that idle has finished — see
+    /// [`on_plugins_menu_shown`].
+    static MENU_LOAD_QUEUED: Cell<bool> = const { Cell::new(false) };
+    /// How many load passes are running ([`load_plugins_where`]): more
+    /// than one when a plugin's own main loop lets a second lazy trigger
+    /// start a pass inside the first, which then loads nothing.
+    static LOAD_PASSES: Cell<u32> = const { Cell::new(0) };
+    /// The Plugins menu, once it has been shown, so a lazy pass that ends
+    /// while it is up can rebuild it ([`refresh_plugins_menu`]).
+    static PLUGINS_MENU: RefCell<Option<gtk::Menu>> = const { RefCell::new(None) };
+}
+
+/// A running load pass, counted in `LOAD_PASSES` until it drops, a panic
+/// included.
+struct LoadPass;
+
+impl LoadPass {
+    fn begin() -> Self {
+        LOAD_PASSES.with(|passes| passes.set(passes.get() + 1));
+        Self
     }
+}
+
+impl Drop for LoadPass {
+    fn drop(&mut self) {
+        LOAD_PASSES.with(|passes| passes.set(passes.get().saturating_sub(1)));
+    }
+}
+
+/// Whether a load pass is running on this thread.
+fn load_pass_running() -> bool {
+    LOAD_PASSES.with(Cell::get) > 0
+}
+
+/// The Plugins menu's `show` handler: rebuild the menu from the plugins
+/// loaded so far and, when one still waits to load, hand the load to a
+/// high-priority idle ([`queue_menu_load`]). **No plugin code runs here.**
+///
+/// The load used to run here, and a plugin whose `setInfo` runs a main
+/// loop of its own then ran that loop inside `show`, while GTK was still
+/// popping the menu up. The menu holds the pointer and keyboard grab, so
+/// the window manager's close never reached the plugin's own window, and
+/// Escape, which does reach the menu, dismissed it from inside the loop
+/// with its own `show` still on the stack: GTK 3.24's
+/// `gtk_widget_mnemonic_activate` carried on once `show` returned, and the
+/// process died in libgtk-3. From the idle, the popup is finished and
+/// nothing of GTK's is below the plugin, so dismissing the menu from
+/// inside its loop is an ordinary dismissal, and the load carries on once
+/// the loop ends.
+///
+/// `Priority::HIGH` runs ahead of pending input and of GTK's redraw, the
+/// choice `crate::deliver_after_signal` makes for the same kind of reason,
+/// so the load starts before the user can act on the menu. A load that
+/// runs no loop of its own should therefore have rebuilt the menu before
+/// it is first drawn; that follows from the priorities and was not
+/// observed. While a plugin's `setInfo` keeps the load going, the menu
+/// says so rather than showing the plugins as not installed.
+///
+/// One load at a time. While a pass runs — this menu's, a plugin chord's
+/// or the startup restore's, its plugin running a loop — the menu queues
+/// none of its own: the host's load latch would let it load nothing. Every
+/// pass rebuilds the menu when it ends ([`load_pending_plugins`],
+/// [`restore_panel_plugins`]), so a menu opened meanwhile does not stay on
+/// "Loading plugins…". An accelerator rebuild asked for under a chord
+/// waits for it ([`rebuild_plugin_accel_group`]).
+pub(crate) fn on_plugins_menu_shown(menu: &gtk::Menu) {
+    PLUGINS_MENU.with(|shown| *shown.borrow_mut() = Some(menu.clone()));
+    rebuild_menu(menu, menu_shows_loading());
+    if plugin_load_to_start() && !MENU_LOAD_QUEUED.with(Cell::get) {
+        queue_menu_load();
+    }
+}
+
+/// Whether a load pass started now would load a plugin: one waits to be
+/// loaded, no load is in progress, and no quit is asked for, which would
+/// stop a pass before it loads anything ([`load_plugins_where`]). A load
+/// in progress answers `false`, and so does a host latch a load left set
+/// without committing, which no later pass gets past
+/// (`Shell::has_plugin_load_to_start`).
+///
+/// A state already borrowed also answers `false`: no load is queued, and
+/// the next opening asks again. Nothing holds a `with_state` borrow across
+/// a main-loop iteration, so `show` should never meet one.
+fn plugin_load_to_start() -> bool {
+    !crate::quit_requested()
+        && with_state(|st| st.shell.has_plugin_load_to_start()).unwrap_or(false)
+}
+
+/// Whether the Plugins menu should say a load is under way: one is
+/// running, or one can start, which `show` then queues. Not once a quit
+/// is asked for, which stops a running pass at its next step.
+fn menu_shows_loading() -> bool {
+    !crate::quit_requested() && (load_pass_running() || plugin_load_to_start())
+}
+
+/// Rebuild the Plugins menu, if it has been shown, from the plugins loaded
+/// now. Runs no plugin code.
+fn refresh_plugins_menu() {
+    let menu = PLUGINS_MENU.with(|shown| shown.borrow().clone());
+    if let Some(menu) = menu {
+        rebuild_menu(&menu, menu_shows_loading());
+    }
+}
+
+/// Run the Plugins menu's lazy load from a high-priority idle — see
+/// [`on_plugins_menu_shown`] for why not from `show`. The pass rebuilds
+/// the menu, up or not, when it ends ([`load_pending_plugins`]); the idle
+/// then rebuilds the plugin accelerators from the loaded set.
+///
+/// The flag stays up until the idle has finished, so a reopened menu
+/// queues no second pass meanwhile, and comes down at the end even when
+/// something below panics: left up, no later opening of the menu would
+/// load a plugin.
+fn queue_menu_load() {
+    MENU_LOAD_QUEUED.with(|queued| queued.set(true));
+    glib::idle_add_local_full(glib::Priority::HIGH, || {
+        crate::at_callback_boundary("plugin:menu_load:idle", glib::ControlFlow::Break, || {
+            let _queued = crate::FlagGuard::set(&MENU_LOAD_QUEUED);
+            // Load pending plugins, installing the GTK routing callback
+            // into each (the SDK handshake) so their `SendMessage` reaches
+            // us.
+            load_pending_plugins();
+            // The load may have absorbed new plugin-shortcut defaults;
+            // rebuild the accel group so their chords become live this
+            // session (Win32 does the equivalent `refresh_plugin_accels`
+            // after its populate).
+            rebuild_plugin_accel_group();
+            // NPPN_READY fired inside `load_pending_plugins`, outside any
+            // borrow; anything a plugin queued back is drained here. Not
+            // when a quit stopped the load: the plugins it loaded may never
+            // have heard READY, and the quit, not a queued notification,
+            // should be what they hear next.
+            if !crate::quit_requested() {
+                crate::drain_shell();
+            }
+            glib::ControlFlow::Break
+        })
+    });
 }
 
 /// A menu item's display chord: Ctrl, Alt, Shift, and the Win32 virtual
@@ -2371,12 +2503,14 @@ fn on_plugin_item_activated(cmd_id: i32) {
 
 /// Rebuild the Plugins menu: one submenu per loaded plugin (its items
 /// taken from the plugin's `FuncItem` array, null `p_func` → separator),
-/// or a greyed "No plugins loaded" placeholder when empty. Then, always,
-/// a separator and the admin entries "Plugin Manager…" + "Open Plugin
-/// Folder" — matching Win32's layout (per-plugin entries, separator,
-/// admin items), so the manager is reachable even to re-enable plugins
-/// the user previously disabled.
-fn rebuild_menu(menu: &gtk::Menu) {
+/// then, while `loading`, a greyed "Loading plugins…" row, or, when
+/// nothing is loaded and nothing is loading, a greyed "No plugins
+/// loaded" placeholder. Then, always, a separator and the admin entries
+/// "Plugin Manager…" + "Open Plugin Folder" — matching Win32's layout
+/// (per-plugin entries, separator, admin items), so the manager is
+/// reachable even to re-enable plugins the user previously disabled.
+/// Runs no plugin code.
+fn rebuild_menu(menu: &gtk::Menu, loading: bool) {
     for child in menu.children() {
         menu.remove(&child);
     }
@@ -2404,26 +2538,30 @@ fn rebuild_menu(menu: &gtk::Menu) {
     })
     .unwrap_or_default();
 
-    if entries.is_empty() {
+    if entries.is_empty() && !loading {
         let placeholder = gtk::MenuItem::with_label("No plugins loaded");
         placeholder.set_sensitive(false);
         menu.append(&placeholder);
-    } else {
-        for (name, items) in entries {
-            let submenu = gtk::Menu::new();
-            for (label, cmd_id, is_command, chord) in items {
-                if is_command {
-                    submenu.append(&build_command_item(&label, cmd_id, chord));
-                } else {
-                    submenu.append(&gtk::SeparatorMenuItem::new());
-                }
+    }
+    for (name, items) in entries {
+        let submenu = gtk::Menu::new();
+        for (label, cmd_id, is_command, chord) in items {
+            if is_command {
+                submenu.append(&build_command_item(&label, cmd_id, chord));
+            } else {
+                submenu.append(&gtk::SeparatorMenuItem::new());
             }
-            // Sanitize the plugin-supplied display name — a plugin is an
-            // untrusted source of chrome text, same policy as filenames.
-            let top = gtk::MenuItem::with_label(&codepp_shell::sanitize_str_for_display(&name));
-            top.set_submenu(Some(&submenu));
-            menu.append(&top);
         }
+        // Sanitize the plugin-supplied display name — a plugin is an
+        // untrusted source of chrome text, same policy as filenames.
+        let top = gtk::MenuItem::with_label(&codepp_shell::sanitize_str_for_display(&name));
+        top.set_submenu(Some(&submenu));
+        menu.append(&top);
+    }
+    if loading {
+        let pending = gtk::MenuItem::with_label("Loading plugins…");
+        pending.set_sensitive(false);
+        menu.append(&pending);
     }
 
     menu.append(&gtk::SeparatorMenuItem::new());
@@ -2766,7 +2904,19 @@ pub(crate) fn register_startup_shortcuts() {
 /// Each closure fires by *chord*, not by a captured identity: it
 /// re-resolves through [`fire_plugin_chord`] at press time, so the
 /// live cache is the authority even between rebuilds.
+///
+/// **Never while a chord is being handled.** The handler runs inside the
+/// group's own closure, and a plugin command it runs may run a main loop
+/// of its own, in which anything that asks for a rebuild runs — the
+/// Plugins menu's lazy load among them. Removing the group there would
+/// take the group whose closure, and whose activation in GTK, are still
+/// on the stack. Asked for then, the rebuild waits until the last chord
+/// being handled has returned ([`ChordFiring`]).
 pub(crate) fn rebuild_plugin_accel_group() {
+    if CHORDS_FIRING.with(Cell::get) > 0 {
+        ACCEL_REBUILD_DEFERRED.with(|deferred| deferred.set(true));
+        return;
+    }
     let Some(window) = with_state(|st| st.window.clone()) else {
         return;
     };
@@ -2808,6 +2958,48 @@ pub(crate) fn rebuild_plugin_accel_group() {
     PLUGIN_ACCEL_GROUP.with(|g| *g.borrow_mut() = Some(accel));
 }
 
+thread_local! {
+    /// How many plugin chords are being handled ([`fire_plugin_chord`]):
+    /// more than one when a command a chord ran is inside a main loop of
+    /// its own and another chord is pressed there.
+    static CHORDS_FIRING: Cell<u32> = const { Cell::new(0) };
+    /// An accelerator rebuild asked for while a chord was being handled,
+    /// run once the last one has returned.
+    static ACCEL_REBUILD_DEFERRED: Cell<bool> = const { Cell::new(false) };
+}
+
+/// A chord being handled, counted in `CHORDS_FIRING` until it drops, a
+/// panic included. The last one to drop hands a rebuild asked for
+/// meanwhile to an idle, which runs once GTK has finished the activation
+/// the chord's closure was called from.
+struct ChordFiring;
+
+impl ChordFiring {
+    fn begin() -> Self {
+        CHORDS_FIRING.with(|firing| firing.set(firing.get() + 1));
+        Self
+    }
+}
+
+impl Drop for ChordFiring {
+    fn drop(&mut self) {
+        let left = CHORDS_FIRING.with(|firing| {
+            let left = firing.get().saturating_sub(1);
+            firing.set(left);
+            left
+        });
+        if left == 0 && ACCEL_REBUILD_DEFERRED.with(|deferred| deferred.replace(false)) {
+            glib::idle_add_local_once(|| {
+                crate::at_callback_boundary(
+                    "plugin:accel_rebuild:idle",
+                    (),
+                    rebuild_plugin_accel_group,
+                );
+            });
+        }
+    }
+}
+
 /// Fire the plugin shortcut bound to a pressed chord. Resolves the
 /// chord against the **live** cache ([`codepp_shell::Shell::match_plugin_chord`]),
 /// lazy-loads every pending plugin (the hotkey is the §6.4 load
@@ -2826,6 +3018,9 @@ pub(crate) fn rebuild_plugin_accel_group() {
 /// counts as handled too: a plugin's chord handed to the editor would run
 /// whatever Scintilla binds it to (Ctrl+Shift+L deletes a line).
 fn fire_plugin_chord(ctrl: bool, alt: bool, shift: bool, key: u8) -> bool {
+    // Counted until this returns, so no rebuild tears the accel group
+    // down under its own closure — see `rebuild_plugin_accel_group`.
+    let _firing = ChordFiring::begin();
     // Live-cache check first: a chord removed via NPPM (or otherwise
     // no longer registrable) must not fire, even though its closure
     // is still installed until the next rebuild.
@@ -2839,13 +3034,10 @@ fn fire_plugin_chord(ctrl: bool, alt: bool, shift: bool, key: u8) -> bool {
     // than the one just pressed (`load_pending_plugins` loads every
     // pending plugin). Rebuild the accel group so those become live
     // this session, matching Win32's `refresh_plugin_accels` after
-    // `handle_plugin_shortcut_shim`'s load. Deferred to a glib idle
-    // rather than done inline: this runs *inside* the accel group's
-    // own closure, and tearing the group down under itself is the
-    // kind of reentrancy this backend has been bitten by before.
-    glib::idle_add_local_once(|| {
-        crate::at_callback_boundary("plugin:accel_rebuild:idle", (), rebuild_plugin_accel_group);
-    });
+    // `handle_plugin_shortcut_shim`'s load. This runs *inside* the
+    // accel group's own closure, so the rebuild waits until the chord
+    // has been handled (`ChordFiring`).
+    rebuild_plugin_accel_group();
     let cmd_id = with_state(|st| st.shell.resolve_plugin_command(&module_key, internal_id))
         .flatten()
         .map(|(cmd_id, _)| cmd_id);
@@ -3073,6 +3265,415 @@ mod shortcut_tests {
     }
 }
 
+/// The Plugins menu's rows, that its lazy load runs from the main loop
+/// rather than inside the call that asks for it, that it starts none while
+/// a pass runs, and that an accelerator rebuild waits for a chord being
+/// handled. Driven with no UI state installed, so no plugin is discovered
+/// and a pass loads nothing; what it shows is when a pass runs and what it
+/// leaves.
+#[cfg(test)]
+pub(crate) mod menu_load_tests {
+    use super::{
+        load_pending_plugins, on_plugins_menu_shown, queue_menu_load, rebuild_menu,
+        rebuild_plugin_accel_group, Cell, ChordFiring, LoadPass, ACCEL_REBUILD_DEFERRED,
+        CHORDS_FIRING, LOAD_PASSES, MENU_LOAD_QUEUED,
+    };
+    use gtk::prelude::*;
+
+    /// Each row's label without its mnemonic marker, `—` for a
+    /// separator, and whether the row can be picked.
+    fn rows(menu: &gtk::Menu) -> Vec<(String, bool)> {
+        menu.children()
+            .iter()
+            .map(|child| {
+                let label = if child.is::<gtk::SeparatorMenuItem>() {
+                    "—".to_string()
+                } else {
+                    child
+                        .clone()
+                        .downcast::<gtk::MenuItem>()
+                        .ok()
+                        .and_then(|item| item.label())
+                        .map(|label| label.replace('_', ""))
+                        .unwrap_or_default()
+                };
+                (label, child.is_sensitive())
+            })
+            .collect()
+    }
+
+    fn row_labels(menu: &gtk::Menu) -> Vec<String> {
+        rows(menu).into_iter().map(|(label, _)| label).collect()
+    }
+
+    pub(crate) fn the_plugins_menu_loads_from_the_main_loop() {
+        gtk::init().expect("gtk::init failed — no display?");
+        let menu = gtk::Menu::new();
+
+        rebuild_menu(&menu, false);
+        assert_eq!(
+            rows(&menu),
+            [
+                ("No plugins loaded".to_string(), false),
+                ("—".to_string(), true),
+                ("Plugin Manager…".to_string(), true),
+                ("Open Plugin Folder".to_string(), true),
+            ],
+            "with nothing loaded and nothing loading"
+        );
+        rebuild_menu(&menu, true);
+        assert_eq!(
+            rows(&menu),
+            [
+                ("Loading plugins…".to_string(), false),
+                ("—".to_string(), true),
+                ("Plugin Manager…".to_string(), true),
+                ("Open Plugin Folder".to_string(), true),
+            ],
+            "while a load is under way, the menu says so rather than that none \
+             is installed"
+        );
+
+        the_load_is_queued_and_run_by_the_main_loop(&menu);
+        no_load_is_queued_while_a_pass_runs(&menu);
+        an_accel_rebuild_waits_for_the_last_chord();
+    }
+
+    /// The real `show` handler with nothing to load, then a queued load
+    /// left to the main loop.
+    fn the_load_is_queued_and_run_by_the_main_loop(menu: &gtk::Menu) {
+        // The real `show` handler, with nothing to load: the menu says so,
+        // and is recorded for a pass to rebuild.
+        on_plugins_menu_shown(menu);
+        assert_eq!(row_labels(menu)[0], "No plugins loaded");
+        assert!(
+            !MENU_LOAD_QUEUED.with(Cell::get),
+            "a load was queued with none to start"
+        );
+
+        // Queued, not run: when the call returns, the menu is as it was
+        // and the flag that keeps a reopened menu from queuing a second
+        // pass is up.
+        rebuild_menu(menu, true);
+        queue_menu_load();
+        assert!(
+            MENU_LOAD_QUEUED.with(Cell::get),
+            "the load was not queued, or ran inside the call that queued it"
+        );
+        assert_eq!(
+            row_labels(menu)[0],
+            "Loading plugins…",
+            "the load ran inside the call that queued it"
+        );
+        // Once the main loop has run it, the pass has rebuilt the menu
+        // `show` recorded, with nothing left to load, and the flag is down.
+        let mut spins = 0;
+        while MENU_LOAD_QUEUED.with(Cell::get) {
+            gtk::main_iteration_do(false);
+            spins += 1;
+            assert!(spins < 10_000, "the queued load never ran");
+        }
+        assert_eq!(
+            row_labels(menu)[0],
+            "No plugins loaded",
+            "the pass did not rebuild the menu when it ended"
+        );
+        assert_eq!(LOAD_PASSES.with(Cell::get), 0, "the pass is still counted");
+    }
+
+    fn no_load_is_queued_while_a_pass_runs(menu: &gtk::Menu) {
+        // While a pass runs — a chord's, its plugin running a loop of its
+        // own — `show` says a load is under way and queues none of its
+        // own. A pass that ends inside it rebuilds the menu, still loading;
+        // once the outer one ends too, the menu stops saying so.
+        let outer = LoadPass::begin();
+        on_plugins_menu_shown(menu);
+        assert_eq!(
+            row_labels(menu)[0],
+            "Loading plugins…",
+            "a menu opened during a pass says nothing is loading"
+        );
+        assert!(
+            !MENU_LOAD_QUEUED.with(Cell::get),
+            "the menu queued a load while a pass ran"
+        );
+        load_pending_plugins();
+        assert_eq!(
+            row_labels(menu)[0],
+            "Loading plugins…",
+            "a pass that ended inside another said nothing is loading"
+        );
+        drop(outer);
+        load_pending_plugins();
+        assert_eq!(
+            row_labels(menu)[0],
+            "No plugins loaded",
+            "the menu stayed on loading once every pass had ended"
+        );
+    }
+
+    fn an_accel_rebuild_waits_for_the_last_chord() {
+        // An accelerator rebuild asked for while chords are being handled
+        // waits for the last of them, and then runs from an idle.
+        let outer = ChordFiring::begin();
+        let inner = ChordFiring::begin();
+        rebuild_plugin_accel_group();
+        assert!(
+            ACCEL_REBUILD_DEFERRED.with(Cell::get),
+            "the accel group was rebuilt under a chord's own closure"
+        );
+        drop(inner);
+        assert!(
+            ACCEL_REBUILD_DEFERRED.with(Cell::get),
+            "the rebuild ran while a chord was still being handled"
+        );
+        drop(outer);
+        assert!(
+            !ACCEL_REBUILD_DEFERRED.with(Cell::get),
+            "the last chord to return did not take the rebuild"
+        );
+        assert_eq!(CHORDS_FIRING.with(Cell::get), 0);
+        let mut spins = 0;
+        while gtk::events_pending() {
+            gtk::main_iteration_do(false);
+            spins += 1;
+            assert!(spins < 10_000, "the main loop never went idle");
+        }
+        assert!(
+            !ACCEL_REBUILD_DEFERRED.with(Cell::get),
+            "the idle's rebuild was deferred again with no chord being handled"
+        );
+    }
+}
+
+/// The Plugins menu's `show` runs no plugin code, which is what keeps a
+/// plugin's own main loop in `setInfo` from running while GTK pops the
+/// menu up — see [`super::on_plugins_menu_shown`]. The crash itself needs
+/// a plugin running a loop under a real grab, which no test here has, so
+/// the shape that rules it out is pinned in the source.
+#[cfg(test)]
+mod menu_load_guards {
+    use crate::source_scan::{
+        block_after, code_only, depth_one_position, fn_body, occurs_at_depth_one,
+        strip_test_modules,
+    };
+
+    /// What runs a plugin's code: a load pass or any step of one, a
+    /// delivery to `beNotified`, a dialog pump that drains, a plugin
+    /// command or chord.
+    const RUNS_PLUGIN_CODE: &[&str] = &[
+        "load_pending_plugins",
+        "load_plugins_where",
+        "execute_load",
+        "load_blocking",
+        "next_plugin_to_load",
+        "next_restored_panel_plugin_to_load",
+        "commit_plugin_load",
+        "after_plugin_loads",
+        "fire_plugin_chord",
+        "drain_shell",
+        "deliver_notifications",
+        "deliver_queued",
+        "deliver_sync",
+        "present_deferred_dialogs",
+        "notify_shutdown",
+        "on_plugin_command",
+        "on_plugin_item_activated",
+        ".run()",
+    ];
+
+    fn plugin_src() -> String {
+        strip_test_modules(&code_only(include_str!("plugin.rs")))
+    }
+
+    #[test]
+    fn the_plugins_menu_show_runs_no_plugin_code() {
+        let src = plugin_src();
+        for name in [
+            "on_plugins_menu_shown",
+            "plugin_load_to_start",
+            "menu_shows_loading",
+            "refresh_plugins_menu",
+            "rebuild_menu",
+        ] {
+            let body = fn_body(&src, name);
+            for call in RUNS_PLUGIN_CODE {
+                assert!(
+                    !body.contains(call),
+                    "`{name}` runs from the Plugins menu's `show` and calls `{call}`: a \
+                     plugin's own main loop would then run while GTK pops the menu up, \
+                     and dismissing the menu inside it crashes GTK"
+                );
+            }
+        }
+        let menu = strip_test_modules(&code_only(include_str!("menu.rs")));
+        let build = fn_body(&menu, "build_plugins_menu");
+        assert!(
+            build.contains("crate::plugin::on_plugins_menu_shown(menu);"),
+            "the Plugins menu's `show` no longer goes through `on_plugins_menu_shown`"
+        );
+        for call in RUNS_PLUGIN_CODE {
+            assert!(
+                !build.contains(call),
+                "the Plugins menu's `show` handler calls `{call}` itself"
+            );
+        }
+    }
+
+    #[test]
+    fn the_menu_load_runs_from_one_high_priority_idle() {
+        let src = plugin_src();
+        // A load reaches the menu only from the idle; the other load
+        // trigger is a plugin's chord, which GTK runs from a key press,
+        // not from a popup's `show`.
+        assert_eq!(
+            src.matches("load_pending_plugins();").count(),
+            2,
+            "`load_pending_plugins` is called from somewhere other than the menu's idle \
+             and a plugin's chord"
+        );
+        assert!(fn_body(&src, "fire_plugin_chord").contains("load_pending_plugins();"));
+        // And a pass runs only from the lazy entry point and the startup
+        // restore, each counted while it runs.
+        assert_eq!(
+            src.matches("load_plugins_where(").count(),
+            3,
+            "`load_plugins_where` is defined or called somewhere new"
+        );
+        let lazy = fn_body(&src, "load_pending_plugins");
+        let passed = depth_one_position(&lazy, "load_plugins_where(LoadScope::All);")
+            .expect("the lazy entry point no longer runs a pass");
+        let refreshed = depth_one_position(&lazy, "refresh_plugins_menu();").expect(
+            "a lazy pass must rebuild the Plugins menu when it ends, whichever trigger \
+             started it, or a menu opened meanwhile stays on \"Loading plugins…\"",
+        );
+        assert!(
+            passed < refreshed,
+            "the menu must be rebuilt after the pass"
+        );
+        let restore = fn_body(&src, "restore_panel_plugins");
+        let restored =
+            depth_one_position(&restore, "load_plugins_where(LoadScope::RestoredPanels);")
+                .expect("the startup restore no longer runs a pass");
+        let rebuilt = depth_one_position(&restore, "refresh_plugins_menu();").expect(
+            "the startup restore must rebuild the Plugins menu after its pass, which a \
+             plugin's own loop may have let the user open",
+        );
+        assert!(
+            restored < rebuilt,
+            "the menu must be rebuilt after the pass"
+        );
+        assert!(
+            fn_body(&src, "load_plugins_where")
+                .trim_start_matches('{')
+                .trim_start()
+                .starts_with("let _pass = LoadPass::begin();"),
+            "the pass must be counted from its first statement until it ends: \
+             `let _ =` would drop the count at once"
+        );
+
+        let shown = fn_body(&src, "on_plugins_menu_shown");
+        let recorded = depth_one_position(
+            &shown,
+            "PLUGINS_MENU.with(|shown| *shown.borrow_mut() = Some(menu.clone()));",
+        )
+        .expect("`show` must record the menu for a pass to rebuild");
+        let check = "if plugin_load_to_start() && !MENU_LOAD_QUEUED.with(Cell::get) {";
+        let queued = depth_one_position(&shown, check).expect(
+            "`show` must queue a load only when one can start and none is queued: while a \
+             pass runs, or with one queued, it must not queue another",
+        );
+        assert!(
+            recorded < queued
+                && occurs_at_depth_one(&block_after(&shown, check), "queue_menu_load();"),
+            "`show` must record the menu, then queue a load only under its check"
+        );
+        assert_eq!(src.matches("queue_menu_load(").count(), 2);
+        assert!(
+            fn_body(&src, "plugin_load_to_start").contains("has_plugin_load_to_start()"),
+            "whether a load can start must come from the host, which knows its latch"
+        );
+
+        let queue = fn_body(&src, "queue_menu_load");
+        let raised =
+            depth_one_position(&queue, "MENU_LOAD_QUEUED.with(|queued| queued.set(true));")
+                .expect("the flag is not raised as the load is queued");
+        let added = depth_one_position(&queue, "glib::idle_add_local_full(glib::Priority::HIGH,")
+            .expect("the load must run from a high-priority idle, ahead of input and redraw");
+        assert!(
+            raised < added,
+            "the flag must be up before the idle is added"
+        );
+        assert!(
+            queue.contains("glib::ControlFlow::Break, ||"),
+            "the boundary's fallback must be `Break`: `Continue` would rerun the load at \
+             high priority for good after a panic"
+        );
+        let idle = block_after(&queue, "glib::ControlFlow::Break, || {");
+        let lowered = depth_one_position(
+            &idle,
+            "let _queued = crate::FlagGuard::set(&MENU_LOAD_QUEUED);",
+        )
+        .expect("the flag must come down when the idle ends, a panic included");
+        let loaded =
+            depth_one_position(&idle, "load_pending_plugins();").expect("the idle no longer loads");
+        assert!(
+            lowered < loaded,
+            "the idle must take its flag guard, then load"
+        );
+    }
+
+    /// The accel group is never torn down under a chord's own closure:
+    /// a chord is counted while it is handled, a rebuild asked for then
+    /// waits, and the chord asks through the same function rather than
+    /// rebuilding by some other route.
+    #[test]
+    fn no_accel_rebuild_runs_while_a_chord_is_handled() {
+        let src = plugin_src();
+        let chord = fn_body(&src, "fire_plugin_chord");
+        assert!(
+            chord
+                .trim_start_matches('{')
+                .trim_start()
+                .starts_with("let _firing = ChordFiring::begin();"),
+            "a chord must be counted from its first statement until it returns: \
+             `let _ =` would drop the count at once"
+        );
+        assert!(
+            !chord.contains("idle_add") && !chord.contains("remove_accel_group"),
+            "a chord must ask for its rebuild through `rebuild_plugin_accel_group`"
+        );
+        let rebuild = fn_body(&src, "rebuild_plugin_accel_group");
+        let check = "if CHORDS_FIRING.with(Cell::get) > 0 {";
+        assert!(
+            rebuild
+                .trim_start_matches('{')
+                .trim_start()
+                .starts_with(check)
+                && occurs_at_depth_one(&block_after(&rebuild, check), "return;"),
+            "a rebuild asked for while a chord is handled must wait, before it touches \
+             the group"
+        );
+        assert_eq!(
+            src.matches("remove_accel_group(").count(),
+            1,
+            "the plugin accel group is removed somewhere other than its rebuild"
+        );
+        // The last chord to return runs what waited, from an idle, so the
+        // rebuild happens once GTK has finished the activation.
+        let dropped = block_after(&src, "impl Drop for ChordFiring {");
+        let last =
+            "if left == 0 && ACCEL_REBUILD_DEFERRED.with(|deferred| deferred.replace(false)) {";
+        let replay = block_after(&dropped, last);
+        assert!(
+            occurs_at_depth_one(&block_after(&dropped, "fn drop(&mut self) {"), last)
+                && replay.contains("glib::idle_add_local_once(")
+                && replay.contains("rebuild_plugin_accel_group"),
+            "the last chord to return must hand a rebuild that waited to an idle"
+        );
+    }
+}
+
 /// Where the plugin paths stop for a quit, pinned in the source because
 /// each matters only while a plugin runs a main loop of its own inside
 /// which the window is closed — which needs a real plugin and a real
@@ -3251,7 +3852,7 @@ mod quit_request_guards {
     #[test]
     fn no_notification_slips_past_a_quit() {
         let src = plugin_src();
-        let menu = fn_body(&src, "ensure_loaded_and_rebuild");
+        let menu = fn_body(&src, "queue_menu_load");
         let gate = "if !crate::quit_requested() {";
         assert!(
             occurs_at_depth_one(&block_after(&menu, gate), "crate::drain_shell();")

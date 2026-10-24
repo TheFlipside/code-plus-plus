@@ -243,17 +243,19 @@ pub fn connect() {
     build_help_menu(&bar, &accel, &window);
 }
 
-/// Build the Plugins menu. Contents are lazy: the `show` handler loads
-/// every pending plugin on first open (deferred load — DESIGN.md §6.4)
-/// and rebuilds the per-plugin submenus from the loaded set. A greyed
-/// placeholder shows until then (and whenever no plugin is installed).
+/// Build the Plugins menu. Contents are lazy: the first open loads every
+/// pending plugin (deferred load — DESIGN.md §6.4) and the menu is rebuilt
+/// from the loaded set on every open. The `show` handler itself runs no
+/// plugin code; it hands the load to an idle — see
+/// [`crate::plugin::on_plugins_menu_shown`]. A greyed placeholder shows
+/// until the first open (and whenever no plugin is installed).
 fn build_plugins_menu(bar: &gtk::MenuBar) {
     let Some(menu) = submenu_at(bar, 7, "Plugins") else {
         return;
     };
     menu.connect_show(|menu| {
         crate::at_callback_boundary("menu:plugins:show", (), || {
-            crate::plugin::ensure_loaded_and_rebuild(menu);
+            crate::plugin::on_plugins_menu_shown(menu);
         });
     });
     let placeholder = gtk::MenuItem::with_label("No plugins loaded");

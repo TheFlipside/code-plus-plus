@@ -3458,6 +3458,16 @@ impl Shell {
         self.plugins.next_pending_load()
     }
 
+    /// Whether a load pass started now would load a plugin: one still
+    /// waits to be loaded and no load is in progress — see
+    /// `PluginHost::has_load_to_start`. Unlike
+    /// [`Self::next_plugin_to_load`] it takes no latch, so a backend can
+    /// ask it to decide whether a lazy trigger has a pass to start.
+    #[must_use]
+    pub fn has_plugin_load_to_start(&self) -> bool {
+        self.plugins.has_load_to_start()
+    }
+
     /// [`Self::next_plugin_to_load`], restricted to the plugins that
     /// own a dock panel the restored session had open.
     ///

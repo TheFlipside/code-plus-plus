@@ -59,6 +59,12 @@ impl PluginInfo {
         matches!(self.state, PluginState::Loaded(_))
     }
 
+    /// Whether a load pass would still load this plugin: it is neither
+    /// loaded, failed nor disabled.
+    fn awaits_load(&self) -> bool {
+        !self.is_loaded() && self.failed_reason().is_none() && !self.disabled
+    }
+
     /// True if a load attempt failed. `reason` carries the diagnostic.
     #[must_use]
     pub fn failed_reason(&self) -> Option<&str> {
@@ -704,12 +710,24 @@ impl PluginHost {
             return None;
         }
         let idx = self.plugins.iter().position(|p| {
-            if p.is_loaded() || p.failed_reason().is_some() || p.disabled {
-                return false;
-            }
-            only.is_none_or(|keys| keys.contains(&p.module_key()))
+            p.awaits_load() && only.is_none_or(|keys| keys.contains(&p.module_key()))
         })?;
         Some(self.hand_out(idx))
+    }
+
+    /// Whether a load pass started now would load a plugin: one is
+    /// neither loaded, failed nor disabled, and no load is in progress.
+    /// That is exactly when [`Self::next_pending_load`] would hand one out.
+    ///
+    /// Read-only, unlike `next_pending_load`, which takes the load latch:
+    /// a UI asks this to decide whether a lazy trigger has a pass to
+    /// start. While a load is in progress it answers `false`, since a
+    /// pass started then would load nothing; the UI running that load
+    /// knows it is running. So does a latch a load left set without
+    /// committing, which no later pass gets past.
+    #[must_use]
+    pub fn has_load_to_start(&self) -> bool {
+        self.load_in_progress.is_none() && self.plugins.iter().any(PluginInfo::awaits_load)
     }
 
     /// Hand out the load of plugin `idx`, numbered from the next free
@@ -2978,6 +2996,55 @@ mod commit_tests {
             .next_pending_load()
             .expect("a load that succeeded kept the latch");
         assert_eq!(beta.idx, 1, "the next load is not beta's");
+    }
+
+    /// `has_load_to_start` holds while a plugin is neither loaded, failed
+    /// nor disabled and no load is in progress, which is when
+    /// `next_pending_load` hands one out. It takes no latch: asking it
+    /// changes what the loader hands out next in no way.
+    #[test]
+    fn a_load_can_start_while_a_plugin_waits_and_none_is_in_progress() {
+        let (_dir, mut host) = host_with_two_plugins();
+        assert!(host.has_load_to_start(), "two plugins, none loaded");
+        let alpha = host.next_pending_load().expect("alpha, pending");
+        assert!(
+            !host.has_load_to_start(),
+            "alpha's load is in progress, so a pass started now loads nothing"
+        );
+        host.commit_load(&alpha, Ok(loaded_without_a_library(&alpha, 0)))
+            .expect("alpha's own outcome was refused");
+        assert!(host.has_load_to_start(), "beta still waits");
+        assert!(host.has_load_to_start(), "asking twice changed the answer");
+        let beta = host
+            .next_pending_load()
+            .expect("asking took the latch or handed beta out");
+        assert_eq!(beta.idx, 1, "the next load is not beta's");
+        assert!(!host.has_load_to_start(), "beta's load is in progress");
+        let _ = host.commit_load(&beta, Err("beta's own error".to_string()));
+        assert!(
+            !host.has_load_to_start(),
+            "one plugin loaded and one failed, and a load can still start"
+        );
+
+        let (_dir, mut host) = host_with_two_plugins();
+        assert!(host.set_disabled(0, true) && host.set_disabled(1, true));
+        assert!(
+            !host.has_load_to_start(),
+            "both plugins disabled, and a load can still start"
+        );
+        assert!(host.set_disabled(1, false));
+        assert!(host.has_load_to_start(), "beta, re-enabled, does not wait");
+
+        // A load that never commits leaves its latch set, and no later
+        // pass gets past it: nothing can start, for good.
+        let (_dir, mut host) = host_with_two_plugins();
+        let _never_committed = host.next_pending_load().expect("alpha, pending");
+        assert!(
+            !host.has_load_to_start(),
+            "a load started past a latch left set"
+        );
+        assert!(host.next_pending_load().is_none());
+        assert!(!host.has_load_to_start(), "asking changed the answer");
     }
 
     /// A commit reserves the ids of the plugin's items, so the next

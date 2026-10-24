@@ -5380,6 +5380,7 @@ mod display_tests {
         crate::platform::doc_binding_tests::view_binding_follows_the_requested_document();
         crate::print::tests::build_print_operation_exports_a_pdf();
         crate::plugin::cross_thread_tests::a_plugins_worker_thread_reaches_scintilla_through_the_main_loop();
+        crate::plugin::menu_load_tests::the_plugins_menu_loads_from_the_main_loop();
         crate::dock::content_tests::a_plugin_panel_asks_for_less_than_the_narrowest_band();
         crate::preferences::dialog_tests::the_category_list_shows_the_page_it_names();
         crate::preferences::dialog_tests::the_dialog_opens_with_focus_in_the_category_list();
