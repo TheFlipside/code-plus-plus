@@ -244,36 +244,37 @@ use windows::Win32::UI::WindowsAndMessaging::{
     AdjustWindowRectEx, AppendMenuW, CheckMenuItem, CheckMenuRadioItem, CopyAcceleratorTableW,
     CreateAcceleratorTableW, CreateMenu, CreatePopupMenu, CreateWindowExW, DefWindowProcW,
     DeleteMenu, DestroyAcceleratorTable, DestroyIcon, DestroyMenu, DestroyWindow, DispatchMessageW,
-    DrawIconEx, DrawMenuBar, EnableMenuItem, EndDialog, GetClassNameW, GetClientRect, GetCursorPos,
-    GetDlgItem, GetMenu, GetMenuItemCount, GetMenuItemID, GetMenuItemInfoW, GetMessageW, GetParent,
-    GetSubMenu, GetWindowLongPtrW, GetWindowRect, GetWindowTextLengthW, GetWindowTextW,
-    GetWindowThreadProcessId, InsertMenuW, IsDialogMessageW, IsWindow, IsWindowVisible, KillTimer,
-    LoadCursorW, LoadIconW, LoadImageW, MessageBoxW, MoveWindow, PostMessageW, PostQuitMessage,
-    RegisterClassExW, RemoveMenu, SendMessageW, SetCursor, SetLayeredWindowAttributes, SetMenu,
-    SetMenuItemInfoW, SetParent, SetTimer, SetWindowLongPtrW, SetWindowPos, SetWindowTextW,
-    ShowWindow, TrackPopupMenu, TranslateAcceleratorW, TranslateMessage, ACCEL, ACCEL_VIRT_FLAGS,
-    BM_GETCHECK, BM_SETCHECK, BN_CLICKED, BS_AUTOCHECKBOX, BS_AUTORADIOBUTTON, BS_DEFPUSHBUTTON,
-    BS_OWNERDRAW, BS_PUSHBUTTON, CBS_AUTOHSCROLL, CBS_DROPDOWN, CB_ADDSTRING, CB_RESETCONTENT,
-    CB_SETEDITSEL, CREATESTRUCTW, CS_HREDRAW, CS_VREDRAW, CW_USEDEFAULT, DC_HASDEFID, DI_NORMAL,
-    DM_GETDEFID, DWLP_MSGRESULT, ES_AUTOHSCROLL, ES_NUMBER, ES_READONLY, FALT, FCONTROL, FSHIFT,
-    FVIRTKEY, GWLP_USERDATA, GWL_EXSTYLE, GWL_STYLE, HACCEL, HICON, HMENU, IDCANCEL, IDC_ARROW,
-    IDC_HAND, IDC_SIZENS, IDNO, IDOK, IDYES, IMAGE_ICON, LR_DEFAULTCOLOR, LWA_ALPHA,
-    MB_ICONQUESTION, MB_ICONWARNING, MB_OK, MB_OKCANCEL, MB_YESNO, MB_YESNOCANCEL, MENUITEMINFOW,
-    MENU_ITEM_FLAGS, MFS_CHECKED, MFS_UNCHECKED, MFT_RADIOCHECK, MFT_RIGHTJUSTIFY, MFT_SEPARATOR,
-    MF_BYCOMMAND, MF_BYPOSITION, MF_CHECKED, MF_ENABLED, MF_GRAYED, MF_POPUP, MF_SEPARATOR,
-    MF_STRING, MF_UNCHECKED, MIIM_FTYPE, MIIM_STATE, MSG, PRF_CLIENT, PRF_ERASEBKGND,
-    SHOW_WINDOW_CMD, SWP_FRAMECHANGED, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SW_HIDE, SW_SHOW,
-    SW_SHOWMAXIMIZED, SW_SHOWNORMAL, TPM_BOTTOMALIGN, TPM_LEFTALIGN, TPM_RETURNCMD,
-    TPM_RIGHTBUTTON, WINDOW_EX_STYLE, WINDOW_LONG_PTR_INDEX, WINDOW_STYLE, WM_APP,
-    WM_CAPTURECHANGED, WM_CHAR, WM_CLOSE, WM_COMMAND, WM_CTLCOLOREDIT, WM_CTLCOLORLISTBOX,
-    WM_CTLCOLORSTATIC, WM_DESTROY, WM_DRAWITEM, WM_DROPFILES, WM_ERASEBKGND, WM_HSCROLL,
-    WM_INITDIALOG, WM_INITMENUPOPUP, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL,
-    WM_NCCREATE, WM_NCDESTROY, WM_NOTIFY, WM_PAINT, WM_PRINTCLIENT, WM_QUIT, WM_RBUTTONDOWN,
-    WM_RBUTTONUP, WM_SETCURSOR, WM_SETFOCUS, WM_SETFONT, WM_SETREDRAW, WM_SETTINGCHANGE, WM_SIZE,
-    WM_TIMER, WNDCLASSEXW, WS_BORDER, WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN, WS_EX_APPWINDOW,
-    WS_EX_CLIENTEDGE, WS_EX_CONTROLPARENT, WS_EX_DLGMODALFRAME, WS_EX_LAYERED, WS_EX_STATICEDGE,
-    WS_EX_TOOLWINDOW, WS_EX_WINDOWEDGE, WS_GROUP, WS_HSCROLL, WS_MAXIMIZEBOX, WS_MINIMIZEBOX,
-    WS_OVERLAPPEDWINDOW, WS_POPUP, WS_SYSMENU, WS_TABSTOP, WS_THICKFRAME, WS_VISIBLE, WS_VSCROLL,
+    DrawIconEx, DrawMenuBar, EnableMenuItem, EndDialog, EndMenu, GetClassNameW, GetClientRect,
+    GetCursorPos, GetDlgItem, GetMenu, GetMenuItemCount, GetMenuItemID, GetMenuItemInfoW,
+    GetMessageW, GetParent, GetSubMenu, GetWindowLongPtrW, GetWindowRect, GetWindowTextLengthW,
+    GetWindowTextW, GetWindowThreadProcessId, InsertMenuW, IsDialogMessageW, IsWindow,
+    IsWindowVisible, KillTimer, LoadCursorW, LoadIconW, LoadImageW, MessageBoxW, MoveWindow,
+    PostMessageW, PostQuitMessage, RegisterClassExW, RemoveMenu, SendMessageW, SetCursor,
+    SetLayeredWindowAttributes, SetMenu, SetMenuItemInfoW, SetParent, SetTimer, SetWindowLongPtrW,
+    SetWindowPos, SetWindowTextW, ShowWindow, TrackPopupMenu, TranslateAcceleratorW,
+    TranslateMessage, ACCEL, ACCEL_VIRT_FLAGS, BM_GETCHECK, BM_SETCHECK, BN_CLICKED,
+    BS_AUTOCHECKBOX, BS_AUTORADIOBUTTON, BS_DEFPUSHBUTTON, BS_OWNERDRAW, BS_PUSHBUTTON,
+    CBS_AUTOHSCROLL, CBS_DROPDOWN, CB_ADDSTRING, CB_RESETCONTENT, CB_SETEDITSEL, CREATESTRUCTW,
+    CS_HREDRAW, CS_VREDRAW, CW_USEDEFAULT, DC_HASDEFID, DI_NORMAL, DM_GETDEFID, DWLP_MSGRESULT,
+    ES_AUTOHSCROLL, ES_NUMBER, ES_READONLY, FALT, FCONTROL, FSHIFT, FVIRTKEY, GWLP_USERDATA,
+    GWL_EXSTYLE, GWL_STYLE, HACCEL, HICON, HMENU, IDCANCEL, IDC_ARROW, IDC_HAND, IDC_SIZENS, IDNO,
+    IDOK, IDYES, IMAGE_ICON, LR_DEFAULTCOLOR, LWA_ALPHA, MB_ICONQUESTION, MB_ICONWARNING, MB_OK,
+    MB_OKCANCEL, MB_YESNO, MB_YESNOCANCEL, MENUITEMINFOW, MENU_ITEM_FLAGS, MFS_CHECKED,
+    MFS_UNCHECKED, MFT_RADIOCHECK, MFT_RIGHTJUSTIFY, MFT_SEPARATOR, MF_BYCOMMAND, MF_BYPOSITION,
+    MF_CHECKED, MF_ENABLED, MF_GRAYED, MF_POPUP, MF_SEPARATOR, MF_STRING, MF_UNCHECKED, MIIM_FTYPE,
+    MIIM_STATE, MSG, PRF_CLIENT, PRF_ERASEBKGND, SHOW_WINDOW_CMD, SWP_FRAMECHANGED, SWP_NOMOVE,
+    SWP_NOSIZE, SWP_NOZORDER, SW_HIDE, SW_SHOW, SW_SHOWMAXIMIZED, SW_SHOWNORMAL, TPM_BOTTOMALIGN,
+    TPM_LEFTALIGN, TPM_RETURNCMD, TPM_RIGHTBUTTON, WINDOW_EX_STYLE, WINDOW_LONG_PTR_INDEX,
+    WINDOW_STYLE, WM_APP, WM_CAPTURECHANGED, WM_CHAR, WM_CLOSE, WM_COMMAND, WM_CTLCOLOREDIT,
+    WM_CTLCOLORLISTBOX, WM_CTLCOLORSTATIC, WM_DESTROY, WM_DRAWITEM, WM_DROPFILES, WM_ERASEBKGND,
+    WM_HSCROLL, WM_INITDIALOG, WM_INITMENUPOPUP, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE,
+    WM_MOUSEWHEEL, WM_NCCREATE, WM_NCDESTROY, WM_NOTIFY, WM_PAINT, WM_PRINTCLIENT, WM_QUIT,
+    WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SETCURSOR, WM_SETFOCUS, WM_SETFONT, WM_SETREDRAW,
+    WM_SETTINGCHANGE, WM_SIZE, WM_TIMER, WNDCLASSEXW, WS_BORDER, WS_CAPTION, WS_CHILD,
+    WS_CLIPCHILDREN, WS_EX_APPWINDOW, WS_EX_CLIENTEDGE, WS_EX_CONTROLPARENT, WS_EX_DLGMODALFRAME,
+    WS_EX_LAYERED, WS_EX_STATICEDGE, WS_EX_TOOLWINDOW, WS_EX_WINDOWEDGE, WS_GROUP, WS_HSCROLL,
+    WS_MAXIMIZEBOX, WS_MINIMIZEBOX, WS_OVERLAPPEDWINDOW, WS_POPUP, WS_SYSMENU, WS_TABSTOP,
+    WS_THICKFRAME, WS_VISIBLE, WS_VSCROLL,
 };
 
 // --- Built-in menu command ids ----------------------------------------
@@ -634,6 +635,13 @@ const ID_MACRO_SAVE: u16 = 2004;
 /// this to drag the UI thread out of its `GetMessageW` idle and into
 /// the `Shell::drain` path.
 const WM_APP_WAKE: u32 = WM_APP + 1;
+
+/// Posted by [`request_quit`] to bring the top-level message loop out of
+/// `GetMessageW`, so it notices the request and runs [`quit`]. The
+/// message itself carries nothing: the main window handles it as a
+/// no-op, which is all a nested loop that happens to take it does.
+/// `WM_APP + 2` and `+ 3` are the UDL editor's.
+const WM_APP_QUIT: u32 = WM_APP + 4;
 
 /// Timer id used by `SetTimer` for the periodic session auto-save.
 /// The value is local to the main window's timer table; any
@@ -4608,6 +4616,12 @@ unsafe fn apply_window_transparency(hwnd: HWND, t: &codepp_core::styles::Transpa
 ///
 /// Caller must invoke from the UI thread that owns `hwnd`.
 unsafe fn fire_queued_notifications(hwnd: HWND) {
+    // Nothing once the quit has begun: the plugins are hearing, or have
+    // heard, that the host is shutting down. What is queued then is
+    // dropped at `WM_DESTROY`.
+    if quitting() {
+        return;
+    }
     unsafe { deliver_queued_notifications(hwnd) };
     // A plugin that pushed onto the deferred-dialog queue from inside
     // its handler posts no worker wake, so nothing else would present
@@ -4616,10 +4630,10 @@ unsafe fn fire_queued_notifications(hwnd: HWND) {
 }
 
 /// The delivery half of [`fire_queued_notifications`], without the
-/// dialog flush. Only `WM_DESTROY` calls this directly: it drains the
-/// last notifications after `NPPN_SHUTDOWN` and the session save,
-/// where a modal would run a nested pump on a window that is being
-/// torn down.
+/// dialog flush or its quit check. Only [`notify_plugins_of_shutdown`]
+/// calls this directly: it delivers what is still queued just ahead of
+/// the shutdown pair, with the quit already begun, where a modal would
+/// run a nested pump on a window about to go.
 ///
 /// # Safety
 ///
@@ -4655,6 +4669,11 @@ unsafe fn deliver_queued_notifications(hwnd: HWND) {
 /// Caller must invoke from the UI thread that owns `hwnd`, with no
 /// `WindowState` borrow held: each dialog runs a nested message pump.
 unsafe fn present_deferred_dialogs(hwnd: HWND) {
+    // None once the quit has begun: a dialog would run a nested pump on a
+    // window about to go. `WM_DESTROY` drops what is queued.
+    if quitting() {
+        return;
+    }
     // SAFETY: caller's contract.
     let deferred = (unsafe { state_from_hwnd(hwnd) })
         .map(|s| s.shell.take_deferred_dialogs())
@@ -5133,7 +5152,12 @@ unsafe fn handle_close_active_tab_inner(hwnd: HWND) -> CloseOutcome {
     let Some(announced) = announced else {
         return CloseOutcome::NothingToClose;
     };
-    announced.deliver(hwnd.0);
+    // Not once the quit has begun: a tab closed inside a plugin's
+    // shutdown handler's own loop must not announce itself to plugins
+    // that have heard `NPPN_SHUTDOWN`. The close itself goes on.
+    if !quitting() {
+        announced.deliver(hwnd.0);
+    }
 
     // Phase 1b: ask the shell to do its half. We hold a brief
     // `&mut WindowState` borrow only for the duration of this
@@ -5574,10 +5598,15 @@ unsafe fn update_window_title(hwnd: HWND, shell: &Shell) {
     // basename → `new N`). Without this the title would still
     // show the on-disk filename or "Untitled" even after a
     // File → Rename..., creating a visual mismatch with the tab.
-    let title = match shell.active() {
+    let mut title = match shell.active() {
         Some(tab) => format!("{} - Code++", tab_display_name(tab)),
         None => "Code++".to_string(),
     };
+    // While a quit waits for code below it, the window is still here
+    // for a reason the user cannot see; say so. See `request_quit`.
+    if quit_waiting() {
+        title.push_str(QUIT_WAITING_TITLE);
+    }
     let wide: Vec<u16> = title.encode_utf16().chain(std::iter::once(0)).collect();
     // SAFETY: hwnd is a valid main-window HWND owned by the caller's
     // thread; `wide` is a null-terminated UTF-16 buffer that lives
@@ -18788,15 +18817,25 @@ pub fn run(initial_path: Option<PathBuf>, perf: codepp_core::perf::Perf) -> Resu
         // After `apply_saved_dock`, because the set is read from the
         // restored layout; before the pump, so the panel is there on
         // the first paint rather than appearing a moment later.
-        load_plugins_where(
-            main_hwnd,
-            NppData {
-                npp_handle: main_hwnd.0,
-                scintilla_main_handle: scintilla_hwnd.0,
-                scintilla_second_handle: core::ptr::null_mut(),
-            },
-            PluginLoadScope::RestoredPanels,
-        );
+        //
+        // A plugin may run a message loop of its own in here — in its
+        // `setInfo`, or in the panel command the restore runs — and
+        // the window can be closed inside it. That close only asks to
+        // quit; the pass stops at its next step, the steps below run
+        // on a window that still exists, and the loop's first check
+        // quits. `StartupRestore` tells the request to save at once.
+        {
+            let _restoring = StartupRestore::begin();
+            load_plugins_where(
+                main_hwnd,
+                NppData {
+                    npp_handle: main_hwnd.0,
+                    scintilla_main_handle: scintilla_hwnd.0,
+                    scintilla_second_handle: core::ptr::null_mut(),
+                },
+                PluginLoadScope::RestoredPanels,
+            );
+        }
         // Seed the map view with the active tab's document so
         // the miniature view isn't blank on first paint. Runs
         // regardless of the map's visibility — the panel might be
@@ -18873,6 +18912,17 @@ pub fn run(initial_path: Option<PathBuf>, perf: codepp_core::perf::Perf) -> Resu
         // the dialog's controls.
         let mut msg = MSG::default();
         loop {
+            // The quit runs here and nowhere else, before the loop
+            // waits again: whatever asked for it — a close inside a
+            // plugin's own message loop, inside a menu, during the
+            // startup restore — has returned by now, and nothing of
+            // anyone else's is below this frame. So the `WM_QUIT` the
+            // window's `WM_DESTROY` posts is taken by the
+            // `GetMessageW` right below, not by a plugin's loop. See
+            // `request_quit`.
+            if quit_waiting() {
+                quit(main_hwnd);
+            }
             let ret = GetMessageW(&raw mut msg, None, 0, 0);
             // Start the keystroke clock at the input event, which is
             // the earliest point the application can observe the
@@ -20181,6 +20231,20 @@ enum PluginLoadScope {
     RestoredPanels,
 }
 
+/// One load pass: load the plugins `scope` allows, install their menus,
+/// then notify them — see [`load_pending_plugins`] for the borrow
+/// discipline.
+///
+/// A quit asked for while the pass runs — the window closed inside a
+/// message loop one of these plugins runs, which is also how a close
+/// reaches the window during the startup restore — stops it at the next
+/// step: no further plugin is loaded or told anything, no panel command
+/// runs, and the conclusions after `NPPN_READY` are skipped, since a pass
+/// that stopped part-way cannot tell a panel that never registered from
+/// one whose plugin was never asked. The quit, which waits for the pass
+/// ([`request_quit`]), tells every plugin loaded by then — the one that
+/// was inside `setInfo` included — and the layout it saves still has
+/// those panels open. `ui_gtk`'s pass stops at the same steps.
 unsafe fn load_plugins_where(hwnd: HWND, npp_data: NppData, scope: PluginLoadScope) {
     // `PluginCallGuard` used to do two jobs here. Declining a
     // plugin's re-entrant `NPPM_*` was the bug; suppressing the
@@ -20201,6 +20265,12 @@ unsafe fn load_plugins_where(hwnd: HWND, npp_data: NppData, scope: PluginLoadSco
     let mut notices = codepp_plugin_host::LoadNotifications::default();
     let mut loaded_now: Vec<usize> = Vec::new();
     loop {
+        // Before asking for the next plugin, which sets `PluginHost`'s
+        // load latch: a quit asked for during the previous one's load
+        // ends the pass here, with nothing outstanding.
+        if quit_requested() {
+            break;
+        }
         let pending = unsafe { state_from_hwnd(hwnd) }.and_then(|s| match scope {
             PluginLoadScope::All => s.shell.next_plugin_to_load(),
             PluginLoadScope::RestoredPanels => s.shell.next_restored_panel_plugin_to_load(),
@@ -20235,15 +20305,7 @@ unsafe fn load_plugins_where(hwnd: HWND, npp_data: NppData, scope: PluginLoadSco
     // show them), its menu installed, the accelerator table rebuilt
     // so its chords fire. Notepad++ has all of that done before it
     // sends the first notification.
-    //
-    // The same borrow notes which dock panels these plugins had open,
-    // and every group's front tab — before any of them runs and can
-    // change either. That is the arrangement the restore below brings
-    // back. A panel parked because its plugin could not supply it is
-    // put back first, so a plugin that has become loadable since —
-    // re-enabled in the Plugin Manager — gets its panel restored the
-    // way it would have been at startup.
-    let restore = unsafe { state_from_hwnd(hwnd) }.map(|state| {
+    let installed = unsafe { state_from_hwnd(hwnd) }.map(|state| {
         state.shell.after_plugin_loads();
         unsafe {
             install_plugin_menus(
@@ -20254,24 +20316,41 @@ unsafe fn load_plugins_where(hwnd: HWND, npp_data: NppData, scope: PluginLoadSco
             );
             refresh_plugin_accels(state);
         }
-        let unparked = unpark_loaded_plugins_panels(state, &loaded_now);
-        PanelRestore {
-            unparked,
-            ..PanelRestore::capture(state, &loaded_now)
-        }
     });
-    if restore.is_none() {
+    if installed.is_none() {
         tracing::error!(
             "lost the window state after a plugin load pass; its menus were not installed"
         );
     }
-    let restore = restore.unwrap_or_default();
+    let _ = unsafe { DrawMenuBar(hwnd) };
+    if quit_requested() {
+        // No load-time notification: the quit that runs once this pass
+        // has returned tells every loaded plugin, these included, that
+        // the host is shutting down — the next thing they hear from it.
+        leave_unannounced(&loaded_now);
+        return;
+    }
+    // Then note which dock panels these plugins had open, and every
+    // group's front tab — before any of them runs and can change
+    // either. That is the arrangement the restore below brings back. A
+    // panel parked because its plugin could not supply it is put back
+    // first, so a plugin that has become loadable since — re-enabled in
+    // the Plugin Manager — gets its panel restored the way it would
+    // have been at startup.
+    let restore = unsafe { state_from_hwnd(hwnd) }
+        .map(|state| {
+            let unparked = unpark_loaded_plugins_panels(state, &loaded_now);
+            PanelRestore {
+                unparked,
+                ..PanelRestore::capture(state, &loaded_now)
+            }
+        })
+        .unwrap_or_default();
     if restore.unparked {
         // The groups those panels are back in need windows before the
         // plugins that fill them run.
         unsafe { dock_panels::apply_dock_layout(hwnd) };
     }
-    let _ = unsafe { DrawMenuBar(hwnd) };
     // Then the notifications, with no borrow held — a plugin that
     // queries the host from `NPPN_READY` is doing something ordinary.
     // Delivered even if the state went away above: these plugins are
@@ -20293,7 +20372,9 @@ unsafe fn load_plugins_where(hwnd: HWND, npp_data: NppData, scope: PluginLoadSco
         _ => unsafe { state_from_hwnd(hwnd) }.map_or(HWND::default(), |s| s.scintilla_hwnd),
     };
     let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        notices.deliver(
+        // Ended part-way by a quit asked for from inside a handler —
+        // see this function's docs.
+        notices.deliver_until(
             npp_data.npp_handle,
             || unsafe { state_from_hwnd(hwnd) }.and_then(|s| s.shell.active_buffer_id()),
             || {
@@ -20304,8 +20385,17 @@ unsafe fn load_plugins_where(hwnd: HWND, npp_data: NppData, scope: PluginLoadSco
                 }));
                 unsafe { dock_panels::return_focus(focus_before) };
             },
+            quit_requested,
         );
     }));
+    if quit_requested() {
+        // Stopped part-way, so what follows would misjudge: a restored
+        // panel whose command never ran would be closed as one its
+        // plugin never registered. Left as they are, the quit saves
+        // them open.
+        leave_unannounced(&loaded_now);
+        return;
+    }
     // Only now, after READY: a plugin may register its panel from
     // there, and one that does must not find it already closed — or
     // parked.
@@ -20316,6 +20406,39 @@ unsafe fn load_plugins_where(hwnd: HWND, npp_data: NppData, scope: PluginLoadSco
     // And a panel whose plugin could not be loaded at all is parked
     // rather than left on screen with nothing in it.
     unsafe { park_unsupplied_plugin_panels(hwnd) };
+}
+
+thread_local! {
+    /// The plugins a load pass loaded and then stopped before it was
+    /// done — a quit was asked for while it ran. Those the stop came
+    /// before never heard `NPPN_READY`, and none of them will now: the
+    /// quit is on its way. So once the pass has returned, none of their
+    /// commands runs (the plugin-command arm of `main_wnd_proc`).
+    /// Conservative by design: a plugin the stop came after is refused
+    /// too. A quit usually runs one loop iteration after its pass stops;
+    /// this matters when it waits behind another plugin's loop, with the
+    /// Plugins menu still in reach. `ui_gtk` keeps the same record.
+    static UNANNOUNCED: std::cell::RefCell<Vec<usize>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Record that the plugins at `loaded` were loaded by a pass a quit
+/// stopped — see [`UNANNOUNCED`].
+fn leave_unannounced(loaded: &[usize]) {
+    UNANNOUNCED.with(|unannounced| unannounced.borrow_mut().extend_from_slice(loaded));
+}
+
+/// Whether the plugin at `owner` may not run its command `cmd_id`: a
+/// pass a quit stopped loaded it ([`UNANNOUNCED`]). Logs a refusal.
+fn refuse_unannounced(cmd_id: i32, owner: usize) -> bool {
+    let refused = UNANNOUNCED.with(|unannounced| unannounced.borrow().contains(&owner));
+    if refused {
+        tracing::debug!(
+            cmd_id,
+            "not running a command of a plugin whose load a quit stopped"
+        );
+    }
+    refused
 }
 
 /// What a load pass needs to bring back the dock panels its plugins
@@ -20463,6 +20586,13 @@ unsafe fn restore_plugin_panels(hwnd: HWND, restore: &PanelRestore, withheld: &m
         })
         .unwrap_or_default();
     for &cmd in &commands {
+        // A command may run a message loop of its own, and a quit asked
+        // for inside it stops the rest — see `load_plugins_where`. The
+        // fronts are still put back below, so the layout the quit saves
+        // is the one the session had.
+        if quit_requested() {
+            break;
+        }
         tracing::debug!(cmd, "restoring a plugin panel by running its command");
         unsafe {
             SendMessageW(
@@ -23295,7 +23425,9 @@ unsafe fn hide_plugin_panel(main_hwnd: HWND, panel: DockPanel) {
         // the stack faults — a hardware exception no `catch_unwind`
         // catches. See `DmnCloseGuard`.
         let reentry_guard = DmnCloseGuard::enter();
-        if reentry_guard.is_some() && unsafe { IsWindow(Some(h_client)) }.as_bool() {
+        // Nor once the quit has begun: a caption ✕ clicked inside a
+        // shutdown handler's own loop closes the panel unannounced.
+        if reentry_guard.is_some() && !quitting() && unsafe { IsWindow(Some(h_client)) }.as_bool() {
             // From the main window. An earlier version sent the
             // group's container here, on the strength of a reading of
             // upstream's source; measuring Notepad++ showed the main
@@ -23426,41 +23558,284 @@ unsafe fn icon_to_tab_bitmap(hicon: HICON) -> Option<HBITMAP> {
     }
 }
 
+thread_local! {
+    /// Set once [`quit`] has begun. See there.
+    static QUITTING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// Set by [`request_quit`] when a quit is asked for. See there.
+    static QUIT_REQUESTED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// Set while `run` loads the plugins the restored session's open
+    /// dock panels name, before the message loop starts. See
+    /// [`StartupRestore`].
+    static STARTUP_RESTORE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Whether [`quit`] has begun — for the paths that must tell plugins
+/// nothing more once it has: a plugin command, a drain, an announced
+/// close, a `DMN_*` notification.
+fn quitting() -> bool {
+    QUITTING.with(std::cell::Cell::get)
+}
+
+/// Whether the host has been asked to quit: the request is waiting to
+/// run ([`request_quit`]), or the quit has begun.
+///
+/// A load pass stops at its next step once this holds: no further
+/// plugin is loaded, no further load-time notification is sent and no
+/// restored panel's command runs. The rest of the app stays live while
+/// a quit waits: the drain, the autosave, dialogs and plugin commands
+/// carry on until [`quitting`], except the commands of plugins a stopped
+/// pass loaded, which the plugin-command arm refuses once that pass has
+/// returned ([`UNANNOUNCED`]).
+fn quit_requested() -> bool {
+    QUIT_REQUESTED.with(std::cell::Cell::get) || QUITTING.with(std::cell::Cell::get)
+}
+
+/// Whether a quit has been asked for and is waiting to run — asked for,
+/// not yet begun. See [`request_quit`].
+fn quit_waiting() -> bool {
+    QUIT_REQUESTED.with(std::cell::Cell::get) && !QUITTING.with(std::cell::Cell::get)
+}
+
+/// What the window title ends with while a quit waits for the code
+/// below it ([`update_window_title`]). The title rather than the status
+/// bar, for `ui_gtk`'s reason: the status bar's free part is a few
+/// characters wide at the default window size, and a plugin can write
+/// over any of its parts.
+const QUIT_WAITING_TITLE: &str = " — closing once the task in progress finishes";
+
+/// Ask to quit — what the window's close (the caption's ✕, the taskbar's
+/// Close window, Alt+F4) and File → Exit do.
+///
+/// The quit never runs here. It runs from Code++'s own top-level message
+/// loop in `run`, which checks for a request every time round, before
+/// `GetMessageW` — so it runs once whatever asked for it has returned,
+/// with nothing of anyone else's left below it. A plain close, made from
+/// that loop, quits one loop iteration later. The cases this exists for
+/// are the others, all measured with a probe plugin that runs a message
+/// loop of its own:
+///
+///   * Inside a plugin's own message loop — a command, or a `setInfo`,
+///     that shows a window and pumps messages until it closes — the old
+///     quit ran inside that loop. `NPPN_SHUTDOWN` reached a plugin whose
+///     call was still running, a plugin still in `setInfo` was never told
+///     at all, and plugins loaded earlier in the same pass heard
+///     `NPPN_TBMODIFICATION` and `NPPN_READY` *after* `NPPN_SHUTDOWN`.
+///     And the `WM_QUIT` the old quit posted went to that loop: one that
+///     does not post it again, as Win32's guidance asks and many do not,
+///     ended there, and Code++ ran on with no window until killed.
+///   * During the startup restore, before the message loop starts, the
+///     old quit freed the editor under `run`, which went on to call
+///     into it: an access violation, every time.
+///
+/// When the host can see that the quit will wait ([`quit_will_wait`]),
+/// the request also saves the session at once — so a process killed
+/// while it waits loses no more than the autosave interval, the autosave
+/// running on meanwhile — and the window title says why the window is
+/// still there. A second request, while one waits or once the quit has
+/// begun, does nothing.
+///
+/// The flag is set first, before anything that could fail or panic, so
+/// no failure can leave a close that did nothing: the loop's check reads
+/// the flag alone. The wake is only for a loop blocked in `GetMessageW`.
+///
+/// # Safety
+///
+/// `hwnd` must be the main window. UI thread only, with no `WindowState`
+/// borrow held.
+unsafe fn request_quit(hwnd: HWND) {
+    if quit_requested() {
+        return;
+    }
+    QUIT_REQUESTED.with(|requested| requested.set(true));
+    // A `WM_CLOSE` another thread *sends* is delivered from inside the
+    // top-level loop's `GetMessageW`, and nothing after it would make
+    // that call return; a posted message does. A nested loop that takes
+    // it instead hands it to the main window, which ignores it.
+    if unsafe { PostMessageW(Some(hwnd), WM_APP_QUIT, WPARAM(0), LPARAM(0)) }.is_err() {
+        tracing::warn!("could not post the quit wake; the quit runs after the next message");
+    }
+    let startup = STARTUP_RESTORE.with(std::cell::Cell::get);
+    let plugin_on_stack = codepp_plugin_host::calling_plugin().is_some();
+    if quit_will_wait(startup, plugin_on_stack) {
+        tracing::info!(
+            startup,
+            plugin_on_stack,
+            "quit asked for inside code that has not returned; it runs once that code has"
+        );
+        let _ = std::panic::catch_unwind(|| unsafe { save_session_now(hwnd) });
+        let _ = std::panic::catch_unwind(|| {
+            if let Some(state) = unsafe { state_from_hwnd(hwnd) } {
+                unsafe { update_window_title(hwnd, &state.shell) };
+            }
+        });
+    }
+}
+
+/// Whether a quit asked for now will wait for code below the request
+/// that the host can see: a host call into a plugin, or — before `run`
+/// starts the message loop — the startup restore. A plain close from
+/// Code++'s own loop does not: the loop runs it as soon as the handler
+/// returns. A nested loop the host did not start — a plugin's own window
+/// procedure running one, a system modal loop — is the case it cannot
+/// see; the loop's check makes the quit wait all the same, without the
+/// early save and the title. See [`request_quit`].
+fn quit_will_wait(startup_restore: bool, plugin_on_stack: bool) -> bool {
+    startup_restore || plugin_on_stack
+}
+
+/// Marks the span of the startup restore — `run`'s load of the plugins
+/// the restored session's open panels name, before the message loop
+/// starts — for [`quit_will_wait`]. Cleared on drop, a panic included.
+struct StartupRestore;
+
+impl StartupRestore {
+    fn begin() -> Self {
+        STARTUP_RESTORE.with(|restoring| restoring.set(true));
+        Self
+    }
+}
+
+impl Drop for StartupRestore {
+    fn drop(&mut self) {
+        STARTUP_RESTORE.with(|restoring| restoring.set(false));
+    }
+}
+
+/// Save the session as it stands: the periodic autosave, and the save a
+/// quit request makes when the quit will wait ([`request_quit`]).
+///
+/// Nothing once the quit has begun: [`quit`] has captured what is saved
+/// and the window's `WM_DESTROY` saves it. A tick reaching here before
+/// that — a shutdown handler's own loop dispatching the timer — would
+/// capture again.
+///
+/// # Safety
+///
+/// `hwnd` must be the main window. UI thread only, with no `WindowState`
+/// borrow held.
+unsafe fn save_session_now(hwnd: HWND) {
+    if quitting() {
+        return;
+    }
+    // Each borrow ends with its statement: the `sync_*` captures take
+    // their own.
+    let Some(scintilla_hwnd) = (unsafe { state_from_hwnd(hwnd) }).map(|s| s.scintilla_hwnd) else {
+        return;
+    };
+    // Freeze the editor's WM_PAINT delivery around the save pass.
+    // `save_session` walks every tab and round-trips through
+    // `SCI_SETDOCPOINTER` for non-active dirty tabs; each swap pair
+    // invalidates the editor and (without this freeze) Scintilla
+    // paints the intermediate state — a visible-and-irritating flicker
+    // every 7 seconds. `WM_SETREDRAW(false)` queues invalidations
+    // without painting; the matching `(true)` re-enables painting, and
+    // an explicit `InvalidateRect` forces ONE clean repaint of the
+    // final (active-doc, restored-view) state.
+    unsafe {
+        let _ = SendMessageW(
+            scintilla_hwnd,
+            WM_SETREDRAW,
+            Some(WPARAM(0)),
+            Some(LPARAM(0)),
+        );
+        // Capture the workspace panel state (root / visible / width)
+        // into the shell's session cache BEFORE `save_session` runs so
+        // cold-start restore next launch sees the latest state. Same
+        // discipline for the right-side Document Map panel.
+        sync_workspace_state_to_shell(hwnd);
+        sync_docmap_state_to_shell(hwnd);
+        sync_dock_state_to_shell(hwnd);
+    }
+    let result = (unsafe { state_from_hwnd(hwnd) }).map(|state| {
+        let (shell, mut ui) = state.split();
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| shell.save_session(&mut ui)))
+    });
+    unsafe {
+        let _ = SendMessageW(
+            scintilla_hwnd,
+            WM_SETREDRAW,
+            Some(WPARAM(1)),
+            Some(LPARAM(0)),
+        );
+        // Force a single fresh paint of the restored-view state.
+        // Without this the editor stays visually frozen until the next
+        // user-driven invalidation.
+        let _ = InvalidateRect(Some(scintilla_hwnd), None, false);
+    }
+    match result {
+        Some(Ok(Ok(()))) | None => {}
+        Some(Ok(Err(e))) => {
+            tracing::warn!(error = ?e, "session save failed");
+        }
+        Some(Err(_)) => {
+            tracing::warn!("session save panicked");
+        }
+    }
+}
+
+/// Leave the application: tell the plugins, then destroy the window,
+/// whose `WM_DESTROY` saves the session and posts the `WM_QUIT` that
+/// ends the message loop. The one way out, and it runs once. The
+/// window's close and File → Exit reach it through [`request_quit`];
+/// only `run`'s top-level message loop calls it, so it never runs from
+/// inside a handler, a nested loop or a plugin call — which is also what
+/// keeps the `WM_QUIT` from any loop but Code++'s own.
+///
+/// `QUITTING` is raised before anything else, so every quit check in
+/// this crate holds by the time any plugin hears of the quit.
+///
+/// The notification still goes out while the window is up and visible,
+/// as it did from `WM_CLOSE` — see [`notify_plugins_of_shutdown`] for why
+/// that matters. A plugin may still destroy the window itself, from any
+/// call; `WM_DESTROY` keeps the latched fallback for that.
+///
+/// # Safety
+///
+/// `hwnd` must be the main window. UI thread only, from the top-level
+/// message loop, with no `WindowState` borrow held.
+unsafe fn quit(hwnd: HWND) {
+    if QUITTING.with(|q| q.replace(true)) {
+        return;
+    }
+    unsafe { notify_plugins_of_shutdown(hwnd) };
+    let _ = unsafe { DestroyWindow(hwnd) };
+}
+
 /// Tell every loaded plugin the app is shutting down, exactly once.
 ///
-/// Captures the panel state the session save will persist, then
-/// delivers `NPPN_BEFORESHUTDOWN` and `NPPN_SHUTDOWN`.
+/// Delivers what is still queued for them first, then captures the
+/// panel state the session save will persist, then delivers
+/// `NPPN_BEFORESHUTDOWN` and `NPPN_SHUTDOWN`. Nothing reaches a plugin
+/// after that pair: `WM_DESTROY` drops whatever its save queues.
 ///
-/// **Called from `WM_CLOSE`, and the timing is the point.** A plugin
-/// that persists whether its dock panel was open asks Win32 at this
-/// moment, and `IsWindowVisible` is false for every descendant of a
-/// hidden window — so delivering at `WM_DESTROY`, after Windows has
-/// hidden the frame, tells every plugin its panel was closed. That is
-/// not a hypothetical: the real `NppExec` writes `[Console] Visible=0`
-/// and comes back with its console shut, where Notepad++ restores it.
+/// **Called from [`quit`], while the window is still up, and the timing
+/// is the point.** A plugin that persists whether its dock panel was
+/// open asks Win32 at this moment, and `IsWindowVisible` is false for
+/// every descendant of a hidden window — so delivering at `WM_DESTROY`,
+/// after Windows has hidden the frame, tells every plugin its panel was
+/// closed. That is not a hypothetical: the real `NppExec` writes
+/// `[Console] Visible=0` and comes back with its console shut, where
+/// Notepad++ restores it.
 ///
-/// Latched rather than called from one place, because the window can
-/// be destroyed without a `WM_CLOSE` — `ID_FILE_EXIT` does exactly
-/// that, and a plugin may call `DestroyWindow` itself — and a lost
-/// shutdown notification costs a plugin its saved state. `WM_DESTROY`
-/// therefore calls this too; whichever arrives first wins and the
-/// other is a no-op.
+/// Latched rather than called from one place, because a plugin may call
+/// `DestroyWindow` itself, and a lost shutdown notification costs a
+/// plugin its saved state. `WM_DESTROY` therefore calls this too;
+/// whichever arrives first wins and the other is a no-op.
 ///
-/// The capture runs *before* the notifications so the persisted
-/// layout is the one the user had, not whatever a plugin left behind
-/// while tearing itself down.
+/// The queued notifications go first — a file whose load completed just
+/// before the quit still announces itself, as it would have to the drain
+/// a moment later — and the capture runs after them but *before* the
+/// shutdown pair, so the persisted layout is the one the user had, not
+/// whatever a plugin left behind while tearing itself down.
 ///
-/// **A plugin that destroys the window from its own handler is
-/// newly reachable, and costs that session's save.** Running from
-/// `WM_CLOSE` means the window has not entered Windows' destroy
-/// sequence yet, so a `beNotified` that calls `DestroyWindow`
-/// re-enters `main_wnd_proc`'s `WM_DESTROY` arm synchronously — with
-/// this function's `PluginCallGuard` still armed, so every
-/// `state_from_hwnd` in that nested pass answers `None` and the
-/// session save, timer cleanup and GDI teardown are all skipped.
-/// Windows sends `WM_DESTROY` once, so the outer frame gets no
-/// second chance at them: the user's tabs and dock layout are not
-/// written, silently.
+/// **A plugin that destroys the window from its own handler costs that
+/// session's save.** A `beNotified` that calls `DestroyWindow` re-enters
+/// `main_wnd_proc`'s `WM_DESTROY` arm synchronously — with this
+/// function's `PluginCallGuard` still armed, so every `state_from_hwnd`
+/// in that nested pass answers `None` and the session save, timer
+/// cleanup and GDI teardown are all skipped. Windows sends `WM_DESTROY`
+/// once, so the outer frame gets no second chance at them: the user's
+/// tabs and dock layout are not written, silently.
 ///
 /// What *is* defended against is the memory-safety half: the
 /// `WindowState` reclaim in that arm now declines while a plugin
@@ -23482,16 +23857,19 @@ unsafe fn notify_plugins_of_shutdown(hwnd: HWND) {
         return;
     }
     unsafe {
+        // Delivery-only, with no borrow held: a dialog a handler queues
+        // here is dropped with the rest at `WM_DESTROY`, not shown on a
+        // window about to go.
+        deliver_queued_notifications(hwnd);
         sync_workspace_state_to_shell(hwnd);
         sync_docmap_state_to_shell(hwnd);
         sync_dock_state_to_shell(hwnd);
         // Both notifications are dispatched synchronously (via
         // `notify_plugins`, not the deferred queue) so they reach the
         // plugin at a moment when its own windows still exist, which
-        // is the whole reason this function is called from
-        // `WM_CLOSE`. Anything a plugin queues from inside them lands
-        // in `pending_notifications` and is drained by the
-        // `deliver_queued_notifications` call in `WM_DESTROY`.
+        // is the whole reason [`quit`] calls this before it destroys
+        // the window. Anything a plugin queues from inside them lands
+        // in `pending_notifications` and is dropped at `WM_DESTROY`.
         //
         // A re-entrant `NPPM_*` from inside these two handlers is
         // **declined**, and that is the guard's cost rather than a
@@ -25627,6 +26005,12 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                 if DrainFreeze::defer_wake() {
                     return LRESULT(0);
                 }
+                // Nothing once the quit has begun: a drain delivers
+                // notifications and shows dialogs, and the plugins have
+                // heard, or are hearing, that the host is shutting down.
+                if quitting() {
+                    return LRESULT(0);
+                }
                 // Drain the shell's task queues. Drain returns any
                 // pending modal dialogs; we MUST show them only AFTER
                 // the &mut WindowState borrow is dropped, otherwise
@@ -26638,7 +27022,12 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                         ensure_one_tab(hwnd);
                     }
                     ID_FILE_EXIT => {
-                        let _ = DestroyWindow(hwnd);
+                        // The same request as the window's close. A
+                        // plugin's `NPPM_MENUCOMMAND(IDM_FILE_EXIT)` is
+                        // posted (`dispatch_npp_menu_command`), so it
+                        // arrives from a message pump, which may be a
+                        // loop of the plugin's own.
+                        request_quit(hwnd);
                     }
                     // Edit menu — every entry is a single Scintilla
                     // direct-call. `editor` is `Copy`, so we pull a
@@ -27106,13 +27495,26 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                         // the same raw pointer (aliasing UB).
                         // Splitting into a lookup phase and an invoke
                         // phase keeps the re-entrant call sound.
-                        if is_plugin_cmd_id(cmd_i32) {
+                        //
+                        // Nothing runs once the quit has begun: a
+                        // plugin's shutdown handler may run a loop of its
+                        // own, and a click landing in it must not run a
+                        // plugin's code after `NPPN_SHUTDOWN`. A quit
+                        // only asked for, waiting for a plugin's loop to
+                        // return, does not stop a command — the plugin's
+                        // own command may be what ends that loop — except
+                        // one of a plugin whose load the quit stopped
+                        // (`UNANNOUNCED`), which may not have heard
+                        // `NPPN_READY`.
+                        if is_plugin_cmd_id(cmd_i32) && !quitting() {
                             let command = if let Some(state) = state_from_hwnd(hwnd) {
                                 state.shell.lookup_plugin_command(cmd_i32)
                             } else {
                                 None
                             };
                             // Borrow on `state` ends here.
+                            let command = command
+                                .filter(|command| !refuse_unannounced(cmd_i32, command.owner()));
                             if let Some(command) = command {
                                 // SAFETY: the C ABI fn ptr the plugin
                                 // handed us in FuncItem.p_func. The
@@ -27178,9 +27580,13 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                 // the borrow, (3) reacquire and run the load, (4)
                 // populate the menu under a fresh borrow.
                 let popup_hmenu_value = wparam.0;
+                // Not once a quit is asked for: the pass would stop
+                // before loading anything, and the menu would be
+                // latched as initialized with no plugins in it.
                 let needs_init = if let Some(state) = state_from_hwnd(hwnd) {
                     !state.plugins_menu_initialized
                         && popup_hmenu_value == state.plugin_menu.0 as usize
+                        && !quit_requested()
                 } else {
                     false
                 };
@@ -27224,6 +27630,13 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                     // redraws the bar, so the items appear on this
                     // open.
                     load_pending_plugins(hwnd, npp_data);
+                    // Closed while a plugin's `setInfo` ran a loop of
+                    // its own: the quit waits for the menu loop this
+                    // popup belongs to, so end it rather than open the
+                    // menu on a window the user asked to close.
+                    if quit_requested() {
+                        let _ = EndMenu();
+                    }
                 }
                 // Refresh dynamic state on the four state-driven
                 // submenus (View toggles, Encoding/Language radios,
@@ -27390,62 +27803,7 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                     return LRESULT(0);
                 }
                 if wparam.0 == AUTOSAVE_TIMER_ID {
-                    if let Some(state) = state_from_hwnd(hwnd) {
-                        // Freeze the editor's WM_PAINT delivery
-                        // around the save pass. `save_session`
-                        // walks every tab and round-trips through
-                        // `SCI_SETDOCPOINTER` for non-active dirty
-                        // tabs; each swap pair invalidates the
-                        // editor and (without this freeze) Scintilla
-                        // paints the intermediate state — a
-                        // visible-and-irritating flicker every 7
-                        // seconds. `WM_SETREDRAW(false)` queues
-                        // invalidations without painting; the
-                        // matching `(true)` re-enables painting,
-                        // and an explicit `InvalidateRect` forces
-                        // ONE clean repaint of the final
-                        // (active-doc, restored-view) state.
-                        let scintilla_hwnd = state.scintilla_hwnd;
-                        let _ = SendMessageW(
-                            scintilla_hwnd,
-                            WM_SETREDRAW,
-                            Some(WPARAM(0)),
-                            Some(LPARAM(0)),
-                        );
-                        // Capture the workspace panel state
-                        // (root / visible / width) into the shell's
-                        // session cache BEFORE `save_session` runs
-                        // so cold-start restore next launch sees the
-                        // latest state. Same discipline for the
-                        // right-side Document Map panel.
-                        sync_workspace_state_to_shell(hwnd);
-                        sync_docmap_state_to_shell(hwnd);
-                        sync_dock_state_to_shell(hwnd);
-                        let (shell, mut ui) = state.split();
-                        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                            shell.save_session(&mut ui)
-                        }));
-                        let _ = SendMessageW(
-                            scintilla_hwnd,
-                            WM_SETREDRAW,
-                            Some(WPARAM(1)),
-                            Some(LPARAM(0)),
-                        );
-                        // Force a single fresh paint of the
-                        // restored-view state. Without this the
-                        // editor stays visually frozen until the
-                        // next user-driven invalidation.
-                        let _ = InvalidateRect(Some(scintilla_hwnd), None, false);
-                        match result {
-                            Ok(Ok(())) => {}
-                            Ok(Err(e)) => {
-                                tracing::warn!(error = ?e, "auto-save failed");
-                            }
-                            Err(_) => {
-                                tracing::warn!("auto-save panicked");
-                            }
-                        }
-                    }
+                    save_session_now(hwnd);
                     return LRESULT(0);
                 }
                 DefWindowProcW(hwnd, msg, wparam, lparam)
@@ -27477,26 +27835,20 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                 LRESULT(1)
             }
             WM_CLOSE => {
-                // Tell the plugins the app is closing **here**, not
-                // from `WM_DESTROY`, because a plugin asked at
-                // `WM_DESTROY` time can no longer see its own panel.
-                //
-                // `WM_DESTROY` arrives after Windows has already
-                // hidden the frame, and `IsWindowVisible` walks the
-                // ancestor chain — so a plugin whose dock panel is on
-                // screen is told it is hidden. Measured with the real
-                // NppExec, whose console carried `WS_VISIBLE` on its
-                // own window while `IsWindowVisible` answered false
-                // because the main window no longer did; it persisted
-                // "console hidden" and came back closed on the next
-                // launch, which is not what Notepad++ does. At
-                // `WM_CLOSE` the window is still up and the answer is
-                // the true one.
-                //
-                // Destruction is then left to `DefWindowProc`, which
-                // is what turns a `WM_CLOSE` into a `DestroyWindow`.
-                notify_plugins_of_shutdown(hwnd);
-                DefWindowProcW(hwnd, msg, wparam, lparam)
+                // Ask to quit, and return: never `DefWindowProc`, which
+                // would destroy the window right here. A close can
+                // arrive inside a plugin's own message loop, or during
+                // the startup restore, with plugin code below it that
+                // has not returned; the quit runs from `run`'s
+                // top-level loop once it has. See `request_quit`.
+                request_quit(hwnd);
+                LRESULT(0)
+            }
+            WM_APP_QUIT => {
+                // Only a wake for the top-level loop, which checks the
+                // request itself; a nested loop that takes it lands
+                // here. See `request_quit`.
+                LRESULT(0)
             }
             WM_DESTROY => {
                 // Persist the session before tearing down. Pull live
@@ -27511,14 +27863,19 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                 // reaching into a torn-down tree HWND is UB.
                 let _ = KillTimer(Some(hwnd), AUTOSAVE_TIMER_ID);
                 let _ = KillTimer(Some(hwnd), WORKSPACE_UNFOLD_TIMER_ID);
-                // Normally already done by `WM_CLOSE`; latched, so
-                // this is the fallback for a route that destroys the
-                // window without one — `DestroyWindow` called
-                // directly, by us or by a plugin. The panel-visibility
-                // answer a plugin gets here is the wrong one (see the
-                // `WM_CLOSE` arm), which is exactly why that arm
-                // exists; losing the notification entirely would be
-                // worse than delivering it late.
+                // The window going is the quit begun, whoever destroyed
+                // it: `quit` raised this already, and a plugin calling
+                // `DestroyWindow` itself raises it here, so every quit
+                // check holds from now on.
+                QUITTING.with(|quitting| quitting.set(true));
+                // Normally already done by `quit`; latched, so this is
+                // the fallback for a plugin that calls `DestroyWindow`
+                // on the main window itself. The panel-visibility
+                // answer a plugin gets here is the wrong one (see
+                // `notify_plugins_of_shutdown`), which is exactly why
+                // `quit` notifies before it destroys; losing the
+                // notification entirely would be worse than delivering
+                // it late.
                 notify_plugins_of_shutdown(hwnd);
                 if let Some(state) = state_from_hwnd(hwnd) {
                     let (shell, mut ui) = state.split();
@@ -27536,22 +27893,22 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                     }
                 }
 
-                // Drain any leftover NPPN_FILEOPENED/NPPN_FILESAVED
-                // notifications that were queued since the last
-                // WM_APP_WAKE drain — a file-open completing right
-                // before the user closes the app would otherwise be
-                // silently dropped, breaking plugins that audit-log
-                // file activity. Safe to call here: no borrow is
-                // held, so a plugin's re-entrant NPPM_* takes a
-                // fresh one. The delivery-only variant: a dialog a
-                // plugin queues from here would run a nested pump
-                // on a window mid-teardown, so any such request is
-                // dropped rather than presented.
-                deliver_queued_notifications(hwnd);
+                // The plugins have heard `NPPN_SHUTDOWN`, so nothing
+                // more is delivered to them: what was queued before it
+                // went out ahead of it (see `notify_plugins_of_shutdown`),
+                // and whatever has been queued since — by a shutdown
+                // handler, by the save above — is dropped. So is any
+                // dialog a plugin queued: it would run a nested pump on
+                // a window mid-teardown.
                 if let Some(state) = state_from_hwnd(hwnd) {
-                    let dropped = state.shell.take_deferred_dialogs().len();
-                    if dropped != 0 {
-                        tracing::debug!(dropped, "plugin dialogs dropped at shutdown");
+                    let notifications = state.shell.take_notifications().len();
+                    let dialogs = state.shell.take_deferred_dialogs().len();
+                    if notifications != 0 || dialogs != 0 {
+                        tracing::debug!(
+                            notifications,
+                            dialogs,
+                            "plugin notifications and dialogs dropped at shutdown"
+                        );
                     }
                 }
 
@@ -27569,8 +27926,8 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                 //
                 // Detach the imagelist from the toolbar *before*
                 // destroying it — `NPPN_SHUTDOWN` has already been
-                // delivered by this point (from `WM_CLOSE`, or from
-                // the fallback at the top of this arm), and a
+                // delivered by this point (from `quit`, or from the
+                // fallback at the top of this arm), and a
                 // plugin's handler is allowed to call
                 // `RedrawWindow` / `UpdateWindow` on top-level UI
                 // (not banned by the ABI). With the imagelist
@@ -32365,7 +32722,7 @@ mod shutdown_timing_guards {
     //! for every descendant of a hidden window. Deliver from
     //! `WM_DESTROY` — after Windows has hidden the frame — and every
     //! such plugin is told its panel was closed, and comes back
-    //! closed. Measured against the real `NppExec`, which wrote
+    //! closed. So `quit` delivers before it destroys the window. Measured against the real `NppExec`, which wrote
     //! `[Console] Visible=0` for a console that was plainly on
     //! screen.
     //!
@@ -32375,35 +32732,33 @@ mod shutdown_timing_guards {
 
     use super::plugin_reentry_guards::{code_only, fn_body, production_src};
 
-    /// The notification goes out from `WM_CLOSE`, while the window is
-    /// still up. `WM_DESTROY` keeps a call too — `ID_FILE_EXIT`
-    /// destroys the window directly, and a plugin may call
-    /// `DestroyWindow` itself — but it is the fallback, not the
-    /// route.
+    /// The notification goes out from `quit`, before it destroys the
+    /// window, while the window is still up. `WM_DESTROY` keeps a call
+    /// too — a plugin may call `DestroyWindow` itself — but it is the
+    /// fallback, not the route.
     #[test]
-    fn the_shutdown_notification_is_sent_from_wm_close() {
+    fn the_shutdown_notification_is_sent_before_the_window_goes() {
+        let body = code_only(&fn_body(production_src(), "quit"));
+        let notify = body.find("notify_plugins_of_shutdown(hwnd)").expect(
+            "the quit no longer tells the plugins the app is closing; a plugin asked at \
+             WM_DESTROY time is told its panel is hidden, because the frame is already \
+             hidden by then",
+        );
+        let destroy = body
+            .find("DestroyWindow(hwnd)")
+            .expect("the quit no longer destroys the window");
+        assert!(
+            notify < destroy,
+            "the quit destroys the window before the plugins are told"
+        );
         let src = code_only(production_src());
-        let close = src
-            .find("WM_CLOSE => {")
-            .expect("the main window's WM_CLOSE arm is gone");
-        let destroy = src
+        let destroy_arm = src
             .find("WM_DESTROY => {")
             .expect("the main window's WM_DESTROY arm is gone");
-        let call = "notify_plugins_of_shutdown(hwnd);";
-        let first = src[close..destroy].find(call).expect(
-            "WM_CLOSE no longer tells the plugins the app is closing; \
-                     a plugin asked at WM_DESTROY time is told its panel is hidden, \
-                     because the frame is already hidden by then",
-        );
         assert!(
-            close + first < destroy,
-            "the WM_CLOSE call moved out of the WM_CLOSE arm"
-        );
-        assert!(
-            src[destroy..].contains(call),
-            "WM_DESTROY no longer carries the fallback call; a close route that \
-             skips WM_CLOSE (ID_FILE_EXIT, a plugin's own DestroyWindow) would \
-             lose the shutdown notification entirely"
+            src[destroy_arm..].contains("notify_plugins_of_shutdown(hwnd);"),
+            "WM_DESTROY no longer carries the fallback call; a plugin's own \
+             DestroyWindow would lose the shutdown notification entirely"
         );
     }
 
@@ -32456,6 +32811,579 @@ mod shutdown_timing_guards {
             body.contains("DONE.with(|d| d.replace(true))"),
             "the once-only latch is gone; a window closed through WM_CLOSE would \
              tell every plugin twice, once more from the WM_DESTROY fallback"
+        );
+    }
+}
+
+#[cfg(test)]
+mod quit_tests {
+    //! The quit's flags and its request, run for real: a request against
+    //! a real window records itself, posts its wake, destroys nothing,
+    //! and is made once; the title says a quit is waiting. The quit
+    //! itself ends the message loop, so it is pinned by `quit_guards`
+    //! and checked live with the probe plugin (DESIGN.md §7.4).
+
+    use super::{
+        leave_unannounced, quit_requested, quit_waiting, quit_will_wait, quitting,
+        refuse_unannounced, request_quit, state_from_hwnd, update_window_title, StartupRestore,
+        QUITTING, QUIT_REQUESTED, STARTUP_RESTORE, UNANNOUNCED, WM_APP_QUIT,
+    };
+    use std::sync::Arc;
+    use windows::core::{w, PCWSTR};
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+    use windows::Win32::UI::WindowsAndMessaging::{
+        CreateWindowExW, DestroyWindow, GetWindowTextW, IsWindow, PeekMessageW, MSG, PM_REMOVE,
+        WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_POPUP,
+    };
+
+    /// Puts the three flags back as a fresh thread has them, whatever
+    /// the test did — a panic included.
+    struct ResetQuit;
+
+    impl Drop for ResetQuit {
+        fn drop(&mut self) {
+            QUITTING.with(|f| f.set(false));
+            QUIT_REQUESTED.with(|f| f.set(false));
+            STARTUP_RESTORE.with(|f| f.set(false));
+        }
+    }
+
+    /// A hidden window of a system class: no `WindowState` behind it, so
+    /// `state_from_hwnd` answers `None` and the request's save and title
+    /// steps do nothing.
+    fn bare_window() -> HWND {
+        let hwnd = unsafe {
+            let instance = GetModuleHandleW(PCWSTR::null()).expect("module handle");
+            CreateWindowExW(
+                WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
+                w!("EDIT"),
+                PCWSTR::null(),
+                WS_POPUP,
+                -32000,
+                -32000,
+                50,
+                20,
+                None,
+                None,
+                Some(instance.into()),
+                None,
+            )
+            .expect("a bare window")
+        };
+        assert!(
+            unsafe { state_from_hwnd(hwnd) }.is_none(),
+            "a bare window has a `WindowState`, so the tests' steps that need none would run"
+        );
+        hwnd
+    }
+
+    /// How many `WM_APP_QUIT` wakes are waiting for `hwnd`, taking them.
+    fn take_wakes(hwnd: HWND) -> usize {
+        let mut msg = MSG::default();
+        let mut n = 0;
+        while unsafe {
+            PeekMessageW(
+                &raw mut msg,
+                Some(hwnd),
+                WM_APP_QUIT,
+                WM_APP_QUIT,
+                PM_REMOVE,
+            )
+        }
+        .as_bool()
+        {
+            n += 1;
+        }
+        n
+    }
+
+    #[test]
+    fn the_flags_read_as_the_request_and_the_quit_say() {
+        let _reset = ResetQuit;
+        assert!(!quit_requested() && !quit_waiting() && !quitting());
+        QUIT_REQUESTED.with(|f| f.set(true));
+        assert!(quit_requested() && quit_waiting() && !quitting());
+        QUITTING.with(|f| f.set(true));
+        assert!(quit_requested() && !quit_waiting() && quitting());
+        // A quit begun without a request — a plugin destroying the
+        // window itself — reads as requested and not waiting.
+        QUIT_REQUESTED.with(|f| f.set(false));
+        assert!(quit_requested() && !quit_waiting() && quitting());
+    }
+
+    /// Only the plugins a stopped pass recorded are refused.
+    #[test]
+    fn a_stopped_pass_refuses_only_the_plugins_it_loaded() {
+        struct Clear;
+        impl Drop for Clear {
+            fn drop(&mut self) {
+                UNANNOUNCED.with(|u| u.borrow_mut().clear());
+            }
+        }
+        let _clear = Clear;
+        assert!(!refuse_unannounced(51_000, 7));
+        leave_unannounced(&[7, 9]);
+        assert!(refuse_unannounced(51_000, 7));
+        assert!(refuse_unannounced(51_000, 9));
+        assert!(!refuse_unannounced(51_000, 8));
+    }
+
+    #[test]
+    fn a_quit_waits_only_for_what_the_host_can_see() {
+        assert!(!quit_will_wait(false, false));
+        assert!(quit_will_wait(true, false));
+        assert!(quit_will_wait(false, true));
+        assert!(quit_will_wait(true, true));
+    }
+
+    #[test]
+    fn the_startup_restore_marker_clears_on_drop_and_on_a_panic() {
+        let _reset = ResetQuit;
+        {
+            let _restoring = StartupRestore::begin();
+            assert!(STARTUP_RESTORE.with(std::cell::Cell::get));
+        }
+        assert!(!STARTUP_RESTORE.with(std::cell::Cell::get));
+        let _ = std::panic::catch_unwind(|| {
+            let _restoring = StartupRestore::begin();
+            panic!("inside the restore");
+        });
+        assert!(!STARTUP_RESTORE.with(std::cell::Cell::get));
+    }
+
+    #[test]
+    fn a_request_records_itself_wakes_the_loop_and_destroys_nothing() {
+        let _reset = ResetQuit;
+        let hwnd = bare_window();
+        take_wakes(hwnd);
+        unsafe { request_quit(hwnd) };
+        assert!(quit_requested() && quit_waiting() && !quitting());
+        assert_eq!(take_wakes(hwnd), 1, "the request posts exactly one wake");
+        assert!(
+            unsafe { IsWindow(Some(hwnd)) }.as_bool(),
+            "a request must never destroy the window; only the quit does"
+        );
+        // A second request, while the first waits, does nothing.
+        unsafe { request_quit(hwnd) };
+        assert_eq!(take_wakes(hwnd), 0, "a second request posted another wake");
+        // And none once the quit has begun.
+        QUIT_REQUESTED.with(|f| f.set(false));
+        QUITTING.with(|f| f.set(true));
+        unsafe { request_quit(hwnd) };
+        assert_eq!(
+            take_wakes(hwnd),
+            0,
+            "a request after the quit began posted a wake"
+        );
+        assert!(!QUIT_REQUESTED.with(std::cell::Cell::get));
+        let _ = unsafe { DestroyWindow(hwnd) };
+    }
+
+    /// The branch that saves at once: during the startup restore. The
+    /// window has no state, so the save finds nothing to do — what this
+    /// pins is that the branch neither destroys nor fails.
+    #[test]
+    fn a_request_that_will_wait_still_destroys_nothing() {
+        let _reset = ResetQuit;
+        let hwnd = bare_window();
+        take_wakes(hwnd);
+        {
+            let _restoring = StartupRestore::begin();
+            unsafe { request_quit(hwnd) };
+        }
+        assert!(quit_waiting());
+        assert_eq!(take_wakes(hwnd), 1);
+        assert!(unsafe { IsWindow(Some(hwnd)) }.as_bool());
+        let _ = unsafe { DestroyWindow(hwnd) };
+    }
+
+    #[test]
+    fn the_title_says_a_quit_is_waiting() {
+        let _reset = ResetQuit;
+        let hwnd = bare_window();
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let shell = codepp_shell::Shell::new(wake).expect("a shell");
+        let title = || {
+            let mut buf = [0u16; 128];
+            let n = unsafe { GetWindowTextW(hwnd, &mut buf) };
+            String::from_utf16_lossy(&buf[..usize::try_from(n).unwrap_or(0)])
+        };
+        unsafe { update_window_title(hwnd, &shell) };
+        assert_eq!(title(), "Code++");
+        QUIT_REQUESTED.with(|f| f.set(true));
+        unsafe { update_window_title(hwnd, &shell) };
+        assert_eq!(
+            title(),
+            "Code++ — closing once the task in progress finishes"
+        );
+        // Once the quit has begun there is nothing left to wait for.
+        QUITTING.with(|f| f.set(true));
+        unsafe { update_window_title(hwnd, &shell) };
+        assert_eq!(title(), "Code++");
+        let _ = unsafe { DestroyWindow(hwnd) };
+    }
+}
+
+#[cfg(test)]
+mod quit_guards {
+    //! Source-level guards for the quit. Each property goes wrong only
+    //! while a plugin runs a message loop of its own — in a command, in
+    //! its `setInfo`, in a panel command the startup restore runs — and
+    //! the failures were a crash, a process left running with no window,
+    //! and notifications after `NPPN_SHUTDOWN` (DESIGN.md §7.4). Every
+    //! order here compiles, so it is pinned in the source; the probe
+    //! plugin runs are the behavioural check.
+
+    use super::plugin_reentry_guards::{
+        block_after, code_without_strings, fn_body, production_src,
+    };
+
+    /// `text` with every whitespace character removed, so a guard can
+    /// pin a sequence of statements without pinning its layout.
+    fn squashed(text: &str) -> String {
+        text.chars().filter(|c| !c.is_whitespace()).collect()
+    }
+
+    /// The production source from `main_wnd_proc`'s signature on, so an
+    /// arm is found in that window procedure and not in a dialog's.
+    fn from_main_wnd_proc() -> String {
+        let src = code_without_strings(production_src());
+        let start = src
+            .find("fn main_wnd_proc(")
+            .expect("main_wnd_proc is gone");
+        src[start..].to_string()
+    }
+
+    /// Byte offsets of every call of the bare function `name` — not a
+    /// method, not a longer name ending in it, not its definition.
+    fn bare_calls(src: &str, name: &str) -> Vec<usize> {
+        let pattern = format!("{name}(");
+        src.match_indices(&pattern)
+            .map(|(i, _)| i)
+            .filter(|&i| {
+                let before = src[..i].chars().next_back();
+                let ident = before.is_some_and(|c| c.is_alphanumeric() || c == '_' || c == '.');
+                !ident && !src[..i].ends_with("fn ")
+            })
+            .collect()
+    }
+
+    #[test]
+    fn the_close_and_file_exit_only_ask_to_quit() {
+        let src = from_main_wnd_proc();
+        let close = block_after(&src, "WM_CLOSE => {");
+        assert!(
+            close.contains("request_quit(hwnd);"),
+            "the main window's close no longer asks to quit"
+        );
+        for forbidden in [
+            "DefWindowProcW",
+            "DestroyWindow",
+            "notify_plugins_of_shutdown",
+        ] {
+            assert!(
+                !close.contains(forbidden),
+                "the main window's close calls `{forbidden}` again: a close inside a plugin's \
+                 own loop would quit under it"
+            );
+        }
+        let exit = block_after(&src, "ID_FILE_EXIT => {");
+        assert!(
+            exit.contains("request_quit(hwnd);") && !exit.contains("DestroyWindow"),
+            "File > Exit destroys the window itself again instead of asking to quit"
+        );
+    }
+
+    /// One call site, `run`'s message loop, as the first thing it does
+    /// each time round — before `GetMessageW`, so the `WM_QUIT` the quit
+    /// posts is taken by that loop.
+    /// Every `.rs` file of this crate, whole, as `(path, text)`: a call
+    /// from another module, or from production code after a test module,
+    /// counts too, and so does one in a file added later.
+    fn crate_sources() -> Vec<(String, String)> {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut files: Vec<_> = std::fs::read_dir(&dir)
+            .expect("the crate's src folder")
+            .map(|entry| entry.expect("a src entry").path())
+            .filter(|path| path.extension().is_some_and(|ext| ext == "rs"))
+            .collect();
+        files.sort();
+        assert!(
+            files.iter().any(|path| path.ends_with("lib.rs"))
+                && files.iter().any(|path| path.ends_with("dock_panels.rs")),
+            "the crate's sources were not found in {}",
+            dir.display()
+        );
+        files
+            .into_iter()
+            .map(|path| {
+                let text = std::fs::read_to_string(&path).expect("a readable source");
+                (path.display().to_string(), text)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn the_quit_runs_only_from_the_top_level_loop() {
+        let calls: Vec<String> = crate_sources()
+            .iter()
+            .flat_map(|(path, text)| {
+                bare_calls(&code_without_strings(text), "quit")
+                    .into_iter()
+                    .map(move |at| format!("{path} at byte {at}"))
+            })
+            .collect();
+        assert_eq!(
+            calls.len(),
+            1,
+            "`quit` is called from {calls:?}; only the top-level loop may run it"
+        );
+        let run = squashed(&code_without_strings(&fn_body(production_src(), "run")));
+        assert!(
+            run.contains("loop{ifquit_waiting(){quit(main_hwnd);}letret=GetMessageW("),
+            "the top-level loop no longer runs a waiting quit as its first step, before \
+             it waits for the next message"
+        );
+    }
+
+    #[test]
+    fn a_request_records_itself_before_anything_else() {
+        let body = squashed(&code_without_strings(&fn_body(
+            production_src(),
+            "request_quit",
+        )));
+        assert!(
+            body.starts_with(
+                "{ifquit_requested(){return;}QUIT_REQUESTED.with(|requested|requested.set(true));"
+            ),
+            "the request no longer records itself first; a failure before the flag is set \
+             would leave a close that did nothing"
+        );
+        assert!(
+            body.contains("PostMessageW(Some(hwnd),WM_APP_QUIT,"),
+            "the request no longer wakes a loop blocked in GetMessageW"
+        );
+        let wait = body
+            .find("ifquit_will_wait(startup,plugin_on_stack){")
+            .expect("the request no longer asks whether the quit will wait");
+        for step in ["save_session_now(hwnd)", "update_window_title(hwnd,"] {
+            let at = body
+                .find(step)
+                .unwrap_or_else(|| panic!("no `{step}` in the request"));
+            assert!(at > wait, "`{step}` runs whether or not the quit waits");
+        }
+    }
+
+    /// The whole body, so nothing can be added before the flag or
+    /// between the notification and the destroy.
+    #[test]
+    fn the_quit_raises_its_flag_then_notifies_then_destroys() {
+        let body = squashed(&code_without_strings(&fn_body(production_src(), "quit")));
+        assert_eq!(
+            body,
+            "{ifQUITTING.with(|q|q.replace(true)){return;}\
+             unsafe{notify_plugins_of_shutdown(hwnd)};\
+             let_=unsafe{DestroyWindow(hwnd)};}",
+            "the quit's steps changed"
+        );
+    }
+
+    #[test]
+    fn the_startup_restore_is_marked() {
+        let run = squashed(&code_without_strings(&fn_body(production_src(), "run")));
+        let marked = run
+            .find("{let_restoring=StartupRestore::begin();load_plugins_where(")
+            .expect("the startup restore's load pass is no longer marked");
+        let end = run[marked..]
+            .find("PluginLoadScope::RestoredPanels,);}")
+            .expect("the marked block no longer ends with the startup load pass");
+        assert_eq!(
+            run[marked..marked + end].matches(';').count(),
+            1,
+            "the marked block holds more than the startup load pass"
+        );
+    }
+
+    #[test]
+    fn the_load_pass_stops_at_a_quit() {
+        let body = squashed(&code_without_strings(&fn_body(
+            production_src(),
+            "load_plugins_where",
+        )));
+        assert!(
+            body.contains("loop{ifquit_requested(){break;}letpending="),
+            "the pass asks for the next plugin without checking for a quit first; it would \
+             load the rest after one was asked for"
+        );
+        assert!(
+            body.contains("quit_requested,);"),
+            "the load-time notifications no longer stop at a quit"
+        );
+        let stop = "ifquit_requested(){leave_unannounced(&loaded_now);return;}";
+        let first = body
+            .find(stop)
+            .expect("the pass no longer stops before notifying");
+        let menus = body
+            .find("DrawMenuBar(hwnd)")
+            .expect("the pass no longer redraws the menu");
+        let unpark = body
+            .find("unpark_loaded_plugins_panels(state,&loaded_now)")
+            .expect("the pass no longer unparks panels");
+        assert!(
+            menus < first && first < unpark,
+            "the first stop must come after the menus are installed and before any panel \
+             is unparked or noted"
+        );
+        let deliver = body
+            .find("notices.deliver_until(")
+            .expect("the batch delivery");
+        let second = body[first + stop.len()..]
+            .find(stop)
+            .map(|i| i + first + stop.len())
+            .expect("the pass no longer stops before its conclusions after READY");
+        let close = body
+            .find("close_unregistered_restored_panels(hwnd,&restore,&withheld)")
+            .expect("the pass no longer closes unregistered panels");
+        assert!(
+            deliver < second && second < close,
+            "a pass a quit stopped part-way must skip the conclusions after READY"
+        );
+        let restore = squashed(&code_without_strings(&fn_body(
+            production_src(),
+            "restore_plugin_panels",
+        )));
+        assert!(
+            restore.contains("for&cmdin&commands{ifquit_requested(){break;}"),
+            "the restore runs panel commands after a quit was asked for"
+        );
+    }
+
+    #[test]
+    fn plugin_commands_stop_at_the_quit() {
+        let src = squashed(&from_main_wnd_proc());
+        let arm = src
+            .find("ifis_plugin_cmd_id(cmd_i32)&&!quitting(){")
+            .expect("a plugin command runs after the quit has begun");
+        let run = src[arm..]
+            .find("command.run();")
+            .expect("the plugin-command arm no longer runs the command");
+        assert!(
+            src[arm..arm + run]
+                .contains(".filter(|command|!refuse_unannounced(cmd_i32,command.owner()));"),
+            "a command of a plugin whose load a quit stopped is no longer refused"
+        );
+    }
+
+    #[test]
+    fn nothing_reaches_a_plugin_once_the_quit_has_begun() {
+        let src = from_main_wnd_proc();
+        let wake = squashed(&block_after(&src, "WM_APP_WAKE => {"));
+        let gate = wake
+            .find("ifDrainFreeze::defer_wake(){returnLRESULT(0);}ifquitting(){returnLRESULT(0);}")
+            .expect("the drain no longer stops once the quit has begun");
+        let drain = wake
+            .find("shell.drain(")
+            .expect("the wake no longer drains");
+        assert!(gate < drain);
+        let destroy = squashed(&block_after(&src, "WM_DESTROY => {"));
+        let raised = destroy
+            .find("QUITTING.with(|quitting|quitting.set(true));")
+            .expect("WM_DESTROY no longer marks the quit begun");
+        let fallback = destroy
+            .find("notify_plugins_of_shutdown(hwnd);")
+            .expect("WM_DESTROY lost its fallback notification");
+        assert!(raised < fallback);
+        assert!(
+            !destroy.contains("deliver_queued_notifications(")
+                && destroy.contains("take_notifications()"),
+            "WM_DESTROY delivers notifications after NPPN_SHUTDOWN again"
+        );
+        let lib = production_src();
+        let notify = squashed(&code_without_strings(&fn_body(
+            lib,
+            "notify_plugins_of_shutdown",
+        )));
+        let queued = notify
+            .find("deliver_queued_notifications(hwnd);")
+            .expect("what is queued no longer goes out ahead of the shutdown pair");
+        let capture = notify
+            .find("sync_dock_state_to_shell(hwnd);")
+            .expect("the capture");
+        let pair = notify
+            .find("notify_plugins(notification,")
+            .expect("the pair");
+        assert!(queued < capture && capture < pair);
+        let save = squashed(&code_without_strings(&fn_body(lib, "save_session_now")));
+        assert!(
+            save.starts_with("{ifquitting(){return;}"),
+            "the autosave runs after the quit has begun"
+        );
+        // The host's own deliveries — after a command, a plugin's message,
+        // a close — and its deferred dialogs stop too. Only
+        // `notify_plugins_of_shutdown` delivers once the quit has begun,
+        // through the delivery half, which has no gate of its own.
+        for (helper, what) in [
+            (
+                "fire_queued_notifications",
+                "queued notifications are delivered",
+            ),
+            ("present_deferred_dialogs", "a deferred dialog is shown"),
+        ] {
+            let body = squashed(&code_without_strings(&fn_body(lib, helper)));
+            assert!(
+                body.starts_with("{ifquitting(){return;}"),
+                "{what} after the quit has begun"
+            );
+        }
+        let deliveries: usize = crate_sources()
+            .iter()
+            .map(|(_, text)| {
+                bare_calls(&code_without_strings(text), "deliver_queued_notifications").len()
+            })
+            .sum();
+        assert_eq!(
+            deliveries, 2,
+            "`deliver_queued_notifications` is called from somewhere other than \
+             `fire_queued_notifications` and the shutdown"
+        );
+        let close = squashed(&code_without_strings(&fn_body(
+            lib,
+            "handle_close_active_tab_inner",
+        )));
+        assert!(
+            close.contains("if!quitting(){announced.deliver(hwnd.0);}"),
+            "a close announces itself after the quit has begun"
+        );
+        let hide = squashed(&code_without_strings(&fn_body(lib, "hide_plugin_panel")));
+        assert!(
+            hide.contains("reentry_guard.is_some()&&!quitting()&&"),
+            "DMN_CLOSE is sent after the quit has begun"
+        );
+        let dock = include_str!("dock_panels.rs");
+        let dock = dock.find("#[cfg(test)]").map_or(dock, |i| &dock[..i]);
+        let notices = squashed(&code_without_strings(&fn_body(
+            dock,
+            "deliver_container_notices",
+        )));
+        assert!(
+            notices.starts_with("{ifcrate::quitting(){return;}"),
+            "DMN_DOCK / DMN_FLOAT are sent after the quit has begun"
+        );
+    }
+
+    #[test]
+    fn the_plugins_menu_does_not_load_or_open_once_a_quit_is_asked_for() {
+        let src = squashed(&from_main_wnd_proc());
+        let arm = src.find("WM_INITMENUPOPUP=>{").expect("the menu arm");
+        let arm = &src[arm..];
+        assert!(
+            arm.contains("==state.plugin_menu.0asusize&&!quit_requested()"),
+            "the Plugins menu starts a load pass after a quit was asked for"
+        );
+        assert!(
+            arm.contains("load_pending_plugins(hwnd,npp_data);ifquit_requested(){let_=EndMenu();}"),
+            "a quit asked for during the menu's load pass leaves the menu open"
         );
     }
 }
@@ -32573,7 +33501,7 @@ mod plugin_load_borrow_guards {
         use super::plugin_reentry_guards::statement_end;
         let body = code_only(&fn_body(production_src(), "load_plugins_where"));
         let tail = body
-            .find("let restore = unsafe { state_from_hwnd(hwnd) }")
+            .find("let installed = unsafe { state_from_hwnd(hwnd) }")
             .expect("the pass no longer does its bookkeeping under one borrow after the loop");
         let install = body
             .find("install_plugin_menus(")
@@ -32582,7 +33510,7 @@ mod plugin_load_borrow_guards {
             .find("refresh_plugin_accels(state)")
             .expect("the pass no longer rebuilds the accelerator table");
         let deliver = body
-            .find("notices.deliver(")
+            .find("notices.deliver_until(")
             .expect("the pass no longer delivers the load-time notifications");
         assert!(
             tail < install && install < deliver && accels < deliver,
@@ -32602,7 +33530,7 @@ mod plugin_load_borrow_guards {
             );
         }
         assert_eq!(
-            body.matches(".deliver(").count(),
+            body.matches(".deliver_until(").count() + body.matches(".deliver(").count(),
             1,
             "a plugin is notified from somewhere other than the one batch delivery — \
              one at a time from inside the loop is how this used to be"
@@ -32630,7 +33558,9 @@ mod plugin_load_borrow_guards {
             tail < capture && capture < statement_end(&body, tail),
             "the arrangement must be noted under the bookkeeping borrow, before any plugin runs"
         );
-        let deliver = body.find("notices.deliver(").expect("the batch delivery");
+        let deliver = body
+            .find("notices.deliver_until(")
+            .expect("the batch delivery");
         let deliver_end = statement_end(&body, deliver);
         let hook = body
             .find("restore_plugin_panels(hwnd, &restore, &mut withheld)")
@@ -33577,7 +34507,7 @@ mod panel_focus_guards {
             .find("let focus_before = match dock_panels::focus_now() {")
             .expect("the load pass no longer notes the focus");
         let deliver = body
-            .find("notices.deliver(")
+            .find("notices.deliver_until(")
             .expect("the load pass no longer delivers its notifications");
         let restore = body
             .find("restore_plugin_panels(hwnd, &restore, &mut withheld);")

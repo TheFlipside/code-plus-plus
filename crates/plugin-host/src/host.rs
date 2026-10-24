@@ -989,8 +989,8 @@ impl PluginHost {
 /// What is lost by not unloading: nothing the OS does not do a moment
 /// later. The process is exiting; every mapping goes with it.
 /// `NPPN_SHUTDOWN` still fires while everything is still mapped — from
-/// `WM_CLOSE` on Win32 and from the quit path on GTK and Cocoa — so a
-/// plugin still gets its documented chance to save state.
+/// the quit path on every backend — so a plugin still gets its
+/// documented chance to save state.
 ///
 /// DESIGN.md §6.4 records why the host does not unload a plugin on
 /// exit.

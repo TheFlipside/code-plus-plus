@@ -714,6 +714,11 @@ pub(crate) fn container_notices(
 /// `WindowState` borrow held — the plugin's handler runs inside the
 /// send and may call straight back into the host.
 unsafe fn deliver_container_notices(main_hwnd: HWND, notices: Vec<(HWND, u32)>) {
+    // Nothing once the quit has begun: the plugins have heard, or are
+    // hearing, that the host is shutting down.
+    if crate::quitting() {
+        return;
+    }
     CONTAINER_NOTICES.with(|q| {
         q.borrow_mut()
             .extend(notices.into_iter().map(|(h, code)| (main_hwnd, h, code)));
