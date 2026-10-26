@@ -271,9 +271,9 @@ impl UiPlatform for GtkUi {
         // at the current document — so avoiding the no-op swap preserves
         // the caret whenever the view is already showing the target doc
         // (e.g. the trailing `bind_active_view` after a single-tab restore,
-        // or re-activating the current tab). It does not help when the
-        // active tab genuinely differs from what is bound; `restore_session`
-        // re-seeds the caret explicitly for that case. Same shape as
+        // or re-activating the current tab). When the tab genuinely differs
+        // from what is bound, the shell puts the view back at the tab's
+        // position after this returns (`Tab::view`). Same shape as
         // `with_doc`'s `prior == doc` short-circuit below. A fresh doc is
         // never the current one, so it always binds.
         if doc != self.editor.send(SCI_GETDOCPOINTER, 0, 0) {
@@ -311,8 +311,16 @@ impl UiPlatform for GtkUi {
         read_all(&self.editor)
     }
 
-    fn get_cursor_pos(&mut self) -> u64 {
-        self.editor.send(SCI_GETCURRENTPOS, 0, 0).max(0) as u64
+    fn bound_doc(&mut self) -> isize {
+        self.editor.send(SCI_GETDOCPOINTER, 0, 0)
+    }
+
+    fn view_position(&mut self) -> codepp_shell::ViewPosition {
+        self.editor.view_position()
+    }
+
+    fn set_view_position(&mut self, pos: codepp_shell::ViewPosition) {
+        self.editor.set_view_position(pos);
     }
 
     fn update_status(&mut self, lang: LangType, encoding: &Encoding, eol: Eol, _byte_len: u64) {

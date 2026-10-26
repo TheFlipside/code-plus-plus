@@ -2622,47 +2622,11 @@ fn restore_session(initial_path: Option<PathBuf>) {
     // active-vs-bound split `Shell::bind_active_view` documents as the
     // most damaging state this crate can produce. Idempotent, so
     // running it when the drain already bound correctly costs nothing.
+    // When it does swap documents, the shell puts the view back at the
+    // position it kept for the tab (`Tab::view`), the caret the session
+    // recorded for a tab restored from a backup; until Phase 5 this
+    // backend re-seeded that caret here by hand, for the tab in front only.
     rebind_active_view();
-    reseed_active_caret();
-}
-
-/// Restore the active tab's caret to its persisted position after a
-/// session restore.
-///
-/// The trailing `bind_active_view` can perform a real `SCI_SETDOCPOINTER`,
-/// and Scintilla clears the caret to 0 on every genuine doc swap — while
-/// `bind_active_view`'s existing-doc path never re-applies the stored
-/// cursor. `activate_tab`'s same-doc guard avoids the swap only when the
-/// active tab is the one already bound (a single-tab restore, or a
-/// multi-tab one whose active tab was the last synchronously bound); when
-/// an *earlier* backup tab is the active one the swap is unavoidable, so
-/// the caret is restored explicitly here. `session.tabs` still holds the
-/// loaded cursor (`load_session_entries` kept it). For an `OpenFile`
-/// active tab the buffer is still empty now, so this clamps to 0 and
-/// `apply_load_result` applies the real cursor when the async load lands —
-/// harmless either way. Scintilla clamps an out-of-range value to the
-/// document length.
-///
-/// Only fires when the active tab is still the session's persisted active
-/// tab: a command-line file (`initial_path`) moves `active_tab` onto its
-/// own freshly-opened tab, whose caret is that file's concern — stamping
-/// the session tab's cursor onto it would land the caret at an unrelated
-/// position.
-fn reseed_active_caret() {
-    let cursor = with_state(|st| {
-        let active_idx = st.shell.session_active_index()?;
-        if st.shell.active_tab != Some(active_idx) {
-            return None;
-        }
-        st.shell.session.tabs.get(active_idx).map(|t| t.cursor)
-    })
-    .flatten();
-    if let Some(cursor) = cursor {
-        with_state(|st| {
-            st.editor
-                .send(codepp_scintilla_sys::SCI_GOTOPOS, cursor as usize, 0);
-        });
-    }
 }
 
 /// The editor half of `Shell::open_file_replacing_scratch`'s decision:

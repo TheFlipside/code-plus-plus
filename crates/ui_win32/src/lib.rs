@@ -2263,9 +2263,16 @@ impl UiPlatform for Win32Ui {
         String::from_utf8_lossy(&buf).into_owned()
     }
 
-    fn get_cursor_pos(&mut self) -> u64 {
-        let pos = self.editor.send(SCI_GETCURRENTPOS, 0, 0);
-        pos.max(0) as u64
+    fn bound_doc(&mut self) -> isize {
+        self.editor.send(SCI_GETDOCPOINTER, 0, 0)
+    }
+
+    fn view_position(&mut self) -> codepp_shell::ViewPosition {
+        self.editor.view_position()
+    }
+
+    fn set_view_position(&mut self, pos: codepp_shell::ViewPosition) {
+        self.editor.set_view_position(pos);
     }
 
     fn update_status(
@@ -8835,15 +8842,16 @@ fn prompt_save_session_xml_path(owner: HWND) -> Option<PathBuf> {
 /// write a Notepad++-shape session XML at a user-picked location.
 /// Untitled buffers are skipped (no path to record); the resulting
 /// file therefore contains only tabs a fresh N++ (or Code++) instance
-/// can reopen from disk. The active tab contributes live caret +
-/// scroll positions pulled from Scintilla; the rest carry zeros.
+/// can reopen from disk. Each tab contributes its caret and scroll
+/// position: the live view's for the tab the view shows, and the one the
+/// shell kept for every other tab (`Shell::save_npp_session`).
 ///
 /// The dialog happens with **no** `&mut WindowState` borrow held — the
 /// OS dialog spins its own message pump that would re-enter `wnd_proc`.
-/// The caret snapshot and the session build then happen together under a
-/// single borrow taken *after* the dialog closes, so the recorded caret
-/// and the tab list it attaches to are one consistent snapshot even if an
-/// async load or watcher event moved `active_tab` during the modal pump.
+/// The session build then happens under a single borrow taken *after*
+/// the dialog closes, so the positions and the tab list they attach to
+/// are one consistent snapshot even if an async load or watcher event
+/// moved `active_tab` during the modal pump.
 fn handle_save_session(hwnd: HWND) {
     // 1. Prompt for a path first. This spins a nested message loop; no
     //    state borrow may be alive when it does.
@@ -8851,26 +8859,13 @@ fn handle_save_session(hwnd: HWND) {
         return;
     };
 
-    // 2. Snapshot the active tab's live caret and build + write, all under
-    //    one post-dialog borrow. The caret is captured only when the active
-    //    tab is path-bound (an untitled active tab has no `<File>` entry, so
-    //    its caret has nowhere to go). `state.editor` and `state.shell` are
-    //    disjoint fields, so the reads coexist. Errors surface via the
-    //    standard dialog — the user picked this path and expects a
+    // 2. Build + write under one post-dialog borrow. Errors surface via
+    //    the standard dialog — the user picked this path and expects a
     //    filesystem outcome, so a silent log wouldn't be right.
     let result = unsafe {
         state_from_hwnd(hwnd).map(|state| {
-            let active_caret = state
-                .shell
-                .active()
-                .is_some_and(|t| t.path.is_some())
-                .then(|| codepp_shell::SessionCaret {
-                    start_pos: state.editor.send(SCI_GETSELECTIONSTART, 0, 0).max(0) as u64,
-                    end_pos: state.editor.send(SCI_GETSELECTIONEND, 0, 0).max(0) as u64,
-                    first_visible_line: state.editor.send(SCI_GETFIRSTVISIBLELINE, 0, 0).max(0)
-                        as u32,
-                });
-            state.shell.save_npp_session(&save_path, active_caret)
+            let (shell, mut ui) = state.split();
+            shell.save_npp_session(&mut ui, &save_path)
         })
     };
     if let Some(Err(e)) = result {
@@ -34531,5 +34526,295 @@ mod panel_focus_guards {
             "the restore slot no longer returns the focus as its last step, outside the \
              restore's panic boundary"
         );
+    }
+}
+
+#[cfg(test)]
+mod view_position_tests {
+    //! The editor's read and apply of a view position, against a real
+    //! Scintilla control. The shell keeps one per tab and puts it back
+    //! after it binds a tab's document, because `SCI_SETDOCPOINTER` clears
+    //! the selection; the fixture the shell is tested with models that,
+    //! and this checks the model, and the `EditorHandle` methods every
+    //! backend delegates to, against Scintilla itself.
+
+    use std::ffi::c_void;
+    use std::fmt::Write as _;
+    use std::sync::Once;
+
+    use codepp_editor::EditorHandle;
+    use codepp_scintilla_sys::{
+        ScintillaDirectFunction, Scintilla_RegisterClasses, SCI_ADDREFDOCUMENT, SCI_CREATEDOCUMENT,
+        SCI_GETCURRENTPOS, SCI_GETDIRECTFUNCTION, SCI_GETDIRECTPOINTER, SCI_GETDOCPOINTER,
+        SCI_GETFIRSTVISIBLELINE, SCI_LINESONSCREEN, SCI_POSITIONFROMLINE, SCI_RELEASEDOCUMENT,
+        SCI_SETCODEPAGE, SCI_SETDOCPOINTER, SCI_SETSCROLLWIDTH, SCI_SETTEXT, SCI_SETWRAPMODE,
+        SC_CP_UTF8, SC_WRAP_WORD,
+    };
+    use codepp_shell::ViewPosition;
+    use windows::core::{w, PCWSTR};
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+    use windows::Win32::UI::WindowsAndMessaging::{
+        CreateWindowExW, DestroyWindow, SendMessageW, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_POPUP,
+    };
+
+    /// An off-screen Scintilla control that is never shown, destroyed when
+    /// it drops, so a failed assertion does not leave it behind.
+    struct Control {
+        hwnd: HWND,
+        editor: EditorHandle,
+    }
+
+    impl Drop for Control {
+        fn drop(&mut self) {
+            // SAFETY: the control `scintilla` created on this thread; the
+            // handle into it is not used after this.
+            unsafe {
+                let _ = DestroyWindow(self.hwnd);
+            }
+        }
+    }
+
+    /// A Scintilla control `width` by `height` pixels holding `text`, in
+    /// the UTF-8 code page, as every document Code++ creates is. Bytes rather
+    /// than a string, so a test can hold a sequence that is not valid UTF-8.
+    fn scintilla(width: i32, height: i32, text: &[u8]) -> Control {
+        static REGISTER: Once = Once::new();
+        // SAFETY: plain Win32 calls on this thread. The direct-call pair is
+        // the control's own, read back from it, and the control outlives
+        // every use of the handle, since `Control` destroys it last.
+        unsafe {
+            let instance = GetModuleHandleW(None).unwrap_or_default();
+            // Scintilla's registration must run once per process.
+            REGISTER.call_once(|| {
+                assert_ne!(
+                    Scintilla_RegisterClasses(instance.0),
+                    0,
+                    "registering Scintilla's window class"
+                );
+            });
+            let hwnd = CreateWindowExW(
+                WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
+                w!("Scintilla"),
+                PCWSTR::null(),
+                WS_POPUP,
+                -32000,
+                -32000,
+                width,
+                height,
+                None,
+                None,
+                Some(instance.into()),
+                None,
+            )
+            .expect("a Scintilla control");
+            let direct_fn = SendMessageW(hwnd, SCI_GETDIRECTFUNCTION, None, None).0;
+            let direct_ptr = SendMessageW(hwnd, SCI_GETDIRECTPOINTER, None, None).0;
+            assert!(direct_fn != 0 && direct_ptr != 0, "no direct-call pair");
+            let direct_fn: ScintillaDirectFunction = std::mem::transmute(direct_fn);
+            let editor = EditorHandle::new(hwnd.0, direct_fn, direct_ptr as *mut c_void);
+            editor.send(SCI_SETCODEPAGE, SC_CP_UTF8 as usize, 0);
+            let mut bytes = text.to_vec();
+            bytes.push(0);
+            editor.send(SCI_SETTEXT, 0, bytes.as_ptr() as isize);
+            Control { hwnd, editor }
+        }
+    }
+
+    /// Two hundred lines, each `width` bytes wide or as wide as its number.
+    fn numbered_lines(width: usize) -> String {
+        let mut text = String::new();
+        for n in 0..200 {
+            let _ = writeln!(text, "line {n:<width$}");
+        }
+        text
+    }
+
+    fn line_start(editor: &EditorHandle, line: usize) -> u64 {
+        u64::try_from(editor.send(SCI_POSITIONFROMLINE, line, 0)).unwrap()
+    }
+
+    /// A position put on the view reads back as it was put: the selection,
+    /// either way round, and the scroll.
+    #[test]
+    fn a_position_reads_back_as_it_was_put() {
+        let control = scintilla(400, 300, numbered_lines(0).as_bytes());
+        let editor = &control.editor;
+        assert!(
+            editor.send(SCI_LINESONSCREEN, 0, 0) > 0,
+            "precondition: whole lines fit on screen"
+        );
+        for (anchor_line, caret_line, top) in [(30, 32, 25), (52, 50, 40)] {
+            let pos = ViewPosition {
+                anchor: line_start(editor, anchor_line),
+                caret: line_start(editor, caret_line),
+                first_visible_line: Some(top),
+                x_offset: 0,
+            };
+            editor.set_view_position(pos);
+            assert_eq!(editor.view_position(), pos);
+        }
+    }
+
+    /// The horizontal scroll reads back with the first visible line, even
+    /// when the caret it goes with is then off screen to the left. While
+    /// lines wrap it is not applied: Scintilla shows no horizontal scroll
+    /// bar then, so a shifted view would be out of reach.
+    #[test]
+    fn the_horizontal_scroll_reads_back_with_the_first_visible_line() {
+        let control = scintilla(400, 300, numbered_lines(500).as_bytes());
+        let editor = &control.editor;
+        assert!(
+            editor.send(SCI_LINESONSCREEN, 0, 0) > 0,
+            "precondition: whole lines fit on screen"
+        );
+        editor.send(SCI_SETSCROLLWIDTH, 6000, 0);
+        let pos = ViewPosition {
+            first_visible_line: Some(20),
+            x_offset: 120,
+            ..ViewPosition::at(line_start(editor, 24))
+        };
+        editor.set_view_position(pos);
+        assert_eq!(editor.view_position(), pos);
+
+        // Kept within the scroll width.
+        editor.set_view_position(ViewPosition {
+            x_offset: 90_000,
+            ..pos
+        });
+        assert_eq!(editor.view_position().x_offset, 6000);
+
+        editor.send(SCI_SETWRAPMODE, SC_WRAP_WORD, 0);
+        editor.set_view_position(pos);
+        assert_eq!(editor.view_position().x_offset, 0, "applied while wrapping");
+    }
+
+    /// What the shell relies on: a document swap clears the selection, and
+    /// putting the position back restores it and the scroll. The view is
+    /// scrolled elsewhere before the position goes back, so a scroll the
+    /// swap happened to keep cannot pass for one the position restored.
+    #[test]
+    fn a_document_swap_loses_the_selection_and_the_position_puts_it_back() {
+        let control = scintilla(400, 300, numbered_lines(0).as_bytes());
+        let editor = &control.editor;
+        assert!(
+            editor.send(SCI_LINESONSCREEN, 0, 0) > 0,
+            "precondition: whole lines fit on screen"
+        );
+        let pos = ViewPosition {
+            anchor: line_start(editor, 120),
+            caret: line_start(editor, 121),
+            first_visible_line: Some(110),
+            x_offset: 0,
+        };
+        editor.set_view_position(pos);
+        // The view holds the only reference on its startup document, so
+        // without one of our own the swap away would free it.
+        let a = editor.send(SCI_GETDOCPOINTER, 0, 0);
+        editor.send(SCI_ADDREFDOCUMENT, 0, a);
+        let b = editor.send(SCI_CREATEDOCUMENT, 0, 0);
+        editor.send(SCI_SETDOCPOINTER, 0, b);
+        editor.send(SCI_SETDOCPOINTER, 0, a);
+        editor.send(SCI_RELEASEDOCUMENT, 0, a);
+        editor.send(SCI_RELEASEDOCUMENT, 0, b);
+        let after_swap = editor.view_position();
+        assert_eq!(
+            (after_swap.anchor, after_swap.caret),
+            (0, 0),
+            "the swap back cleared the selection"
+        );
+        editor.set_view_position(ViewPosition {
+            first_visible_line: Some(5),
+            ..ViewPosition::at(0)
+        });
+        assert_eq!(
+            editor.send(SCI_GETFIRSTVISIBLELINE, 0, 0),
+            5,
+            "precondition: scrolled away"
+        );
+
+        editor.set_view_position(pos);
+        assert_eq!(editor.view_position(), pos);
+    }
+
+    /// A caret with no scroll to go back to, as `session.xml` gives one, is
+    /// scrolled into view.
+    #[test]
+    fn a_caret_without_a_scroll_is_scrolled_into_view() {
+        let control = scintilla(400, 300, numbered_lines(0).as_bytes());
+        let editor = &control.editor;
+        let caret = line_start(editor, 150);
+        editor.set_view_position(ViewPosition::at(caret));
+        assert_eq!(editor.view_position().caret, caret);
+        let top = editor.send(SCI_GETFIRSTVISIBLELINE, 0, 0);
+        let lines = editor.send(SCI_LINESONSCREEN, 0, 0);
+        assert!(
+            (top..top + lines).contains(&150),
+            "line 150 is not on screen: lines {top} to {}",
+            top + lines - 1
+        );
+    }
+
+    /// A view too small to show a whole line reads no scroll at all.
+    #[test]
+    fn a_view_too_small_for_a_line_reads_no_scroll() {
+        let control = scintilla(400, 1, numbered_lines(0).as_bytes());
+        let editor = &control.editor;
+        assert_eq!(editor.send(SCI_LINESONSCREEN, 0, 0), 0, "precondition");
+        assert_eq!(editor.view_position().first_visible_line, None);
+    }
+
+    /// A position inside a character, or between the CR and LF of a line
+    /// end, moves back to where that character starts; one past the end is
+    /// clamped to it. Neither `SCI_SETSEL` nor `SCI_GOTOPOS` does that
+    /// itself, and a caret left inside a character splits it on the next
+    /// keystroke.
+    #[test]
+    fn a_position_inside_a_character_moves_back_to_its_start() {
+        // 'a' 0, 'é' 1..3, '€' 3..6, a four-byte emoji 6..10, CR 10, LF 11,
+        // 'b' 12, end 13.
+        let control = scintilla(400, 300, "a\u{e9}\u{20ac}\u{1f600}\r\nb".as_bytes());
+        let editor = &control.editor;
+        for (pos, start) in [
+            (0, 0),
+            (1, 1),
+            (2, 1),
+            (3, 3),
+            (4, 3),
+            (5, 3),
+            (6, 6),
+            (7, 6),
+            (8, 6),
+            (9, 6),
+            (10, 10),
+            (11, 10),
+            (12, 12),
+            (13, 13),
+            (99, 13),
+        ] {
+            assert_eq!(editor.char_boundary_at_or_before(pos), start, "at {pos}");
+        }
+        editor.set_view_position(ViewPosition {
+            anchor: 8,
+            caret: 4,
+            ..ViewPosition::default()
+        });
+        let pos = editor.view_position();
+        assert_eq!((pos.anchor, pos.caret), (6, 3));
+        assert_eq!(editor.send(SCI_GETCURRENTPOS, 0, 0), 3);
+
+        // Outside UTF-8 the bytes are not walked, only clamped.
+        editor.send(SCI_SETCODEPAGE, 0, 0);
+        assert_eq!(editor.char_boundary_at_or_before(2), 2);
+        assert_eq!(editor.char_boundary_at_or_before(99), 13);
+
+        // A CRLF at the very end, and a document that ends in a partial
+        // sequence (a three-byte lead and one continuation byte, at 4 and 5).
+        let control = scintilla(400, 300, b"ab\r\n");
+        assert_eq!(control.editor.char_boundary_at_or_before(3), 2);
+        assert_eq!(control.editor.char_boundary_at_or_before(4), 4);
+        let control = scintilla(400, 300, b"abc\n\xe2\x82");
+        assert_eq!(control.editor.char_boundary_at_or_before(5), 4);
+        assert_eq!(control.editor.char_boundary_at_or_before(6), 6);
     }
 }

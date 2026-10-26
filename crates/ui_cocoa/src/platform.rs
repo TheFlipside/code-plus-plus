@@ -377,8 +377,16 @@ impl UiPlatform for CocoaUi {
         read_all(&self.editor)
     }
 
-    fn get_cursor_pos(&mut self) -> u64 {
-        self.editor.send(SCI_GETCURRENTPOS, 0, 0).max(0) as u64
+    fn bound_doc(&mut self) -> isize {
+        self.editor.send(SCI_GETDOCPOINTER, 0, 0)
+    }
+
+    fn view_position(&mut self) -> codepp_shell::ViewPosition {
+        self.editor.view_position()
+    }
+
+    fn set_view_position(&mut self, pos: codepp_shell::ViewPosition) {
+        self.editor.set_view_position(pos);
     }
 
     fn update_status(&mut self, lang: LangType, encoding: &Encoding, eol: Eol, _byte_len: u64) {

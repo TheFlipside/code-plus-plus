@@ -72,6 +72,8 @@ pub mod udl_paint;
 
 use core::ffi::c_void;
 
+use codepp_core::ViewPosition;
+
 // Lexilla is only built on the backends that have a Scintilla build,
 // so `CreateLexer` exists on exactly those targets — see the gate on
 // its declaration in `scintilla-sys`. Imported separately so the
@@ -80,20 +82,23 @@ use core::ffi::c_void;
 use codepp_scintilla_sys::CreateLexer;
 use codepp_scintilla_sys::{
     sptr_t, uptr_t, ScintillaDirectFunction, SCI_BRACEBADLIGHT, SCI_BRACEHIGHLIGHT, SCI_BRACEMATCH,
-    SCI_GETCHARAT, SCI_GETCURRENTPOS, SCI_GETENDSTYLED, SCI_GETLINECOUNT, SCI_GETRANGEPOINTER,
-    SCI_GETTARGETEND, SCI_GETTARGETSTART, SCI_LINEFROMPOSITION, SCI_MARKERDEFINE,
+    SCI_GETANCHOR, SCI_GETCHARAT, SCI_GETCODEPAGE, SCI_GETCURRENTPOS, SCI_GETENDSTYLED,
+    SCI_GETFIRSTVISIBLELINE, SCI_GETLENGTH, SCI_GETLINECOUNT, SCI_GETRANGEPOINTER,
+    SCI_GETSCROLLWIDTH, SCI_GETTARGETEND, SCI_GETTARGETSTART, SCI_GETWRAPMODE, SCI_GETXOFFSET,
+    SCI_LINEFROMPOSITION, SCI_LINESCROLL, SCI_LINESONSCREEN, SCI_MARKERDEFINE,
     SCI_MARKERENABLEHIGHLIGHT, SCI_MARKERSETBACK, SCI_MARKERSETBACKSELECTED, SCI_MARKERSETFORE,
     SCI_POSITIONFROMLINE, SCI_REPLACETARGET, SCI_REPLACETARGETRE, SCI_SEARCHANCHOR,
     SCI_SEARCHINTARGET, SCI_SEARCHNEXT, SCI_SEARCHPREV, SCI_SETAUTOMATICFOLD, SCI_SETCARETLINEBACK,
     SCI_SETCARETLINEVISIBLE, SCI_SETCHANGEHISTORY, SCI_SETFOLDFLAGS, SCI_SETFOLDMARGINCOLOUR,
     SCI_SETFOLDMARGINHICOLOUR, SCI_SETILEXER, SCI_SETKEYWORDS, SCI_SETMARGINMASKN,
     SCI_SETMARGINSENSITIVEN, SCI_SETMARGINTYPEN, SCI_SETMARGINWIDTHN, SCI_SETPROPERTY,
-    SCI_SETSEARCHFLAGS, SCI_SETSTYLING, SCI_SETTARGETRANGE, SCI_STARTSTYLING, SCI_STYLECLEARALL,
-    SCI_STYLESETBACK, SCI_STYLESETBOLD, SCI_STYLESETFONT, SCI_STYLESETFORE, SCI_STYLESETITALIC,
-    SCI_STYLESETSIZE, SCI_STYLESETUNDERLINE, SCI_TEXTWIDTH, SC_CHANGE_HISTORY_ENABLED,
-    SC_CHANGE_HISTORY_MARKERS, SC_MARGIN_NUMBER, SC_MARGIN_SYMBOL, SC_MARKNUM_HISTORY_MODIFIED,
-    SC_MARKNUM_HISTORY_REVERTED_TO_MODIFIED, SC_MARKNUM_HISTORY_REVERTED_TO_ORIGIN,
-    SC_MARKNUM_HISTORY_SAVED, SC_MARK_EMPTY, SC_MARK_FULLRECT, STYLE_LINENUMBER,
+    SCI_SETSEARCHFLAGS, SCI_SETSEL, SCI_SETSTYLING, SCI_SETTARGETRANGE, SCI_SETXOFFSET,
+    SCI_STARTSTYLING, SCI_STYLECLEARALL, SCI_STYLESETBACK, SCI_STYLESETBOLD, SCI_STYLESETFONT,
+    SCI_STYLESETFORE, SCI_STYLESETITALIC, SCI_STYLESETSIZE, SCI_STYLESETUNDERLINE, SCI_TEXTWIDTH,
+    SC_CHANGE_HISTORY_ENABLED, SC_CHANGE_HISTORY_MARKERS, SC_CP_UTF8, SC_MARGIN_NUMBER,
+    SC_MARGIN_SYMBOL, SC_MARKNUM_HISTORY_MODIFIED, SC_MARKNUM_HISTORY_REVERTED_TO_MODIFIED,
+    SC_MARKNUM_HISTORY_REVERTED_TO_ORIGIN, SC_MARKNUM_HISTORY_SAVED, SC_MARK_EMPTY,
+    SC_MARK_FULLRECT, SC_WRAP_NONE, STYLE_LINENUMBER,
 };
 
 /// Opaque handle to a Scintilla editor control.
@@ -804,6 +809,95 @@ impl EditorHandle {
     #[must_use]
     pub fn current_pos(&self) -> u64 {
         self.send(SCI_GETCURRENTPOS, 0, 0) as u64
+    }
+
+    /// Where the view stands in the document it shows: the selection and
+    /// the scroll. The first visible line is left out while no whole line
+    /// fits on screen (`SCI_LINESONSCREEN` answers 0), as in a view not yet
+    /// laid out, or a window shorter than one line: its scroll says nothing
+    /// about where the user was, and applying it later could put the caret
+    /// just off screen.
+    #[must_use]
+    pub fn view_position(&self) -> ViewPosition {
+        let read = |msg: u32| self.send(msg, 0, 0).max(0) as u64;
+        let laid_out = self.send(SCI_LINESONSCREEN, 0, 0) > 0;
+        ViewPosition {
+            anchor: read(SCI_GETANCHOR),
+            caret: read(SCI_GETCURRENTPOS),
+            first_visible_line: laid_out.then(|| read(SCI_GETFIRSTVISIBLELINE)),
+            x_offset: read(SCI_GETXOFFSET),
+        }
+    }
+
+    /// Put the view at `pos` in the document it shows. The selection goes
+    /// first, which scrolls the caret into view (`SCI_SETSEL`); with a first
+    /// visible line, the scroll then goes back to it exactly, the way the
+    /// user left it, even if that leaves the caret off screen.
+    ///
+    /// Each end of the selection is clamped to the document and moved back
+    /// to a character boundary first ([`Self::char_boundary_at_or_before`]),
+    /// so a position from a hand-edited file, or one kept over text that has
+    /// changed since, lands inside the document on a character. The
+    /// horizontal scroll is applied only while lines do not wrap, and kept
+    /// within the scroll width.
+    pub fn set_view_position(&self, pos: ViewPosition) {
+        let to_ptr = |v: u64| sptr_t::try_from(v).unwrap_or(sptr_t::MAX);
+        let anchor = to_ptr(self.char_boundary_at_or_before(pos.anchor));
+        let caret = to_ptr(self.char_boundary_at_or_before(pos.caret));
+        // Non-negative by construction, so the cast to the unsigned
+        // parameter keeps the value.
+        self.send(SCI_SETSEL, anchor as uptr_t, caret);
+        let Some(line) = pos.first_visible_line else {
+            return;
+        };
+        // `SCI_LINESCROLL` scrolls by a delta from the first visible line,
+        // read just before on this thread, so the line it arrives at is
+        // `to_ptr(line)` and the sum inside Scintilla cannot overflow.
+        let current = self.send(SCI_GETFIRSTVISIBLELINE, 0, 0);
+        let delta = to_ptr(line).saturating_sub(current);
+        if delta != 0 {
+            self.send(SCI_LINESCROLL, 0, delta);
+        }
+        // A horizontal scroll means nothing while lines wrap. Scintilla sets
+        // it to 0 when wrapping starts (`Message::SetWrapMode`) and shows no
+        // horizontal scroll bar then, so one read with wrapping off and put
+        // back with it on would shift the text left out of reach.
+        if self.send(SCI_GETWRAPMODE, 0, 0) == SC_WRAP_NONE as sptr_t {
+            let width = self.send(SCI_GETSCROLLWIDTH, 0, 0).max(0) as u64;
+            let x_offset = i32::try_from(pos.x_offset.min(width)).unwrap_or(i32::MAX);
+            self.send(SCI_SETXOFFSET, x_offset as uptr_t, 0);
+        }
+    }
+
+    /// `pos` moved back to the nearest character boundary in the document
+    /// the view shows, and clamped to its end. A kept or saved position is a
+    /// byte offset into text that may have changed since (a reload, a file
+    /// edited between sessions), and neither `SCI_SETSEL` nor `SCI_GOTOPOS`
+    /// moves a position out of a character: they clamp it into the document
+    /// and no more (`Editor::SetSelection`, `Editor::SetEmptySelection`). A
+    /// caret left inside a UTF-8 sequence, or between the CR and LF of a
+    /// line end, would have the next keystroke split it.
+    ///
+    /// Only UTF-8 documents are walked, which every document Code++ creates
+    /// is; in any other code page the position is only clamped.
+    #[must_use]
+    pub fn char_boundary_at_or_before(&self, pos: u64) -> u64 {
+        let len = self.send(SCI_GETLENGTH, 0, 0).max(0) as u64;
+        let mut pos = pos.min(len);
+        if pos == 0 || pos == len || self.send(SCI_GETCODEPAGE, 0, 0) != SC_CP_UTF8 as sptr_t {
+            return pos;
+        }
+        // At most three continuation bytes follow a UTF-8 lead byte.
+        for _ in 0..3 {
+            if pos == 0 || self.char_at(pos) & 0xC0 != 0x80 {
+                break;
+            }
+            pos -= 1;
+        }
+        if pos > 0 && self.char_at(pos) == b'\n' && self.char_at(pos - 1) == b'\r' {
+            pos -= 1;
+        }
+        pos
     }
 
     /// Return the byte at document position `pos`, or `0` if `pos`

@@ -87,6 +87,7 @@ use codepp_plugin_host::{
 };
 
 pub mod fif;
+pub use codepp_core::ViewPosition;
 pub use fif::{FifError, FifEvent, FifJobId, FifRequest, FifStats, OpenBufferOutcome};
 
 /// Plugin-driven pre-fill for the next FIF dialog open. Populated
@@ -221,10 +222,27 @@ pub trait UiPlatform {
     /// `SCI_GETTEXT` round trip via the direct-call API.
     fn get_buffer_text(&mut self) -> String;
 
-    /// Pull the current cursor byte offset from the editor control.
-    /// Used by `Shell::save_session` so the next launch can restore
-    /// the user's caret position.
-    fn get_cursor_pos(&mut self) -> u64;
+    /// The document the view shows, as `SCI_GETDOCPOINTER` answers: 0
+    /// before the shell has bound one. The shell matches it against
+    /// [`Tab::scintilla_doc`] to tell whose position the view holds.
+    fn bound_doc(&mut self) -> isize;
+
+    /// Where the view stands in the document it shows
+    /// (`EditorHandle::view_position` in `codepp_editor`). The shell keeps
+    /// it for the tab whose document the view is about to leave
+    /// ([`Tab::view`]).
+    fn view_position(&mut self) -> ViewPosition;
+
+    /// Put the view at `pos` in the document it shows
+    /// (`EditorHandle::set_view_position`). `SCI_SETDOCPOINTER` clears the
+    /// selection, so the shell calls this after it binds a tab's document,
+    /// to give the tab back the position it had.
+    ///
+    /// Required rather than defaulted, on `release_doc`'s reasoning: a
+    /// no-op would leave a backend putting the caret at the start of
+    /// every tab it switches to, and saving every tab but the one in
+    /// front at the start, while looking implemented.
+    fn set_view_position(&mut self, pos: ViewPosition);
 
     /// Update the status bar with the active buffer's language,
     /// encoding, EOL, and byte count. The leftmost segment shows
@@ -1243,6 +1261,20 @@ pub struct Tab {
     /// for the file unless this names that load; a reload never changes
     /// the pin.
     pub pin_requested_during_load: Option<RequestId>,
+    /// Where the view stood in this tab's document when it last left it,
+    /// or where a first load or a restore puts the caret: what the view is
+    /// put back at when the tab's document is bound again, and what a
+    /// session saved while the view shows another document records for
+    /// the tab. While the view shows the tab's document the live view is
+    /// what counts ([`Shell::tab_position`]): this is refreshed only when
+    /// the view leaves the document or a load lands.
+    ///
+    /// Kept by every bind the shell makes ([`Shell::bind_view`]). Until
+    /// Phase 5 nothing kept it: `SCI_SETDOCPOINTER` clears the selection,
+    /// so every tab switch put the caret at the start of the document,
+    /// and every tab but the one in front was saved at 0 and reopened at
+    /// the top.
+    pub view: ViewPosition,
 }
 
 impl Default for Tab {
@@ -1266,6 +1298,7 @@ impl Default for Tab {
             custom_name: None,
             pinned: false,
             pin_requested_during_load: None,
+            view: ViewPosition::at(0),
         }
     }
 }
@@ -1787,18 +1820,6 @@ impl SyncNotification {
     pub fn deliver(&self, npp_hwnd: Hwnd) {
         self.targets.deliver(&self.notification, npp_hwnd);
     }
-}
-
-/// The active tab's live caret/scroll, snapshotted by the UI (it owns the
-/// `EditorHandle`) and handed to [`Shell::save_npp_session`] so the saved
-/// session records where the user was in the active file. Non-active tabs
-/// record zeros — per-tab caret across switches is the DESIGN.md m6b gap
-/// the automatic `session.xml` save shares.
-#[derive(Clone, Copy, Debug, Default)]
-pub struct SessionCaret {
-    pub start_pos: u64,
-    pub end_pos: u64,
-    pub first_visible_line: u32,
 }
 
 /// Counts from a [`Shell::load_npp_session`] run, for the UI to surface to
@@ -4218,7 +4239,7 @@ impl Shell {
         // 0 tells the UI "I don't have one yet, create one for me".
         // The returned doc pointer is what subsequent activations
         // re-bind to.
-        let bound_doc = ui.activate_tab(new_idx, 0);
+        let (bound_doc, _) = self.bind_view(ui, new_idx, 0);
         if let Some(tab) = self.tabs.get_mut(new_idx) {
             tab.scintilla_doc = bound_doc;
         }
@@ -5419,6 +5440,76 @@ impl Shell {
         t.dirty || t.shadow_unsaved || self.is_unsaved_restore(t.id)
     }
 
+    /// Bind the view to `doc` for the tab at `idx` (0: create one), first
+    /// keeping where the view stands in the document it leaves
+    /// ([`Self::note_bound_position`]). Returns the bound document and
+    /// whether the view changed document; when it did, the swap cleared
+    /// the selection, and the caller puts the view at the tab's position
+    /// ([`Tab::view`]).
+    ///
+    /// **Every bind the shell makes goes through here**, so a tab keeps its
+    /// position whatever moves the view off it: a tab switch, an open, a
+    /// load landing in front, File → New, a restore, or Save All's visits
+    /// to the tabs it writes. The backends' own temporary swaps, which read
+    /// or write another document and come back, put the view back as they
+    /// found it themselves.
+    fn bind_view<U: UiPlatform>(&mut self, ui: &mut U, idx: usize, doc: isize) -> (isize, bool) {
+        let before = ui.bound_doc();
+        if doc == 0 || doc != before {
+            self.note_bound_position(ui);
+        }
+        let bound = ui.activate_tab(idx, doc);
+        (bound, bound != before)
+    }
+
+    /// Keep where the view stands as the position of the tab whose document
+    /// it shows ([`Tab::view`]). Nothing is kept when no tab owns the
+    /// document, as for a closed tab's on its way out, or when the document
+    /// is stale ([`Tab::doc_needs_text`]): its text is about to be replaced,
+    /// and the tab's position is the one that text will be shown at.
+    fn note_bound_position<U: UiPlatform>(&mut self, ui: &mut U) {
+        let doc = ui.bound_doc();
+        if doc == 0 {
+            return;
+        }
+        let Some(tab) = self.tabs.iter_mut().find(|t| t.scintilla_doc == doc) else {
+            return;
+        };
+        if !tab.doc_needs_text {
+            tab.view = ui.view_position();
+        }
+    }
+
+    /// The position a session saved now records for the tab at `idx`: the
+    /// live one while the view shows the tab's document, and the one kept
+    /// for the tab ([`Tab::view`]) otherwise. That includes a stale document
+    /// the view shows ([`Tab::doc_needs_text`]): its text is about to be
+    /// replaced, and the kept position is where the new text will be shown.
+    ///
+    /// Asked of the view rather than of which tab is in front: an open moves
+    /// the front when it is asked for and the view only when its file lands,
+    /// so the tab in front can be one the view does not show. Until Phase 5
+    /// the tab in front got the live caret, whichever document the view
+    /// showed, and every other tab got 0, so each reopened at the top.
+    fn tab_position<U: UiPlatform>(&self, ui: &mut U, idx: usize) -> ViewPosition {
+        let Some(tab) = self.tabs.get(idx) else {
+            return ViewPosition::default();
+        };
+        let shown =
+            tab.scintilla_doc != 0 && !tab.doc_needs_text && ui.bound_doc() == tab.scintilla_doc;
+        if shown {
+            ui.view_position()
+        } else {
+            tab.view
+        }
+    }
+
+    /// The caret of [`Self::tab_position`], which is what `session.xml`
+    /// records.
+    fn tab_caret<U: UiPlatform>(&self, ui: &mut U, idx: usize) -> u64 {
+        self.tab_position(ui, idx).caret
+    }
+
     /// Bind the view to `idx`'s document, creating it and/or filling it
     /// from [`Tab::text`] when it does not already match, and return the
     /// bound pointer.
@@ -5463,7 +5554,7 @@ impl Shell {
             "a reload's consent outlived its landing"
         );
         let (existing_doc, text, stale) = (tab.scintilla_doc, tab.text.clone(), tab.doc_needs_text);
-        let bound = ui.activate_tab(idx, existing_doc);
+        let (bound, swapped) = self.bind_view(ui, idx, existing_doc);
         let clobbers_edits = stale && existing_doc != 0 && self.has_unsaved_work(ui, idx);
         if clobbers_edits {
             // The landing's decline, made again here for work that
@@ -5476,13 +5567,20 @@ impl Shell {
             );
         }
         let installs = existing_doc == 0 || (stale && !clobbers_edits);
-        if installs {
-            // Caret to 0: a tab reached this way was never displayed,
-            // so there is no caret position to preserve. The session's
-            // stored cursor is applied by the `Ok` arm of
-            // `apply_load_result` when a load completes onto the active
-            // tab, which is a different path.
-            ui.set_buffer_text(&text, 0);
+        // The view goes to the tab's position whenever it arrives at the
+        // document or the document's text is replaced: where the view last
+        // left it, or where its file's landing put the caret — the one the
+        // session recorded, for a tab loaded in the background. The swap
+        // cleared the selection, and a fill would leave the caret at 0. When
+        // edits kept a stale document's text over a landed first load, that
+        // is a position in the file shown over the kept text; it is clamped
+        // into it, and onto a character boundary (`set_view_position`).
+        if installs || swapped {
+            let pos = self.tabs[idx].view;
+            if installs {
+                ui.set_buffer_text(&text, pos.caret);
+            }
+            ui.set_view_position(pos);
         }
         let Some(tab) = self.tabs.get_mut(idx) else {
             return bound;
@@ -5571,29 +5669,38 @@ impl Shell {
         idx: usize,
         bind: ActiveBind,
         keeps_shadow: bool,
-        cursor: u64,
     ) {
         let Some(tab) = self.tabs.get(idx) else {
             return;
         };
         let stored_doc = tab.scintilla_doc;
-        let (lang, encoding, eol, byte_len) =
-            (tab.lang, tab.encoding.clone(), tab.eol, tab.byte_len);
+        let (lang, encoding, eol, byte_len, pos) = (
+            tab.lang,
+            tab.encoding.clone(),
+            tab.eol,
+            tab.byte_len,
+            tab.view,
+        );
         let text = match bind {
             ActiveBind::Skip => return,
             ActiveBind::BindOnly => None,
             ActiveBind::Install(text) => Some(text),
         };
-        let bound_doc = ui.activate_tab(idx, stored_doc);
+        let (bound_doc, swapped) = self.bind_view(ui, idx, stored_doc);
         if let Some(tab) = self.tabs.get_mut(idx) {
             tab.scintilla_doc = bound_doc;
             // The load has landed and the view shows its outcome; the
             // consent that travelled with the request is spent.
             tab.reload_confirmed = false;
         }
+        // The position the landing gave the tab ([`Self::apply_load_result`]):
+        // for a first load the caret the session recorded, and for a reload
+        // where the tab was, so a reload no longer sends the caret back to
+        // the start or to where the session had it.
         if let Some(text) = text {
             self.release_marker_before_install(idx, keeps_shadow);
-            ui.set_buffer_text(&text, cursor);
+            ui.set_buffer_text(&text, pos.caret);
+            ui.set_view_position(pos);
             self.settle_marker_after_install(idx, keeps_shadow);
             // The document now holds what the tab holds, so it is no longer
             // stale, whatever an earlier landing in the background flagged.
@@ -5604,6 +5711,9 @@ impl Shell {
             if let Some(tab) = self.tabs.get_mut(idx) {
                 tab.doc_needs_text = false;
             }
+        } else if swapped {
+            // The work was kept, and the view has just arrived at it.
+            ui.set_view_position(pos);
         }
         ui.apply_lang(lang);
         ui.update_status(lang, &encoding, eol, byte_len);
@@ -5711,6 +5821,16 @@ impl Shell {
                 // whether the untitled identity is dropped and whether
                 // the session's language and pin apply (both below).
                 let gained_a_path = self.tabs.get(target_idx).is_some_and(|t| t.path.is_none());
+                // **A reload keeps the tab where it was; a first load puts
+                // the caret where the session recorded it** (`Tab::view`,
+                // set below). While the view shows the tab's document the
+                // live view is where the tab was, so where the view stands
+                // is kept now, before the landing replaces the text or
+                // leaves the document stale. Whichever tab the view shows,
+                // that is the tab's own position. A reload used to put the
+                // caret where the session read at startup had it, or at the
+                // start.
+                self.note_bound_position(ui);
 
                 // Single by-path lookup covering every attribute the
                 // load path pulls from the persisted session:
@@ -5718,10 +5838,7 @@ impl Shell {
                 // and the pin state. Rebuilding the find call per
                 // attribute (an earlier shape of this code) had the
                 // same shape three times and pushed the function
-                // over clippy's `too_many_lines` gate. The caret is
-                // applied by a reload too, which puts it where the
-                // session had it or at the start (DESIGN.md §7.4 tracks
-                // keeping it where it was).
+                // over clippy's `too_many_lines` gate.
                 let stored = self
                     .session
                     .tabs
@@ -5779,7 +5896,7 @@ impl Shell {
                 // A first load never gives its file to a tab whose work it
                 // would not install: see `divert_first_load`.
                 if let Some(values) = first_load.filter(|_| keeps_work) {
-                    self.divert_first_load(ui, target_idx, loaded, values, pending);
+                    self.divert_first_load(ui, target_idx, loaded, values, cursor, pending);
                     return;
                 }
                 let Some(tab) = self.tabs.get_mut(target_idx) else {
@@ -5801,6 +5918,9 @@ impl Shell {
                 if gained_a_path {
                     tab.untitled_seq = None;
                     tab.custom_name = None;
+                    // Shown now if the tab is in front, and when it is
+                    // next shown otherwise.
+                    tab.view = ViewPosition::at(cursor);
                 }
                 // A kept shadow keeps the metadata that describes it; a
                 // kept document keeps its shadow too, so the two never
@@ -5913,7 +6033,7 @@ impl Shell {
                 if !is_active && !keeps_work {
                     self.settle_background_landing(ui, target_idx, stored_doc, unsaved);
                 }
-                self.show_on_active_view(ui, target_idx, active_bind, keeps_shadow, cursor);
+                self.show_on_active_view(ui, target_idx, active_bind, keeps_shadow);
 
                 // If restoring the pin above left this tab outside the pinned
                 // cluster — which happens when a single mid-session open of a
@@ -6052,7 +6172,8 @@ impl Shell {
     /// file arrived, and switching the view under them would send their next
     /// keystrokes into the file. The file's tab opens right after this one,
     /// in the background, and is filled when it is first shown, as a
-    /// background load is; `NPPN_FILEOPENED` names it. If this tab is in
+    /// background load is, at `cursor`, the caret the session recorded for
+    /// the file; `NPPN_FILEOPENED` names it. If this tab is in
     /// front, the view is bound to it here, because nothing else may have
     /// done so: a plugin can switch to a tab whose load is in flight without
     /// a rebind, and a view left on another tab's document would let Save As
@@ -6078,6 +6199,7 @@ impl Shell {
         idx: usize,
         loaded: codepp_core::file::LoadedFile,
         (lang, pinned): (LangType, bool),
+        cursor: u64,
         pending: &mut Vec<PendingDialog>,
     ) {
         let seq = self.next_untitled_seq();
@@ -6157,6 +6279,7 @@ impl Shell {
                 text,
                 lang,
                 pinned,
+                view: ViewPosition::at(cursor),
                 ..Tab::default()
             },
         );
@@ -7557,20 +7680,23 @@ impl Shell {
 
     /// File → Save Session: write a Notepad++-shape session XML at `path`
     /// capturing every path-bound open tab (untitled buffers are skipped —
-    /// there is no path to record). `active_caret` is the live caret of the
-    /// active tab, applied to its `<File>` entry when the active tab is
-    /// path-bound; every other entry carries zeros. Cross-platform: the UI
-    /// snapshots the caret and picks the path, this builds and writes the
-    /// N++-shape document so the file is reopenable by Notepad++ too.
+    /// there is no path to record). Each `<File>` entry carries its tab's
+    /// selection and first visible line ([`Self::tab_position`]): the live
+    /// view's for the tab whose document the view shows, and the position
+    /// kept for every other tab. Until Phase 5 the UI handed in the live
+    /// caret for the tab in front, whichever document the view showed, and
+    /// every other entry carried zeros. Cross-platform: the UI picks the
+    /// path, this builds and writes the N++-shape document so the file is
+    /// reopenable by Notepad++ too.
     ///
     /// # Errors
     ///
     /// Returns the underlying [`NppSessionError`](codepp_core::npp_session::NppSessionError)
     /// on serialisation / I/O failure (the UI surfaces it in an error dialog).
-    pub fn save_npp_session(
+    pub fn save_npp_session<U: UiPlatform>(
         &self,
+        ui: &mut U,
         path: &Path,
-        active_caret: Option<SessionCaret>,
     ) -> Result<(), codepp_core::npp_session::NppSessionError> {
         use codepp_core::npp_session::{
             npp_name_for_lang, NppFile, NppSession, NppSessionDoc, NppView, YesNo,
@@ -7591,17 +7717,16 @@ impl Shell {
             .enumerate()
             .filter_map(|(i, t)| {
                 let filename = t.path.clone()?;
-                let caret = if self.active_tab == Some(i) {
-                    active_caret.unwrap_or_default()
-                } else {
-                    SessionCaret::default()
-                };
+                let pos = self.tab_position(ui, i);
+                let (start_pos, end_pos) = pos.selection();
                 Some(NppFile {
                     filename,
                     lang: npp_name_for_lang(t.lang).to_string(),
-                    first_visible_line: caret.first_visible_line,
-                    start_pos: caret.start_pos,
-                    end_pos: caret.end_pos,
+                    first_visible_line: pos
+                        .first_visible_line
+                        .map_or(0, |line| u32::try_from(line).unwrap_or(u32::MAX)),
+                    start_pos,
+                    end_pos,
                     tab_pinned: YesNo::from_bool(t.pinned),
                     encoding: -1,
                     user_read_only: YesNo::No,
@@ -7797,11 +7922,13 @@ impl Shell {
     /// Persist the open-tab list to `session.xml`, with a recovery
     /// backup for every buffer holding work that is not on disk: an
     /// untitled buffer, or a file with unsaved edits. Called on clean
-    /// shutdown and by the autosave. The active tab's cursor is pulled live
-    /// from the editor so the next launch restores the caret where the
-    /// user left it; other tabs record cursor 0, except a file still
-    /// loading, which keeps the caret the session read at startup recorded
-    /// for it. What is written is [`Self::session_to_save`]'s.
+    /// shutdown and by the autosave. Each tab records its caret, so the
+    /// next launch puts it back where the user left it: the live one for
+    /// the tab whose document the view shows, and the one the shell kept
+    /// for every other tab ([`Self::tab_caret`]). A file still loading
+    /// records the caret the session read at startup recorded for it,
+    /// which its landing would apply. What is written is
+    /// [`Self::session_to_save`]'s.
     ///
     /// A backup takes a name nothing in the backup folder has
     /// ([`write_backup_file`]), so a save in the same second as the last
@@ -8027,14 +8154,8 @@ impl Shell {
         idx: usize,
         pass: &mut SavePass<'_>,
     ) -> Option<codepp_core::Tab> {
+        let cursor = self.tab_caret(ui, idx);
         let tab = self.tabs.get(idx)?;
-        // Active-tab cursor comes from the editor; others are 0
-        // until a future tab-switch hook persists per-tab cursors.
-        let cursor = if self.active_tab == Some(idx) {
-            ui.get_cursor_pos()
-        } else {
-            0
-        };
         // Two cases write backups:
         //   1. Untitled buffer (`tab.path.is_none()`) — always
         //      backed up; there's no file on disk to fall back
@@ -8138,11 +8259,7 @@ impl Shell {
             let seq = tab
                 .untitled_seq
                 .unwrap_or_else(|| pass.give_untitled_number(&self.tabs));
-            let cursor = if self.active_tab == Some(idx) {
-                ui.get_cursor_pos()
-            } else {
-                0
-            };
+            let cursor = self.tab_caret(ui, idx);
             let backup = pass
                 .write(tab, &format!("new {seq}"), || {
                     Self::backup_text_for(tab, ui)
@@ -8632,19 +8749,22 @@ impl Shell {
             custom_name,
             pinned,
             pin_requested_during_load: None,
+            view: ViewPosition::at(cursor),
         });
         self.active_tab = Some(new_idx);
         // Bind a fresh Scintilla document; matches `new_untitled`'s
         // path. The 0 sentinel asks the UI to allocate.
-        let new_doc = ui.activate_tab(new_idx, 0);
+        let (new_doc, _) = self.bind_view(ui, new_idx, 0);
         if let Some(tab) = self.tabs.get_mut(new_idx) {
             tab.scintilla_doc = new_doc;
         }
         // Push the backup text + cursor into the now-active editor
         // document. From the user's perspective this is identical
         // to having opened the buffer at the same position last
-        // session.
+        // session. The position, not the bare caret, so a caret a crafted or
+        // stale session puts inside a character lands on its boundary.
         ui.set_buffer_text(&text, cursor);
+        ui.set_view_position(ViewPosition::at(cursor));
         // Track this buffer as unsaved-from-restore: `set_buffer_text`
         // set the save point (Scintilla reports clean), but an untitled
         // buffer with no real on-disk file is unsaved by definition, so it
@@ -8772,9 +8892,10 @@ impl Shell {
             custom_name: None,
             pinned,
             pin_requested_during_load: None,
+            view: ViewPosition::at(cursor),
         });
         self.active_tab = Some(new_idx);
-        let new_doc = ui.activate_tab(new_idx, 0);
+        let (new_doc, _) = self.bind_view(ui, new_idx, 0);
         if let Some(tab) = self.tabs.get_mut(new_idx) {
             tab.scintilla_doc = new_doc;
         }
@@ -8787,8 +8908,10 @@ impl Shell {
         // backup would be pruned. The set carries the unsaved state
         // durably (see `unsaved_restore_ids`); a phantom undo action would
         // instead let one Ctrl+Z reach the save point and trigger exactly
-        // that prune.
+        // that prune. The position goes through `set_view_position`, which
+        // puts a caret inside a character on its boundary.
         ui.set_buffer_text(&text, cursor);
+        ui.set_view_position(ViewPosition::at(cursor));
         self.unsaved_restore_ids.insert(id);
         ui.apply_lang(lang);
         ui.update_status(lang, &encoding, eol, byte_len);
@@ -12262,7 +12385,13 @@ mod tests {
     #[allow(clippy::struct_excessive_bools)]
     struct FakeUi {
         buffer_text: String,
-        cursor: u64,
+        /// Where the view stands in the document it shows. A document swap
+        /// clears the selection and keeps the scroll, as
+        /// `Editor::SetDocPointer` does, so a position the shell does not
+        /// put back is lost here as it is in Scintilla.
+        view: ViewPosition,
+        /// Every `set_view_position` call as `(bound document, position)`.
+        view_position_calls: Vec<(isize, ViewPosition)>,
         set_text_calls: Vec<(String, u64)>,
         /// Every `replace_doc_text` call, for the Replace-in-Files
         /// open-buffer tests.
@@ -12463,6 +12592,8 @@ mod tests {
             }
             self.current_doc = doc;
             self.buffer_text = self.doc_text.get(&doc).cloned().unwrap_or_default();
+            self.view.anchor = 0;
+            self.view.caret = 0;
             if outgoing != 0 {
                 self.drop_ref(outgoing, "SCI_SETDOCPOINTER");
             }
@@ -12578,14 +12709,21 @@ mod tests {
             if self.current_doc != 0 {
                 self.doc_text.insert(self.current_doc, text.to_string());
             }
-            self.cursor = cursor;
+            self.view = ViewPosition::at(cursor);
             self.set_text_calls.push((text.to_string(), cursor));
         }
         fn get_buffer_text(&mut self) -> String {
             self.buffer_text.clone()
         }
-        fn get_cursor_pos(&mut self) -> u64 {
-            self.cursor
+        fn bound_doc(&mut self) -> isize {
+            self.current_doc
+        }
+        fn view_position(&mut self) -> ViewPosition {
+            self.view
+        }
+        fn set_view_position(&mut self, pos: ViewPosition) {
+            self.view = pos;
+            self.view_position_calls.push((self.current_doc, pos));
         }
         fn update_status(
             &mut self,
@@ -21802,7 +21940,7 @@ mod tests {
             !shell.tabs[0].doc_needs_text,
             "the installed document is flagged stale"
         );
-        ui.cursor = 3;
+        ui.view = ViewPosition::at(3);
         let filled = ui.set_text_calls.len();
         std::fs::write(&paths[1], "b two\n").unwrap();
         shell.request_reload(paths[1].clone(), ReloadConsent::Unconfirmed);
@@ -21812,7 +21950,7 @@ mod tests {
             "precondition: b.txt landed in the background on its document"
         );
         assert_eq!(
-            (ui.set_text_calls.len(), ui.cursor),
+            (ui.set_text_calls.len(), ui.view.caret),
             (filled, 3),
             "the tab in front was filled again"
         );
@@ -22593,8 +22731,8 @@ mod tests {
         );
     }
 
-    /// Text typed into the tab in front while its file loads is saved with
-    /// the caret the editor reports, as any tab in front is.
+    /// Text typed into a tab while its file loads is saved with the caret
+    /// the editor reports while the view shows it, as any tab is.
     #[test]
     fn text_typed_while_a_file_loads_is_saved_with_the_live_caret() {
         let dir = tempfile::tempdir().unwrap();
@@ -22608,7 +22746,7 @@ mod tests {
         shell.bind_active_view(&mut ui);
         let doc = shell.tabs[0].scintilla_doc;
         ui.doc_dirty.insert(doc, true);
-        ui.cursor = 9;
+        ui.view = ViewPosition::at(9);
 
         let SavedSession { session, .. } =
             shell.session_to_save(&mut ui, Some(backups.path()), "ts");
@@ -22937,12 +23075,17 @@ mod tests {
         shell.tabs[1].pinned = true;
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("s.xml");
-        let caret = SessionCaret {
-            start_pos: 10,
-            end_pos: 15,
-            first_visible_line: 3,
+        // The view shows the active tab's document, with a selection.
+        let mut ui = FakeUi::default();
+        shell.tabs[2].scintilla_doc = 77;
+        ui.current_doc = 77;
+        ui.view = ViewPosition {
+            anchor: 15,
+            caret: 10,
+            first_visible_line: Some(3),
+            x_offset: 0,
         };
-        shell.save_npp_session(&path, Some(caret)).unwrap();
+        shell.save_npp_session(&mut ui, &path).unwrap();
 
         let doc =
             codepp_core::npp_session::NppSessionDoc::read_from(std::fs::File::open(&path).unwrap())
@@ -22950,7 +23093,8 @@ mod tests {
         let files = &doc.session.main_view.files;
         assert_eq!(files.len(), 3);
         assert_eq!(doc.session.main_view.active_index, 2);
-        // The active tab (index 2) carries the live caret; the others zeros.
+        // The active tab (index 2) carries the live caret; the others the
+        // position kept for them, which for these tabs is the start.
         assert_eq!(files[2].start_pos, 10);
         assert_eq!(files[2].end_pos, 15);
         assert_eq!(files[2].first_visible_line, 3);
@@ -27556,10 +27700,13 @@ mod tests {
         assert_eq!(session.tabs.len(), MAX_SESSION_TABS);
     }
 
-    /// A loading tab with typed work that is not in front records caret 0,
-    /// not the view's caret.
+    /// A loading tab with typed work records the view's caret while the view
+    /// shows its document, even once another tab is in front, and the caret
+    /// kept for it once the view shows another document. Whichever tab is
+    /// in front decides nothing: an open moves the front when it is asked
+    /// for and the view only when its file lands.
     #[test]
-    fn a_background_loading_tab_with_work_records_caret_zero() {
+    fn a_loading_tab_with_work_records_the_caret_of_its_own_document() {
         let dir = tempfile::tempdir().unwrap();
         let (one, two) = (dir.path().join("one.txt"), dir.path().join("two.txt"));
         std::fs::write(&one, "one\n").unwrap();
@@ -27574,11 +27721,26 @@ mod tests {
         ui.buffer_text = "typed\n".into();
         ui.doc_dirty.insert(doc, true);
         shell.open_file(two);
-        ui.cursor = 9;
+        ui.view = ViewPosition::at(4);
         let SavedSession { session, .. } =
             shell.session_to_save(&mut ui, Some(backups.path()), "ts");
         assert_eq!(session.tabs[0].untitled_seq, Some(1));
-        assert_eq!(session.tabs[0].cursor, 0);
+        assert_eq!(
+            session.tabs[0].cursor, 4,
+            "the view still shows one.txt's tab, whichever tab is in front"
+        );
+
+        // The view moves to two.txt's tab, and its caret moves there.
+        shell.bind_active_view(&mut ui);
+        assert_ne!(ui.current_doc, doc, "precondition: the view left the work");
+        ui.view = ViewPosition::at(9);
+        let SavedSession { session, .. } =
+            shell.session_to_save(&mut ui, Some(backups.path()), "ts");
+        assert_eq!(session.tabs[0].untitled_seq, Some(1));
+        assert_eq!(
+            session.tabs[0].cursor, 4,
+            "the work records the caret kept when the view left it, not the view's"
+        );
     }
 
     /// A number a loading scratch keeps for its own typed work is not given
@@ -27643,5 +27805,335 @@ mod tests {
             .map(|t| (t.path.is_some(), t.pinned))
             .collect();
         assert_eq!(summary, vec![(false, true), (true, false)]);
+    }
+
+    /// Restore `files`, each `(name, caret)`, as a session whose tab in
+    /// front is `active`, the way every backend's startup restore does: the
+    /// shell reads the session, each file is opened, the recorded front is
+    /// put back and the view is bound to it. Nothing has landed yet.
+    fn restore_files_at(
+        files: &[(&str, u64)],
+        active: usize,
+    ) -> (Shell, FakeUi, tempfile::TempDir, Vec<PathBuf>) {
+        let dir = tempfile::tempdir().unwrap();
+        let mut session = Session::new();
+        let paths: Vec<PathBuf> = files
+            .iter()
+            .map(|&(name, caret)| {
+                let path = dir.path().join(name);
+                std::fs::write(&path, "line one\nline two\nline three\n").unwrap();
+                session.tabs.push(codepp_core::Tab {
+                    path: Some(path.clone()),
+                    cursor: caret,
+                    ..codepp_core::Tab::default()
+                });
+                path
+            })
+            .collect();
+        session.active = Some(active);
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+        for entry in shell.restore_entries(session, None, MAX_RESTORED_BACKUP_BYTES) {
+            let SessionRestoreEntry::OpenFile(path) = entry else {
+                panic!("a file with no backup is restored by opening it");
+            };
+            shell.open_file(path);
+        }
+        shell.active_tab = shell.session_active_index();
+        shell.bind_active_view(&mut ui);
+        (shell, ui, dir, paths)
+    }
+
+    /// The caret of each record a session saved now holds, in order.
+    fn saved_carets(shell: &Shell, ui: &mut FakeUi) -> Vec<u64> {
+        let backups = tempfile::tempdir().unwrap();
+        let SavedSession { session, .. } = shell.session_to_save(ui, Some(backups.path()), "ts");
+        session.tabs.iter().map(|t| t.cursor).collect()
+    }
+
+    /// Every restored file is saved at the caret the session recorded for
+    /// it, whether its file has landed or not, and whichever tab is in
+    /// front. Until Phase 5 only the tab the view showed was: every other
+    /// tab whose file had landed was saved at 0 and reopened at the top. A
+    /// close during the startup panel restore made that easy to see, since
+    /// its quit saves as soon as the restore's loads have landed.
+    #[test]
+    fn every_restored_file_is_saved_at_its_caret_whether_or_not_it_has_landed() {
+        let (mut shell, mut ui, _dir, _paths) =
+            restore_files_at(&[("a.txt", 5), ("b.txt", 7), ("c.txt", 9)], 1);
+        assert_eq!(
+            saved_carets(&shell, &mut ui),
+            [5, 7, 9],
+            "before the files land"
+        );
+
+        drain_until_loads_settle(&mut shell, &mut ui);
+        assert_eq!(ui.view.caret, 7, "b.txt lands in front, at its caret");
+        assert_eq!(
+            saved_carets(&shell, &mut ui),
+            [5, 7, 9],
+            "once they have landed"
+        );
+
+        // a.txt is shown at its caret when the user switches to it.
+        assert!(shell.switch_to_tab(0));
+        shell.bind_active_view(&mut ui);
+        assert_eq!(ui.view.caret, 5);
+        assert_eq!(saved_carets(&shell, &mut ui), [5, 7, 9]);
+        ui.assert_documents_accounted_for(&shell);
+    }
+
+    /// A tab switch puts the view back where it was in the tab it returns
+    /// to: the selection and the scroll. `SCI_SETDOCPOINTER` clears the
+    /// selection, and until Phase 5 nothing put it back, so every switch put
+    /// the caret at the start of the document.
+    #[test]
+    fn a_tab_switch_puts_the_view_back_where_it_was() {
+        let (mut shell, mut ui, _dir, _paths) = open_settled(&["a.txt", "b.txt"]);
+        assert_eq!(shell.active_tab, Some(1), "precondition: b.txt is in front");
+        let in_b = ViewPosition {
+            anchor: 2,
+            caret: 6,
+            first_visible_line: Some(3),
+            x_offset: 40,
+        };
+        ui.view = in_b;
+
+        assert!(shell.switch_to_tab(0));
+        shell.bind_active_view(&mut ui);
+        ui.view = ViewPosition::at(4);
+        assert!(shell.switch_to_tab(1));
+        shell.bind_active_view(&mut ui);
+        assert_eq!(ui.view, in_b, "back in b.txt");
+
+        assert!(shell.switch_to_tab(0));
+        shell.bind_active_view(&mut ui);
+        assert_eq!(ui.view.caret, 4, "back in a.txt");
+        assert_eq!(saved_carets(&shell, &mut ui), [4, 6]);
+    }
+
+    /// A reload keeps the caret where it was, in front and in the
+    /// background. It used to put it where the session read at startup had
+    /// it, or at the start.
+    #[test]
+    fn a_reload_keeps_the_caret_where_it_was() {
+        let (mut shell, mut ui, _dir, paths) = open_settled(&["a.txt", "b.txt"]);
+        // a.txt in the background, left at 3; b.txt in front, at 5 and
+        // scrolled.
+        assert!(shell.switch_to_tab(0));
+        shell.bind_active_view(&mut ui);
+        ui.view = ViewPosition::at(3);
+        assert!(shell.switch_to_tab(1));
+        shell.bind_active_view(&mut ui);
+        let in_b = ViewPosition {
+            anchor: 5,
+            caret: 5,
+            first_visible_line: Some(1),
+            x_offset: 0,
+        };
+        ui.view = in_b;
+
+        let changed = "changed on disk\nand longer than before\n";
+        for path in &paths {
+            std::fs::write(path, changed).unwrap();
+            shell.request_reload(path.clone(), ReloadConsent::Unconfirmed);
+        }
+        drain_until_loads_settle(&mut shell, &mut ui);
+        assert_eq!(
+            ui.set_text_calls
+                .last()
+                .map(|(text, caret)| (text.as_str(), *caret)),
+            Some((changed, 5)),
+            "b.txt is reloaded in front, at its caret"
+        );
+        assert_eq!(ui.view, in_b, "and at its scroll");
+
+        assert!(shell.switch_to_tab(0));
+        shell.bind_active_view(&mut ui);
+        assert_eq!(ui.get_buffer_text(), changed);
+        assert_eq!(ui.view.caret, 3, "a.txt is shown at its caret");
+    }
+
+    /// A reload declined to keep unsaved edits, landing on a tab in front
+    /// that the view does not show, binds the view to the kept edits at the
+    /// caret the tab had. A plugin's switch onto a tab leaves the view where
+    /// it was.
+    #[test]
+    fn a_declined_reload_shows_the_kept_edits_at_their_caret() {
+        let (mut shell, mut ui, _dir, paths) = open_settled(&["a.txt", "b.txt"]);
+        assert!(shell.switch_to_tab(0));
+        shell.bind_active_view(&mut ui);
+        let a_doc = shell.tabs[0].scintilla_doc;
+        ui.doc_dirty.insert(a_doc, true);
+        ui.view = ViewPosition::at(3);
+        assert!(shell.switch_to_tab(1));
+        shell.bind_active_view(&mut ui);
+        // A plugin's switch back to a.txt, with no rebind.
+        assert!(shell.switch_to_tab(0));
+        assert_ne!(ui.current_doc, a_doc, "precondition: the view trails");
+
+        std::fs::write(&paths[0], "changed on disk\n").unwrap();
+        shell.request_reload(paths[0].clone(), ReloadConsent::Unconfirmed);
+        drain_until_loads_settle(&mut shell, &mut ui);
+        assert_eq!(ui.current_doc, a_doc, "the view shows the kept edits");
+        assert_eq!(ui.view.caret, 3);
+    }
+
+    /// Save All puts the view back where it was in the tab in front, after
+    /// binding every tab it writes. It used to leave the caret at the start.
+    #[test]
+    fn save_all_leaves_the_view_where_it_was() {
+        let (mut shell, mut ui, _dir, _paths) = open_settled(&["a.txt", "b.txt"]);
+        let in_b = ViewPosition {
+            anchor: 1,
+            caret: 4,
+            first_visible_line: Some(2),
+            x_offset: 0,
+        };
+        ui.view = in_b;
+
+        assert!(shell.save_all(&mut ui).is_empty());
+        assert_eq!(shell.active_tab, Some(1));
+        assert_eq!(ui.view, in_b);
+    }
+
+    /// A Notepad++ session file records every tab's selection and first
+    /// visible line: the live view's for the tab the view shows, and the
+    /// one kept for every other tab, whichever tab is in front. It used to
+    /// record the live selection for the tab in front, even when the view
+    /// showed another, and zeros for every other tab.
+    #[test]
+    fn a_notepad_plus_plus_session_records_every_tabs_selection() {
+        let (mut shell, mut ui, dir, _paths) = open_settled(&["a.txt", "b.txt"]);
+        assert!(shell.switch_to_tab(0));
+        shell.bind_active_view(&mut ui);
+        ui.view = ViewPosition {
+            anchor: 8,
+            caret: 3,
+            first_visible_line: Some(2),
+            x_offset: 0,
+        };
+        assert!(shell.switch_to_tab(1));
+        shell.bind_active_view(&mut ui);
+        ui.view = ViewPosition {
+            anchor: 5,
+            caret: 6,
+            first_visible_line: Some(1),
+            x_offset: 0,
+        };
+        let path = dir.path().join("s.xml");
+        let saved = |shell: &Shell, ui: &mut FakeUi| {
+            shell.save_npp_session(ui, &path).unwrap();
+            let file = std::fs::File::open(&path).unwrap();
+            let doc = codepp_core::npp_session::NppSessionDoc::read_from(file).unwrap();
+            doc.session
+                .main_view
+                .files
+                .iter()
+                .map(|f| (f.start_pos, f.end_pos, f.first_visible_line))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(saved(&shell, &mut ui), [(3, 8, 2), (5, 6, 1)]);
+
+        // A plugin's switch to a.txt moves the front and leaves the view on
+        // b.txt: the live selection is still b.txt's.
+        assert!(shell.switch_to_tab(0));
+        assert_eq!(saved(&shell, &mut ui), [(3, 8, 2), (5, 6, 1)]);
+    }
+
+    /// A buffer restored from its backup is shown at its caret when it is in
+    /// front but was not the last one restored. Binding it swapped documents
+    /// and lost the caret; `ui_gtk` put it back by hand, for that tab only.
+    #[test]
+    fn a_restored_buffer_in_front_is_shown_at_its_caret() {
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+        for (seq, caret) in [(1, 4), (2, 6)] {
+            shell.restore_untitled_with_text(
+                &mut ui,
+                Some(seq),
+                format!("restored {seq}\n"),
+                caret,
+                Encoding::Utf8,
+                Eol::Lf,
+                false,
+                None,
+                None,
+                false,
+            );
+        }
+        shell.active_tab = Some(0);
+        shell.bind_active_view(&mut ui);
+        assert_eq!(ui.get_buffer_text(), "restored 1\n");
+        assert_eq!(ui.view.caret, 4);
+        assert_eq!(saved_carets(&shell, &mut ui), [4, 6]);
+    }
+
+    /// When a file lands on a tab holding work and opens beside it, its own
+    /// tab is shown at the caret the session recorded for the file.
+    #[test]
+    fn a_diverted_file_is_shown_at_its_recorded_caret() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("late.txt");
+        let text = "late file\nwith lines\n";
+        std::fs::write(&path, text).unwrap();
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+        shell.session.tabs.push(codepp_core::session::Tab {
+            path: Some(path.clone()),
+            cursor: 6,
+            ..codepp_core::session::Tab::default()
+        });
+        shell.new_untitled(&mut ui);
+        let scratch_doc = shell.tabs[0].scintilla_doc;
+        shell.open_file_replacing_scratch(path, true);
+        ui.buffer_text = "typed\n".into();
+        ui.doc_dirty.insert(scratch_doc, true);
+        drain_until_loads_settle(&mut shell, &mut ui);
+        assert_eq!(
+            shell.tabs.len(),
+            2,
+            "precondition: the file opened beside the work"
+        );
+
+        assert!(shell.switch_to_tab(1));
+        shell.bind_active_view(&mut ui);
+        assert_eq!(ui.get_buffer_text(), text);
+        assert_eq!(ui.view.caret, 6);
+    }
+
+    /// A file that lands on a tab shown while it loaded, once another open
+    /// has taken the front, is shown at the caret the session recorded for
+    /// it, not where the view stood in the empty document it replaces: the
+    /// view leaving a stale document keeps nothing for its tab.
+    #[test]
+    fn a_file_landing_on_a_tab_the_view_has_left_keeps_its_recorded_caret() {
+        let (mut shell, mut ui, dir, _paths) = open_settled(&["a.txt"]);
+        let (b, c) = (dir.path().join("b.txt"), dir.path().join("c.txt"));
+        let text = "b file\nwith lines\n";
+        std::fs::write(&b, text).unwrap();
+        std::fs::write(&c, "c\n").unwrap();
+        shell.session.tabs.push(codepp_core::session::Tab {
+            path: Some(b.clone()),
+            cursor: 8,
+            ..codepp_core::session::Tab::default()
+        });
+        shell.open_file(b);
+        // Shown while it loads, so it has a document of its own.
+        shell.bind_active_view(&mut ui);
+        shell.open_file(c);
+        drain_until_loads_settle(&mut shell, &mut ui);
+        assert!(
+            shell.tabs[1].doc_needs_text,
+            "precondition: b.txt landed on the document it was shown in"
+        );
+
+        assert!(shell.switch_to_tab(1));
+        shell.bind_active_view(&mut ui);
+        assert_eq!(ui.get_buffer_text(), text);
+        assert_eq!(ui.view.caret, 8);
     }
 }

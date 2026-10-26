@@ -2917,35 +2917,21 @@ mod save_as_refused_tests {
 /// File → Save Session… — write every path-bound open tab to a
 /// Notepad++-shape session XML at a user-picked path (distinct from the
 /// automatic `session.xml` restore). Untitled buffers are skipped — they
-/// have no path to record. The active tab carries its live caret + scroll
-/// position; the rest record zeros, the same per-file-caret gap the
-/// automatic session save documents. The intricate build lives in the
-/// shared `Shell::save_npp_session`; this only snapshots the caret and
-/// picks the path.
+/// have no path to record. Each tab carries its caret and scroll position:
+/// the live view's for the tab the view shows, and the one the shell kept
+/// for every other tab. The intricate build lives in the shared
+/// `Shell::save_npp_session`; this only picks the path.
 fn on_save_session() {
-    use codepp_scintilla_sys::{
-        SCI_GETFIRSTVISIBLELINE, SCI_GETSELECTIONEND, SCI_GETSELECTIONSTART,
-    };
     let Some(path) = choose_save_path("Save Session") else {
         return;
     };
-    // Snapshot the caret and build + write under one borrow taken *after*
-    // the dialog closes, so the recorded caret and the tab list it attaches
-    // to are a single consistent snapshot — an async load or watcher event
-    // during the chooser's nested loop can't split them apart. The caret is
-    // captured only when the active tab is path-bound (an untitled active
-    // tab contributes no `<File>` entry).
+    // Build + write under one borrow taken *after* the dialog closes, so
+    // the positions and the tab list they attach to are a single consistent
+    // snapshot — an async load or watcher event during the chooser's nested
+    // loop can't split them apart.
     let result = with_state(|st| {
-        let active_caret = st
-            .shell
-            .active()
-            .is_some_and(|t| t.path.is_some())
-            .then(|| codepp_shell::SessionCaret {
-                start_pos: st.editor.send(SCI_GETSELECTIONSTART, 0, 0).max(0) as u64,
-                end_pos: st.editor.send(SCI_GETSELECTIONEND, 0, 0).max(0) as u64,
-                first_visible_line: st.editor.send(SCI_GETFIRSTVISIBLELINE, 0, 0).max(0) as u32,
-            });
-        st.shell.save_npp_session(&path, active_caret)
+        let (shell, mut ui) = st.split();
+        shell.save_npp_session(&mut ui, &path)
     });
     if let Some(Err(err)) = result {
         crate::message_dialog(

@@ -19,6 +19,7 @@ pub mod recent_files;
 pub mod session;
 pub mod shortcuts;
 pub mod styles;
+pub mod view_position;
 mod xml;
 
 pub use dock::{
@@ -43,6 +44,7 @@ pub use recent_files::{RecentFiles, RecentFilesError};
 pub use session::{Session, SessionError, Tab, WindowGeometry};
 pub use shortcuts::{PluginShortcut, PluginShortcuts, ShortcutsError};
 pub use styles::{format_rgb_hex, parse_rgb_hex, StyleEntry, Styles, StylesError, Transparency};
+pub use view_position::ViewPosition;
 
 /// A workspace-wide source lint, not a unit test.
 ///
