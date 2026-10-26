@@ -19,14 +19,14 @@ use codepp_core::{Encoding, Eol, LangType};
 use codepp_editor::EditorHandle;
 use codepp_scintilla_sys::{
     SCI_ADDUNDOACTION, SCI_BEGINUNDOACTION, SCI_COLOURISE, SCI_CONVERTEOLS, SCI_EMPTYUNDOBUFFER,
-    SCI_ENDUNDOACTION, SCI_GETANCHOR, SCI_GETCOLUMN, SCI_GETCURRENTPOS, SCI_GETDOCPOINTER,
+    SCI_ENDUNDOACTION, SCI_GETCOLUMN, SCI_GETCURRENTPOS, SCI_GETDOCPOINTER,
     SCI_GETFIRSTVISIBLELINE, SCI_GETLENGTH, SCI_GETLINECOUNT, SCI_GETMODIFY, SCI_GETOVERTYPE,
-    SCI_GETSELECTIONEND, SCI_GETSELECTIONSTART, SCI_GETTEXT, SCI_GETXOFFSET, SCI_GETZOOM,
-    SCI_GOTOPOS, SCI_LINEFROMPOSITION, SCI_LINESCROLL, SCI_LINESONSCREEN, SCI_POSITIONAFTER,
+    SCI_GETSELECTIONEND, SCI_GETSELECTIONSTART, SCI_GETTEXT, SCI_GETZOOM, SCI_GOTOPOS,
+    SCI_LINEFROMPOSITION, SCI_LINESCROLL, SCI_LINESONSCREEN, SCI_POSITIONAFTER,
     SCI_RELEASEDOCUMENT, SCI_SETDOCPOINTER, SCI_SETEMPTYSELECTION, SCI_SETEOLMODE,
-    SCI_SETSAVEPOINT, SCI_SETSEL, SCI_SETSELECTIONEND, SCI_SETSELECTIONSTART, SCI_SETTABWIDTH,
-    SCI_SETTEXT, SCI_SETXOFFSET, SCI_STYLEGETBACK, SCI_STYLEGETFORE, SC_DOCUMENTOPTION_DEFAULT,
-    SC_EOL_CR, SC_EOL_CRLF, SC_EOL_LF, STYLE_DEFAULT,
+    SCI_SETSAVEPOINT, SCI_SETSELECTIONEND, SCI_SETSELECTIONSTART, SCI_SETTABWIDTH, SCI_SETTEXT,
+    SCI_STYLEGETBACK, SCI_STYLEGETFORE, SC_DOCUMENTOPTION_DEFAULT, SC_EOL_CR, SC_EOL_CRLF,
+    SC_EOL_LF, STYLE_DEFAULT,
 };
 
 /// Visible width of a TAB, in spaces. Matches `ui_win32`'s tab-width
@@ -82,47 +82,17 @@ const fn rgb_to_scintilla_colour((r, g, b): (u8, u8, u8)) -> u32 {
     (b as u32) << 16 | (g as u32) << 8 | (r as u32)
 }
 
-/// Caret/scroll position of the bound document, so a temporary
-/// `SCI_SETDOCPOINTER` swap can put the user's view back exactly as it
-/// was. Mirrors `ui_win32::ScintillaViewState`.
-struct ViewState {
-    caret: isize,
-    anchor: isize,
-    top_line: isize,
-    x_offset: isize,
-}
-
 impl GtkUi {
-    fn snapshot_view(&self) -> ViewState {
-        ViewState {
-            caret: self.editor.send(SCI_GETCURRENTPOS, 0, 0),
-            anchor: self.editor.send(SCI_GETANCHOR, 0, 0),
-            top_line: self.editor.send(SCI_GETFIRSTVISIBLELINE, 0, 0),
-            x_offset: self.editor.send(SCI_GETXOFFSET, 0, 0),
-        }
-    }
-
-    fn restore_view(&self, snap: &ViewState) {
-        self.editor
-            .send(SCI_SETSEL, snap.anchor.max(0) as usize, snap.caret);
-        let cur_top = self.editor.send(SCI_GETFIRSTVISIBLELINE, 0, 0);
-        let delta = snap.top_line - cur_top;
-        if delta != 0 {
-            self.editor.send(SCI_LINESCROLL, 0, delta);
-        }
-        self.editor
-            .send(SCI_SETXOFFSET, snap.x_offset.max(0) as usize, 0);
-    }
-
     /// Run `f` with `doc` temporarily bound to the view, restoring the
     /// previous document and the user's scroll/caret afterwards.
     ///
     /// The doc-pointer swap is how a single Scintilla view serves many
     /// tabs (DESIGN.md §7.2 Phase 3). Reading another tab's text is
     /// therefore visible to the *view*, not just the model, which is
-    /// why the caret and scroll offsets have to be saved and put back —
-    /// otherwise a Save All would leave the user staring at a different
-    /// line than before.
+    /// why the selection, scroll and folds have to be saved and put back:
+    /// the swap clears the selection and expands every fold, so an
+    /// autosave would otherwise leave the user staring at a different
+    /// line, with their folds open.
     fn with_doc<R>(&mut self, doc: isize, f: impl FnOnce(&mut Self) -> R, absent: R) -> R {
         if doc == 0 {
             return absent;
@@ -131,7 +101,7 @@ impl GtkUi {
         if prior == doc {
             return f(self);
         }
-        let view = self.snapshot_view();
+        let view = self.editor.save_view();
         // Hold a reference of our own on the document being swapped away
         // from. `SCI_SETDOCPOINTER` releases the view's reference, and a
         // document the view alone still holds (one a tab has `release_doc`'d)
@@ -146,7 +116,7 @@ impl GtkUi {
             self.editor.send(SCI_SETDOCPOINTER, 0, prior);
             self.editor
                 .send(codepp_scintilla_sys::SCI_RELEASEDOCUMENT, 0, prior);
-            self.restore_view(&view);
+            self.editor.restore_view(&view);
         }
         out
     }
@@ -321,6 +291,14 @@ impl UiPlatform for GtkUi {
 
     fn set_view_position(&mut self, pos: codepp_shell::ViewPosition) {
         self.editor.set_view_position(pos);
+    }
+
+    fn contracted_folds(&mut self) -> Vec<u64> {
+        self.editor.contracted_folds()
+    }
+
+    fn apply_folds(&mut self, lines: &[u64]) {
+        self.editor.apply_folds(lines);
     }
 
     fn update_status(&mut self, lang: LangType, encoding: &Encoding, eol: Eol, _byte_len: u64) {

@@ -320,7 +320,7 @@ pub fn run(initial_path: Option<PathBuf>, perf: Perf) -> Result<(), GtkUiError> 
     }));
     state::install(&st);
 
-    connect_sci_notify(&sci_widget);
+    connect_sci_notify(&sci_widget, editor);
 
     connect_file_drop(&window, &sci_widget);
 
@@ -476,13 +476,13 @@ fn connect_session_persistence(window: &gtk::Window) {
     });
 }
 
-/// Wire the two `sci-notify` handlers. Split out of `run` for length.
+/// Wire the three `sci-notify` handlers. Split out of `run` for length.
 ///
 /// Scintilla reports caret moves, edits and save-point transitions through
 /// its own `sci-notify` `GObject` signal (declared in `ScintillaWidget.h`
 /// as `SCINTILLA_NOTIFY`), the GTK analogue of Win32's `WM_NOTIFY`.
 ///
-/// Two handlers, deliberately separate:
+/// Three handlers, deliberately separate:
 ///   1. Chrome resync — ignores the payload; refreshing unconditionally is
 ///      cheaper than unpacking `SCNotification`, and the work (a few
 ///      direct-calls + label writes GTK elides when unchanged, plus a
@@ -495,7 +495,12 @@ fn connect_session_persistence(window: &gtk::Window) {
 ///      Kept apart so the hot styling path unpacks the payload only when it
 ///      must and its borrow-drop discipline (see `udl::on_style_needed`)
 ///      stays isolated.
-fn connect_sci_notify(sci_widget: &gtk::Widget) {
+///   3. A tab's top partway into a wrapped line, settled on `SCN_PAINTED`
+///      once the paint has wrapped that line
+///      (`EditorHandle::settle_wrapped_top`). It holds the handle rather
+///      than reaching it through `with_state`, which would decline a paint
+///      made inside a borrow and leave the top unsettled.
+fn connect_sci_notify(sci_widget: &gtk::Widget, editor: EditorHandle) {
     sci_widget.connect_local("sci-notify", false, |values| {
         crate::at_callback_boundary("lib:sci_notify:chrome", None, || {
             // A UDL container-lexer paint fires an `SCN_MODIFIED(ChangeStyle)`
@@ -547,6 +552,15 @@ fn connect_sci_notify(sci_widget: &gtk::Widget) {
         crate::at_callback_boundary("lib:sci_notify:udl", None, || {
             if let Some(position) = style_needed_position(values) {
                 udl::on_style_needed(position);
+            }
+            None
+        })
+    });
+
+    sci_widget.connect_local("sci-notify", false, move |values| {
+        crate::at_callback_boundary("lib:sci_notify:wrapped_top", None, || {
+            if notification_code(values) == Some(codepp_scintilla_sys::SCN_PAINTED) {
+                editor.settle_wrapped_top();
             }
             None
         })
@@ -2496,7 +2510,8 @@ fn restore_session(initial_path: Option<PathBuf>) {
             SessionRestoreEntry::UntitledFromBackup {
                 untitled_seq,
                 text,
-                cursor,
+                view,
+                folds,
                 encoding,
                 eol,
                 backup_modified_externally,
@@ -2510,7 +2525,8 @@ fn restore_session(initial_path: Option<PathBuf>) {
                         &mut ui,
                         untitled_seq,
                         text,
-                        cursor,
+                        view,
+                        folds,
                         encoding,
                         eol,
                         backup_modified_externally,
@@ -2529,7 +2545,8 @@ fn restore_session(initial_path: Option<PathBuf>) {
             SessionRestoreEntry::DirtyFromBackup {
                 path,
                 text,
-                cursor,
+                view,
+                folds,
                 encoding,
                 eol,
                 disk_changed_externally,
@@ -2543,7 +2560,8 @@ fn restore_session(initial_path: Option<PathBuf>) {
                         &mut ui,
                         path,
                         text,
-                        cursor,
+                        view,
+                        folds,
                         encoding,
                         eol,
                         disk_changed_externally,

@@ -72,7 +72,7 @@ pub mod udl_paint;
 
 use core::ffi::c_void;
 
-use codepp_core::ViewPosition;
+use codepp_core::{ViewPosition, MAX_KEPT_FOLDS};
 
 // Lexilla is only built on the backends that have a Scintilla build,
 // so `CreateLexer` exists on exactly those targets — see the gate on
@@ -82,24 +82,72 @@ use codepp_core::ViewPosition;
 use codepp_scintilla_sys::CreateLexer;
 use codepp_scintilla_sys::{
     sptr_t, uptr_t, ScintillaDirectFunction, SCI_BRACEBADLIGHT, SCI_BRACEHIGHLIGHT, SCI_BRACEMATCH,
-    SCI_GETANCHOR, SCI_GETCHARAT, SCI_GETCODEPAGE, SCI_GETCURRENTPOS, SCI_GETENDSTYLED,
-    SCI_GETFIRSTVISIBLELINE, SCI_GETLENGTH, SCI_GETLINECOUNT, SCI_GETRANGEPOINTER,
-    SCI_GETSCROLLWIDTH, SCI_GETTARGETEND, SCI_GETTARGETSTART, SCI_GETWRAPMODE, SCI_GETXOFFSET,
-    SCI_LINEFROMPOSITION, SCI_LINESCROLL, SCI_LINESONSCREEN, SCI_MARKERDEFINE,
+    SCI_CONTRACTEDFOLDNEXT, SCI_DOCLINEFROMVISIBLE, SCI_FOLDLINE, SCI_GETANCHOR, SCI_GETCHARAT,
+    SCI_GETCODEPAGE, SCI_GETCURRENTPOS, SCI_GETDOCPOINTER, SCI_GETENDSTYLED,
+    SCI_GETFIRSTVISIBLELINE, SCI_GETFOLDLEVEL, SCI_GETLENGTH, SCI_GETLINECOUNT,
+    SCI_GETRANGEPOINTER, SCI_GETSCROLLWIDTH, SCI_GETTARGETEND, SCI_GETTARGETSTART, SCI_GETWRAPMODE,
+    SCI_GETXOFFSET, SCI_LINEFROMPOSITION, SCI_LINESONSCREEN, SCI_MARKERDEFINE,
     SCI_MARKERENABLEHIGHLIGHT, SCI_MARKERSETBACK, SCI_MARKERSETBACKSELECTED, SCI_MARKERSETFORE,
     SCI_POSITIONFROMLINE, SCI_REPLACETARGET, SCI_REPLACETARGETRE, SCI_SEARCHANCHOR,
     SCI_SEARCHINTARGET, SCI_SEARCHNEXT, SCI_SEARCHPREV, SCI_SETAUTOMATICFOLD, SCI_SETCARETLINEBACK,
-    SCI_SETCARETLINEVISIBLE, SCI_SETCHANGEHISTORY, SCI_SETFOLDFLAGS, SCI_SETFOLDMARGINCOLOUR,
-    SCI_SETFOLDMARGINHICOLOUR, SCI_SETILEXER, SCI_SETKEYWORDS, SCI_SETMARGINMASKN,
-    SCI_SETMARGINSENSITIVEN, SCI_SETMARGINTYPEN, SCI_SETMARGINWIDTHN, SCI_SETPROPERTY,
-    SCI_SETSEARCHFLAGS, SCI_SETSEL, SCI_SETSTYLING, SCI_SETTARGETRANGE, SCI_SETXOFFSET,
-    SCI_STARTSTYLING, SCI_STYLECLEARALL, SCI_STYLESETBACK, SCI_STYLESETBOLD, SCI_STYLESETFONT,
-    SCI_STYLESETFORE, SCI_STYLESETITALIC, SCI_STYLESETSIZE, SCI_STYLESETUNDERLINE, SCI_TEXTWIDTH,
-    SC_CHANGE_HISTORY_ENABLED, SC_CHANGE_HISTORY_MARKERS, SC_CP_UTF8, SC_MARGIN_NUMBER,
-    SC_MARGIN_SYMBOL, SC_MARKNUM_HISTORY_MODIFIED, SC_MARKNUM_HISTORY_REVERTED_TO_MODIFIED,
-    SC_MARKNUM_HISTORY_REVERTED_TO_ORIGIN, SC_MARKNUM_HISTORY_SAVED, SC_MARK_EMPTY,
-    SC_MARK_FULLRECT, SC_WRAP_NONE, STYLE_LINENUMBER,
+    SCI_SETCARETLINEVISIBLE, SCI_SETCHANGEHISTORY, SCI_SETFIRSTVISIBLELINE, SCI_SETFOLDFLAGS,
+    SCI_SETFOLDMARGINCOLOUR, SCI_SETFOLDMARGINHICOLOUR, SCI_SETILEXER, SCI_SETKEYWORDS,
+    SCI_SETMARGINMASKN, SCI_SETMARGINSENSITIVEN, SCI_SETMARGINTYPEN, SCI_SETMARGINWIDTHN,
+    SCI_SETPROPERTY, SCI_SETSEARCHFLAGS, SCI_SETSEL, SCI_SETSTYLING, SCI_SETTARGETRANGE,
+    SCI_SETXOFFSET, SCI_STARTSTYLING, SCI_STYLECLEARALL, SCI_STYLESETBACK, SCI_STYLESETBOLD,
+    SCI_STYLESETFONT, SCI_STYLESETFORE, SCI_STYLESETITALIC, SCI_STYLESETSIZE,
+    SCI_STYLESETUNDERLINE, SCI_TEXTWIDTH, SCI_VISIBLEFROMDOCLINE, SCI_WRAPCOUNT,
+    SC_CHANGE_HISTORY_ENABLED, SC_CHANGE_HISTORY_MARKERS, SC_CP_UTF8, SC_FOLDACTION_CONTRACT,
+    SC_FOLDLEVELHEADERFLAG, SC_MARGIN_NUMBER, SC_MARGIN_SYMBOL, SC_MARKNUM_HISTORY_MODIFIED,
+    SC_MARKNUM_HISTORY_REVERTED_TO_MODIFIED, SC_MARKNUM_HISTORY_REVERTED_TO_ORIGIN,
+    SC_MARKNUM_HISTORY_SAVED, SC_MARK_EMPTY, SC_MARK_FULLRECT, SC_WRAP_NONE, STYLE_LINENUMBER,
 };
+
+/// What [`EditorHandle::save_view`] reads and [`EditorHandle::restore_view`]
+/// puts back: where the view stood, and which folds were contracted.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct SavedView {
+    /// The selection and the scroll.
+    pub position: ViewPosition,
+    /// The contracted fold headers, as document lines.
+    pub folds: Vec<u64>,
+}
+
+/// How many paints a top line waits for the view to wrap enough of the
+/// document to show it, before it is given up. Notepad++ waits as many, as
+/// read from its source (`ScintillaEditView::restoreCurrentPosPostStep`),
+/// not measured.
+const WRAPPED_TOP_PAINTS: u8 = 8;
+
+/// A top line the view could not yet be put at, because the view has not
+/// wrapped enough of the document yet. See
+/// [`EditorHandle::settle_wrapped_top`].
+#[derive(Clone, Copy, Debug)]
+struct WrappedTop {
+    /// The view it is for: its direct-call instance pointer.
+    view: usize,
+    /// The document the view showed: a top is for one document only.
+    doc: sptr_t,
+    /// The document line to be at the top.
+    line: sptr_t,
+    /// The display lines into it the view is to show at the top.
+    subline: sptr_t,
+    /// Where the view's top was left, as the document line and the display
+    /// lines into it: short of `line` and `subline`.
+    left: (sptr_t, sptr_t),
+    /// The paints that have gone by since the top was put.
+    paints: u8,
+}
+
+thread_local! {
+    /// The top lines waiting for the view to wrap enough of the document, at
+    /// most one per view. Kept here rather than on the handle, which is
+    /// `Copy` and is copied into every backend's state; a view is driven from
+    /// the UI thread only. An entry for a view that is never painted again
+    /// stays, which costs nothing: a backend's views live as long as it does.
+    static WRAPPED_TOPS: std::cell::RefCell<Vec<WrappedTop>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
 
 /// Opaque handle to a Scintilla editor control.
 ///
@@ -812,34 +860,57 @@ impl EditorHandle {
     }
 
     /// Where the view stands in the document it shows: the selection and
-    /// the scroll. The first visible line is left out while no whole line
-    /// fits on screen (`SCI_LINESONSCREEN` answers 0), as in a view not yet
-    /// laid out, or a window shorter than one line: its scroll says nothing
-    /// about where the user was, and applying it later could put the caret
-    /// just off screen.
+    /// the scroll, the scroll as the document line at the top and the
+    /// display lines into it when it wraps. The top line is left out while
+    /// no whole line fits on screen (`SCI_LINESONSCREEN` answers 0), as in a
+    /// view not yet laid out, or a window shorter than one line: its scroll
+    /// says nothing about where the user was, and applying it later could
+    /// put the caret just off screen.
+    ///
+    /// A top line still waiting for the view to wrap enough of the document
+    /// ([`Self::settle_wrapped_top`]) is reported where it is to be, not
+    /// where the view has got to so far.
     #[must_use]
     pub fn view_position(&self) -> ViewPosition {
         let read = |msg: u32| self.send(msg, 0, 0).max(0) as u64;
         let laid_out = self.send(SCI_LINESONSCREEN, 0, 0) > 0;
+        let (top_line, top_subline) = if laid_out {
+            let (line, subline) = match self.wrapped_top() {
+                Some(top) if self.top_is_where_left(&top) => (top.line, top.subline),
+                _ => self.top_now(),
+            };
+            (Some(line as u64), subline as u64)
+        } else {
+            (None, 0)
+        };
         ViewPosition {
             anchor: read(SCI_GETANCHOR),
             caret: read(SCI_GETCURRENTPOS),
-            first_visible_line: laid_out.then(|| read(SCI_GETFIRSTVISIBLELINE)),
+            top_line,
+            top_subline,
             x_offset: read(SCI_GETXOFFSET),
         }
     }
 
     /// Put the view at `pos` in the document it shows. The selection goes
-    /// first, which scrolls the caret into view (`SCI_SETSEL`); with a first
-    /// visible line, the scroll then goes back to it exactly, the way the
-    /// user left it, even if that leaves the caret off screen.
+    /// first, which scrolls the caret into view (`SCI_SETSEL`); with a top
+    /// line, the scroll then goes back to it exactly, the way the user left
+    /// it, even if that leaves the caret off screen.
+    ///
+    /// Apply the folds first ([`Self::apply_folds`]): the top line is
+    /// turned into a display line here, and contracting a fold above it
+    /// moves that.
     ///
     /// Each end of the selection is clamped to the document and moved back
     /// to a character boundary first ([`Self::char_boundary_at_or_before`]),
     /// so a position from a hand-edited file, or one kept over text that has
-    /// changed since, lands inside the document on a character. The
-    /// horizontal scroll is applied only while lines do not wrap, and kept
-    /// within the scroll width.
+    /// changed since, lands inside the document on a character. The top line
+    /// is clamped to the document and the display lines into it to the ones
+    /// it has. The horizontal scroll is applied only while lines do not
+    /// wrap, and kept within the scroll width.
+    ///
+    /// While lines wrap, a top the view cannot show yet waits for the view
+    /// to wrap enough of the document ([`Self::settle_wrapped_top`]).
     pub fn set_view_position(&self, pos: ViewPosition) {
         let to_ptr = |v: u64| sptr_t::try_from(v).unwrap_or(sptr_t::MAX);
         let anchor = to_ptr(self.char_boundary_at_or_before(pos.anchor));
@@ -847,26 +918,229 @@ impl EditorHandle {
         // Non-negative by construction, so the cast to the unsigned
         // parameter keeps the value.
         self.send(SCI_SETSEL, anchor as uptr_t, caret);
-        let Some(line) = pos.first_visible_line else {
+        self.take_wrapped_top();
+        let Some(line) = pos.top_line else {
             return;
         };
-        // `SCI_LINESCROLL` scrolls by a delta from the first visible line,
-        // read just before on this thread, so the line it arrives at is
-        // `to_ptr(line)` and the sum inside Scintilla cannot overflow.
-        let current = self.send(SCI_GETFIRSTVISIBLELINE, 0, 0);
-        let delta = to_ptr(line).saturating_sub(current);
-        if delta != 0 {
-            self.send(SCI_LINESCROLL, 0, delta);
+        let last = self.send(SCI_GETLINECOUNT, 0, 0).max(1) - 1;
+        let line = to_ptr(line).min(last);
+        let sublines = self.send(SCI_WRAPCOUNT, line as uptr_t, 0).max(1);
+        let wanted = to_ptr(pos.top_subline).min(sublines - 1);
+        let left = self.put_top_at(line, wanted);
+        let wraps = self.send(SCI_GETWRAPMODE, 0, 0) != SC_WRAP_NONE as sptr_t;
+        // Without wrapping, the view has every line at its height already,
+        // and a top it would not go to is past the last one it scrolls to.
+        if wraps && left != (line, wanted) {
+            Self::keep_wrapped_top(WrappedTop {
+                view: self.view_key(),
+                doc: self.send(SCI_GETDOCPOINTER, 0, 0),
+                line,
+                subline: wanted,
+                left,
+                paints: 0,
+            });
         }
         // A horizontal scroll means nothing while lines wrap. Scintilla sets
         // it to 0 when wrapping starts (`Message::SetWrapMode`) and shows no
         // horizontal scroll bar then, so one read with wrapping off and put
         // back with it on would shift the text left out of reach.
-        if self.send(SCI_GETWRAPMODE, 0, 0) == SC_WRAP_NONE as sptr_t {
+        if !wraps {
             let width = self.send(SCI_GETSCROLLWIDTH, 0, 0).max(0) as u64;
             let x_offset = i32::try_from(pos.x_offset.min(width)).unwrap_or(i32::MAX);
             self.send(SCI_SETXOFFSET, x_offset as uptr_t, 0);
         }
+    }
+
+    /// Finish putting the view at a top it could not be put at yet, once the
+    /// view has wrapped enough of the document. Call it from the view's
+    /// `SCN_PAINTED`.
+    ///
+    /// Scintilla wraps lines when it paints them, and `SCI_SETDOCPOINTER`
+    /// and `SCI_SETTEXT` drop the wrapping. Until the paint after either,
+    /// every line is one display line high in the view, which leaves the
+    /// view short of a top in two ways. A display line partway into a line
+    /// would name a later document line, so only the document line can go to
+    /// the top. And the view does not scroll past its last line
+    /// (`Editor::MaxScrollPos`), so in a document of fewer lines than fit on
+    /// screen not even that can, until wrapping has made it longer.
+    /// Scintilla's wrapping keeps the document line at the top where it is
+    /// (`Editor::WrapLines`), and this puts the top again after each paint,
+    /// as Notepad++ does as read from its source
+    /// (`ScintillaEditView::restoreCurrentPosPostStep`), until it is where it
+    /// is to be.
+    ///
+    /// Given up when the view is no longer where it was left, since wrapping
+    /// alone never moves it: the user, or something else, has scrolled. Also
+    /// when the document no longer has the line, once the line is wrapped
+    /// and the view still stops short, which it then always will, and after
+    /// [`WRAPPED_TOP_PAINTS`] paints.
+    pub fn settle_wrapped_top(&self) {
+        let Some(mut top) = self.take_wrapped_top() else {
+            return;
+        };
+        if !self.top_is_where_left(&top) {
+            return;
+        }
+        top.left = self.put_top_at(top.line, top.subline);
+        top.paints += 1;
+        let settled = top.left == (top.line, top.subline);
+        let stuck = top.left.0 == top.line
+            && self.shown_height(top.line) >= self.send(SCI_WRAPCOUNT, top.line as uptr_t, 0);
+        if !settled && !stuck && top.paints < WRAPPED_TOP_PAINTS {
+            Self::keep_wrapped_top(top);
+        }
+    }
+
+    /// Put document `line` at the top of the view, `subline` display lines
+    /// into it as far as the view has wrapped it, and return where the top
+    /// went, which the view's scroll range can leave short
+    /// ([`Self::top_now`]).
+    fn put_top_at(&self, line: sptr_t, subline: sptr_t) -> (sptr_t, sptr_t) {
+        let start = self.send(SCI_VISIBLEFROMDOCLINE, line as uptr_t, 0).max(0);
+        let subline = self.shown_subline(line, subline);
+        self.send(
+            SCI_SETFIRSTVISIBLELINE,
+            start.saturating_add(subline) as uptr_t,
+            0,
+        );
+        self.top_now()
+    }
+
+    /// The view's top as it is: the document line at the top, and the
+    /// display lines into it.
+    fn top_now(&self) -> (sptr_t, sptr_t) {
+        let first = self.send(SCI_GETFIRSTVISIBLELINE, 0, 0).max(0);
+        let line = self.send(SCI_DOCLINEFROMVISIBLE, first as uptr_t, 0).max(0);
+        let start = self.send(SCI_VISIBLEFROMDOCLINE, line as uptr_t, 0).max(0);
+        (line, first.saturating_sub(start))
+    }
+
+    /// The display lines the view gives document `line` now: as many as it
+    /// wraps to once the view has wrapped it, 1 before, and 0 while a
+    /// contracted fold hides it.
+    fn shown_height(&self, line: sptr_t) -> sptr_t {
+        let start = self.send(SCI_VISIBLEFROMDOCLINE, line as uptr_t, 0);
+        let next = self.send(SCI_VISIBLEFROMDOCLINE, line.saturating_add(1) as uptr_t, 0);
+        next.saturating_sub(start).max(0)
+    }
+
+    /// `subline` display lines into document `line`, as far as the view
+    /// shows the line now ([`Self::shown_height`]).
+    fn shown_subline(&self, line: sptr_t, subline: sptr_t) -> sptr_t {
+        subline.min(self.shown_height(line) - 1).max(0)
+    }
+
+    /// Whether the view still shows `top`'s document with its top where it
+    /// was left, allowing for the view having wrapped lines since, which
+    /// keeps the document line at the top and the display lines into it as
+    /// far as the line now has; and whether the document still has the line
+    /// the top is to be at. An undo can take that line away and leave the
+    /// view's top where it was, and then there is no top to put.
+    ///
+    /// Two things read as "where left" that are not, both harmless: the view
+    /// scrolled away and back to exactly that top between two paints, and
+    /// the document freed and another allocated at its address with the
+    /// view's top by chance at the same place. Either costs one more put of
+    /// the top, which only scrolls, and the paint limit still applies.
+    fn top_is_where_left(&self, top: &WrappedTop) -> bool {
+        if self.send(SCI_GETDOCPOINTER, 0, 0) != top.doc
+            || top.line >= self.send(SCI_GETLINECOUNT, 0, 0)
+        {
+            return false;
+        }
+        let (line, subline) = top.left;
+        self.top_now() == (line, self.shown_subline(line, subline))
+    }
+
+    /// The key this view's waiting top is kept under.
+    fn view_key(&self) -> usize {
+        self.direct_ptr as usize
+    }
+
+    /// The top this view is waiting to settle, if any.
+    fn wrapped_top(&self) -> Option<WrappedTop> {
+        let key = self.view_key();
+        WRAPPED_TOPS.with(|tops| tops.borrow().iter().find(|t| t.view == key).copied())
+    }
+
+    /// Remove and return the top this view is waiting to settle.
+    fn take_wrapped_top(&self) -> Option<WrappedTop> {
+        let key = self.view_key();
+        WRAPPED_TOPS.with(|tops| {
+            let mut tops = tops.borrow_mut();
+            let idx = tops.iter().position(|t| t.view == key)?;
+            Some(tops.swap_remove(idx))
+        })
+    }
+
+    /// Wait to settle `top`, in place of any top its view was waiting on.
+    fn keep_wrapped_top(top: WrappedTop) {
+        WRAPPED_TOPS.with(|tops| {
+            let mut tops = tops.borrow_mut();
+            tops.retain(|t| t.view != top.view);
+            tops.push(top);
+        });
+    }
+
+    /// The fold headers whose folds are contracted in the view, as document
+    /// lines in order, at most [`MAX_KEPT_FOLDS`] of them. Contraction
+    /// belongs to the view, not to the document, and `SCI_SETDOCPOINTER`
+    /// expands every fold, so this is what has to be kept across a swap.
+    #[must_use]
+    pub fn contracted_folds(&self) -> Vec<u64> {
+        let mut folds = Vec::new();
+        let mut from: sptr_t = 0;
+        while folds.len() < MAX_KEPT_FOLDS {
+            let line = self.send(SCI_CONTRACTEDFOLDNEXT, from as uptr_t, 0);
+            if line < from {
+                break;
+            }
+            folds.push(line as u64);
+            from = line + 1;
+        }
+        folds
+    }
+
+    /// Contract the folds headed by `lines` in the view, leaving every other
+    /// fold as it is. A line that is past the end of the document, or that
+    /// the lexer does not mark as a fold header, is passed over: a file
+    /// edited since the folds were recorded may have none there now, and
+    /// `SCI_FOLDLINE` on a line followed by blank ones would hide them.
+    ///
+    /// Fold levels come from the lexer, so this goes after it has styled the
+    /// document; `codepp_editor::theme::apply_lang_theme` styles all of it.
+    /// Nothing here styles, which keeps a document lexed by the container (a
+    /// User Defined Language, plain text) from being asked to style itself
+    /// from inside whatever applies the folds.
+    pub fn apply_folds(&self, lines: &[u64]) {
+        let count = self.send(SCI_GETLINECOUNT, 0, 0).max(0) as u64;
+        for &line in lines.iter().take(MAX_KEPT_FOLDS) {
+            if line >= count {
+                continue;
+            }
+            let line = line as uptr_t;
+            if self.send(SCI_GETFOLDLEVEL, line, 0) & SC_FOLDLEVELHEADERFLAG != 0 {
+                self.send(SCI_FOLDLINE, line, SC_FOLDACTION_CONTRACT as sptr_t);
+            }
+        }
+    }
+
+    /// Everything a swap to another document and back clears in the view:
+    /// the position and the contracted folds. For a backend's temporary
+    /// swap, which reads or writes another tab's document and comes back.
+    #[must_use]
+    pub fn save_view(&self) -> SavedView {
+        SavedView {
+            position: self.view_position(),
+            folds: self.contracted_folds(),
+        }
+    }
+
+    /// Put back what [`Self::save_view`] read, once the view shows the same
+    /// document again: the folds, then the position.
+    pub fn restore_view(&self, saved: &SavedView) {
+        self.apply_folds(&saved.folds);
+        self.set_view_position(saved.position);
     }
 
     /// `pos` moved back to the nearest character boundary in the document

@@ -77,8 +77,8 @@ use crossbeam_channel::{unbounded, Receiver, Sender};
 use codepp_core::file::{Loader, LoaderShutdown};
 use codepp_core::lang::L_TEXT;
 use codepp_core::{
-    Encoding, Eol, FindHistory, LangType, LoadResult, Preferences, RecentFiles, RequestId, Session,
-    WindowGeometry,
+    kept_folds, Encoding, Eol, FindHistory, LangType, LoadResult, Preferences, RecentFiles,
+    RequestId, Session, WindowGeometry, MAX_SESSION_FOLDS,
 };
 use codepp_platform::watch::{FileChange, FileWatcher};
 use codepp_plugin_host::{
@@ -243,6 +243,20 @@ pub trait UiPlatform {
     /// every tab it switches to, and saving every tab but the one in
     /// front at the start, while looking implemented.
     fn set_view_position(&mut self, pos: ViewPosition);
+
+    /// The fold headers whose folds are contracted in the view
+    /// (`EditorHandle::contracted_folds`). Contraction belongs to the view
+    /// and `SCI_SETDOCPOINTER` expands every fold, so the shell keeps these
+    /// with the position for the tab whose document the view is about to
+    /// leave ([`Tab::folds`]).
+    fn contracted_folds(&mut self) -> Vec<u64>;
+
+    /// Contract the folds headed by `lines` in the view
+    /// (`EditorHandle::apply_folds`). The shell calls this once the lexer
+    /// has styled the document, since fold levels are the lexer's, and
+    /// before [`Self::set_view_position`], since contracting a fold moves
+    /// the display lines the scroll is turned into.
+    fn apply_folds(&mut self, lines: &[u64]);
 
     /// Update the status bar with the active buffer's language,
     /// encoding, EOL, and byte count. The leftmost segment shows
@@ -825,8 +839,11 @@ pub enum SessionRestoreEntry {
         untitled_seq: Option<u32>,
         /// Buffer content read from the backup file.
         text: String,
-        /// Caret position the user had when they last closed.
-        cursor: u64,
+        /// Where the view stood when the user last closed: the selection
+        /// and the scroll.
+        view: ViewPosition,
+        /// The fold headers whose folds were contracted.
+        folds: Vec<u64>,
         /// Encoding the buffer would target on first save.
         encoding: Encoding,
         /// EOL style the buffer would target on first save.
@@ -874,8 +891,11 @@ pub enum SessionRestoreEntry {
         /// Buffer content from the backup file (the user's last
         /// unsaved edits).
         text: String,
-        /// Caret position the user had when they last closed.
-        cursor: u64,
+        /// Where the view stood when the user last closed: the selection
+        /// and the scroll.
+        view: ViewPosition,
+        /// The fold headers whose folds were contracted.
+        folds: Vec<u64>,
         /// Encoding the buffer carried.
         encoding: Encoding,
         /// EOL style the buffer carried.
@@ -1275,6 +1295,23 @@ pub struct Tab {
     /// and every tab but the one in front was saved at 0 and reopened at
     /// the top.
     pub view: ViewPosition,
+    /// The fold headers whose folds were contracted, as document lines, kept
+    /// with [`Self::view`] and on the same terms: `SCI_SETDOCPOINTER`
+    /// expands every fold, so until Phase 5 a tab switch unfolded the tab
+    /// switched to, and nothing recorded folds across a restart.
+    ///
+    /// Kept by line number, not by what the line holds: a file changed
+    /// above a fold before it is shown again may have another fold header
+    /// at that line, which is contracted, or none, which is passed over.
+    pub folds: Vec<u64>,
+    /// The view shows this tab's document, but the kept position and folds
+    /// have not been put back yet ([`Shell::show_kept_view`]). Set by a bind
+    /// that swapped the document or filled it, and cleared once the lexer
+    /// has styled it and the folds and position are applied, which is why it
+    /// waits: fold levels are the lexer's, and a fresh document has none
+    /// until then. While it is set, what the view holds is not the tab's,
+    /// so it is neither kept for the tab nor saved as its position.
+    pub view_owed: bool,
 }
 
 impl Default for Tab {
@@ -1299,6 +1336,8 @@ impl Default for Tab {
             pinned: false,
             pin_requested_during_load: None,
             view: ViewPosition::at(0),
+            folds: Vec::new(),
+            view_owed: false,
         }
     }
 }
@@ -4283,6 +4322,12 @@ impl Shell {
         // subsequent Ctrl+S writing to the wrong file. Looking up
         // the index by id at the end is robust to shifts.
         let original_active_id = self.active().map(|t| t.id);
+        // Whether binding the tab in front, in the loop or at the end, puts
+        // text into its document (`bind_and_fill`): that drops the lexer's
+        // styling and fold levels, so the language goes on again there.
+        let front_gets_text = self
+            .active()
+            .is_some_and(|t| t.scintilla_doc == 0 || t.doc_needs_text);
         let mut errors = Vec::new();
 
         for idx in 0..self.tabs.len() {
@@ -4367,6 +4412,16 @@ impl Shell {
             if let Some(orig_idx) = self.tabs.iter().position(|t| t.id == orig_id) {
                 self.bind_and_fill(ui, orig_idx);
                 self.active_tab = Some(orig_idx);
+                // A document that was shown before and got no new text keeps
+                // the lexer's styling and fold levels, so the language goes on
+                // again only when it did; re-lexing every time would cost a
+                // whole-document restyle per Save All. The tabs visited on the
+                // way stay owed their position and keep it, since the view
+                // leaving an owed tab keeps nothing.
+                if front_gets_text {
+                    self.show_language(ui, orig_idx);
+                }
+                self.show_kept_view(ui, orig_idx);
             }
         }
 
@@ -5462,29 +5517,47 @@ impl Shell {
         (bound, bound != before)
     }
 
-    /// Keep where the view stands as the position of the tab whose document
-    /// it shows ([`Tab::view`]). Nothing is kept when no tab owns the
-    /// document, as for a closed tab's on its way out, or when the document
-    /// is stale ([`Tab::doc_needs_text`]): its text is about to be replaced,
-    /// and the tab's position is the one that text will be shown at.
+    /// Keep where the view stands, and which folds are contracted, for the
+    /// tab whose document it shows ([`Tab::view`], [`Tab::folds`]). Nothing
+    /// is kept when what the view holds is not the tab's
+    /// ([`Self::view_holds_its_tab`]); a document no tab owns, as a closed
+    /// tab's on its way out, has no one to keep it for.
     fn note_bound_position<U: UiPlatform>(&mut self, ui: &mut U) {
         let doc = ui.bound_doc();
-        if doc == 0 {
-            return;
-        }
-        let Some(tab) = self.tabs.iter_mut().find(|t| t.scintilla_doc == doc) else {
+        let Some(idx) = self.tabs.iter().position(|t| t.scintilla_doc == doc) else {
             return;
         };
-        if !tab.doc_needs_text {
-            tab.view = ui.view_position();
+        // A bound document of 0 matches the first tab that has none yet;
+        // `view_holds_its_tab` refuses any tab with no document, so nothing
+        // is kept for it.
+        if !self.view_holds_its_tab(ui, idx) {
+            return;
         }
+        let (view, folds) = (ui.view_position(), ui.contracted_folds());
+        let tab = &mut self.tabs[idx];
+        tab.view = view;
+        tab.folds = folds;
+    }
+
+    /// Whether the view shows the tab at `idx`'s document as the tab's own,
+    /// so that where it stands is the tab's position. Not while the document
+    /// is stale ([`Tab::doc_needs_text`]), since its text is about to be
+    /// replaced and the tab's position is the one that text will be shown
+    /// at, and not while the kept position is owed to it ([`Tab::view_owed`]),
+    /// since the view has not been put there yet.
+    fn view_holds_its_tab<U: UiPlatform>(&self, ui: &mut U, idx: usize) -> bool {
+        self.tabs.get(idx).is_some_and(|tab| {
+            tab.scintilla_doc != 0
+                && !tab.doc_needs_text
+                && !tab.view_owed
+                && ui.bound_doc() == tab.scintilla_doc
+        })
     }
 
     /// The position a session saved now records for the tab at `idx`: the
-    /// live one while the view shows the tab's document, and the one kept
-    /// for the tab ([`Tab::view`]) otherwise. That includes a stale document
-    /// the view shows ([`Tab::doc_needs_text`]): its text is about to be
-    /// replaced, and the kept position is where the new text will be shown.
+    /// live one while the view holds the tab's document as its own
+    /// ([`Self::view_holds_its_tab`]), and the one kept for the tab
+    /// ([`Tab::view`]) otherwise.
     ///
     /// Asked of the view rather than of which tab is in front: an open moves
     /// the front when it is asked for and the view only when its file lands,
@@ -5492,22 +5565,46 @@ impl Shell {
     /// the tab in front got the live caret, whichever document the view
     /// showed, and every other tab got 0, so each reopened at the top.
     fn tab_position<U: UiPlatform>(&self, ui: &mut U, idx: usize) -> ViewPosition {
-        let Some(tab) = self.tabs.get(idx) else {
-            return ViewPosition::default();
-        };
-        let shown =
-            tab.scintilla_doc != 0 && !tab.doc_needs_text && ui.bound_doc() == tab.scintilla_doc;
-        if shown {
+        if self.view_holds_its_tab(ui, idx) {
             ui.view_position()
         } else {
-            tab.view
+            self.tabs.get(idx).map(|t| t.view).unwrap_or_default()
         }
     }
 
-    /// The caret of [`Self::tab_position`], which is what `session.xml`
-    /// records.
-    fn tab_caret<U: UiPlatform>(&self, ui: &mut U, idx: usize) -> u64 {
-        self.tab_position(ui, idx).caret
+    /// The contracted folds a session saved now records for the tab at
+    /// `idx`, on [`Self::tab_position`]'s terms.
+    fn tab_folds<U: UiPlatform>(&self, ui: &mut U, idx: usize) -> Vec<u64> {
+        if self.view_holds_its_tab(ui, idx) {
+            ui.contracted_folds()
+        } else {
+            self.tabs
+                .get(idx)
+                .map(|t| t.folds.clone())
+                .unwrap_or_default()
+        }
+    }
+
+    /// Put the view at the tab at `idx`'s kept position, folds first, if it
+    /// is owed one ([`Tab::view_owed`]) and the view shows the tab's
+    /// document. Called once the document has the fold levels the folds
+    /// need, which the language gives it by styling the whole document:
+    /// applied just before by `bind_active_view`, a landing in front and a
+    /// restore from a backup, and by the end of Save All when its rebind put
+    /// text into the document, which drops them; otherwise the document kept
+    /// them from when it was last shown. A document Code++ lexes itself, plain
+    /// text or a User Defined Language, has no fold levels, so it never has
+    /// folds to put back.
+    fn show_kept_view<U: UiPlatform>(&mut self, ui: &mut U, idx: usize) {
+        let Some(tab) = self.tabs.get_mut(idx) else {
+            return;
+        };
+        if !tab.view_owed || tab.scintilla_doc == 0 || ui.bound_doc() != tab.scintilla_doc {
+            return;
+        }
+        tab.view_owed = false;
+        ui.apply_folds(&tab.folds);
+        ui.set_view_position(tab.view);
     }
 
     /// Bind the view to `idx`'s document, creating it and/or filling it
@@ -5567,24 +5664,25 @@ impl Shell {
             );
         }
         let installs = existing_doc == 0 || (stale && !clobbers_edits);
-        // The view goes to the tab's position whenever it arrives at the
-        // document or the document's text is replaced: where the view last
-        // left it, or where its file's landing put the caret — the one the
-        // session recorded, for a tab loaded in the background. The swap
-        // cleared the selection, and a fill would leave the caret at 0. When
-        // edits kept a stale document's text over a landed first load, that
-        // is a position in the file shown over the kept text; it is clamped
-        // into it, and onto a character boundary (`set_view_position`).
-        if installs || swapped {
-            let pos = self.tabs[idx].view;
-            if installs {
-                ui.set_buffer_text(&text, pos.caret);
-            }
-            ui.set_view_position(pos);
+        if installs {
+            ui.set_buffer_text(&text, self.tabs[idx].view.caret);
         }
         let Some(tab) = self.tabs.get_mut(idx) else {
             return bound;
         };
+        // The view is owed the tab's position whenever it arrives at the
+        // document or the document's text is replaced: where the view last
+        // left it, or where its file's landing put it — the one the session
+        // recorded, for a tab loaded in the background. The swap cleared the
+        // selection and expanded every fold. It is put there by
+        // `show_kept_view` once the language has styled the document, since
+        // the folds need the lexer's fold levels. When edits kept a stale
+        // document's text over a landed first load, that is a position in
+        // the file shown over the kept text; it is clamped into it, and onto
+        // a character boundary (`set_view_position`).
+        if installs || swapped {
+            tab.view_owed = true;
+        }
         if existing_doc == 0 {
             tab.scintilla_doc = bound;
         }
@@ -5643,6 +5741,15 @@ impl Shell {
             return;
         };
         self.bind_and_fill(ui, idx);
+        self.show_language(ui, idx);
+        // After the language, which styles the document: the folds need the
+        // lexer's fold levels.
+        self.show_kept_view(ui, idx);
+    }
+
+    /// Apply the tab at `idx`'s language to the view and show its status,
+    /// for the document the view has just been bound to.
+    fn show_language<U: UiPlatform>(&self, ui: &mut U, idx: usize) {
         let Some(tab) = self.tabs.get(idx) else {
             return;
         };
@@ -5674,12 +5781,12 @@ impl Shell {
             return;
         };
         let stored_doc = tab.scintilla_doc;
-        let (lang, encoding, eol, byte_len, pos) = (
+        let (lang, encoding, eol, byte_len, caret) = (
             tab.lang,
             tab.encoding.clone(),
             tab.eol,
             tab.byte_len,
-            tab.view,
+            tab.view.caret,
         );
         let text = match bind {
             ActiveBind::Skip => return,
@@ -5692,15 +5799,18 @@ impl Shell {
             // The load has landed and the view shows its outcome; the
             // consent that travelled with the request is spent.
             tab.reload_confirmed = false;
+            // Owed the position and folds the landing gave the tab
+            // ([`Self::apply_load_result`]): for a first load what the
+            // session recorded, and for a reload where the tab was, so a
+            // reload no longer sends the view back to the start or to where
+            // the session had it. Put back after the language below.
+            if text.is_some() || swapped {
+                tab.view_owed = true;
+            }
         }
-        // The position the landing gave the tab ([`Self::apply_load_result`]):
-        // for a first load the caret the session recorded, and for a reload
-        // where the tab was, so a reload no longer sends the caret back to
-        // the start or to where the session had it.
         if let Some(text) = text {
             self.release_marker_before_install(idx, keeps_shadow);
-            ui.set_buffer_text(&text, pos.caret);
-            ui.set_view_position(pos);
+            ui.set_buffer_text(&text, caret);
             self.settle_marker_after_install(idx, keeps_shadow);
             // The document now holds what the tab holds, so it is no longer
             // stale, whatever an earlier landing in the background flagged.
@@ -5711,12 +5821,10 @@ impl Shell {
             if let Some(tab) = self.tabs.get_mut(idx) {
                 tab.doc_needs_text = false;
             }
-        } else if swapped {
-            // The work was kept, and the view has just arrived at it.
-            ui.set_view_position(pos);
         }
         ui.apply_lang(lang);
         ui.update_status(lang, &encoding, eol, byte_len);
+        self.show_kept_view(ui, idx);
         self.queue_buffer_activated();
     }
 
@@ -5833,9 +5941,9 @@ impl Shell {
                 self.note_bound_position(ui);
 
                 // Single by-path lookup covering every attribute the
-                // load path pulls from the persisted session:
-                // caret position, the user's Language-menu override,
-                // and the pin state. Rebuilding the find call per
+                // load path pulls from the persisted session: the view
+                // and folds, the user's Language-menu override, and the
+                // pin state. Rebuilding the find call per
                 // attribute (an earlier shape of this code) had the
                 // same shape three times and pushed the function
                 // over clippy's `too_many_lines` gate.
@@ -5844,7 +5952,7 @@ impl Shell {
                     .tabs
                     .iter()
                     .find(|t| t.path.as_deref() == Some(loaded.path.as_path()));
-                let cursor = stored.map_or(0, |t| t.cursor);
+                let (view, folds) = Self::recorded_view(stored);
                 // The language and pin a first load sets, resolved before
                 // the `&mut tab` borrow below so the UDL-registry read (a
                 // separate field) can't conflict with it. A reload sets
@@ -5896,7 +6004,7 @@ impl Shell {
                 // A first load never gives its file to a tab whose work it
                 // would not install: see `divert_first_load`.
                 if let Some(values) = first_load.filter(|_| keeps_work) {
-                    self.divert_first_load(ui, target_idx, loaded, values, cursor, pending);
+                    self.divert_first_load(ui, target_idx, loaded, values, (view, folds), pending);
                     return;
                 }
                 let Some(tab) = self.tabs.get_mut(target_idx) else {
@@ -5920,7 +6028,8 @@ impl Shell {
                     tab.custom_name = None;
                     // Shown now if the tab is in front, and when it is
                     // next shown otherwise.
-                    tab.view = ViewPosition::at(cursor);
+                    tab.view = view;
+                    tab.folds = folds;
                 }
                 // A kept shadow keeps the metadata that describes it; a
                 // kept document keeps its shadow too, so the two never
@@ -6172,8 +6281,8 @@ impl Shell {
     /// file arrived, and switching the view under them would send their next
     /// keystrokes into the file. The file's tab opens right after this one,
     /// in the background, and is filled when it is first shown, as a
-    /// background load is, at `cursor`, the caret the session recorded for
-    /// the file; `NPPN_FILEOPENED` names it. If this tab is in
+    /// background load is, at `view` with `folds` contracted, what the session
+    /// recorded for the file; `NPPN_FILEOPENED` names it. If this tab is in
     /// front, the view is bound to it here, because nothing else may have
     /// done so: a plugin can switch to a tab whose load is in flight without
     /// a rebind, and a view left on another tab's document would let Save As
@@ -6199,7 +6308,7 @@ impl Shell {
         idx: usize,
         loaded: codepp_core::file::LoadedFile,
         (lang, pinned): (LangType, bool),
-        cursor: u64,
+        (view, folds): (ViewPosition, Vec<u64>),
         pending: &mut Vec<PendingDialog>,
     ) {
         let seq = self.next_untitled_seq();
@@ -6279,7 +6388,8 @@ impl Shell {
                 text,
                 lang,
                 pinned,
-                view: ViewPosition::at(cursor),
+                view,
+                folds,
                 ..Tab::default()
             },
         );
@@ -7007,6 +7117,14 @@ impl Shell {
                 || self.udl_registry.find_by_lang_type_id(id).is_some())
     }
 
+    /// Where the view stood in a file and which folds were contracted, as
+    /// the session read at startup or by Load Session recorded them
+    /// (`stored`), for a tab's first load of it to show it at. A file the
+    /// session does not name is shown at its start, unfolded.
+    fn recorded_view(stored: Option<&codepp_core::Tab>) -> (ViewPosition, Vec<u64>) {
+        stored.map_or_else(Default::default, |t| (t.view_position(), t.fold_lines()))
+    }
+
     /// The language and pin a tab's first load of `path` sets: what the
     /// session read at startup or by Load Session recorded for the file
     /// (`stored`), or else, for the language, the extension
@@ -7723,7 +7841,7 @@ impl Shell {
                     filename,
                     lang: npp_name_for_lang(t.lang).to_string(),
                     first_visible_line: pos
-                        .first_visible_line
+                        .top_line
                         .map_or(0, |line| u32::try_from(line).unwrap_or(u32::MAX)),
                     start_pos,
                     end_pos,
@@ -7922,12 +8040,13 @@ impl Shell {
     /// Persist the open-tab list to `session.xml`, with a recovery
     /// backup for every buffer holding work that is not on disk: an
     /// untitled buffer, or a file with unsaved edits. Called on clean
-    /// shutdown and by the autosave. Each tab records its caret, so the
-    /// next launch puts it back where the user left it: the live one for
-    /// the tab whose document the view shows, and the one the shell kept
-    /// for every other tab ([`Self::tab_caret`]). A file still loading
-    /// records the caret the session read at startup recorded for it,
-    /// which its landing would apply. What is written is
+    /// shutdown and by the autosave. Each tab records its selection, its
+    /// scroll and its contracted folds, so the next launch puts it back
+    /// where the user left it: the live ones for the tab whose document
+    /// the view shows, and those the shell kept for every other tab
+    /// ([`Self::tab_position`], [`Self::tab_folds`]). A file still loading
+    /// records what the session read at startup recorded for it, which its
+    /// landing would apply. What is written is
     /// [`Self::session_to_save`]'s.
     ///
     /// A backup takes a name nothing in the backup folder has
@@ -8125,6 +8244,17 @@ impl Shell {
                     .position(|t| t.path.as_deref() == Some(p))
             })
         });
+        // Each tab may record `MAX_KEPT_FOLDS` folds, and a `session.xml`
+        // over the reader's cap is one `save_to_xml` declines to write, so
+        // folds enough would stop the whole session being saved.
+        let dropped = session.limit_folds(MAX_SESSION_FOLDS);
+        if dropped > 0 {
+            tracing::debug!(
+                dropped,
+                kept = MAX_SESSION_FOLDS,
+                "the session records only its first contracted folds"
+            );
+        }
         SavedSession { session, backups }
     }
 
@@ -8154,7 +8284,7 @@ impl Shell {
         idx: usize,
         pass: &mut SavePass<'_>,
     ) -> Option<codepp_core::Tab> {
-        let cursor = self.tab_caret(ui, idx);
+        let (view, folds) = (self.tab_position(ui, idx), self.tab_folds(ui, idx));
         let tab = self.tabs.get(idx)?;
         // Two cases write backups:
         //   1. Untitled buffer (`tab.path.is_none()`) — always
@@ -8200,9 +8330,8 @@ impl Shell {
         // `persisted_lang_fields` for why a UDL id must never reach disk.
         let (lang, udl) =
             Self::persisted_lang_fields(tab.lang, tab.path.as_deref(), &self.udl_registry);
-        Some(codepp_core::Tab {
+        let mut record = codepp_core::Tab {
             path: tab.path.clone(),
-            cursor,
             encoding: tab.encoding.clone(),
             eol: tab.eol,
             untitled_seq: tab.untitled_seq,
@@ -8226,7 +8355,13 @@ impl Shell {
             // deserialize with `pinned = false` (unpinned), so
             // no migration is required.
             pinned: tab.pinned,
-        })
+            ..codepp_core::Tab::default()
+        };
+        // Where the view stood and which folds were contracted, so the
+        // next start shows the tab as it was left.
+        record.set_view_position(view);
+        record.set_fold_lines(&folds);
+        Some(record)
     }
 
     /// What a session saved now records for the tab at `idx`, whose first
@@ -8259,29 +8394,34 @@ impl Shell {
             let seq = tab
                 .untitled_seq
                 .unwrap_or_else(|| pass.give_untitled_number(&self.tabs));
-            let cursor = self.tab_caret(ui, idx);
+            let (view, folds) = (self.tab_position(ui, idx), self.tab_folds(ui, idx));
             let backup = pass
                 .write(tab, &format!("new {seq}"), || {
                     Self::backup_text_for(tab, ui)
                 })
                 .or_else(|| self.last_good_backup(tab.id, pass));
             let (lang, udl) = Self::persisted_lang_fields(tab.lang, None, &self.udl_registry);
-            backup.map(|backup| codepp_core::Tab {
-                path: None,
-                cursor,
-                encoding: tab.encoding.clone(),
-                eol: tab.eol,
-                untitled_seq: Some(seq),
-                backup: Some(backup),
-                custom_name: tab.custom_name.clone(),
-                lang,
-                udl,
-                // A pin set before the load stays with the work, as the
-                // landing keeps it, and one asked for during the load goes
-                // with the file. No loading tab is pinned the first way
-                // today, since an open never loads into a pinned tab, so
-                // this mirrors the landing rather than a path a test reaches.
-                pinned: tab.pinned && !pin_moves,
+            backup.map(|backup| {
+                let mut record = codepp_core::Tab {
+                    path: None,
+                    encoding: tab.encoding.clone(),
+                    eol: tab.eol,
+                    untitled_seq: Some(seq),
+                    backup: Some(backup),
+                    custom_name: tab.custom_name.clone(),
+                    lang,
+                    udl,
+                    // A pin set before the load stays with the work, as the
+                    // landing keeps it, and one asked for during the load goes
+                    // with the file. No loading tab is pinned the first way
+                    // today, since an open never loads into a pinned tab, so
+                    // this mirrors the landing rather than a path a test reaches.
+                    pinned: tab.pinned && !pin_moves,
+                    ..codepp_core::Tab::default()
+                };
+                record.set_view_position(view);
+                record.set_fold_lines(&folds);
+                record
             })
         } else {
             None
@@ -8299,9 +8439,8 @@ impl Shell {
         } else {
             stored.map_or((None, None), |t| (t.lang, t.udl.clone()))
         };
-        let file = codepp_core::Tab {
+        let mut file = codepp_core::Tab {
             path: Some(path.to_path_buf()),
-            cursor: stored.map_or(0, |t| t.cursor),
             encoding: tab.encoding.clone(),
             eol: tab.eol,
             lang,
@@ -8313,6 +8452,10 @@ impl Shell {
             },
             ..codepp_core::Tab::default()
         };
+        if let Some(stored) = stored {
+            file.set_view_position(stored.view_position());
+            file.set_fold_lines(&stored.fold_lines());
+        }
         (work, file)
     }
 
@@ -8584,7 +8727,8 @@ impl Shell {
                         Some(SessionRestoreEntry::DirtyFromBackup {
                             path: path.clone(),
                             text,
-                            cursor: t.cursor,
+                            view: t.view_position(),
+                            folds: t.fold_lines(),
                             encoding: t.encoding.clone(),
                             eol: t.eol,
                             disk_changed_externally,
@@ -8614,7 +8758,8 @@ impl Shell {
                         SessionRestoreEntry::UntitledFromBackup {
                             untitled_seq: t.untitled_seq,
                             text,
-                            cursor: t.cursor,
+                            view: t.view_position(),
+                            folds: t.fold_lines(),
                             encoding: t.encoding.clone(),
                             eol: t.eol,
                             backup_modified_externally,
@@ -8701,7 +8846,8 @@ impl Shell {
         ui: &mut U,
         untitled_seq: Option<u32>,
         text: String,
-        cursor: u64,
+        view: ViewPosition,
+        folds: Vec<u64>,
         encoding: Encoding,
         eol: Eol,
         backup_modified_externally: bool,
@@ -8749,7 +8895,9 @@ impl Shell {
             custom_name,
             pinned,
             pin_requested_during_load: None,
-            view: ViewPosition::at(cursor),
+            view,
+            folds: kept_folds(folds),
+            view_owed: true,
         });
         self.active_tab = Some(new_idx);
         // Bind a fresh Scintilla document; matches `new_untitled`'s
@@ -8761,10 +8909,9 @@ impl Shell {
         // Push the backup text + cursor into the now-active editor
         // document. From the user's perspective this is identical
         // to having opened the buffer at the same position last
-        // session. The position, not the bare caret, so a caret a crafted or
-        // stale session puts inside a character lands on its boundary.
-        ui.set_buffer_text(&text, cursor);
-        ui.set_view_position(ViewPosition::at(cursor));
+        // session. The rest of the position, and the folds, go back once the
+        // language below has styled the text.
+        ui.set_buffer_text(&text, view.caret);
         // Track this buffer as unsaved-from-restore: `set_buffer_text`
         // set the save point (Scintilla reports clean), but an untitled
         // buffer with no real on-disk file is unsaved by definition, so it
@@ -8781,6 +8928,7 @@ impl Shell {
         // `restore_dirty_with_text`'s `ui.apply_lang(lang)` call.
         ui.apply_lang(resolved_lang);
         ui.update_status(resolved_lang, &encoding, eol, byte_len);
+        self.show_kept_view(ui, new_idx);
         // External-edit detection on the backup file itself. If
         // another program touched the recovery file between our
         // last save and this restore, the buffer content the
@@ -8841,7 +8989,8 @@ impl Shell {
         ui: &mut U,
         path: PathBuf,
         text: String,
-        cursor: u64,
+        view: ViewPosition,
+        folds: Vec<u64>,
         encoding: Encoding,
         eol: Eol,
         disk_changed_externally: bool,
@@ -8892,7 +9041,9 @@ impl Shell {
             custom_name: None,
             pinned,
             pin_requested_during_load: None,
-            view: ViewPosition::at(cursor),
+            view,
+            folds: kept_folds(folds),
+            view_owed: true,
         });
         self.active_tab = Some(new_idx);
         let (new_doc, _) = self.bind_view(ui, new_idx, 0);
@@ -8908,13 +9059,13 @@ impl Shell {
         // backup would be pruned. The set carries the unsaved state
         // durably (see `unsaved_restore_ids`); a phantom undo action would
         // instead let one Ctrl+Z reach the save point and trigger exactly
-        // that prune. The position goes through `set_view_position`, which
-        // puts a caret inside a character on its boundary.
-        ui.set_buffer_text(&text, cursor);
-        ui.set_view_position(ViewPosition::at(cursor));
+        // that prune. The rest of the position, and the folds, go back once
+        // the language has styled the text.
+        ui.set_buffer_text(&text, view.caret);
         self.unsaved_restore_ids.insert(id);
         ui.apply_lang(lang);
         ui.update_status(lang, &encoding, eol, byte_len);
+        self.show_kept_view(ui, new_idx);
         // Watch the file so a future external edit prompts a
         // reload, matching the behaviour of a fresh disk-load
         // open. A failed watch is non-fatal — the tab still
@@ -12390,6 +12541,18 @@ mod tests {
         /// `Editor::SetDocPointer` does, so a position the shell does not
         /// put back is lost here as it is in Scintilla.
         view: ViewPosition,
+        /// The folds contracted in the view. A document swap expands every
+        /// fold, as `Editor::SetDocPointer` does, and so does replacing the
+        /// text, which takes the lines the folds were on with it. Contracting
+        /// a fold above the top line moves it on, as it does in Scintilla,
+        /// so a position put before the folds comes out wrong.
+        folds: Vec<u64>,
+        /// The documents a lexer has styled, so that they have the fold
+        /// levels a fold needs: `apply_lang` styles the bound one, and
+        /// replacing a document's text drops its levels until it is styled
+        /// again. A fold applied to a document without them contracts nothing,
+        /// as `SCI_FOLDLINE` on a line with no fold level does.
+        styled_docs: std::collections::HashSet<isize>,
         /// Every `set_view_position` call as `(bound document, position)`.
         view_position_calls: Vec<(isize, ViewPosition)>,
         set_text_calls: Vec<(String, u64)>,
@@ -12563,6 +12726,7 @@ mod tests {
             self.doc_refs.remove(&doc);
             self.doc_text.remove(&doc);
             self.doc_dirty.remove(&doc);
+            self.styled_docs.remove(&doc);
             self.freed_docs.insert(doc);
         }
 
@@ -12594,6 +12758,7 @@ mod tests {
             self.buffer_text = self.doc_text.get(&doc).cloned().unwrap_or_default();
             self.view.anchor = 0;
             self.view.caret = 0;
+            self.folds.clear();
             if outgoing != 0 {
                 self.drop_ref(outgoing, "SCI_SETDOCPOINTER");
             }
@@ -12710,6 +12875,8 @@ mod tests {
                 self.doc_text.insert(self.current_doc, text.to_string());
             }
             self.view = ViewPosition::at(cursor);
+            self.folds.clear();
+            self.styled_docs.remove(&self.current_doc);
             self.set_text_calls.push((text.to_string(), cursor));
         }
         fn get_buffer_text(&mut self) -> String {
@@ -12724,6 +12891,29 @@ mod tests {
         fn set_view_position(&mut self, pos: ViewPosition) {
             self.view = pos;
             self.view_position_calls.push((self.current_doc, pos));
+        }
+        fn contracted_folds(&mut self) -> Vec<u64> {
+            self.folds.clone()
+        }
+        fn apply_folds(&mut self, lines: &[u64]) {
+            if !self.styled_docs.contains(&self.current_doc) {
+                return;
+            }
+            for &line in lines {
+                if self.folds.contains(&line) {
+                    continue;
+                }
+                self.folds.push(line);
+                // Scintilla keeps the top as a display line, so a fold
+                // contracted above it puts a later document line there, by
+                // as many lines as the fold hides: at least one.
+                if let Some(top) = self.view.top_line.as_mut() {
+                    if line < *top {
+                        *top += 1;
+                    }
+                }
+            }
+            self.folds.sort_unstable();
         }
         fn update_status(
             &mut self,
@@ -12750,6 +12940,7 @@ mod tests {
             self.mark_saved_calls += 1;
         }
         fn apply_lang(&mut self, lang: LangType) {
+            self.styled_docs.insert(self.current_doc);
             self.apply_lang_calls.push(lang);
         }
         fn apply_default_style(&mut self, styles: &codepp_core::styles::Styles) {
@@ -17390,7 +17581,8 @@ mod tests {
                 &mut ui,
                 None,
                 "typed\n".to_string(),
-                0,
+                ViewPosition::at(0),
+                Vec::new(),
                 Encoding::Utf8,
                 Eol::Lf,
                 false,
@@ -17407,7 +17599,8 @@ mod tests {
                 &mut ui,
                 path,
                 "fn edited() {}\n".into(),
-                0,
+                ViewPosition::at(0),
+                Vec::new(),
                 Encoding::Utf8,
                 Eol::Lf,
                 false,
@@ -17688,6 +17881,7 @@ mod tests {
                     lang: None,
                     udl: None,
                     pinned: false,
+                    ..CoreTab::default()
                 },
                 CoreTab {
                     path: Some(PathBuf::from("/tmp/second.txt")),
@@ -17700,6 +17894,7 @@ mod tests {
                     lang: None,
                     udl: None,
                     pinned: false,
+                    ..CoreTab::default()
                 },
             ],
         };
@@ -18702,7 +18897,8 @@ mod tests {
             &mut ui,
             recovered.clone(),
             "RECOVERED UNSAVED WORK\n".into(),
-            0,
+            ViewPosition::at(0),
+            Vec::new(),
             Encoding::Utf8,
             Eol::Lf,
             false,
@@ -18865,7 +19061,8 @@ mod tests {
             &mut ui,
             PathBuf::from("/tmp/recovered.txt"),
             "recovered\n".to_string(),
-            0,
+            ViewPosition::at(0),
+            Vec::new(),
             Encoding::default(),
             Eol::default(),
             false,
@@ -22523,7 +22720,8 @@ mod tests {
             &mut ui,
             None,
             "recovered\n".to_string(),
-            0,
+            ViewPosition::at(0),
+            Vec::new(),
             Encoding::Utf8,
             Eol::Lf,
             false,
@@ -22822,7 +23020,8 @@ mod tests {
             &mut ui,
             None,
             "recovered\n".to_string(),
-            0,
+            ViewPosition::at(0),
+            Vec::new(),
             Encoding::Utf8,
             Eol::Lf,
             false,
@@ -23082,7 +23281,8 @@ mod tests {
         ui.view = ViewPosition {
             anchor: 15,
             caret: 10,
-            first_visible_line: Some(3),
+            top_line: Some(3),
+            top_subline: 0,
             x_offset: 0,
         };
         shell.save_npp_session(&mut ui, &path).unwrap();
@@ -24330,7 +24530,8 @@ mod tests {
                 &mut ui,
                 path.clone(),
                 text.into(),
-                0,
+                ViewPosition::at(0),
+                Vec::new(),
                 Encoding::Utf8,
                 Eol::Lf,
                 false,
@@ -24390,7 +24591,8 @@ mod tests {
                 &mut ui,
                 dir.path().join(name),
                 format!("edits in {name}\n"),
-                0,
+                ViewPosition::at(0),
+                Vec::new(),
                 Encoding::Utf8,
                 Eol::Lf,
                 false,
@@ -24489,7 +24691,8 @@ mod tests {
                 &mut ui,
                 path.clone(),
                 "first edits\n".into(),
-                0,
+                ViewPosition::at(0),
+                Vec::new(),
                 Encoding::Utf8,
                 Eol::Lf,
                 false,
@@ -24511,7 +24714,8 @@ mod tests {
             &mut ui,
             other.clone(),
             "unbacked edits\n".into(),
-            0,
+            ViewPosition::at(0),
+            Vec::new(),
             Encoding::Utf8,
             Eol::Lf,
             false,
@@ -24576,7 +24780,8 @@ mod tests {
                 &mut ui,
                 untitled_seq,
                 text,
-                0,
+                ViewPosition::at(0),
+                Vec::new(),
                 Encoding::Utf8,
                 Eol::Lf,
                 false,
@@ -24630,7 +24835,8 @@ mod tests {
             ui,
             path.to_path_buf(),
             text.into(),
-            0,
+            ViewPosition::at(0),
+            Vec::new(),
             Encoding::Utf8,
             Eol::Lf,
             false,
@@ -24652,7 +24858,8 @@ mod tests {
                         ui,
                         untitled_seq,
                         text,
-                        0,
+                        ViewPosition::at(0),
+                        Vec::new(),
                         Encoding::Utf8,
                         Eol::Lf,
                         false,
@@ -25742,7 +25949,8 @@ mod tests {
             &mut ui,
             path.clone(),
             "user's unsaved edits".into(),
-            0,
+            ViewPosition::at(0),
+            Vec::new(),
             Encoding::Utf8,
             Eol::Lf,
             true,  // disk file changed externally
@@ -25877,7 +26085,8 @@ mod tests {
             &mut ui,
             Some(7),
             "altered content".into(),
-            0,
+            ViewPosition::at(0),
+            Vec::new(),
             Encoding::Utf8,
             Eol::Lf,
             true,  // backup was modified externally
@@ -25909,7 +26118,8 @@ mod tests {
             &mut ui,
             PathBuf::from("/tmp/clean.txt"),
             "user's unsaved edits".into(),
-            0,
+            ViewPosition::at(0),
+            Vec::new(),
             Encoding::Utf8,
             Eol::Lf,
             false, // disk untouched
@@ -25950,7 +26160,8 @@ mod tests {
             &mut ui,
             PathBuf::from("/tmp/notes.txt"),
             "fn main() {}".into(),
-            0,
+            ViewPosition::at(0),
+            Vec::new(),
             Encoding::Utf8,
             Eol::Lf,
             false,
@@ -25991,7 +26202,8 @@ mod tests {
             &mut ui,
             Some(1),
             "fn main() {}".into(),
-            0,
+            ViewPosition::at(0),
+            Vec::new(),
             Encoding::Utf8,
             Eol::Lf,
             false,
@@ -26025,7 +26237,8 @@ mod tests {
             &mut ui,
             Some(1),
             "unsaved text".into(),
-            0,
+            ViewPosition::at(0),
+            Vec::new(),
             Encoding::Utf8,
             Eol::Lf,
             false,
@@ -26061,7 +26274,8 @@ mod tests {
             &mut ui,
             std::path::PathBuf::from("/tmp/codepp-restore-dirty-test.txt"),
             "edited but not saved".into(),
-            0,
+            ViewPosition::at(0),
+            Vec::new(),
             Encoding::Utf8,
             Eol::Lf,
             false,
@@ -26099,7 +26313,8 @@ mod tests {
             &mut ui,
             Some(1),
             "recovered".into(),
-            0,
+            ViewPosition::at(0),
+            Vec::new(),
             Encoding::Utf8,
             Eol::Lf,
             false,
@@ -26141,7 +26356,8 @@ mod tests {
             &mut ui,
             folder.join("recovered.txt"),
             "recovered edits".into(),
-            0,
+            ViewPosition::at(0),
+            Vec::new(),
             Encoding::Utf8,
             Eol::Lf,
             false,
@@ -26194,7 +26410,8 @@ mod tests {
             &mut ui,
             Some(1),
             "recovered".into(),
-            0,
+            ViewPosition::at(0),
+            Vec::new(),
             Encoding::Utf8,
             Eol::Lf,
             false,
@@ -27831,6 +28048,14 @@ mod tests {
             })
             .collect();
         session.active = Some(active);
+        let (shell, ui) = restore_files(session);
+        (shell, ui, dir, paths)
+    }
+
+    /// Restore `session`, whose records are files with no backup, the way
+    /// every backend's startup restore does: each file is opened, the
+    /// recorded front is put back and the view is bound to it.
+    fn restore_files(session: Session) -> (Shell, FakeUi) {
         let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
         let mut shell = Shell::new(wake).unwrap();
         let mut ui = FakeUi::default();
@@ -27842,7 +28067,7 @@ mod tests {
         }
         shell.active_tab = shell.session_active_index();
         shell.bind_active_view(&mut ui);
-        (shell, ui, dir, paths)
+        (shell, ui)
     }
 
     /// The caret of each record a session saved now holds, in order.
@@ -27895,7 +28120,8 @@ mod tests {
         let in_b = ViewPosition {
             anchor: 2,
             caret: 6,
-            first_visible_line: Some(3),
+            top_line: Some(3),
+            top_subline: 0,
             x_offset: 40,
         };
         ui.view = in_b;
@@ -27929,7 +28155,8 @@ mod tests {
         let in_b = ViewPosition {
             anchor: 5,
             caret: 5,
-            first_visible_line: Some(1),
+            top_line: Some(1),
+            top_subline: 0,
             x_offset: 0,
         };
         ui.view = in_b;
@@ -27988,7 +28215,8 @@ mod tests {
         let in_b = ViewPosition {
             anchor: 1,
             caret: 4,
-            first_visible_line: Some(2),
+            top_line: Some(2),
+            top_subline: 0,
             x_offset: 0,
         };
         ui.view = in_b;
@@ -28011,7 +28239,8 @@ mod tests {
         ui.view = ViewPosition {
             anchor: 8,
             caret: 3,
-            first_visible_line: Some(2),
+            top_line: Some(2),
+            top_subline: 0,
             x_offset: 0,
         };
         assert!(shell.switch_to_tab(1));
@@ -28019,7 +28248,8 @@ mod tests {
         ui.view = ViewPosition {
             anchor: 5,
             caret: 6,
-            first_visible_line: Some(1),
+            top_line: Some(1),
+            top_subline: 0,
             x_offset: 0,
         };
         let path = dir.path().join("s.xml");
@@ -28055,7 +28285,8 @@ mod tests {
                 &mut ui,
                 Some(seq),
                 format!("restored {seq}\n"),
-                caret,
+                ViewPosition::at(caret),
+                Vec::new(),
                 Encoding::Utf8,
                 Eol::Lf,
                 false,
@@ -28135,5 +28366,280 @@ mod tests {
         shell.bind_active_view(&mut ui);
         assert_eq!(ui.get_buffer_text(), text);
         assert_eq!(ui.view.caret, 8);
+    }
+
+    /// The contracted folds and top line of each record a session saved now
+    /// holds, in order.
+    fn saved_views(shell: &Shell, ui: &mut FakeUi) -> Vec<(Vec<u64>, Option<u64>)> {
+        let backups = tempfile::tempdir().unwrap();
+        let SavedSession { session, .. } = shell.session_to_save(ui, Some(backups.path()), "ts");
+        session
+            .tabs
+            .iter()
+            .map(|t| (t.fold_lines(), t.view_position().top_line))
+            .collect()
+    }
+
+    /// The view's contracted folds and top line, as [`saved_views`] gives a
+    /// tab's.
+    fn shown_view(ui: &FakeUi) -> (Vec<u64>, Option<u64>) {
+        (ui.folds.clone(), ui.view.top_line)
+    }
+
+    /// A tab switch keeps each tab's contracted folds. A document swap
+    /// expands every fold, and until Phase 5 nothing put them back.
+    #[test]
+    fn a_tab_switch_keeps_each_tabs_folds() {
+        let (mut shell, mut ui, _dir, _paths) = open_settled(&["a.txt", "b.txt"]);
+        assert_eq!(shell.active_tab, Some(1), "precondition: b.txt is in front");
+        ui.folds = vec![2, 5];
+
+        assert!(shell.switch_to_tab(0));
+        shell.bind_active_view(&mut ui);
+        assert!(ui.folds.is_empty(), "a.txt has none of b.txt's folds");
+        ui.folds = vec![1];
+        assert!(shell.switch_to_tab(1));
+        shell.bind_active_view(&mut ui);
+        assert_eq!(ui.folds, [2, 5], "back in b.txt");
+        assert!(shell.switch_to_tab(0));
+        shell.bind_active_view(&mut ui);
+        assert_eq!(ui.folds, [1], "back in a.txt");
+    }
+
+    /// A session saves every tab's folds and top line: the live view's for
+    /// the tab the view shows, and those kept for every other tab.
+    #[test]
+    fn a_session_saves_every_tabs_folds_and_top_line() {
+        let (mut shell, mut ui, _dir, _paths) = open_settled(&["a.txt", "b.txt"]);
+        assert!(shell.switch_to_tab(0));
+        shell.bind_active_view(&mut ui);
+        ui.folds = vec![3];
+        ui.view.top_line = Some(7);
+        assert!(shell.switch_to_tab(1));
+        shell.bind_active_view(&mut ui);
+        ui.folds = vec![0, 4];
+        ui.view.top_line = Some(2);
+        assert_eq!(
+            saved_views(&shell, &mut ui),
+            [(vec![3], Some(7)), (vec![0, 4], Some(2))]
+        );
+    }
+
+    /// A session still gets written when every tab has as many folds as a
+    /// tab keeps. Unbounded, 48 tabs of them come to well over the 8 MiB
+    /// the next start reads, which `save_to_xml` refuses to write, and the
+    /// session, backups and all, would stop being saved.
+    #[test]
+    fn a_session_of_tabs_full_of_folds_is_still_written() {
+        let names: Vec<String> = (0..48).map(|n| format!("f{n}.txt")).collect();
+        let names: Vec<&str> = names.iter().map(String::as_str).collect();
+        let (mut shell, mut ui, _dir, _paths) = open_settled(&names);
+        let full: Vec<u64> = (1_000_000..1_000_000 + codepp_core::MAX_KEPT_FOLDS as u64).collect();
+        for tab in &mut shell.tabs {
+            tab.folds.clone_from(&full);
+        }
+        ui.folds.clone_from(&full);
+
+        let backups = tempfile::tempdir().unwrap();
+        let SavedSession { mut session, .. } =
+            shell.session_to_save(&mut ui, Some(backups.path()), "ts");
+        let counts: Vec<usize> = session.tabs.iter().map(|t| t.fold_lines().len()).collect();
+        assert_eq!(counts.iter().sum::<usize>(), MAX_SESSION_FOLDS);
+        assert_eq!(
+            counts[0],
+            codepp_core::MAX_KEPT_FOLDS,
+            "the first tabs keep theirs"
+        );
+        assert_eq!(counts.last(), Some(&0), "the last ones keep none");
+        let path = backups.path().join("session.xml");
+        session.save_to_xml(&path).unwrap();
+
+        for (tab, record) in shell.tabs.iter().zip(&mut session.tabs) {
+            record.set_fold_lines(&tab.folds);
+        }
+        assert!(
+            session.save_to_xml(&path).is_err(),
+            "precondition: unbounded, the session is too large to write"
+        );
+    }
+
+    /// The folds and top line a session recorded for a file come back when
+    /// it lands: in front at once, and in the background when it is shown.
+    /// Both after the language, which styles the document and so gives it
+    /// the fold levels a fold needs; the fixture contracts nothing on a
+    /// document no lexer has styled since its text was put in.
+    #[test]
+    fn a_files_recorded_folds_and_top_line_come_back_when_it_lands() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut session = Session::new();
+        for (name, folds, top) in [("a.txt", [1], 4), ("b.txt", [2], 6)] {
+            let path = dir.path().join(name);
+            std::fs::write(&path, "one\ntwo\nthree\nfour\n").unwrap();
+            let mut record = codepp_core::Tab {
+                path: Some(path),
+                ..codepp_core::Tab::default()
+            };
+            record.set_view_position(ViewPosition {
+                top_line: Some(top),
+                ..ViewPosition::at(5)
+            });
+            record.set_fold_lines(&folds);
+            session.tabs.push(record);
+        }
+        session.active = Some(1);
+        let (mut shell, mut ui) = restore_files(session);
+        assert_eq!(
+            saved_views(&shell, &mut ui),
+            [(vec![1], Some(4)), (vec![2], Some(6))],
+            "kept while the files load"
+        );
+
+        drain_until_loads_settle(&mut shell, &mut ui);
+        assert_eq!(shown_view(&ui), (vec![2], Some(6)), "b.txt lands in front");
+        assert!(shell.switch_to_tab(0));
+        shell.bind_active_view(&mut ui);
+        assert_eq!(shown_view(&ui), (vec![1], Some(4)), "a.txt is shown");
+    }
+
+    /// A buffer restored from its backup, untitled or a file's unsaved
+    /// edits, comes back with its folds and top line.
+    #[test]
+    fn a_restored_buffer_comes_back_with_its_folds_and_top_line() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("edited.txt");
+        std::fs::write(&path, "on disk\n").unwrap();
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+        let view = |top| ViewPosition {
+            top_line: Some(top),
+            ..ViewPosition::at(1)
+        };
+        shell.restore_untitled_with_text(
+            &mut ui,
+            Some(1),
+            "a\nb\nc\nd\n".into(),
+            view(2),
+            vec![0, 2],
+            Encoding::Utf8,
+            Eol::Lf,
+            false,
+            None,
+            None,
+            false,
+        );
+        assert_eq!(
+            shown_view(&ui),
+            (vec![0, 2], Some(2)),
+            "the untitled buffer"
+        );
+        shell.restore_dirty_with_text(
+            &mut ui,
+            path,
+            "edited\nlines\nhere\n".into(),
+            view(1),
+            vec![1],
+            Encoding::Utf8,
+            Eol::Lf,
+            false,
+            false,
+            None,
+            false,
+        );
+        assert_eq!(shown_view(&ui), (vec![1], Some(1)), "the file's edits");
+        assert_eq!(
+            saved_views(&shell, &mut ui),
+            [(vec![0, 2], Some(2)), (vec![1], Some(1))]
+        );
+    }
+
+    /// Save All keeps the folds and top line of every tab it binds to write.
+    /// Binding one to read its text expands its folds and moves the view's
+    /// top line nowhere in particular, and that must not be taken for where
+    /// the user left the tab.
+    #[test]
+    fn save_all_keeps_the_folds_and_top_line_of_the_tabs_it_visits() {
+        let (mut shell, mut ui, _dir, _paths) = open_settled(&["a.txt", "b.txt"]);
+        assert!(shell.switch_to_tab(0));
+        shell.bind_active_view(&mut ui);
+        let a_doc = shell.tabs[0].scintilla_doc;
+        ui.doc_dirty.insert(a_doc, true);
+        ui.folds = vec![3];
+        ui.view.top_line = Some(7);
+        assert!(shell.switch_to_tab(1));
+        shell.bind_active_view(&mut ui);
+        ui.doc_dirty.insert(shell.tabs[1].scintilla_doc, true);
+        ui.folds = vec![1];
+        let in_b = ViewPosition {
+            top_line: Some(2),
+            ..ViewPosition::at(4)
+        };
+        ui.view = in_b;
+        let binds_before = ui.activate_tab_calls.len();
+
+        assert!(shell.save_all(&mut ui).is_empty());
+        assert!(
+            ui.activate_tab_calls[binds_before..]
+                .iter()
+                .any(|&(_, _, bound)| bound == a_doc),
+            "precondition: Save All bound a.txt to write it"
+        );
+        assert_eq!(
+            (ui.folds.clone(), ui.view),
+            (vec![1], in_b),
+            "b.txt as it was"
+        );
+        assert_eq!(
+            saved_views(&shell, &mut ui),
+            [(vec![3], Some(7)), (vec![1], Some(2))]
+        );
+        assert!(shell.switch_to_tab(0));
+        shell.bind_active_view(&mut ui);
+        assert_eq!(shown_view(&ui), (vec![3], Some(7)), "a.txt as it was");
+    }
+
+    /// Save All puts back the folds of the tab in front even when binding it
+    /// puts text in, which drops the fold levels until the language goes on
+    /// again: here a tab reloaded in the background and then brought to the
+    /// front without a rebind, as a plugin's switch does.
+    #[test]
+    fn save_all_keeps_the_folds_of_a_tab_in_front_it_puts_text_into() {
+        let (mut shell, mut ui, _dir, paths) = open_settled(&["a.txt", "b.txt"]);
+        assert!(shell.switch_to_tab(0));
+        shell.bind_active_view(&mut ui);
+        ui.folds = vec![1];
+        assert!(shell.switch_to_tab(1));
+        shell.bind_active_view(&mut ui);
+        std::fs::write(&paths[0], "changed\non disk\n").unwrap();
+        shell.request_reload(paths[0].clone(), ReloadConsent::Unconfirmed);
+        drain_until_loads_settle(&mut shell, &mut ui);
+        assert!(shell.switch_to_tab(0));
+        assert!(
+            shell.tabs[0].doc_needs_text,
+            "precondition: a.txt's document is waiting for its new text"
+        );
+
+        assert!(shell.save_all(&mut ui).is_empty());
+        assert_eq!(ui.bound_doc(), shell.tabs[0].scintilla_doc);
+        assert_eq!(ui.folds, [1]);
+    }
+
+    /// A reload in front keeps the tab's folds. Putting the new text in
+    /// expands them, and they go back once the language has styled it.
+    #[test]
+    fn a_reload_keeps_the_folds_of_the_tab_in_front() {
+        let (mut shell, mut ui, _dir, paths) = open_settled(&["a.txt"]);
+        ui.folds = vec![0, 2];
+        ui.view.top_line = Some(1);
+        let changed = "changed\non disk\nwith\nmore lines\n";
+        std::fs::write(&paths[0], changed).unwrap();
+        shell.request_reload(paths[0].clone(), ReloadConsent::Unconfirmed);
+        drain_until_loads_settle(&mut shell, &mut ui);
+        assert_eq!(
+            ui.set_text_calls.last().map(|(text, _)| text.as_str()),
+            Some(changed),
+            "precondition: the reload landed"
+        );
+        assert_eq!(shown_view(&ui), (vec![0, 2], Some(1)));
     }
 }

@@ -152,20 +152,19 @@ use codepp_scintilla_sys::{
     ScintillaDirectFunction, Scintilla_RegisterClasses, CARETSTYLE_INVISIBLE, SCI_ADDUNDOACTION,
     SCI_BEGINUNDOACTION, SCI_CANREDO, SCI_CANUNDO, SCI_CLEAR, SCI_COLOURISE, SCI_CONVERTEOLS,
     SCI_COPY, SCI_CREATEDOCUMENT, SCI_CUT, SCI_DOCLINEFROMVISIBLE, SCI_EMPTYUNDOBUFFER,
-    SCI_ENDUNDOACTION, SCI_GETANCHOR, SCI_GETCOLUMN, SCI_GETCURRENTPOS, SCI_GETDIRECTFUNCTION,
+    SCI_ENDUNDOACTION, SCI_GETCOLUMN, SCI_GETCURRENTPOS, SCI_GETDIRECTFUNCTION,
     SCI_GETDIRECTPOINTER, SCI_GETDOCPOINTER, SCI_GETFIRSTVISIBLELINE, SCI_GETINDENTATIONGUIDES,
     SCI_GETLENGTH, SCI_GETLINECOUNT, SCI_GETMODIFY, SCI_GETOVERTYPE, SCI_GETSELECTIONEND,
     SCI_GETSELECTIONSTART, SCI_GETSELTEXT, SCI_GETTEXT, SCI_GETVIEWEOL, SCI_GETVIEWWS,
-    SCI_GETWRAPMODE, SCI_GETXOFFSET, SCI_GETZOOM, SCI_GOTOLINE, SCI_GOTOPOS, SCI_LINEFROMPOSITION,
-    SCI_LINESCROLL, SCI_LINESONSCREEN, SCI_PASTE, SCI_POINTYFROMPOSITION, SCI_POSITIONAFTER,
-    SCI_POSITIONFROMLINE, SCI_POSITIONFROMPOINTCLOSE, SCI_REDO, SCI_RELEASEDOCUMENT,
-    SCI_REPLACETARGET, SCI_SELECTALL, SCI_SETCARETSTYLE, SCI_SETCODEPAGE, SCI_SETDOCPOINTER,
-    SCI_SETEMPTYSELECTION, SCI_SETEOLMODE, SCI_SETFONTQUALITY, SCI_SETHSCROLLBAR,
-    SCI_SETINDENTATIONGUIDES, SCI_SETMARGINWIDTHN, SCI_SETREADONLY, SCI_SETSAVEPOINT,
-    SCI_SETSCROLLWIDTH, SCI_SETSCROLLWIDTHTRACKING, SCI_SETSEL, SCI_SETSELECTIONEND,
-    SCI_SETSELECTIONMODE, SCI_SETSELECTIONSTART, SCI_SETTABWIDTH, SCI_SETTARGETEND,
-    SCI_SETTARGETSTART, SCI_SETTEXT, SCI_SETVIEWEOL, SCI_SETVIEWWS, SCI_SETVSCROLLBAR,
-    SCI_SETWRAPMODE, SCI_SETXOFFSET, SCI_SETZOOM, SCI_STYLEGETBACK, SCI_STYLEGETFORE,
+    SCI_GETWRAPMODE, SCI_GETZOOM, SCI_GOTOLINE, SCI_GOTOPOS, SCI_LINEFROMPOSITION, SCI_LINESCROLL,
+    SCI_LINESONSCREEN, SCI_PASTE, SCI_POINTYFROMPOSITION, SCI_POSITIONAFTER, SCI_POSITIONFROMLINE,
+    SCI_POSITIONFROMPOINTCLOSE, SCI_REDO, SCI_RELEASEDOCUMENT, SCI_REPLACETARGET, SCI_SELECTALL,
+    SCI_SETCARETSTYLE, SCI_SETCODEPAGE, SCI_SETDOCPOINTER, SCI_SETEMPTYSELECTION, SCI_SETEOLMODE,
+    SCI_SETFONTQUALITY, SCI_SETHSCROLLBAR, SCI_SETINDENTATIONGUIDES, SCI_SETMARGINWIDTHN,
+    SCI_SETREADONLY, SCI_SETSAVEPOINT, SCI_SETSCROLLWIDTH, SCI_SETSCROLLWIDTHTRACKING, SCI_SETSEL,
+    SCI_SETSELECTIONEND, SCI_SETSELECTIONMODE, SCI_SETSELECTIONSTART, SCI_SETTABWIDTH,
+    SCI_SETTARGETEND, SCI_SETTARGETSTART, SCI_SETTEXT, SCI_SETVIEWEOL, SCI_SETVIEWWS,
+    SCI_SETVSCROLLBAR, SCI_SETWRAPMODE, SCI_SETZOOM, SCI_STYLEGETBACK, SCI_STYLEGETFORE,
     SCI_TEXTHEIGHT, SCI_UNDO, SCI_VISIBLEFROMDOCLINE, SCI_ZOOMIN, SCI_ZOOMOUT, SCN_MODIFIED,
     SCN_PAINTED, SCN_SAVEPOINTLEFT, SCN_SAVEPOINTREACHED, SCN_STYLENEEDED, SCN_UPDATEUI,
     SC_AUTOMATICFOLD_CHANGE, SC_AUTOMATICFOLD_CLICK, SC_AUTOMATICFOLD_SHOW, SC_CP_UTF8,
@@ -2275,6 +2274,14 @@ impl UiPlatform for Win32Ui {
         self.editor.set_view_position(pos);
     }
 
+    fn contracted_folds(&mut self) -> Vec<u64> {
+        self.editor.contracted_folds()
+    }
+
+    fn apply_folds(&mut self, lines: &[u64]) {
+        self.editor.apply_folds(lines);
+    }
+
     fn update_status(
         &mut self,
         lang: codepp_core::LangType,
@@ -3729,7 +3736,7 @@ impl UiPlatform for Win32Ui {
         // swap-back to the prior doc — so without this snapshot
         // the active tab's caret and scroll get reset to (0, 0)
         // every auto-save tick.
-        let view = self.snapshot_active_view();
+        let view = self.editor.save_view();
         // Own a reference on the document being left: a document only the
         // view still holds would be freed by the swap and re-bound dangling.
         if prior_doc != 0 {
@@ -3742,7 +3749,7 @@ impl UiPlatform for Win32Ui {
             self.editor.send(SCI_SETDOCPOINTER, 0, prior_doc);
             self.editor
                 .send(codepp_scintilla_sys::SCI_RELEASEDOCUMENT, 0, prior_doc);
-            self.restore_active_view(view);
+            self.editor.restore_view(&view);
         }
         text
     }
@@ -3766,7 +3773,7 @@ impl UiPlatform for Win32Ui {
         // Same view-snapshot dance as `capture_text_from_doc`: every
         // `SCI_SETDOCPOINTER` clears the selection, including the swap
         // back, so the active tab's caret and scroll must be restored.
-        let view = self.snapshot_active_view();
+        let view = self.editor.save_view();
         if prior_doc != 0 {
             self.editor
                 .send(codepp_scintilla_sys::SCI_ADDREFDOCUMENT, 0, prior_doc);
@@ -3780,7 +3787,7 @@ impl UiPlatform for Win32Ui {
             self.editor.send(SCI_SETDOCPOINTER, 0, prior_doc);
             self.editor
                 .send(codepp_scintilla_sys::SCI_RELEASEDOCUMENT, 0, prior_doc);
-            self.restore_active_view(view);
+            self.editor.restore_view(&view);
         }
         true
     }
@@ -3794,7 +3801,7 @@ impl UiPlatform for Win32Ui {
             return self.editor.send(SCI_GETMODIFY, 0, 0) != 0;
         }
         // Same view-snapshot dance as `capture_text_from_doc`.
-        let view = self.snapshot_active_view();
+        let view = self.editor.save_view();
         if prior_doc != 0 {
             self.editor
                 .send(codepp_scintilla_sys::SCI_ADDREFDOCUMENT, 0, prior_doc);
@@ -3805,7 +3812,7 @@ impl UiPlatform for Win32Ui {
             self.editor.send(SCI_SETDOCPOINTER, 0, prior_doc);
             self.editor
                 .send(codepp_scintilla_sys::SCI_RELEASEDOCUMENT, 0, prior_doc);
-            self.restore_active_view(view);
+            self.editor.restore_view(&view);
         }
         dirty
     }
@@ -3856,7 +3863,7 @@ impl UiPlatform for Win32Ui {
         // Same view-snapshot dance as `capture_text_from_doc`: every
         // `SCI_SETDOCPOINTER` clears the selection, including the swap
         // back, so the active tab's caret and scroll must be restored.
-        let view = self.snapshot_active_view();
+        let view = self.editor.save_view();
         if prior_doc != 0 {
             self.editor
                 .send(codepp_scintilla_sys::SCI_ADDREFDOCUMENT, 0, prior_doc);
@@ -3867,7 +3874,7 @@ impl UiPlatform for Win32Ui {
             self.editor.send(SCI_SETDOCPOINTER, 0, prior_doc);
             self.editor
                 .send(codepp_scintilla_sys::SCI_RELEASEDOCUMENT, 0, prior_doc);
-            self.restore_active_view(view);
+            self.editor.restore_view(&view);
         }
         true
     }
@@ -4030,26 +4037,6 @@ impl UiPlatform for Win32Ui {
     }
 }
 
-/// Snapshot of the editor's view state — the bits Scintilla wipes
-/// on `SCI_SETDOCPOINTER` (selection, caret, scroll). Captured
-/// before a document-pointer swap by `capture_text_from_doc` and
-/// `is_doc_dirty` so that swapping out and back doesn't reset the
-/// user's caret to position 0 every auto-save tick.
-#[derive(Clone, Copy)]
-struct ScintillaViewState {
-    /// `SCI_GETCURRENTPOS` — caret end of the selection.
-    caret: isize,
-    /// `SCI_GETANCHOR` — opposite end of the selection. Equal to
-    /// `caret` for a collapsed selection.
-    anchor: isize,
-    /// `SCI_GETFIRSTVISIBLELINE` — top line of the viewport. Used
-    /// with a `SCI_LINESCROLL` delta to restore vertical scroll.
-    top_line: isize,
-    /// `SCI_GETXOFFSET` — horizontal scroll in pixels. Restored
-    /// directly via `SCI_SETXOFFSET`.
-    x_offset: isize,
-}
-
 impl Win32Ui {
     /// UDL branch of `<Self as UiPlatform>::apply_lang` — set
     /// container-lexer mode, apply the UDL's own style palette,
@@ -4118,37 +4105,6 @@ impl Win32Ui {
         // palette, and does the bounded initial paint (see its
         // docstring for the `endStyled` / §8 rationale).
         udl_paint::apply_udl_lang(&self.editor, &styles, &compiled_rules);
-    }
-
-    /// Capture every piece of view state that `SCI_SETDOCPOINTER`
-    /// would wipe on the swap-back. See `ScintillaViewState`.
-    fn snapshot_active_view(&self) -> ScintillaViewState {
-        ScintillaViewState {
-            caret: self.editor.send(SCI_GETCURRENTPOS, 0, 0),
-            anchor: self.editor.send(SCI_GETANCHOR, 0, 0),
-            top_line: self.editor.send(SCI_GETFIRSTVISIBLELINE, 0, 0),
-            x_offset: self.editor.send(SCI_GETXOFFSET, 0, 0),
-        }
-    }
-
-    /// Restore the snapshotted view state on the currently-bound
-    /// document. Caller must have already swapped back to the
-    /// document the snapshot belongs to. Selection is restored
-    /// via `SCI_SETSEL`; vertical scroll via the delta between
-    /// the now-zero `firstvisibleline` and the snapshotted one;
-    /// horizontal scroll via `SCI_SETXOFFSET`.
-    fn restore_active_view(&self, snap: ScintillaViewState) {
-        // SCI_SETSEL takes (anchor, caret) in (wparam, lparam).
-        self.editor
-            .send(SCI_SETSEL, snap.anchor.max(0) as usize, snap.caret);
-        let cur_top = self.editor.send(SCI_GETFIRSTVISIBLELINE, 0, 0);
-        let delta = snap.top_line - cur_top;
-        if delta != 0 {
-            // SCI_LINESCROLL takes (column_delta, line_delta).
-            self.editor.send(SCI_LINESCROLL, 0, delta);
-        }
-        self.editor
-            .send(SCI_SETXOFFSET, snap.x_offset.max(0) as usize, 0);
     }
 }
 
@@ -15578,8 +15534,11 @@ unsafe fn apply_fif_in_buffer_replace(
 
     // Save the active doc pointer so we can restore it after the
     // doc-swap dance. Without this the user's active tab silently
-    // changes to whichever candidate was visited last.
+    // changes to whichever candidate was visited last. And where the
+    // view stood in it, its folds included, which the swap clears, as
+    // every helper that swaps the view away and back keeps them.
     let original_doc = state.editor.send(SCI_GETDOCPOINTER, 0, 0);
+    let original_view = state.editor.save_view();
     // Own a reference on it for the whole swap loop (see `with_doc`'s pin on
     // the other backends): the first `SCI_SETDOCPOINTER` below drops the
     // view's, and a document the view alone holds would be freed.
@@ -15687,6 +15646,10 @@ unsafe fn apply_fif_in_buffer_replace(
             .editor
             .send(codepp_scintilla_sys::SCI_RELEASEDOCUMENT, 0, original_doc);
     }
+    // A replacement in the active tab's own document may have moved its
+    // lines; `restore_view` clamps the position to the document and skips a
+    // fold line that no longer heads a fold.
+    state.editor.restore_view(&original_view);
     // Re-measure the line-number margin's width against the restored
     // doc: the loop above may have rewritten the *active* tab's buffer
     // across a digit boundary, and the `SCN_MODIFIED` arm's re-measure
@@ -18549,7 +18512,8 @@ pub fn run(initial_path: Option<PathBuf>, perf: codepp_core::perf::Perf) -> Resu
                     SessionRestoreEntry::UntitledFromBackup {
                         untitled_seq,
                         text,
-                        cursor,
+                        view,
+                        folds,
                         encoding,
                         eol,
                         backup_modified_externally,
@@ -18569,7 +18533,8 @@ pub fn run(initial_path: Option<PathBuf>, perf: codepp_core::perf::Perf) -> Resu
                             &mut ui,
                             untitled_seq,
                             text,
-                            cursor,
+                            view,
+                            folds,
                             encoding,
                             eol,
                             backup_modified_externally,
@@ -18581,7 +18546,8 @@ pub fn run(initial_path: Option<PathBuf>, perf: codepp_core::perf::Perf) -> Resu
                     SessionRestoreEntry::DirtyFromBackup {
                         path,
                         text,
-                        cursor,
+                        view,
+                        folds,
                         encoding,
                         eol,
                         disk_changed_externally,
@@ -18607,7 +18573,8 @@ pub fn run(initial_path: Option<PathBuf>, perf: codepp_core::perf::Perf) -> Resu
                             &mut ui,
                             path,
                             text,
-                            cursor,
+                            view,
+                            folds,
                             encoding,
                             eol,
                             disk_changed_externally,
@@ -28360,13 +28327,16 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                         // `SCN_STYLENEEDED` / `SCN_MODIFIED` /
                         // `SCN_SAVEPOINT*` / `SCN_UPDATEUI` arms apply,
                         // for the same reason.
-                        let perf = state_from_hwnd(hwnd).and_then(|state| {
+                        let main = state_from_hwnd(hwnd).and_then(|state| {
                             (nmhdr.hwndFrom == state.scintilla_hwnd)
-                                .then(|| std::rc::Rc::clone(&state.perf))
+                                .then(|| (std::rc::Rc::clone(&state.perf), state.editor))
                         });
-                        if let Some(perf) = perf {
+                        if let Some((perf, editor)) = main {
                             perf.mark_first_draw();
                             perf.painted();
+                            // A tab's top partway into a wrapped line waits
+                            // for the paint that wraps it.
+                            editor.settle_wrapped_top();
                         }
                     } else if nmhdr.code == SCN_MODIFIED {
                         // Confirms the pending keystroke actually
@@ -31908,7 +31878,9 @@ mod plugin_reentry_guards {
     /// only the view still held — one a tab has released, while the
     /// active tab is still loading — would be freed there and then bound
     /// again, dangling: the crash the third code review of the
-    /// tab-switch change reproduced on GTK.
+    /// tab-switch change reproduced on GTK. Each also keeps where the view
+    /// stood in that document, its folds included, which the swap clears:
+    /// read before swapping away and put back after swapping back.
     #[test]
     fn swap_helpers_hold_the_document_they_return_to() {
         let src = production_src();
@@ -31924,6 +31896,12 @@ mod plugin_reentry_guards {
             assert!(
                 held < swapped && swapped < back && back < let_go,
                 "{what}: hold the document before swapping away, let go after swapping back"
+            );
+            let kept = at(".save_view()");
+            let put_back = at(".restore_view(&");
+            assert!(
+                kept < swapped && back < put_back,
+                "{what}: keep the view before swapping away, put it back after swapping back"
             );
         };
         for (name, away) in [
@@ -34544,11 +34522,14 @@ mod view_position_tests {
 
     use codepp_editor::EditorHandle;
     use codepp_scintilla_sys::{
-        ScintillaDirectFunction, Scintilla_RegisterClasses, SCI_ADDREFDOCUMENT, SCI_CREATEDOCUMENT,
+        ScintillaDirectFunction, Scintilla_RegisterClasses, SCI_ADDREFDOCUMENT, SCI_COLOURISE,
+        SCI_CREATEDOCUMENT, SCI_DOCLINEFROMVISIBLE, SCI_ENSUREVISIBLE, SCI_FOLDLINE,
         SCI_GETCURRENTPOS, SCI_GETDIRECTFUNCTION, SCI_GETDIRECTPOINTER, SCI_GETDOCPOINTER,
-        SCI_GETFIRSTVISIBLELINE, SCI_LINESONSCREEN, SCI_POSITIONFROMLINE, SCI_RELEASEDOCUMENT,
-        SCI_SETCODEPAGE, SCI_SETDOCPOINTER, SCI_SETSCROLLWIDTH, SCI_SETTEXT, SCI_SETWRAPMODE,
-        SC_CP_UTF8, SC_WRAP_WORD,
+        SCI_GETFIRSTVISIBLELINE, SCI_GETLENGTH, SCI_GETLINECOUNT, SCI_GETLINEVISIBLE,
+        SCI_LINESONSCREEN, SCI_POSITIONFROMLINE, SCI_RELEASEDOCUMENT, SCI_REPLACETARGET,
+        SCI_SETCODEPAGE, SCI_SETDOCPOINTER, SCI_SETFIRSTVISIBLELINE, SCI_SETSCROLLWIDTH,
+        SCI_SETTARGETRANGE, SCI_SETTEXT, SCI_SETWRAPMODE, SCI_VISIBLEFROMDOCLINE, SCI_WRAPCOUNT,
+        SC_CP_UTF8, SC_FOLDACTION_CONTRACT, SC_WRAP_WORD,
     };
     use codepp_shell::ViewPosition;
     use windows::core::{w, PCWSTR};
@@ -34648,7 +34629,8 @@ mod view_position_tests {
             let pos = ViewPosition {
                 anchor: line_start(editor, anchor_line),
                 caret: line_start(editor, caret_line),
-                first_visible_line: Some(top),
+                top_line: Some(top),
+                top_subline: 0,
                 x_offset: 0,
             };
             editor.set_view_position(pos);
@@ -34670,7 +34652,8 @@ mod view_position_tests {
         );
         editor.send(SCI_SETSCROLLWIDTH, 6000, 0);
         let pos = ViewPosition {
-            first_visible_line: Some(20),
+            top_line: Some(20),
+            top_subline: 0,
             x_offset: 120,
             ..ViewPosition::at(line_start(editor, 24))
         };
@@ -34704,19 +34687,12 @@ mod view_position_tests {
         let pos = ViewPosition {
             anchor: line_start(editor, 120),
             caret: line_start(editor, 121),
-            first_visible_line: Some(110),
+            top_line: Some(110),
+            top_subline: 0,
             x_offset: 0,
         };
         editor.set_view_position(pos);
-        // The view holds the only reference on its startup document, so
-        // without one of our own the swap away would free it.
-        let a = editor.send(SCI_GETDOCPOINTER, 0, 0);
-        editor.send(SCI_ADDREFDOCUMENT, 0, a);
-        let b = editor.send(SCI_CREATEDOCUMENT, 0, 0);
-        editor.send(SCI_SETDOCPOINTER, 0, b);
-        editor.send(SCI_SETDOCPOINTER, 0, a);
-        editor.send(SCI_RELEASEDOCUMENT, 0, a);
-        editor.send(SCI_RELEASEDOCUMENT, 0, b);
+        swap_away_and_back(editor);
         let after_swap = editor.view_position();
         assert_eq!(
             (after_swap.anchor, after_swap.caret),
@@ -34724,7 +34700,8 @@ mod view_position_tests {
             "the swap back cleared the selection"
         );
         editor.set_view_position(ViewPosition {
-            first_visible_line: Some(5),
+            top_line: Some(5),
+            top_subline: 0,
             ..ViewPosition::at(0)
         });
         assert_eq!(
@@ -34761,7 +34738,421 @@ mod view_position_tests {
         let control = scintilla(400, 1, numbered_lines(0).as_bytes());
         let editor = &control.editor;
         assert_eq!(editor.send(SCI_LINESONSCREEN, 0, 0), 0, "precondition");
-        assert_eq!(editor.view_position().first_visible_line, None);
+        assert_eq!(editor.view_position().top_line, None);
+    }
+
+    /// Bind another document to the view and the view's own again, as a
+    /// tab switch away and back does. The view holds the only reference on
+    /// its startup document, so the swap takes one of its own.
+    fn swap_away_and_back(editor: &EditorHandle) {
+        let a = editor.send(SCI_GETDOCPOINTER, 0, 0);
+        editor.send(SCI_ADDREFDOCUMENT, 0, a);
+        let b = editor.send(SCI_CREATEDOCUMENT, 0, 0);
+        editor.send(SCI_SETDOCPOINTER, 0, b);
+        editor.send(SCI_SETDOCPOINTER, 0, a);
+        editor.send(SCI_RELEASEDOCUMENT, 0, a);
+        editor.send(SCI_RELEASEDOCUMENT, 0, b);
+    }
+
+    /// `count` C functions, each a header line, `body` statement lines with
+    /// two blank lines after the first, and a closing brace: `body + 4`
+    /// lines, the first heading a fold. Styled by the C++ lexer with folding
+    /// on, as `apply_lang_theme` styles a C++ buffer.
+    fn functions(count: usize, body: usize) -> Control {
+        let mut text = String::new();
+        for f in 0..count {
+            let _ = writeln!(text, "int f{f}() {{");
+            for b in 0..body {
+                let _ = writeln!(text, "    x{b};");
+                if b == 0 {
+                    text.push_str("\n\n");
+                }
+            }
+            text.push_str("}\n");
+        }
+        let control = scintilla(400, 300, text.as_bytes());
+        assert!(control.editor.set_lexer_by_name("cpp"), "the C++ lexer");
+        control.editor.set_property("fold", "1");
+        control.editor.send(SCI_COLOURISE, 0, -1);
+        control
+    }
+
+    /// Display lines the view shows the whole document in.
+    fn shown_lines(editor: &EditorHandle) -> isize {
+        let count = editor.send(SCI_GETLINECOUNT, 0, 0);
+        editor.send(SCI_VISIBLEFROMDOCLINE, count as usize, 0)
+    }
+
+    /// Folds are contracted on the lines that head one and read back in
+    /// order. A line that heads none is passed over, even one followed by
+    /// blank lines, which `SCI_FOLDLINE` would hide where the lexer folds
+    /// compactly; so is one past the end. Code++ turns compact folding off
+    /// for its lexers (`apply_lang_theme`), but a plugin can turn it on.
+    #[test]
+    fn folds_are_contracted_only_on_the_lines_that_head_one() {
+        let compact = |control: &Control| {
+            control.editor.set_property("fold.compact", "1");
+            control.editor.send(SCI_COLOURISE, 0, -1);
+        };
+        // Line 15 is `x0;` in f1, followed by its two blank lines.
+        let probe = functions(5, 10);
+        compact(&probe);
+        let lines = probe.editor.send(SCI_GETLINECOUNT, 0, 0);
+        probe
+            .editor
+            .send(SCI_FOLDLINE, 15, SC_FOLDACTION_CONTRACT as isize);
+        assert_eq!(
+            shown_lines(&probe.editor),
+            lines - 2,
+            "precondition: SCI_FOLDLINE on line 15 hides the blank lines after it"
+        );
+
+        let control = functions(5, 10);
+        compact(&control);
+        let editor = &control.editor;
+        assert!(editor.contracted_folds().is_empty(), "precondition");
+        assert_eq!(shown_lines(editor), lines, "precondition: nothing hidden");
+
+        editor.apply_folds(&[15, 9_999]);
+        assert!(editor.contracted_folds().is_empty());
+        assert_eq!(shown_lines(editor), lines, "nothing was hidden");
+
+        editor.apply_folds(&[28, 0]);
+        assert_eq!(editor.contracted_folds(), [0, 28]);
+        assert_eq!(editor.send(SCI_GETLINEVISIBLE, 1, 0), 0);
+        assert_eq!(shown_lines(editor), lines - 2 * 13);
+    }
+
+    /// What the shell relies on: a document swap expands every fold, and
+    /// putting back what `save_view` read restores them, and the top line as
+    /// a document line, though the folds above it moved its display line.
+    #[test]
+    fn a_document_swap_expands_the_folds_and_restore_view_puts_them_back() {
+        let control = functions(20, 10);
+        let editor = &control.editor;
+        assert!(
+            editor.send(SCI_LINESONSCREEN, 0, 0) > 0,
+            "precondition: whole lines fit on screen"
+        );
+        editor.apply_folds(&[0, 14, 42]);
+        editor.set_view_position(ViewPosition {
+            top_line: Some(120),
+            top_subline: 0,
+            ..ViewPosition::at(line_start(editor, 121))
+        });
+        assert_eq!(
+            editor.send(SCI_GETFIRSTVISIBLELINE, 0, 0),
+            120 - 3 * 13,
+            "the top line's display line is above it by the folded lines"
+        );
+        let saved = editor.save_view();
+        assert_eq!(saved.folds, [0, 14, 42]);
+        assert_eq!(saved.position.top_line, Some(120));
+
+        swap_away_and_back(editor);
+        assert!(
+            editor.contracted_folds().is_empty(),
+            "the swap expanded them"
+        );
+        editor.set_view_position(ViewPosition {
+            top_line: Some(5),
+            ..ViewPosition::at(0)
+        });
+
+        editor.restore_view(&saved);
+        assert_eq!(editor.save_view(), saved);
+    }
+
+    /// `count` long lines that wrap at the control's width, each 60 words.
+    fn wrapped_lines(count: usize) -> Control {
+        let mut text = String::new();
+        for n in 0..count {
+            for w in 0..60 {
+                let _ = write!(text, "w{n}x{w} ");
+            }
+            text.push('\n');
+        }
+        let control = scintilla(400, 300, text.as_bytes());
+        control.editor.send(SCI_SETWRAPMODE, SC_WRAP_WORD, 0);
+        control
+    }
+
+    /// Wrap every line the view has yet to, as its next paint would wrap the
+    /// ones it shows. Expanding a fold that hides nothing wraps first
+    /// (`Editor::EnsureLineVisible`), and moves nothing else.
+    fn wrap_now(editor: &EditorHandle) {
+        editor.send(SCI_ENSUREVISIBLE, 0, 0);
+    }
+
+    /// A top partway into a wrapped line, put back right after a document
+    /// swap, when the view has every line one display line high: the
+    /// document line goes to the top at once, and the rest of the way once
+    /// the view has wrapped the line. Putting the whole display offset on at
+    /// once would name a later document line, since the view counts each
+    /// line as one display line until it wraps them.
+    #[test]
+    fn a_top_partway_into_a_wrapped_line_settles_once_the_line_is_wrapped() {
+        let control = wrapped_lines(40);
+        let editor = &control.editor;
+        wrap_now(editor);
+        assert!(
+            editor.send(SCI_WRAPCOUNT, 10, 0) > 3,
+            "precondition: line 10 wraps"
+        );
+        let pos = ViewPosition {
+            top_line: Some(10),
+            top_subline: 2,
+            ..ViewPosition::at(line_start(editor, 10))
+        };
+        editor.set_view_position(pos);
+        assert_eq!(
+            editor.view_position(),
+            pos,
+            "a wrapped view takes it at once"
+        );
+
+        swap_away_and_back(editor);
+        assert_eq!(
+            editor.send(SCI_VISIBLEFROMDOCLINE, 10, 0),
+            10,
+            "precondition: the swap left every line one display line high"
+        );
+        editor.set_view_position(pos);
+        let first = editor.send(SCI_GETFIRSTVISIBLELINE, 0, 0);
+        assert_eq!(
+            editor.send(SCI_DOCLINEFROMVISIBLE, first as usize, 0),
+            10,
+            "the document line is at the top"
+        );
+        assert_eq!(editor.view_position(), pos, "and the rest is still owed");
+
+        wrap_now(editor);
+        editor.settle_wrapped_top();
+        let start = editor.send(SCI_VISIBLEFROMDOCLINE, 10, 0);
+        assert_eq!(editor.send(SCI_GETFIRSTVISIBLELINE, 0, 0), start + 2);
+        assert_eq!(editor.view_position(), pos);
+    }
+
+    /// Without wrapping, a top past the last one the view scrolls to is not
+    /// kept waiting: nothing will make the view scroll that far, and the top
+    /// read back is the one the view shows.
+    #[test]
+    fn without_wrapping_a_top_the_view_cannot_scroll_to_is_not_kept() {
+        let control = functions(1, 3);
+        let editor = &control.editor;
+        assert!(
+            editor.send(SCI_GETLINECOUNT, 0, 0) < editor.send(SCI_LINESONSCREEN, 0, 0),
+            "precondition: the document fits on screen"
+        );
+        editor.set_view_position(ViewPosition {
+            top_line: Some(4),
+            ..ViewPosition::at(0)
+        });
+        assert_eq!(editor.send(SCI_GETFIRSTVISIBLELINE, 0, 0), 0);
+        assert_eq!(editor.view_position().top_line, Some(0));
+    }
+
+    /// The same in a document shorter than the view until it is wrapped:
+    /// there not even the document line can go to the top at once, since
+    /// the view does not scroll past its last line (`Editor::MaxScrollPos`),
+    /// and it goes there once the view has wrapped the document. That is
+    /// any file of fewer long lines than fit on screen, shown with word wrap
+    /// on.
+    #[test]
+    fn a_top_the_unwrapped_document_cannot_scroll_to_settles_once_it_is_wrapped() {
+        let control = wrapped_lines(12);
+        let editor = &control.editor;
+        wrap_now(editor);
+        let pos = ViewPosition {
+            top_line: Some(4),
+            top_subline: 2,
+            ..ViewPosition::at(line_start(editor, 4))
+        };
+        editor.set_view_position(pos);
+        assert_eq!(
+            editor.view_position(),
+            pos,
+            "a wrapped view takes it at once"
+        );
+
+        swap_away_and_back(editor);
+        assert!(
+            editor.send(SCI_GETLINECOUNT, 0, 0) < editor.send(SCI_LINESONSCREEN, 0, 0),
+            "precondition: unwrapped, the document fits on screen"
+        );
+        editor.set_view_position(pos);
+        assert_eq!(
+            editor.send(SCI_GETFIRSTVISIBLELINE, 0, 0),
+            0,
+            "precondition: the view does not scroll at all"
+        );
+        assert_eq!(editor.view_position(), pos, "and the top is owed");
+
+        wrap_now(editor);
+        editor.settle_wrapped_top();
+        let start = editor.send(SCI_VISIBLEFROMDOCLINE, 4, 0);
+        assert_eq!(editor.send(SCI_GETFIRSTVISIBLELINE, 0, 0), start + 2);
+        assert_eq!(editor.view_position(), pos);
+    }
+
+    /// A top the view stops short of once its line is wrapped is given up at
+    /// the next paint, since the view will always stop there: here partway
+    /// into a document's last line, taller than the view, which the view
+    /// does not scroll that far into (`Editor::MaxScrollPos`). The top read
+    /// back is then the one the view shows.
+    #[test]
+    fn a_top_the_view_stops_short_of_in_a_wrapped_line_is_given_up() {
+        let mut text = String::new();
+        for n in 0..10 {
+            for w in 0..60 {
+                let _ = write!(text, "w{n}x{w} ");
+            }
+            text.push('\n');
+        }
+        for w in 0..600 {
+            let _ = write!(text, "last{w} ");
+        }
+        let control = scintilla(400, 300, text.as_bytes());
+        let editor = &control.editor;
+        editor.send(SCI_SETWRAPMODE, SC_WRAP_WORD, 0);
+        wrap_now(editor);
+        let height = editor.send(SCI_WRAPCOUNT, 10, 0);
+        assert!(
+            height > editor.send(SCI_LINESONSCREEN, 0, 0) + 2,
+            "precondition: the last line is taller than the view"
+        );
+        let pos = ViewPosition {
+            top_line: Some(10),
+            top_subline: (height - 1) as u64,
+            ..ViewPosition::at(line_start(editor, 10))
+        };
+        editor.set_view_position(pos);
+        assert_eq!(
+            editor.view_position(),
+            pos,
+            "precondition: owed until the next paint"
+        );
+
+        editor.settle_wrapped_top();
+        let shown = editor.view_position();
+        assert_eq!(shown.top_line, Some(10));
+        assert!(shown.top_subline < pos.top_subline, "{shown:?}");
+    }
+
+    /// A top the view does not reach whatever it wraps, and not stopped
+    /// short of in its own line, is given up after eight paints: here the
+    /// start of the last line, which the view does not scroll to.
+    #[test]
+    fn a_top_the_view_never_reaches_is_given_up_after_eight_paints() {
+        let control = wrapped_lines(40);
+        let editor = &control.editor;
+        wrap_now(editor);
+        let pos = ViewPosition {
+            top_line: Some(39),
+            top_subline: 0,
+            ..ViewPosition::at(line_start(editor, 39))
+        };
+        editor.set_view_position(pos);
+        let first = editor.send(SCI_GETFIRSTVISIBLELINE, 0, 0);
+        assert!(
+            editor.send(SCI_DOCLINEFROMVISIBLE, first as usize, 0) < 39,
+            "precondition: the view stops before the last line"
+        );
+        for paint in 1..8 {
+            editor.settle_wrapped_top();
+            assert_eq!(
+                editor.view_position(),
+                pos,
+                "still owed after paint {paint}"
+            );
+        }
+        editor.settle_wrapped_top();
+        assert!(editor.view_position().top_line < Some(39), "given up");
+    }
+
+    /// A top still owed to a wrapped line is given up once the view is
+    /// scrolled away from where it was put: wrapping alone never moves it,
+    /// so whoever moved it, the user or anything else, chose where it is.
+    #[test]
+    fn an_owed_top_is_given_up_once_the_view_is_scrolled() {
+        let control = wrapped_lines(40);
+        let editor = &control.editor;
+        wrap_now(editor);
+        swap_away_and_back(editor);
+        assert_eq!(
+            editor.send(SCI_VISIBLEFROMDOCLINE, 10, 0),
+            10,
+            "precondition: the swap left every line one display line high"
+        );
+        let pos = ViewPosition {
+            top_line: Some(10),
+            top_subline: 2,
+            ..ViewPosition::at(line_start(editor, 10))
+        };
+        editor.set_view_position(pos);
+        assert_eq!(
+            editor.send(SCI_GETFIRSTVISIBLELINE, 0, 0),
+            10,
+            "precondition: only the document line went to the top"
+        );
+        assert_eq!(
+            editor.view_position(),
+            pos,
+            "precondition: the rest is owed"
+        );
+        editor.send(SCI_SETFIRSTVISIBLELINE, 30, 0);
+        wrap_now(editor);
+        let scrolled = editor.send(SCI_GETFIRSTVISIBLELINE, 0, 0);
+        editor.settle_wrapped_top();
+        assert_eq!(editor.send(SCI_GETFIRSTVISIBLELINE, 0, 0), scrolled);
+        assert_ne!(editor.view_position().top_line, Some(10));
+    }
+
+    /// A top still owed to a line the document has since lost is given up,
+    /// as an undo can take the line away and leave the view's top where it
+    /// was: there is no such line to put at the top, and the top read back
+    /// is the one the view shows, not a line past the end.
+    #[test]
+    fn an_owed_top_on_a_line_the_document_lost_is_given_up() {
+        let control = wrapped_lines(12);
+        let editor = &control.editor;
+        wrap_now(editor);
+        swap_away_and_back(editor);
+        let pos = ViewPosition {
+            top_line: Some(8),
+            top_subline: 2,
+            ..ViewPosition::at(line_start(editor, 8))
+        };
+        editor.set_view_position(pos);
+        assert_eq!(
+            editor.send(SCI_GETFIRSTVISIBLELINE, 0, 0),
+            0,
+            "precondition: the view does not scroll at all"
+        );
+        assert_eq!(editor.view_position(), pos, "precondition: the top is owed");
+
+        // From the line end before line 8, so line 7 is the last one left:
+        // the line the top is to be at is the first one gone.
+        let from = editor.send(SCI_POSITIONFROMLINE, 8, 0) - 1;
+        let to = editor.send(SCI_GETLENGTH, 0, 0);
+        editor.send(SCI_SETTARGETRANGE, from as usize, to);
+        editor.send(SCI_REPLACETARGET, 0, "".as_ptr() as isize);
+        assert_eq!(
+            editor.send(SCI_GETLINECOUNT, 0, 0),
+            8,
+            "precondition: line 8 is the first line gone"
+        );
+        assert_eq!(
+            editor.send(SCI_GETFIRSTVISIBLELINE, 0, 0),
+            0,
+            "precondition: the view's top did not move"
+        );
+        assert_eq!(editor.view_position().top_line, Some(0));
+
+        wrap_now(editor);
+        editor.settle_wrapped_top();
+        assert_eq!(editor.send(SCI_GETFIRSTVISIBLELINE, 0, 0), 0);
+        assert_eq!(editor.view_position().top_line, Some(0));
     }
 
     /// A position inside a character, or between the CR and LF of a line

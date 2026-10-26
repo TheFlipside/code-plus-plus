@@ -37,6 +37,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::encoding::Encoding;
 use crate::eol::Eol;
+use crate::view_position::{kept_folds, ViewPosition};
 
 /// One open tab's persistent state.
 ///
@@ -61,8 +62,10 @@ pub struct Tab {
     /// `untitled_seq` instead).
     #[serde(rename = "@path", skip_serializing_if = "Option::is_none", default)]
     pub path: Option<PathBuf>,
-    /// Caret byte position within the buffer. Restored on load via
-    /// `SCI_GOTOPOS`. Defaults to 0 for files we've never opened.
+    /// Caret byte position within the buffer. Defaults to 0 for files
+    /// we've never opened. With [`Self::anchor`], [`Self::top_line`],
+    /// [`Self::top_subline`] and [`Self::x_offset`] it makes the tab's
+    /// [`ViewPosition`] ([`Self::view_position`]).
     #[serde(rename = "@cursor", default)]
     pub cursor: u64,
     /// Detected encoding when the tab was last opened. Persisted so a
@@ -168,6 +171,72 @@ pub struct Tab {
     /// tabs come back unpinned, matching pre-pin behaviour.
     #[serde(rename = "@pinned", default, skip_serializing_if = "is_false")]
     pub pinned: bool,
+    /// The anchor end of the selection, when something was selected; the
+    /// caret is [`Self::cursor`]. Absent reads as nothing selected, which
+    /// is also how a session written before this was recorded reads.
+    #[serde(rename = "@anchor", skip_serializing_if = "Option::is_none", default)]
+    pub anchor: Option<u64>,
+    /// The document line at the top of the view
+    /// ([`ViewPosition::top_line`]). Absent when it was not known, and in a
+    /// session written before it was recorded; the caret is then scrolled
+    /// into view.
+    #[serde(rename = "@top_line", skip_serializing_if = "Option::is_none", default)]
+    pub top_line: Option<u64>,
+    /// How many display lines into a wrapped [`Self::top_line`] the view
+    /// started ([`ViewPosition::top_subline`]).
+    #[serde(rename = "@top_subline", default, skip_serializing_if = "is_zero")]
+    pub top_subline: u64,
+    /// The horizontal scroll in pixels ([`ViewPosition::x_offset`]).
+    #[serde(rename = "@x_offset", default, skip_serializing_if = "is_zero")]
+    pub x_offset: u64,
+    /// The fold headers whose folds were contracted, one `<fold line="N"/>`
+    /// child each. Read back through [`Self::fold_lines`], which bounds them.
+    #[serde(rename = "fold", default, skip_serializing_if = "Vec::is_empty")]
+    pub folds: Vec<Fold>,
+}
+
+/// A contracted fold in a [`Tab`]: the document line of its header.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Fold {
+    /// The fold header's document line, 0-based.
+    #[serde(rename = "@line")]
+    pub line: u64,
+}
+
+impl Tab {
+    /// Where the view stood in this tab's document, as recorded.
+    #[must_use]
+    pub fn view_position(&self) -> ViewPosition {
+        ViewPosition {
+            anchor: self.anchor.unwrap_or(self.cursor),
+            caret: self.cursor,
+            top_line: self.top_line,
+            top_subline: self.top_subline,
+            x_offset: self.x_offset,
+        }
+    }
+
+    /// Record `pos` as where the view stood: the caret in [`Self::cursor`],
+    /// the anchor only when something is selected, and the scroll.
+    pub fn set_view_position(&mut self, pos: ViewPosition) {
+        self.cursor = pos.caret;
+        self.anchor = (pos.anchor != pos.caret).then_some(pos.anchor);
+        self.top_line = pos.top_line;
+        self.top_subline = pos.top_subline;
+        self.x_offset = pos.x_offset;
+    }
+
+    /// The contracted fold headers recorded, ordered, each once, and at most
+    /// [`crate::MAX_KEPT_FOLDS`] of them ([`kept_folds`]).
+    #[must_use]
+    pub fn fold_lines(&self) -> Vec<u64> {
+        kept_folds(self.folds.iter().map(|f| f.line).collect())
+    }
+
+    /// Record `lines` as the contracted fold headers.
+    pub fn set_fold_lines(&mut self, lines: &[u64]) {
+        self.folds = lines.iter().map(|&line| Fold { line }).collect();
+    }
 }
 
 /// Persisted main-window geometry. Pixel dimensions are positive in
@@ -233,6 +302,14 @@ pub struct WindowGeometry {
 #[allow(clippy::trivially_copy_pass_by_ref)]
 fn is_false(b: &bool) -> bool {
     !*b
+}
+
+/// `skip_serializing_if` predicate for the scroll fields, which are 0
+/// when there is nothing to record. By reference for serde, as
+/// [`is_false`] is.
+#[allow(clippy::trivially_copy_pass_by_ref)]
+fn is_zero(n: &u64) -> bool {
+    *n == 0
 }
 
 /// Persisted "Folder as Workspace" panel state — the left-column
@@ -523,8 +600,11 @@ fn is_default_view(v: &ViewSettings) -> bool {
 /// starts with an empty session, so the cap sits well above what Code++
 /// writes: a record per open tab, at most 1024, each a path and a few
 /// attributes. Even with every path as long as Linux opens, 4096 bytes, that
-/// comes to under 5 MiB. Only names Code++ does not bound, a User Defined
-/// Language's or a rename label, could make a session that large, and
+/// comes to under 5 MiB, and the contracted folds the tabs record add at
+/// most [`crate::MAX_SESSION_FOLDS`] short children, under 3 MB. Only paths
+/// full of characters XML escapes, `&` or a line break at five or six bytes
+/// each, or names Code++ does not bound, a User Defined Language's or a
+/// rename label, could make a session that large, and
 /// [`Session::save_to_xml`] refuses to write one, so Code++ never writes a
 /// `session.xml` it would refuse.
 pub const MAX_SESSION_FILE_BYTES: u64 = 8 * 1024 * 1024;
@@ -588,6 +668,22 @@ impl Session {
     #[must_use]
     pub fn new() -> Self {
         Session::default()
+    }
+
+    /// Keep at most `budget` contracted folds across every tab, the first
+    /// tabs' first, and drop the rest; returns how many were dropped. A tab
+    /// over what is left keeps the folds nearest its start, since a tab's
+    /// are recorded in line order. See [`crate::MAX_SESSION_FOLDS`].
+    pub fn limit_folds(&mut self, budget: usize) -> usize {
+        let mut left = budget;
+        let mut dropped = 0;
+        for tab in &mut self.tabs {
+            let keep = tab.folds.len().min(left);
+            dropped += tab.folds.len() - keep;
+            tab.folds.truncate(keep);
+            left -= keep;
+        }
+        dropped
     }
 
     /// Read a session in Code++'s own format from `reader`: `session.xml`,
@@ -735,6 +831,7 @@ mod tests {
                     lang: None,
                     udl: None,
                     pinned: false,
+                    ..Tab::default()
                 },
                 Tab {
                     path: Some(PathBuf::from(r"C:\users\alice\config.toml")),
@@ -747,12 +844,172 @@ mod tests {
                     lang: None,
                     udl: None,
                     pinned: false,
+                    ..Tab::default()
                 },
             ],
         };
         session.save_to_xml(&path).unwrap();
         let loaded = read_file(&path).unwrap();
         assert_eq!(session, loaded);
+    }
+
+    /// A tab's selection, scroll and contracted folds round-trip; a tab
+    /// with nothing selected, no scroll and no folds writes none of it.
+    #[test]
+    fn a_tabs_view_position_and_folds_round_trip() {
+        let (_dir, path) = temp_session_path();
+        let pos = ViewPosition {
+            anchor: 120,
+            caret: 98,
+            top_line: Some(40),
+            top_subline: 2,
+            x_offset: 64,
+        };
+        let mut tab = Tab {
+            path: Some(PathBuf::from("/tmp/a.rs")),
+            ..Tab::default()
+        };
+        tab.set_view_position(pos);
+        tab.set_fold_lines(&[3, 17]);
+        let plain = Tab {
+            path: Some(PathBuf::from("/tmp/b.rs")),
+            cursor: 7,
+            ..Tab::default()
+        };
+        let session = Session {
+            tabs: vec![tab, plain],
+            ..Session::default()
+        };
+        session.save_to_xml(&path).unwrap();
+        let xml = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            xml.contains(r#"<fold line="3"/><fold line="17"/>"#),
+            "{xml}"
+        );
+        let plain = xml
+            .split("<tab ")
+            .find(|element| element.contains("b.rs"))
+            .expect("b.rs's record");
+        for absent in ["anchor=", "top_line=", "top_subline=", "x_offset=", "<fold"] {
+            assert!(!plain.contains(absent), "{absent} written for b.rs: {xml}");
+        }
+
+        let loaded = read_file(&path).unwrap();
+        assert_eq!(loaded, session);
+        assert_eq!(loaded.tabs[0].view_position(), pos);
+        assert_eq!(loaded.tabs[0].fold_lines(), [3, 17]);
+        assert_eq!(loaded.tabs[1].view_position(), ViewPosition::at(7));
+        assert!(loaded.tabs[1].fold_lines().is_empty());
+    }
+
+    /// The largest values a hand-edited file can hold come back as they
+    /// were, for the editor to clamp; and a tab listing more folds than are
+    /// kept gives the first [`MAX_KEPT_FOLDS`] in line order.
+    #[test]
+    fn extreme_view_values_and_too_many_folds_round_trip() {
+        let (_dir, path) = temp_session_path();
+        let pos = ViewPosition {
+            anchor: u64::MAX,
+            caret: u64::MAX - 1,
+            top_line: Some(u64::MAX),
+            top_subline: u64::MAX,
+            x_offset: u64::MAX,
+        };
+        let mut tab = Tab::default();
+        tab.set_view_position(pos);
+        let lines: Vec<u64> = (0..=crate::MAX_KEPT_FOLDS as u64).rev().collect();
+        tab.set_fold_lines(&lines);
+        let session = Session {
+            tabs: vec![tab],
+            ..Session::default()
+        };
+        session.save_to_xml(&path).unwrap();
+        let loaded = read_file(&path).unwrap();
+        assert_eq!(loaded.tabs[0].view_position(), pos);
+        let folds = loaded.tabs[0].fold_lines();
+        assert_eq!(folds.len(), crate::MAX_KEPT_FOLDS);
+        assert_eq!(folds.first(), Some(&0));
+        assert_eq!(folds.last(), Some(&(crate::MAX_KEPT_FOLDS as u64 - 1)));
+    }
+
+    /// The folds a session records are bounded across its tabs: the first
+    /// tabs keep theirs, a tab over what is left keeps the ones nearest its
+    /// start, and the tabs after keep none.
+    #[test]
+    fn a_sessions_folds_are_limited_across_its_tabs() {
+        let tab_with = |lines: std::ops::Range<u64>| {
+            let mut tab = Tab::default();
+            tab.set_fold_lines(&lines.collect::<Vec<_>>());
+            tab
+        };
+        let mut session = Session {
+            tabs: vec![tab_with(0..4), tab_with(10..16), tab_with(20..23)],
+            ..Session::default()
+        };
+        assert_eq!(session.limit_folds(7), 6);
+        assert_eq!(session.tabs[0].fold_lines(), [0, 1, 2, 3]);
+        assert_eq!(session.tabs[1].fold_lines(), [10, 11, 12]);
+        assert!(session.tabs[2].fold_lines().is_empty());
+        assert_eq!(session.limit_folds(7), 0, "already within it");
+    }
+
+    /// The largest session Code++ writes fits under the cap its reader
+    /// applies: 1024 tabs with paths as long as Linux opens, every view
+    /// attribute at its widest, and the session's whole fold budget on the
+    /// highest lines a fold is kept on. A `session.xml` over the cap is one
+    /// Code++ declines to write, so the session would stop being saved at all.
+    #[test]
+    fn the_largest_session_code_plus_plus_writes_fits_under_the_cap() {
+        let (_dir, path) = temp_session_path();
+        let per_tab = crate::MAX_SESSION_FOLDS / 1024 + 1;
+        let tabs = (0..1024u64)
+            .map(|n| {
+                let mut tab = Tab {
+                    path: Some(PathBuf::from(format!("/{n:0>4095}"))),
+                    backup: Some(format!("{n:0>200}@2026-10-26_123456")),
+                    ..Tab::default()
+                };
+                tab.set_view_position(ViewPosition {
+                    anchor: u64::MAX,
+                    caret: u64::MAX - 1,
+                    top_line: Some(u64::MAX),
+                    top_subline: u64::MAX,
+                    x_offset: u64::MAX,
+                });
+                let lines: Vec<u64> = (0..per_tab as u64)
+                    .map(|l| crate::MAX_FOLD_LINE - l)
+                    .collect();
+                tab.set_fold_lines(&lines);
+                tab
+            })
+            .collect();
+        let mut session = Session {
+            tabs,
+            ..Session::default()
+        };
+        session.limit_folds(crate::MAX_SESSION_FOLDS);
+        session.save_within(&path, MAX_SESSION_FILE_BYTES).unwrap();
+        let written = std::fs::metadata(&path).unwrap().len();
+        assert!(written <= MAX_SESSION_FILE_BYTES, "{written} bytes");
+        let folds: usize = read_file(&path)
+            .unwrap()
+            .tabs
+            .iter()
+            .map(|t| t.fold_lines().len())
+            .sum();
+        assert_eq!(folds, crate::MAX_SESSION_FOLDS);
+    }
+
+    /// A tab recorded before the selection, scroll and folds were reads as
+    /// its caret alone, scrolled into view.
+    #[test]
+    fn an_older_tab_reads_as_its_caret_alone() {
+        let session = Session::read_from(
+            br#"<session active="0"><tab path="/tmp/a.rs" cursor="42"/></session>"#.as_slice(),
+        )
+        .unwrap();
+        assert_eq!(session.tabs[0].view_position(), ViewPosition::at(42));
+        assert!(session.tabs[0].fold_lines().is_empty());
     }
 
     /// A path with a tab or a line break in it, legal on Linux and macOS,
@@ -798,6 +1055,7 @@ mod tests {
                 lang: None,
                 udl: None,
                 pinned: false,
+                ..Tab::default()
             }],
         };
         session.save_to_xml(&path).unwrap();
@@ -830,6 +1088,7 @@ mod tests {
                 lang: None,
                 udl: None,
                 pinned: false,
+                ..Tab::default()
             }],
         };
         session.save_to_xml(&path).unwrap();
@@ -864,6 +1123,7 @@ mod tests {
                     lang: None,
                     udl: None,
                     pinned: false,
+                    ..Tab::default()
                 },
                 Tab {
                     path: None,
@@ -876,6 +1136,7 @@ mod tests {
                     lang: None,
                     udl: None,
                     pinned: false,
+                    ..Tab::default()
                 },
                 Tab {
                     path: None,
@@ -888,6 +1149,7 @@ mod tests {
                     lang: None,
                     udl: None,
                     pinned: false,
+                    ..Tab::default()
                 },
             ],
         };
@@ -923,6 +1185,7 @@ mod tests {
                 lang: None,
                 udl: None,
                 pinned: false,
+                ..Tab::default()
             }],
         };
         session.save_to_xml(&path).unwrap();
@@ -962,6 +1225,7 @@ mod tests {
                 lang: Some(81),
                 udl: None,
                 pinned: false,
+                ..Tab::default()
             }],
         };
         session.save_to_xml(&path).unwrap();
@@ -995,6 +1259,7 @@ mod tests {
                 lang: None,
                 udl: None,
                 pinned: true,
+                ..Tab::default()
             }],
         };
         session.save_to_xml(&path).unwrap();
@@ -1029,6 +1294,7 @@ mod tests {
                 lang: None,
                 udl: None,
                 pinned: false,
+                ..Tab::default()
             }],
         };
         session.save_to_xml(&path).unwrap();

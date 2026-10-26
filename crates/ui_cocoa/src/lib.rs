@@ -882,6 +882,10 @@ unsafe fn on_sci_notify_inner(message: u32, lparam: usize) {
                     enforce_scroller_layout(&st.sci_view, mtm);
                 }
                 clamp_scroll_width_to_viewport(&st.editor, &st.sci_view, &st.scroll_floor);
+                // A tab's top partway into a wrapped line waits for the
+                // paint that wraps it. A paint made inside a borrow, where
+                // this is declined, leaves it to the next paint.
+                st.editor.settle_wrapped_top();
             });
         }
         _ => {}
@@ -3049,7 +3053,8 @@ fn restore_session(initial_path: Option<PathBuf>) {
             SessionRestoreEntry::UntitledFromBackup {
                 untitled_seq,
                 text,
-                cursor,
+                view,
+                folds,
                 encoding,
                 eol,
                 backup_modified_externally,
@@ -3063,7 +3068,8 @@ fn restore_session(initial_path: Option<PathBuf>) {
                         &mut ui,
                         untitled_seq,
                         text,
-                        cursor,
+                        view,
+                        folds,
                         encoding,
                         eol,
                         backup_modified_externally,
@@ -3081,7 +3087,8 @@ fn restore_session(initial_path: Option<PathBuf>) {
             SessionRestoreEntry::DirtyFromBackup {
                 path,
                 text,
-                cursor,
+                view,
+                folds,
                 encoding,
                 eol,
                 disk_changed_externally,
@@ -3095,7 +3102,8 @@ fn restore_session(initial_path: Option<PathBuf>) {
                         &mut ui,
                         path,
                         text,
-                        cursor,
+                        view,
+                        folds,
                         encoding,
                         eol,
                         disk_changed_externally,

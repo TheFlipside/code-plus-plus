@@ -703,6 +703,47 @@ pub const SCI_DOCLINEFROMVISIBLE: u32 = 2221;
 /// visible-line coordinate that [`SCI_LINESCROLL`] operates on.
 pub const SCI_VISIBLEFROMDOCLINE: u32 = 2220;
 
+/// `SCI_SETFIRSTVISIBLELINE(displayLine)` — scroll so `displayLine` is the
+/// top line of the view, clamped to the last top the view scrolls to
+/// (`Editor::MaxScrollPos`). The setter of [`SCI_GETFIRSTVISIBLELINE`];
+/// `EditorHandle::set_view_position` uses it.
+pub const SCI_SETFIRSTVISIBLELINE: u32 = 2613;
+
+/// `SCI_WRAPCOUNT(docLine)` — how many display lines `docLine` wraps to at
+/// the view's wrap width, 1 unless it wraps. Lays the line out to count, so
+/// it answers whether or not the view has wrapped the line yet, and whether
+/// or not a fold hides it (`Editor::WrapCount`).
+pub const SCI_WRAPCOUNT: u32 = 2235;
+
+/// `SCI_GETLINEVISIBLE(docLine)` — 1 unless a contracted fold hides
+/// `docLine`. Used by the view-position tests.
+pub const SCI_GETLINEVISIBLE: u32 = 2228;
+
+/// `SCI_ENSUREVISIBLE(docLine)` — expand any fold that hides `docLine`.
+/// Wraps every line still waiting to be wrapped first, when `docLine` is
+/// one of them (`Editor::EnsureLineVisible`). Used by the view-position
+/// tests, to wrap the way a paint would.
+pub const SCI_ENSUREVISIBLE: u32 = 2232;
+
+/// `SCI_GETFOLDLEVEL(line)` — the fold level the lexer gave `line`, with
+/// [`SC_FOLDLEVELHEADERFLAG`] set on a line that starts a fold.
+pub const SCI_GETFOLDLEVEL: u32 = 2223;
+
+/// The bit of a fold level that marks a fold header line.
+pub const SC_FOLDLEVELHEADERFLAG: isize = 0x2000;
+
+/// `SCI_FOLDLINE(line, action)` — contract, expand or toggle the fold
+/// headed by `line`.
+pub const SCI_FOLDLINE: u32 = 2237;
+
+/// The `action` for [`SCI_FOLDLINE`] that contracts the fold.
+pub const SC_FOLDACTION_CONTRACT: usize = 0;
+
+/// `SCI_CONTRACTEDFOLDNEXT(lineStart)` — the first fold header line at or
+/// after `lineStart` whose fold is contracted, or -1 if there is none. Walks
+/// the view's contraction state rather than every line.
+pub const SCI_CONTRACTEDFOLDNEXT: u32 = 2618;
+
 /// `SCI_POSITIONFROMPOINTCLOSE(x, y)` — return the closest byte
 /// position to the given client-coord point, or `-1` if the
 /// point is not inside a text region (e.g. on the margin, or
@@ -10167,6 +10208,52 @@ pub const SCE_ERR_ES_WHITE: usize = 55;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The fold and scroll messages the view-position restore uses carry
+    /// the numbers the vendored header gives them. Read from the header
+    /// rather than restated, since a transcribed number that is wrong sends
+    /// another message, which no other test here would notice.
+    #[test]
+    fn the_fold_and_scroll_messages_match_the_vendored_header() {
+        let header = include_str!("../vendor/scintilla/include/Scintilla.h");
+        let defined = |name: &str| -> i64 {
+            let line = header
+                .lines()
+                .find(|l| l.split_whitespace().nth(1) == Some(name))
+                .unwrap_or_else(|| panic!("{name} is not in Scintilla.h"));
+            let value = line.split_whitespace().nth(2).expect("a value");
+            value.strip_prefix("0x").map_or_else(
+                || value.parse().expect("a decimal value"),
+                |hex| i64::from_str_radix(hex, 16).expect("a hex value"),
+            )
+        };
+        for (name, value) in [
+            (
+                "SCI_SETFIRSTVISIBLELINE",
+                i64::from(SCI_SETFIRSTVISIBLELINE),
+            ),
+            ("SCI_WRAPCOUNT", i64::from(SCI_WRAPCOUNT)),
+            ("SCI_GETFOLDLEVEL", i64::from(SCI_GETFOLDLEVEL)),
+            ("SC_FOLDLEVELHEADERFLAG", SC_FOLDLEVELHEADERFLAG as i64),
+            ("SCI_FOLDLINE", i64::from(SCI_FOLDLINE)),
+            (
+                "SC_FOLDACTION_CONTRACT",
+                i64::try_from(SC_FOLDACTION_CONTRACT).expect("a small value"),
+            ),
+            ("SCI_CONTRACTEDFOLDNEXT", i64::from(SCI_CONTRACTEDFOLDNEXT)),
+            ("SCI_DOCLINEFROMVISIBLE", i64::from(SCI_DOCLINEFROMVISIBLE)),
+            ("SCI_VISIBLEFROMDOCLINE", i64::from(SCI_VISIBLEFROMDOCLINE)),
+            (
+                "SCI_GETFIRSTVISIBLELINE",
+                i64::from(SCI_GETFIRSTVISIBLELINE),
+            ),
+            ("SCI_COLOURISE", i64::from(SCI_COLOURISE)),
+            ("SCI_GETLINEVISIBLE", i64::from(SCI_GETLINEVISIBLE)),
+            ("SCI_ENSUREVISIBLE", i64::from(SCI_ENSUREVISIBLE)),
+        ] {
+            assert_eq!(defined(name), value, "{name}");
+        }
+    }
 
     /// The `Sci_RangeToFormatFull` layout is ABI-critical — Scintilla's
     /// `SCI_FORMATRANGEFULL` dispatch reads fields by fixed byte offset,

@@ -41,10 +41,12 @@ pub use preferences::{
     Preferences, PreferencesError, RecentFileDisplayMode, RecentFilesHistoryConfig,
 };
 pub use recent_files::{RecentFiles, RecentFilesError};
-pub use session::{Session, SessionError, Tab, WindowGeometry};
+pub use session::{Fold, Session, SessionError, Tab, WindowGeometry};
 pub use shortcuts::{PluginShortcut, PluginShortcuts, ShortcutsError};
 pub use styles::{format_rgb_hex, parse_rgb_hex, StyleEntry, Styles, StylesError, Transparency};
-pub use view_position::ViewPosition;
+pub use view_position::{
+    kept_folds, ViewPosition, MAX_FOLD_LINE, MAX_KEPT_FOLDS, MAX_SESSION_FOLDS,
+};
 
 /// A workspace-wide source lint, not a unit test.
 ///
