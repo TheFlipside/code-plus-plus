@@ -31,7 +31,7 @@ tools/               → plugin compat harness, perf scripts
 ```powershell
 git submodule update --init --recursive   		  # required: Scintilla + Lexilla source
 cargo build --workspace                   		  # builds everything
-cargo run -p app                          		  # launches Code++ (current phase's demo)
+cargo run -p codepp-app                   		  # launches Code++ (current phase's demo)
 cargo test --workspace                    		  # runs all tests
 cargo fmt --check                        		  # must pass
 cargo clippy -- -W clippy::pedantic -D warnings   # must pass

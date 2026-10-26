@@ -1,6 +1,6 @@
 # Code++ — Development Environment Setup
 
-This document walks through everything that must be installed on each supported platform to get a working development environment for Code++. It is the source of truth for "how do I get from a fresh OS to `cargo run -p app`."
+This document walks through everything that must be installed on each supported platform to get a working development environment for Code++. It is the source of truth for "how do I get from a fresh OS to `cargo run -p codepp-app`."
 
 If a step here is wrong or out of date, fix it in this file in the same commit that fixes the underlying issue. Setup docs that lie waste more time than no setup docs at all.
 
@@ -21,7 +21,7 @@ Once those are present, the cross-platform bring-up is identical:
 git clone --recurse-submodules https://git.fiedler.live/tux/code-plus-plus.git
 cd code-plus-plus
 cargo build --workspace
-cargo run -p app
+cargo run -p codepp-app
 ```
 
 If you cloned without `--recurse-submodules`:
@@ -76,7 +76,7 @@ cargo --version
 git --version
 git submodule status        # should list scintilla and lexilla under crates/scintilla-sys/vendor/
 cargo build --workspace     # full build
-cargo run -p app            # launches the app
+cargo run -p codepp-app     # launches the app
 ```
 
 If `cl` is not found, you opened the wrong shell. Use the **Developer** PowerShell, not the regular one.
@@ -523,8 +523,8 @@ cd ../lexilla
 git fetch --tags
 git checkout rel-X-YY-Z
 cd ../../../..
-cargo build -p scintilla-sys     # recompile against new source
-cargo test -p scintilla-sys      # smoke test must pass
+cargo build -p codepp-scintilla-sys     # recompile against new source
+cargo test -p codepp-scintilla-sys      # smoke test must pass
 ```
 
 Commit the submodule pointer bumps in the same commit that adapts any code to API changes.
@@ -745,18 +745,10 @@ against a pre-change build (DESIGN.md §7.4).
 Each phase in DESIGN.md §7.2 has a Demo column. The current phase's demo is always reachable via:
 
 ```sh
-cargo run -p app
+cargo run -p codepp-app
 ```
 
-with manual steps from the Demo description. Automated phase-demo scripts live in `tools/phase-demos/` (added per phase).
-
-### Run the Notepad++ plugin compatibility harness (Windows, Phase 3+)
-
-```powershell
-cargo run -p npp-plugin-test -- --plugin path\to\NppExec.dll
-```
-
-The harness loads the plugin, calls each required entry point, and asserts the lifecycle messages fire in the correct order. CI runs this with a curated set of public N++ plugins from Phase 3 onward.
+with manual steps from the Demo description.
 
 ---
 
@@ -766,9 +758,8 @@ The harness loads the plugin, calls each required entry point, and asserts the l
 | --- | --- | --- |
 | `error: linker 'link.exe' not found` on Windows | MSVC not on PATH | Open a **Developer** PowerShell, not a plain one. |
 | `gtk+-3.0 not found` / `pkg-config exited with status code 1` on Linux | `libgtk-3-dev` missing | Install GTK dev packages from §3.1. |
-| `error: failed to run custom build command for scintilla-sys` | Submodules not initialized | `git submodule update --init --recursive`. |
+| `error: failed to run custom build command for codepp-scintilla-sys` | Submodules not initialized | `git submodule update --init --recursive`. |
 | Build is slow on every `cargo build` | Incremental compilation off, or full rebuild of Scintilla each time | Confirm no `cargo clean` in your loop; Scintilla object files are cached in `target/`. |
-| `cargo run -p app` opens window then exits immediately | Phase 0 demo behavior — empty window with File→Exit menu only | Expected before Phase 1. |
 | Plugin DLL fails to load with "not a valid Win32 application" | Plugin built for x86, app built for x64 (or vice versa) | Rebuild the plugin for the matching architecture. |
 
 For anything not listed: file an issue with the full output of `cargo build --workspace -vv`, your platform, and your rustc/toolchain version.
