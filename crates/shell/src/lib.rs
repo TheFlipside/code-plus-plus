@@ -82,8 +82,8 @@ use codepp_core::{
 };
 use codepp_platform::watch::{FileChange, FileWatcher};
 use codepp_plugin_host::{
-    dispatch_nppm, notify_all, FuncItem, HostServices, Hwnd, Notification, NotifyTargets,
-    PendingLoad, PluginCmd, PluginHost, PluginReady, NPPMAINMENU, NPPPLUGINMENU,
+    dispatch_nppm, notify_all, BufferPathName, FuncItem, HostServices, Hwnd, Notification,
+    NotifyTargets, PendingLoad, PluginCmd, PluginHost, PluginReady, NPPMAINMENU, NPPPLUGINMENU,
 };
 
 pub mod fif;
@@ -1595,11 +1595,21 @@ pub fn tab_display_name(tab: &Tab) -> String {
                 p.file_name().map(|s| s.to_string_lossy().into_owned())
             })
         })
+        .unwrap_or_else(|| untitled_name(tab));
+    sanitize_filename_for_display(&owned)
+}
+
+/// An untitled tab's name, unsanitized: what it was renamed to, else
+/// `new N`, else `Untitled` for a buffer with no number. The tail of
+/// [`tab_display_name`], and what a plugin is told an untitled buffer's
+/// full path is ([`Shell::buffer_path_name`]).
+fn untitled_name(tab: &Tab) -> String {
+    tab.custom_name
+        .clone()
         .unwrap_or_else(|| match tab.untitled_seq {
             Some(n) => format!("new {n}"),
             None => "Untitled".to_string(),
-        });
-    sanitize_filename_for_display(&owned)
+        })
 }
 
 /// Which subset of tabs the "Close Multiple Documents" menu closes. Every
@@ -8317,6 +8327,23 @@ impl Shell {
         SavedSession { session, backups }
     }
 
+    /// What Notepad++ calls a buffer's full path name, for the
+    /// `RUNCOMMAND_USER` path messages: the tab's file, the file its first
+    /// load is for while that load is in flight, or for an untitled buffer
+    /// its name ([`untitled_name`]). `None` for an unknown id.
+    #[must_use]
+    pub fn buffer_path_name(&self, id: isize) -> Option<BufferPathName> {
+        let tab = self.tabs.iter().find(|t| t.id as isize == id)?;
+        let file = tab
+            .path
+            .clone()
+            .or_else(|| self.first_load(tab).map(|load| load.path.clone()));
+        Some(file.map_or_else(
+            || BufferPathName::Untitled(untitled_name(tab)),
+            BufferPathName::File,
+        ))
+    }
+
     /// The first load `tab` is waiting on, from the open that will give the
     /// tab its path until that load lands or fails (`first_loads`): the
     /// file, and the record the landing will apply. `None` for a tab being
@@ -10510,6 +10537,10 @@ impl<U: UiPlatform> HostServices for HostBridge<'_, U> {
             .iter()
             .find(|t| t.id as isize == id)
             .and_then(|t| t.path.clone())
+    }
+
+    fn buffer_path_name(&self, id: isize) -> Option<BufferPathName> {
+        self.shell.buffer_path_name(id)
     }
 
     fn buffer_lang_type(&self, id: isize) -> i32 {
@@ -14006,6 +14037,46 @@ mod tests {
         assert_eq!(shell.active().unwrap().custom_name, None);
         // Clearing an already-cleared name is likewise a no-op.
         assert!(!shell.set_active_custom_name(""));
+    }
+
+    /// What a plugin's `NPPM_GETFULLCURRENTPATH` and its siblings are
+    /// told a buffer is: its name while untitled, renamed or not, and its
+    /// file from the moment it is opened, before the file lands.
+    #[test]
+    fn buffer_path_name_is_the_untitled_name_or_the_file() {
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+        shell.new_untitled(&mut ui);
+        let untitled = shell.active().unwrap().id as isize;
+        let label = tab_display_name(shell.active().unwrap());
+        assert_eq!(
+            shell.buffer_path_name(untitled),
+            Some(BufferPathName::Untitled(label))
+        );
+        assert!(shell.set_active_custom_name("draft.md"));
+        assert_eq!(
+            shell.buffer_path_name(untitled),
+            Some(BufferPathName::Untitled("draft.md".into()))
+        );
+
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("a.txt");
+        std::fs::write(&file, "x").unwrap();
+        shell.open_file(file.clone());
+        let loading = shell.active().unwrap();
+        assert!(loading.path.is_none(), "the first load has not landed");
+        let loading = loading.id as isize;
+        assert_eq!(
+            shell.buffer_path_name(loading),
+            Some(BufferPathName::File(file.clone()))
+        );
+        land_next_load(&mut shell, &mut ui);
+        assert_eq!(
+            shell.buffer_path_name(loading),
+            Some(BufferPathName::File(file))
+        );
+        assert_eq!(shell.buffer_path_name(-5), None);
     }
 
     #[test]

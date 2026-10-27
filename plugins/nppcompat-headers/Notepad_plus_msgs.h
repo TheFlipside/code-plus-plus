@@ -900,6 +900,18 @@ typedef struct NppDarkModeColors_ {
  *             skip the call and never observe the gap. */
 #define NPPM_GETDARKMODECOLORS            (NPPMSG + 108)
 
+/* v3: asks the host to subclass and theme a plugin dialog so it
+ *     follows the host's dark mode.
+ *     wParam: flags — 0x0B once the dialog's children exist,
+ *             0x0C from NPPN_DARKMODECHANGED.
+ *     lParam: the dialog's HWND.
+ *     Returns: the flags the host applied. Code++ has no dark mode
+ *             for a dialog to follow, so it applies none and
+ *             returns 0. Notepad++ themes in light mode too and
+ *             returns 7 for 0x0B and 4 for 0x0C on a dialog, 0 for
+ *             a NULL HWND. */
+#define NPPM_DARKMODESUBCLASSANDTHEME     (NPPMSG + 112)
+
 /*
  * RUNCOMMAND_USER family. Notepad++ split a handful of host-state-
  * as-environment queries (the application's directory, the running
@@ -909,17 +921,40 @@ typedef struct NppDarkModeColors_ {
  * header reach the right routing.
  */
 #define RUNCOMMAND_USER                   (WM_USER + 3000)
-/* v1: returns the host's installation directory (the directory
- *     containing the running executable) into a plugin-allocated
- *     wide buffer.
- *     wParam: capacity in TCHARs.
+/* v3: the active buffer's path, in five parts. One contract for
+ *     all five:
+ *     wParam: capacity in TCHARs, the terminating NUL included.
+ *             0 means MAX_PATH (Notepad++ takes 0 as "large enough"
+ *             and writes without a bound; Code++ bounds it), and so
+ *             does any larger capacity: Code++ never writes more
+ *             than MAX_PATH TCHARs.
  *     lParam: TCHAR* OUT.
- *     Returns 1 on success, 0 on bad arguments or unresolvable
- *     executable path. */
+ *     Returns TRUE and writes the answer if it fits; FALSE and
+ *     writes nothing if it does not, for a NULL lParam, or for a
+ *     path that is not valid Unicode.
+ *     An untitled buffer answers its name ("new 1", or the name it
+ *     was renamed to) as its full path, file name and name part,
+ *     and an empty directory and extension. */
+#define NPPM_GETFULLCURRENTPATH           (RUNCOMMAND_USER + 1)
+/* v3: the directory, with no trailing separator except at a
+ *     drive's root ("C:\"). */
+#define NPPM_GETCURRENTDIRECTORY          (RUNCOMMAND_USER + 2)
+/* v3: the file name, extension included. */
+#define NPPM_GETFILENAME                  (RUNCOMMAND_USER + 3)
+/* v3: the file name without its extension. */
+#define NPPM_GETNAMEPART                  (RUNCOMMAND_USER + 4)
+/* v3: the extension, dot included. It runs from the file name's
+ *     last dot, so ".gitignore" is all extension, and a part that
+ *     holds a space is no extension ("name.my ext" has none) — the
+ *     Windows shell's rule, on every platform. */
+#define NPPM_GETEXTPART                   (RUNCOMMAND_USER + 5)
+/* v1: the host's installation directory (the directory containing
+ *     the running executable). The contract of NPPM_GETFULLCURRENTPATH
+ *     above; FALSE also when the executable's path cannot be
+ *     resolved. */
 #define NPPM_GETNPPDIRECTORY              (RUNCOMMAND_USER + 7)
-/* v1: returns the full path of the running executable (the
- *     installation directory plus the binary's filename).
- *     Same wParam/lParam contract as NPPM_GETNPPDIRECTORY. */
+/* v1: the full path of the running executable (the installation
+ *     directory plus the binary's filename). Same contract. */
 #define NPPM_GETNPPFULLFILEPATH           (RUNCOMMAND_USER + 10)
 
 /*

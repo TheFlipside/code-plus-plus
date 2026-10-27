@@ -288,27 +288,27 @@ fn run_decode<F: FnOnce(&[u8]) -> Result<Vec<u8>, &'static str>>(transform: F) {
 // ---- Menu callbacks --------------------------------------------------------
 
 extern "C" fn cmd_base64_encode() {
-    run_encode(|b| base64_encode(b).into_bytes());
+    run_encode(|b| base64_encode(b, false).into_bytes());
 }
 
 extern "C" fn cmd_base64_encode_with_padding() {
-    run_encode(|b| base64_encode_wrapped(b, "\r\n").into_bytes());
+    run_encode(|b| base64_encode(b, true).into_bytes());
 }
 
 extern "C" fn cmd_base64_encode_unix_eol() {
-    run_encode(|b| base64_encode_wrapped(b, "\n").into_bytes());
+    run_encode(|b| base64_encode_unix_lines(b).into_bytes());
 }
 
 extern "C" fn cmd_base64_encode_by_line() {
-    run_encode(|b| for_each_line(b, |line| base64_encode(line).into_bytes()));
+    run_encode(|b| for_each_line(b, |line| base64_encode(line, false).into_bytes()));
 }
 
 extern "C" fn cmd_base64_decode() {
-    run_decode(base64_decode_tolerant);
+    run_decode(|b| base64_decode(b, B64Decode::Lenient));
 }
 
 extern "C" fn cmd_base64_decode_strict() {
-    run_decode(base64_decode_strict);
+    run_decode(|b| base64_decode(b, B64Decode::Strict));
 }
 
 extern "C" fn cmd_base64_decode_by_line() {
@@ -324,7 +324,7 @@ extern "C" fn cmd_base64_decode_by_line() {
     // grow a "best-effort with diagnostic" mode.
     run_decode(|b| {
         let mut err: Result<(), &'static str> = Ok(());
-        let out = for_each_line(b, |line| match base64_decode_tolerant(line) {
+        let out = for_each_line(b, |line| match base64_decode_words(line) {
             Ok(v) => v,
             Err(msg) => {
                 if err.is_ok() {
@@ -414,139 +414,148 @@ fn for_each_line<F: FnMut(&[u8]) -> Vec<u8>>(bytes: &[u8], mut f: F) -> Vec<u8> 
     out
 }
 
-// ---- Base64 (RFC 4648, standard alphabet, `=` padding) --------------------
+// ---- Base64 (RFC 4648, standard alphabet) ---------------------------------
 //
-// `base64_encode`: padded, no wrapping — compact form, suitable for
-//                  inline data URIs and config files.
-// `base64_encode_wrapped`: padded, wrapped at 76 columns with the
-//                          supplied EOL bytes (`\r\n` for MIME, `\n`
-//                          for the Unix variant).
-// `base64_decode_tolerant`: skip any ASCII whitespace, accept input
-//                            whose length (post-strip) is a multiple
-//                            of 4. Rejects invalid chars and malformed
-//                            padding. Matches RFC 4648 §3.3 (tolerant
-//                            implementations MAY ignore whitespace).
-// `base64_decode_strict`: reject ANY byte not in the base64 alphabet,
-//                          `=`, or one of the four whitespace bytes
-//                          that RFC 4648 carves out as "non-essential"
-//                          — actually, strict means even those are
-//                          rejected. We reject any byte not in
-//                          `A-Z a-z 0-9 + / =`.
+// The encoders and decoders follow the upstream mimeTools, measured
+// command by command against the one Notepad++ 8.9.8.1 ships:
+//
+// "Base64 Encode"                unpadded, one line.
+// "Base64 Encode with padding"   padded, one line.
+// "Base64 Encode with Unix EOL"  padded, a `\n` after every 64 output
+//                                characters, none after the last line.
+// "Base64 Encode by line"        each line on its own, unpadded.
+//
+// Both decoders skip whitespace anywhere, which to upstream is a space,
+// a tab, CR and LF only (a vertical tab or a form feed is a stray
+// byte), and take the encoders' output back, padded or not: `=` padding
+// is optional, and any amount of it is accepted at the end. A single
+// character left over after the last group of four carries too few
+// bits for a byte and is refused. A selection of nothing but whitespace
+// decodes to nothing, so the command empties it, as upstream does.
+//
+// "Base64 Decode strict" refuses, as upstream does: `=` anywhere but
+// after a partial group of four (so `YQ==` decodes and `aGVs=` and `==`
+// do not), data after `=`, and any byte outside the alphabet.
+// "Base64 Decode" skips `=` wherever it appears, as upstream does, so
+// two padded encodings run together decode as one, and a selection of
+// nothing but `=` decodes to nothing. It still refuses a byte outside
+// the alphabet, and the lone leftover character, where upstream copies
+// the stray byte into its output and makes a byte of the six bits: the
+// selection is then left as it was rather than replaced with text that
+// decodes nothing.
+// "Base64 Decode by line" decodes each run of non-whitespace on a line
+// on its own, as "Base64 Decode" does, and keeps the whitespace.
 
 const B64_ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-const B64_WRAP_WIDTH: usize = 76;
+/// Output characters per line of "Base64 Encode with Unix EOL".
+const B64_LINE_WIDTH: usize = 64;
 
-fn base64_encode(bytes: &[u8]) -> String {
+fn base64_encode(bytes: &[u8], pad: bool) -> String {
     let mut s = String::with_capacity(bytes.len().div_ceil(3) * 4);
-    let mut chunks = bytes.chunks_exact(3);
-    for c in &mut chunks {
-        let v = (u32::from(c[0]) << 16) | (u32::from(c[1]) << 8) | u32::from(c[2]);
-        s.push(B64_ALPHABET[((v >> 18) & 0x3f) as usize] as char);
-        s.push(B64_ALPHABET[((v >> 12) & 0x3f) as usize] as char);
-        s.push(B64_ALPHABET[((v >> 6) & 0x3f) as usize] as char);
-        s.push(B64_ALPHABET[(v & 0x3f) as usize] as char);
-    }
-    let rem = chunks.remainder();
-    match rem.len() {
-        0 => {}
-        1 => {
-            let v = u32::from(rem[0]) << 16;
-            s.push(B64_ALPHABET[((v >> 18) & 0x3f) as usize] as char);
-            s.push(B64_ALPHABET[((v >> 12) & 0x3f) as usize] as char);
-            s.push('=');
-            s.push('=');
+    for chunk in bytes.chunks(3) {
+        let v = chunk
+            .iter()
+            .enumerate()
+            .fold(0u32, |v, (i, &b)| v | (u32::from(b) << (16 - 8 * i)));
+        // A chunk of n bytes is n + 1 characters, padded to four.
+        for i in 0..=chunk.len() {
+            s.push(B64_ALPHABET[((v >> (18 - 6 * i)) & 0x3f) as usize] as char);
         }
-        2 => {
-            let v = (u32::from(rem[0]) << 16) | (u32::from(rem[1]) << 8);
-            s.push(B64_ALPHABET[((v >> 18) & 0x3f) as usize] as char);
-            s.push(B64_ALPHABET[((v >> 12) & 0x3f) as usize] as char);
-            s.push(B64_ALPHABET[((v >> 6) & 0x3f) as usize] as char);
-            s.push('=');
+        if pad {
+            for _ in chunk.len()..3 {
+                s.push('=');
+            }
         }
-        _ => unreachable!("chunks_exact remainder length is < 3"),
     }
     s
 }
 
-fn base64_encode_wrapped(bytes: &[u8], eol: &str) -> String {
-    // Standard base64, then insert `eol` every 76 output chars. The
-    // final line is NOT terminated by `eol` — matches RFC 2045's
-    // "no final CRLF on the last line of a 7-bit text body" rule and
-    // keeps the output minimal for the selection-replace case (the
-    // user can re-add a trailing newline themselves if they want one).
-    let s = base64_encode(bytes);
-    let mut out = String::with_capacity(s.len() + (s.len() / B64_WRAP_WIDTH) * eol.len());
+fn base64_encode_unix_lines(bytes: &[u8]) -> String {
+    let s = base64_encode(bytes, true);
+    // Base64 is ASCII, so a character is a byte and `i` counts output
+    // characters.
+    let mut out = String::with_capacity(s.len() + s.len() / B64_LINE_WIDTH);
     for (i, c) in s.chars().enumerate() {
-        if i > 0 && i.is_multiple_of(B64_WRAP_WIDTH) {
-            out.push_str(eol);
+        if i > 0 && i.is_multiple_of(B64_LINE_WIDTH) {
+            out.push('\n');
         }
         out.push(c);
     }
     out
 }
 
-fn base64_decode_tolerant(bytes: &[u8]) -> Result<Vec<u8>, &'static str> {
-    let stripped: Vec<u8> = bytes
-        .iter()
-        .copied()
-        .filter(|b| !b.is_ascii_whitespace())
-        .collect();
-    base64_decode_core(&stripped)
+/// A line for "Base64 Decode by line": each run of non-whitespace is an
+/// encoding of its own, decoded as "Base64 Decode" decodes it, and the
+/// whitespace between runs is kept, as upstream keeps it (`aGVs bG8=`
+/// is `hel lo`).
+fn base64_decode_words(line: &[u8]) -> Result<Vec<u8>, &'static str> {
+    let mut out = Vec::with_capacity(line.len());
+    let mut rest = line;
+    while let Some(&first) = rest.first() {
+        let space = b64_space(first);
+        let run = rest
+            .iter()
+            .position(|&b| b64_space(b) != space)
+            .unwrap_or(rest.len());
+        let (piece, tail) = rest.split_at(run);
+        if space {
+            out.extend_from_slice(piece);
+        } else {
+            out.extend(base64_decode(piece, B64Decode::Lenient)?);
+        }
+        rest = tail;
+    }
+    Ok(out)
 }
 
-fn base64_decode_strict(bytes: &[u8]) -> Result<Vec<u8>, &'static str> {
-    // Strict mode: any whitespace or non-alphabet byte fails the
-    // input. Validate the byte set first, then delegate to the same
-    // core decoder so the two modes share the padding / length /
-    // value logic.
+/// Which of the two decoders: see the section comment above.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum B64Decode {
+    Strict,
+    Lenient,
+}
+
+fn base64_decode(bytes: &[u8], mode: B64Decode) -> Result<Vec<u8>, &'static str> {
+    let mut digits = Vec::with_capacity(bytes.len());
+    let mut padded = false;
     for &b in bytes {
-        if !(b.is_ascii_alphanumeric() || matches!(b, b'+' | b'/' | b'=')) {
-            return Err("base64 strict: input contains non-alphabet byte");
+        if b64_space(b) {
+            continue;
         }
-    }
-    base64_decode_core(bytes)
-}
-
-fn base64_decode_core(stripped: &[u8]) -> Result<Vec<u8>, &'static str> {
-    if stripped.is_empty() {
-        return Ok(Vec::new());
-    }
-    if !stripped.len().is_multiple_of(4) {
-        return Err("base64 length is not a multiple of 4 (after whitespace strip)");
-    }
-    let mut out = Vec::with_capacity(stripped.len() / 4 * 3);
-    let last_chunk_idx = stripped.len() / 4 - 1;
-    for (chunk_idx, chunk) in stripped.chunks_exact(4).enumerate() {
-        let is_last = chunk_idx == last_chunk_idx;
-        let mut v = 0u32;
-        let mut pad = 0;
-        for (i, &c) in chunk.iter().enumerate() {
-            if c == b'=' {
-                if !is_last {
-                    return Err("base64 padding before end of input");
-                }
-                if i < 2 {
-                    return Err("base64 padding in first two positions");
-                }
-                pad += 1;
-                v <<= 6;
-            } else {
-                if pad > 0 {
-                    return Err("base64 non-pad after padding");
-                }
-                let d = b64_digit(c).ok_or("invalid base64 character")?;
-                v = (v << 6) | u32::from(d);
+        if b == b'=' {
+            if mode == B64Decode::Strict && digits.len() % 4 == 0 {
+                return Err("base64 strict: padding that follows no partial group");
             }
+            padded = true;
+            continue;
         }
-        out.push(((v >> 16) & 0xff) as u8);
-        if pad < 2 {
-            out.push(((v >> 8) & 0xff) as u8);
+        let d = b64_digit(b).ok_or("invalid base64 character")?;
+        if padded && mode == B64Decode::Strict {
+            return Err("base64 strict: padding before the end of the input");
         }
-        if pad < 1 {
-            out.push((v & 0xff) as u8);
+        digits.push(d);
+    }
+    if digits.len() % 4 == 1 {
+        return Err("base64: one character too many to make a byte");
+    }
+    let mut out = Vec::with_capacity(digits.len() / 4 * 3 + 2);
+    for group in digits.chunks(4) {
+        let v = group
+            .iter()
+            .enumerate()
+            .fold(0u32, |v, (i, &d)| v | (u32::from(d) << (18 - 6 * i)));
+        // A group of n characters makes n - 1 bytes; the bits left over
+        // are dropped, as upstream drops them.
+        for i in 0..group.len() - 1 {
+            out.push(((v >> (16 - 8 * i)) & 0xff) as u8);
         }
     }
     Ok(out)
+}
+
+/// Whitespace to the Base64 decoders: what upstream skips, measured.
+fn b64_space(b: u8) -> bool {
+    matches!(b, b' ' | b'\t' | b'\r' | b'\n')
 }
 
 fn b64_digit(c: u8) -> Option<u8> {
@@ -838,8 +847,11 @@ fn qp_decode(bytes: &[u8]) -> Result<Vec<u8>, &'static str> {
 // `saml_decode` covers both. The decode pipeline is:
 //   1. URL decode — peels off the query-string encoding. POST-binding
 //      input has nothing to decode and passes through unchanged.
-//   2. Base64 decode (tolerant). Strips any line wrapping the SAML
-//      tooling may have inserted.
+//   2. Base64 decode, as "Base64 Decode" does: whitespace and `=`
+//      are skipped wherever they appear, which strips any line
+//      wrapping the SAML tooling may have inserted. (Until the decoder
+//      followed upstream's, this step also refused misplaced padding
+//      and a length not a multiple of four.)
 //   3. Attempt raw-DEFLATE inflate. Redirect-binding payloads
 //      inflate to XML; POST-binding payloads were already XML at
 //      step 2 and inflate fails — in that case we return the step-2
@@ -866,7 +878,7 @@ const SAML_INFLATE_CAP: usize = 16 * 1024 * 1024;
 fn saml_decode(input: &[u8]) -> Result<Vec<u8>, &'static str> {
     use miniz_oxide::inflate::TINFLStatus;
     let url_decoded = url_decode(input)?;
-    let b64_decoded = base64_decode_tolerant(&url_decoded)?;
+    let b64_decoded = base64_decode(&url_decoded, B64Decode::Lenient)?;
     // Bounded inflate. `decompress_to_vec_with_limit` returns
     // `Err(TINFLStatus)` for every failure mode: malformed input,
     // truncated stream, AND output-cap exceeded. We want to
@@ -896,124 +908,209 @@ mod tests {
 
     #[test]
     fn base64_encode_empty() {
-        assert_eq!(base64_encode(b""), "");
+        assert_eq!(base64_encode(b"", true), "");
+        assert_eq!(base64_encode(b"", false), "");
     }
 
     #[test]
     fn base64_encode_rfc4648_test_vectors() {
-        // The canonical test vectors from RFC 4648 §10.
-        assert_eq!(base64_encode(b"f"), "Zg==");
-        assert_eq!(base64_encode(b"fo"), "Zm8=");
-        assert_eq!(base64_encode(b"foo"), "Zm9v");
-        assert_eq!(base64_encode(b"foob"), "Zm9vYg==");
-        assert_eq!(base64_encode(b"fooba"), "Zm9vYmE=");
-        assert_eq!(base64_encode(b"foobar"), "Zm9vYmFy");
-    }
-
-    #[test]
-    fn base64_encode_wrapped_crlf_at_76() {
-        // 60 bytes of input → 80 base64 chars → exactly one wrap at
-        // col 76. The wrap inserts CRLF; the final 4 chars don't get
-        // a trailing CRLF (matches RFC 2045's "no final newline" rule).
-        let input = vec![b'A'; 60];
-        let encoded = base64_encode_wrapped(&input, "\r\n");
-        // `A` × 60 → `Q` × 60 (base64 of 'A' triples is "QUFB"-ish but
-        // with the actual bit pattern). Just check the structural
-        // properties: exactly one CRLF, first line is 76 chars.
-        let lines: Vec<&str> = encoded.split("\r\n").collect();
-        assert_eq!(lines.len(), 2, "should be exactly two lines");
-        assert_eq!(lines[0].len(), 76);
-        assert_eq!(lines[1].len(), 80 - 76); // remaining 4 chars
-    }
-
-    #[test]
-    fn base64_encode_wrapped_lf_at_76() {
-        // Unix EOL variant — same structure as CRLF but with `\n`.
-        let input = vec![b'A'; 60];
-        let encoded = base64_encode_wrapped(&input, "\n");
-        let lines: Vec<&str> = encoded.split('\n').collect();
-        assert_eq!(lines.len(), 2);
-        assert_eq!(lines[0].len(), 76);
-    }
-
-    #[test]
-    fn base64_encode_wrapped_short_no_wrap() {
-        // Input shorter than 76 base64 chars — no wrap, single line.
-        let encoded = base64_encode_wrapped(b"hello", "\r\n");
-        assert_eq!(encoded, "aGVsbG8=");
-        assert!(!encoded.contains('\n'));
-    }
-
-    #[test]
-    fn base64_decode_rfc4648_test_vectors() {
-        assert_eq!(base64_decode_tolerant(b"").unwrap(), b"");
-        assert_eq!(base64_decode_tolerant(b"Zg==").unwrap(), b"f");
-        assert_eq!(base64_decode_tolerant(b"Zm8=").unwrap(), b"fo");
-        assert_eq!(base64_decode_tolerant(b"Zm9v").unwrap(), b"foo");
-        assert_eq!(base64_decode_tolerant(b"Zm9vYg==").unwrap(), b"foob");
-        assert_eq!(base64_decode_tolerant(b"Zm9vYmE=").unwrap(), b"fooba");
-        assert_eq!(base64_decode_tolerant(b"Zm9vYmFy").unwrap(), b"foobar");
-    }
-
-    #[test]
-    fn base64_round_trip_random_lengths() {
-        for len in 0..=64usize {
-            let data: Vec<u8> = (0..len).map(|i| (i * 7 + 13) as u8).collect();
-            let encoded = base64_encode(&data);
-            let decoded = base64_decode_tolerant(encoded.as_bytes()).unwrap();
-            assert_eq!(decoded, data, "round trip failed at length {len}");
+        // The canonical test vectors from RFC 4648 §10, padded, and
+        // without the padding as "Base64 Encode" writes them.
+        for (data, padded) in [
+            (&b"f"[..], "Zg=="),
+            (b"fo", "Zm8="),
+            (b"foo", "Zm9v"),
+            (b"foob", "Zm9vYg=="),
+            (b"fooba", "Zm9vYmE="),
+            (b"foobar", "Zm9vYmFy"),
+        ] {
+            assert_eq!(base64_encode(data, true), padded);
+            assert_eq!(base64_encode(data, false), padded.trim_end_matches('='));
         }
     }
 
     #[test]
-    fn base64_decode_tolerant_skips_whitespace() {
-        // Tolerant mode tolerates arbitrary whitespace between chars.
-        assert_eq!(base64_decode_tolerant(b"Zm9v\nYmFy").unwrap(), b"foobar");
+    fn base64_encodes_as_upstream_mimetools_does() {
+        // Measured against the mimeTools Notepad++ 8.9.8.1 ships, on
+        // the text "hello".
+        assert_eq!(base64_encode(b"hello", false), "aGVsbG8");
+        assert_eq!(base64_encode(b"hello", true), "aGVsbG8=");
+        assert_eq!(base64_encode_unix_lines(b"hello"), "aGVsbG8=");
+    }
+
+    #[test]
+    fn base64_unix_lines_break_every_64_characters() {
+        // 60 bytes → 80 characters: one break, after the 64th, and none
+        // after the last line.
+        let encoded = base64_encode_unix_lines(&[b'A'; 60]);
+        let lines: Vec<&str> = encoded.split('\n').collect();
+        assert_eq!(lines.iter().map(|l| l.len()).collect::<Vec<_>>(), [64, 16]);
+        // 48 bytes → exactly 64 characters: no break at all.
+        assert!(!base64_encode_unix_lines(&[b'A'; 48]).contains('\n'));
+        // The padding stays on the last line.
+        assert!(base64_encode_unix_lines(&[b'A'; 49]).ends_with("\nQQ=="));
+    }
+
+    #[test]
+    fn base64_decode_rfc4648_test_vectors() {
+        for mode in [B64Decode::Strict, B64Decode::Lenient] {
+            for (text, data) in [
+                (&b""[..], &b""[..]),
+                (b"Zg==", b"f"),
+                (b"Zm8=", b"fo"),
+                (b"Zm9v", b"foo"),
+                (b"Zm9vYg==", b"foob"),
+                (b"Zm9vYmE=", b"fooba"),
+                (b"Zm9vYmFy", b"foobar"),
+            ] {
+                assert_eq!(base64_decode(text, mode).unwrap(), data);
+            }
+        }
+    }
+
+    #[test]
+    fn base64_round_trip_random_lengths() {
+        for len in 0..=100usize {
+            let data: Vec<u8> = (0..len).map(|i| (i * 7 + 13) as u8).collect();
+            for encoded in [
+                base64_encode(&data, false),
+                base64_encode(&data, true),
+                base64_encode_unix_lines(&data),
+            ] {
+                for mode in [B64Decode::Strict, B64Decode::Lenient] {
+                    let decoded = base64_decode(encoded.as_bytes(), mode).unwrap();
+                    assert_eq!(decoded, data, "round trip failed at length {len}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn base64_decoders_skip_whitespace_and_take_any_padding_at_the_end() {
+        // Each measured against the upstream "Base64 Decode strict",
+        // which agrees with "Base64 Decode" on all of them.
+        for mode in [B64Decode::Strict, B64Decode::Lenient] {
+            let decode = |text: &[u8]| base64_decode(text, mode).unwrap();
+            assert_eq!(decode(b"aGVsbG8"), b"hello");
+            assert_eq!(decode(b"aGVsbG8=="), b"hello");
+            assert_eq!(decode(b"aGVsbG8===="), b"hello");
+            assert_eq!(decode(b"aGVsbA="), b"hell");
+            assert_eq!(decode(b"aGV"), b"he");
+            assert_eq!(decode(b"aGVs bG8="), b"hello");
+            assert_eq!(decode(b"aGVs\nbG8 ="), b"hello");
+            assert_eq!(decode(b"Z\tm\r\n9 v Y m F y"), b"foobar");
+            // The bits left over past the last whole byte are dropped,
+            // set or not.
+            assert_eq!(decode(b"aGVsbG9"), b"hello");
+        }
+    }
+
+    #[test]
+    fn base64_decoders_refuse_stray_bytes_and_a_lone_character() {
+        for mode in [B64Decode::Strict, B64Decode::Lenient] {
+            assert!(base64_decode(b"!!!!", mode).is_err());
+            assert!(base64_decode(b"aGVs!bG8=", mode).is_err());
+            assert!(base64_decode(&[b'a', 0x80, b'b'], mode).is_err());
+            // Upstream refuses this in strict mode and makes "h" of it
+            // in the other; Code++ refuses it in both.
+            assert!(base64_decode(b"a", mode).is_err());
+            assert!(base64_decode(b"aGVsb", mode).is_err());
+        }
+    }
+
+    #[test]
+    fn base64_strict_refuses_padding_before_the_end_and_lenient_skips_it() {
+        // Measured: upstream's strict decoder refuses each of these, and
+        // its other decoder skips the `=`.
+        for (text, lenient) in [
+            (&b"=aGVs"[..], &b"hel"[..]),
+            (b"aGVs=bG8", b"hello"),
+            (b"aGVsbG8=a", b"hello\x1a"),
+        ] {
+            assert!(base64_decode(text, B64Decode::Strict).is_err());
+            assert_eq!(base64_decode(text, B64Decode::Lenient).unwrap(), lenient);
+        }
+        // Two padded encodings run together decode as one stream, as
+        // upstream decodes them: `aGVsbG8aGVs`.
         assert_eq!(
-            base64_decode_tolerant(b"  Zm9v  YmFy  ").unwrap(),
-            b"foobar"
+            base64_decode(b"aGVsbG8=aGVs", B64Decode::Lenient).unwrap(),
+            b"hello\x1a\x19["
         );
+    }
+
+    #[test]
+    fn base64_by_line_decodes_each_word_and_keeps_the_whitespace() {
+        // Measured: upstream turns `aGVs bG8=` into `hel lo`.
+        assert_eq!(base64_decode_words(b"aGVs bG8=").unwrap(), b"hel lo");
+        assert_eq!(base64_decode_words(b" YQ\t\tYg  ").unwrap(), b" a\t\tb  ");
+        assert_eq!(base64_decode_words(b"").unwrap(), b"");
+        assert!(base64_decode_words(b"YQ a").is_err());
+    }
+
+    #[test]
+    fn base64_whitespace_is_space_tab_cr_and_lf_only() {
+        // Measured: upstream skips these four, and takes a vertical tab
+        // or a form feed for a stray byte, which both decoders refuse.
+        for mode in [B64Decode::Strict, B64Decode::Lenient] {
+            assert_eq!(base64_decode(b"aGVs \t\r\nbG8=", mode).unwrap(), b"hello");
+            assert!(base64_decode(b"YQ\x0bYg", mode).is_err());
+            assert!(base64_decode(b"YQ\x0cYg", mode).is_err());
+        }
+        assert!(base64_decode_words(b"YQ\x0cYg").is_err());
+    }
+
+    #[test]
+    fn base64_strict_takes_padding_only_after_a_partial_group() {
+        // Measured against upstream's strict decoder.
+        for (text, data) in [
+            (&b"YQ="[..], &b"a"[..]),
+            (b"YQ===", b"a"),
+            (b"YQ== =", b"a"),
+            (b"YWI====", b"ab"),
+        ] {
+            assert_eq!(base64_decode(text, B64Decode::Strict).unwrap(), data);
+        }
+        for text in [&b"="[..], b"====", b" =", b"aGVs=", b"aGVs===="] {
+            assert!(base64_decode(text, B64Decode::Strict).is_err());
+        }
+        // The other decoder skips the padding: "====" is measured, the
+        // rest follow from the rule.
+        assert_eq!(base64_decode(b"====", B64Decode::Lenient).unwrap(), b"");
         assert_eq!(
-            base64_decode_tolerant(b"Z\tm\r\n9 v Y m F y").unwrap(),
-            b"foobar"
+            base64_decode(b"aGVs====", B64Decode::Lenient).unwrap(),
+            b"hel"
         );
     }
 
     #[test]
-    fn base64_decode_strict_rejects_whitespace() {
-        // Strict mode: ANY non-alphabet byte fails. Whitespace counts.
-        assert!(base64_decode_strict(b"Zm9v\nYmFy").is_err());
-        assert!(base64_decode_strict(b" Zm9vYmFy").is_err());
-        // But pure base64 still decodes cleanly.
-        assert_eq!(base64_decode_strict(b"Zm9vYmFy").unwrap(), b"foobar");
-        assert_eq!(base64_decode_strict(b"Zg==").unwrap(), b"f");
+    fn base64_whitespace_alone_decodes_to_nothing() {
+        // Measured: upstream empties a selection of nothing but
+        // whitespace, in both modes.
+        for mode in [B64Decode::Strict, B64Decode::Lenient] {
+            assert_eq!(base64_decode(b"   ", mode).unwrap(), b"");
+        }
     }
 
     #[test]
-    fn base64_decode_rejects_invalid_chars() {
-        assert!(base64_decode_tolerant(b"!!!!").is_err());
-        assert!(base64_decode_tolerant(b"Zm9*").is_err());
-    }
-
-    #[test]
-    fn base64_decode_rejects_bad_length() {
-        // After stripping whitespace, length must be a multiple of 4.
-        assert!(base64_decode_tolerant(b"Zg=").is_err());
-        assert!(base64_decode_tolerant(b"Zm9").is_err());
-    }
-
-    #[test]
-    fn base64_decode_rejects_pad_in_wrong_places() {
-        assert!(base64_decode_tolerant(b"==Zm").is_err());
-        assert!(base64_decode_tolerant(b"Z===").is_err());
-        assert!(base64_decode_tolerant(b"Z=g=").is_err());
-        assert!(base64_decode_tolerant(b"Zg==Zm9v").is_err());
+    fn base64_round_trips_utf8_text() {
+        let text = "héllo, 日本".as_bytes();
+        for encoded in [
+            base64_encode(text, false),
+            base64_encode(text, true),
+            base64_encode_unix_lines(text),
+        ] {
+            assert_eq!(
+                base64_decode(encoded.as_bytes(), B64Decode::Strict).unwrap(),
+                text
+            );
+        }
     }
 
     #[test]
     fn base64_encodes_high_bytes() {
-        assert_eq!(base64_encode(&[0xff, 0xff, 0xff]), "////");
-        assert_eq!(base64_encode(&[0x00, 0x00, 0x00]), "AAAA");
+        assert_eq!(base64_encode(&[0xff, 0xff, 0xff], true), "////");
+        assert_eq!(base64_encode(&[0x00, 0x00, 0x00], true), "AAAA");
+        assert_eq!(base64_encode(&[0xff], false), "/w");
     }
 
     // ---- "by line" ---------------------------------------------------------
@@ -1079,7 +1176,7 @@ mod tests {
         // remain literal between them. Critical for users selecting
         // a column of data items they want individually encoded.
         let input = b"foo\nbar";
-        let encoded = for_each_line(input, |line| base64_encode(line).into_bytes());
+        let encoded = for_each_line(input, |line| base64_encode(line, true).into_bytes());
         assert_eq!(encoded, b"Zm9v\nYmFy");
     }
 
@@ -1509,7 +1606,7 @@ mod tests {
         // inflate fails — the function returns the Base64-decoded
         // bytes unchanged.
         let xml = b"<saml:Assertion>hello</saml:Assertion>";
-        let b64 = base64_encode(xml);
+        let b64 = base64_encode(xml, true);
         let decoded = saml_decode(b64.as_bytes()).unwrap();
         assert_eq!(decoded, xml);
     }
@@ -1521,7 +1618,7 @@ mod tests {
         use miniz_oxide::deflate::compress_to_vec;
         let xml = b"<saml:LogoutRequest>x</saml:LogoutRequest>";
         let deflated = compress_to_vec(xml, 6);
-        let b64 = base64_encode(&deflated);
+        let b64 = base64_encode(&deflated, true);
         let url_encoded = url_encode_extended(b64.as_bytes());
         let decoded = saml_decode(url_encoded.as_bytes()).unwrap();
         assert_eq!(decoded, xml);
@@ -1554,7 +1651,7 @@ mod tests {
         use miniz_oxide::deflate::compress_to_vec;
         let bomb_input = vec![0u8; SAML_INFLATE_CAP + 1];
         let deflated = compress_to_vec(&bomb_input, 9);
-        let b64 = base64_encode(&deflated);
+        let b64 = base64_encode(&deflated, true);
         let url = url_encode_extended(b64.as_bytes());
         let result = saml_decode(url.as_bytes());
         assert!(

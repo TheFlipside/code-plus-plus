@@ -13,7 +13,7 @@
 //! - `SCI_*` from the vendored Scintilla's `Scintilla.h`.
 //!
 //! A number neither table knows is shown as an offset from the base of
-//! its range (`RUNCOMMAND_USER+1`), which is how Notepad++'s own header
+//! its range (`RUNCOMMAND_USER+6`), which is how Notepad++'s own header
 //! writes it. That is the common case for a message Code++ does not
 //! implement: the compat header declares only what Code++ answers.
 
@@ -238,10 +238,12 @@ mod tests {
 
     #[test]
     fn unnamed_messages_are_shown_relative_to_their_range() {
-        // `RUNCOMMAND_USER + 1` is Notepad++'s `NPPM_GETFULLCURRENTPATH`,
-        // which Code++ does not implement, so the compat header does
-        // not name it.
-        assert_eq!(host_message_name(RUNCOMMAND_USER + 1), "RUNCOMMAND_USER+1");
+        // Upstream's numbers stop below `RUNCOMMAND_USER + 99`, so the
+        // compat header names nothing there.
+        assert_eq!(
+            host_message_name(RUNCOMMAND_USER + 99),
+            "RUNCOMMAND_USER+99"
+        );
         assert_eq!(host_message_name(NPPMSG + 199), "NPPMSG+199");
         assert_eq!(host_message_name(CODEPPMSG + 15), "CODEPPMSG+15");
         assert_eq!(host_message_name(WM_USER + 7), "WM_USER+7");

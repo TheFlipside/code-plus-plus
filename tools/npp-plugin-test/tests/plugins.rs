@@ -206,6 +206,53 @@ fn cppmimetools_encodes_base64_and_decodes_it_back() {
     both.assert_pass();
     assert!(both.has("buffer: \"hello!\""), "{}", both.shown());
     assert!(both.has("sci: SCI_REPLACETARGET x2"), "{}", both.shown());
+
+    // The unpadded form decodes back.
+    let round_trip = run_on_text(&dll, "hello", &["Base64 Encode", "Base64 Decode strict"]);
+    round_trip.assert_pass();
+    assert!(
+        round_trip.has("buffer: \"hello\""),
+        "{}",
+        round_trip.shown()
+    );
+}
+
+/// Each Base64 command reaches its own code. Every answer below was
+/// measured against the upstream mimeTools, and each input tells its
+/// command apart from the others enough that swapping any two menu
+/// items' callbacks fails here (swapping strict and lenient decoding was
+/// tried). A one-way miswiring can slip through: "with padding" gives
+/// the same answer as "with Unix EOL" on a short input.
+#[test]
+fn cppmimetools_each_base64_command_does_its_own_job() {
+    let Some(dll) = in_tree("cppmimetools") else {
+        return;
+    };
+    let a49 = "A".repeat(49);
+    let unix_lines = format!("{}\\nQQ==", "QUFB".repeat(16));
+    for (command, text, answer) in [
+        ("Base64 Encode", "hello", "aGVsbG8"),
+        ("Base64 Encode with padding", "hello", "aGVsbG8="),
+        (
+            "Base64 Encode with Unix EOL",
+            a49.as_str(),
+            unix_lines.as_str(),
+        ),
+        ("Base64 Encode by line", "hello\r\nab", "aGVsbG8\\r\\nYWI"),
+        // Padding mid-stream: skipped by one decoder, refused by the
+        // strict one, which leaves the selection as it was.
+        ("Base64 Decode", "aGVs=bG8", "hello"),
+        ("Base64 Decode strict", "aGVs=bG8", "aGVs=bG8"),
+        ("Base64 Decode by line", "aGVs bG8=", "hel lo"),
+    ] {
+        let out = run_on_text(&dll, text, &[command]);
+        out.assert_pass();
+        assert!(
+            out.has(&format!("buffer: \"{answer}\"")),
+            "{command}: {}",
+            out.shown()
+        );
+    }
 }
 
 #[test]
@@ -213,22 +260,30 @@ fn cppconverter_converts_to_hex_and_back() {
     let Some(dll) = in_tree("cppconverter") else {
         return;
     };
+    // The upstream NppConverter's default format: no separator, and a
+    // line break in the document's line ending after each 16 bytes.
     let encoded = run_on_text(&dll, "hello", &["ASCII -> HEX"]);
     encoded.assert_pass();
-    assert!(
-        encoded.has("buffer: \"68 65 6C 6C 6F\""),
-        "{}",
-        encoded.shown()
-    );
+    assert!(encoded.has("buffer: \"68656C6C6F\""), "{}", encoded.shown());
     assert!(
         encoded.has("sci: SCI_REPLACETARGET x1"),
         "{}",
         encoded.shown()
     );
+    let long = run_on_text(&dll, "0123456789abcdefg", &["ASCII -> HEX"]);
+    long.assert_pass();
+    assert!(
+        long.has("buffer: \"30313233343536373839616263646566\\r\\n67\""),
+        "{}",
+        long.shown()
+    );
 
-    let decoded = run_on_text(&dll, "68 65 6C 6C 6F", &["HEX -> ASCII"]);
-    decoded.assert_pass();
-    assert!(decoded.has("buffer: \"hello\""), "{}", decoded.shown());
+    // Pairs decode with or without whitespace between them.
+    for hex in ["68656C6C6F", "68 65 6C 6C 6F"] {
+        let decoded = run_on_text(&dll, hex, &["HEX -> ASCII"]);
+        decoded.assert_pass();
+        assert!(decoded.has("buffer: \"hello\""), "{}", decoded.shown());
+    }
 }
 
 #[test]

@@ -206,6 +206,21 @@ pub const NPPM_ISDARKMODEENABLED: u32 = NPPMSG + 107;
 /// returns FALSE) skip the call entirely and never observe the
 /// gap.
 pub const NPPM_GETDARKMODECOLORS: u32 = NPPMSG + 108;
+/// wparam: `dmFlags` — `dmfInit` (`0x0B`) once a plugin dialog's
+///         children exist, `dmfHandleChange` (`0x0C`) from
+///         `NPPN_DARKMODECHANGED`.
+/// lparam: the plugin dialog's `HWND`.
+/// Returns the flags the host applied, which in Code++ is none: 0.
+///
+/// The host is asked to subclass and theme a plugin dialog so it
+/// follows the host's dark mode. Code++ has no dark mode to follow
+/// (DESIGN.md §7.4), so it applies nothing and says so. Notepad++
+/// applies its theming in light mode too and answers 7 for `dmfInit`
+/// and 4 for `dmfHandleChange` on a dialog, 0 for a NULL `HWND`
+/// (measured against 8.9.8.1); a plugin that reads the 0 as an older
+/// host that lacks the message falls back to its own handling, which
+/// with dark mode off does nothing either.
+pub const NPPM_DARKMODESUBCLASSANDTHEME: u32 = NPPMSG + 112;
 
 /// `NPPM_SETLINENUMBERWIDTHMODE` / `GETLINENUMBERWIDTHMODE`
 /// values. Match the upstream `LineNumberWidthMode` enum so
@@ -224,16 +239,50 @@ pub const LINENUMWIDTH_CONSTANT: i32 = 1;
 
 /// `RUNCOMMAND_USER` family — see [`RUNCOMMAND_USER`].
 ///
-/// Returns the host's installation directory (the one containing
-/// the running executable) into a plugin-allocated wide buffer.
-/// `wparam` carries the buffer capacity in TCHARs; `lparam` the
-/// `TCHAR*` OUT pointer. Returns 1 on success, 0 on bad arguments
-/// or unresolvable executable path.
+/// The active buffer's full path. The five messages from here to
+/// [`NPPM_GETEXTPART`] share one contract, Notepad++'s (measured
+/// against 8.9.8.1):
+///
+/// * wparam: the buffer's capacity in `TCHAR`s, its terminating NUL
+///   included. 0 means `MAX_PATH`: Notepad++ takes 0 as "large
+///   enough" for plugins that predate the capacity, which passed a
+///   `MAX_PATH` buffer, and writes without a bound. Code++ bounds it,
+///   and takes a larger capacity as `MAX_PATH` too (see
+///   `path_capacity`).
+/// * lparam: `TCHAR*` OUT.
+/// * Returns TRUE and writes the answer, NUL-terminated, if it fits;
+///   FALSE and writes nothing if it does not, for a NULL lparam, or
+///   for a path that is not valid Unicode, where the only answer would
+///   name another file.
+///
+/// An untitled buffer answers its tab's name (`new 1`, or the name it
+/// was renamed to) as its full path, file name and name part, and an
+/// empty directory and extension, as Notepad++ does. A tab whose file
+/// is still on its first load answers that file.
+pub const NPPM_GETFULLCURRENTPATH: u32 = RUNCOMMAND_USER + 1;
+/// The active buffer's directory: its full path without the file
+/// name, with no trailing separator except at a drive's root
+/// (`C:\`). Contract as [`NPPM_GETFULLCURRENTPATH`].
+pub const NPPM_GETCURRENTDIRECTORY: u32 = RUNCOMMAND_USER + 2;
+/// The active buffer's file name, its extension included. Contract
+/// as [`NPPM_GETFULLCURRENTPATH`].
+pub const NPPM_GETFILENAME: u32 = RUNCOMMAND_USER + 3;
+/// The active buffer's file name without its extension (see
+/// [`NPPM_GETEXTPART`]). Contract as [`NPPM_GETFULLCURRENTPATH`].
+pub const NPPM_GETNAMEPART: u32 = RUNCOMMAND_USER + 4;
+/// The active buffer's extension, its dot included, by the Windows
+/// shell's rule (`PathFindExtension`), on every platform: it runs
+/// from the file name's last dot, so `.gitignore` is all extension,
+/// and a part holding a space is none (`name.my ext` has no
+/// extension). Contract as [`NPPM_GETFULLCURRENTPATH`].
+pub const NPPM_GETEXTPART: u32 = RUNCOMMAND_USER + 5;
+
+/// The host's installation directory, the one holding the running
+/// executable. Contract as [`NPPM_GETFULLCURRENTPATH`]; FALSE also when
+/// the executable's path cannot be resolved.
 pub const NPPM_GETNPPDIRECTORY: u32 = RUNCOMMAND_USER + 7;
-/// Returns the full path of the running executable (the
-/// installation directory plus `code++.exe` filename) into a
-/// plugin-allocated wide buffer. Same wparam/lparam contract as
-/// `NPPM_GETNPPDIRECTORY`.
+/// The running executable's full path. Contract as
+/// [`NPPM_GETNPPDIRECTORY`].
 pub const NPPM_GETNPPFULLFILEPATH: u32 = RUNCOMMAND_USER + 10;
 
 /// Selectors for [`NPPM_GETMENUHANDLE`].
@@ -855,6 +904,59 @@ impl NotifyTargets {
 
 // --- Inbound: NPPM_* dispatch ----------------------------------------
 
+/// A buffer's full path name, as [`HostServices::buffer_path_name`]
+/// answers it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum BufferPathName {
+    /// The buffer's file.
+    File(PathBuf),
+    /// An untitled buffer's name: `new 1`, or what it was renamed to.
+    /// Kept apart from [`Self::File`] so a separator in a name the user
+    /// chose is part of the name rather than a directory.
+    Untitled(String),
+}
+
+/// The answer to one of the `RUNCOMMAND_USER` path messages, from
+/// [`NPPM_GETFULLCURRENTPATH`] to [`NPPM_GETEXTPART`], for a buffer
+/// whose full path name is `name`. `None` for any other message.
+#[must_use]
+pub fn path_message_answer(msg: u32, name: &BufferPathName) -> Option<String> {
+    let (full, dir, file) = match name {
+        // A path that is not valid Unicode has no answer: a lossy one
+        // would name another file, which a plugin would then act on.
+        BufferPathName::File(path) => (
+            path.to_str()?.to_string(),
+            path.parent()
+                .and_then(std::path::Path::to_str)
+                .unwrap_or_default()
+                .to_string(),
+            path.file_name()
+                .and_then(std::ffi::OsStr::to_str)
+                .unwrap_or_default()
+                .to_string(),
+        ),
+        BufferPathName::Untitled(name) => (name.clone(), String::new(), name.clone()),
+    };
+    let ext_at = extension_start(&file).unwrap_or(file.len());
+    Some(match msg {
+        NPPM_GETFULLCURRENTPATH => full,
+        NPPM_GETCURRENTDIRECTORY => dir,
+        NPPM_GETFILENAME => file,
+        NPPM_GETNAMEPART => file[..ext_at].to_string(),
+        NPPM_GETEXTPART => file[ext_at..].to_string(),
+        _ => return None,
+    })
+}
+
+/// Where a file name's extension starts, by the Windows shell's rule
+/// (`PathFindExtension`, measured through Notepad++): at the last dot,
+/// unless a space follows it. A leading dot counts, so `.gitignore` is
+/// all extension; `name.my ext` has none.
+fn extension_start(file: &str) -> Option<usize> {
+    let dot = file.rfind('.')?;
+    (!file[dot..].contains(' ')).then_some(dot)
+}
+
 /// Side-effecting operations the dispatcher needs from the host. The
 /// shell crate implements this trait against the live `Session`,
 /// `ActiveBuffer`, and `EditorHandle`s.
@@ -881,6 +983,11 @@ pub trait HostServices {
     fn current_buffer_id(&self) -> isize;
     /// Path of the buffer with id `id`. None if the id is unknown.
     fn buffer_path(&self, id: isize) -> Option<PathBuf>;
+    /// What Notepad++ calls the buffer's full path name: its file, or
+    /// for an untitled buffer its tab's name. A tab whose file is still
+    /// on its first load answers that file. None for an unknown id.
+    /// Drives [`NPPM_GETFULLCURRENTPATH`] and its four siblings.
+    fn buffer_path_name(&self, id: isize) -> Option<BufferPathName>;
     /// Lang-type for buffer `id`, as Notepad++ numbers it (up to
     /// `L_TYPESCRIPT`; from 86 up Code++'s numbers disagree with
     /// Notepad++'s, DESIGN.md §7.4), or `-1` for an unknown id,
@@ -3104,12 +3211,50 @@ pub unsafe fn dispatch_nppm<S: HostServices>(
             1
         }
 
-        // RUNCOMMAND_USER family. The two host-environment queries
-        // share an out-buffer protocol: wparam = capacity in TCHARs,
-        // lparam = TCHAR* OUT. Bad pointer / zero capacity returns 0
-        // (failure); successful write returns 1.
+        // RUNCOMMAND_USER family: the active buffer's path, in five
+        // parts. Notepad++'s contract, measured: TRUE and the answer if
+        // it fits the plugin's buffer, NUL included; FALSE and nothing
+        // written if not. Notepad++ takes a capacity of 0 as "large
+        // enough" and writes without a bound; 0 here is `MAX_PATH`, the
+        // buffer the plugins that pass 0 were written for.
+        NPPM_GETFULLCURRENTPATH
+        | NPPM_GETCURRENTDIRECTORY
+        | NPPM_GETFILENAME
+        | NPPM_GETNAMEPART
+        | NPPM_GETEXTPART => {
+            // Notepad++ answers TRUE for a NULL lparam and writes
+            // nothing; FALSE says the same thing more plainly, and a
+            // negative one is a kernel-range pointer.
+            if lparam <= 0 {
+                return Some(0);
+            }
+            let Some(name) = services.buffer_path_name(services.current_buffer_id()) else {
+                return Some(0);
+            };
+            let Some(answer) = path_message_answer(msg, &name) else {
+                return Some(0);
+            };
+            // SAFETY: the plugin promises lparam points to a wide
+            // buffer of `wparam` TCHARs, or of `MAX_PATH` when it
+            // passes 0; nothing is written past the smaller of the
+            // two.
+            let cap = path_capacity(wparam);
+            isize::from(unsafe { write_wide_if_fits(lparam as *mut u16, cap, &answer) })
+        }
+
+        // Code++ has no dark mode for a plugin dialog to follow, so it
+        // themes nothing and answers that no flag was applied. See
+        // [`NPPM_DARKMODESUBCLASSANDTHEME`] for what Notepad++ answers.
+        NPPM_DARKMODESUBCLASSANDTHEME => 0,
+
+        // RUNCOMMAND_USER family: the two host-environment queries,
+        // with the path messages' contract above, measured for these
+        // two as well. Until Phase 5 they cut a path too long for the
+        // buffer short and answered TRUE, so a plugin was handed a
+        // different directory as if it were the right one, and they
+        // refused a capacity of 0.
         NPPM_GETNPPDIRECTORY | NPPM_GETNPPFULLFILEPATH => {
-            if lparam == 0 || wparam == 0 {
+            if lparam <= 0 {
                 return Some(0);
             }
             let resolved = if msg == NPPM_GETNPPDIRECTORY {
@@ -3123,14 +3268,14 @@ pub unsafe fn dispatch_nppm<S: HostServices>(
                 // failure rather than handing back a guessed path.
                 return Some(0);
             };
-            let cap = wparam.min(MAX_PATH_TCHARS);
-            // SAFETY: plugin promises lparam points to a wide buffer
-            // of at least `wparam` TCHARs (we further cap at
-            // MAX_PATH_TCHARS).
-            unsafe {
-                write_wide_path(lparam as *mut u16, cap, &path);
-            }
-            1
+            // As for the path messages: no answer for a path that is
+            // not valid Unicode, rather than another path.
+            let Some(path) = path.to_str() else {
+                return Some(0);
+            };
+            // SAFETY: as for the path messages above.
+            let cap = path_capacity(wparam);
+            isize::from(unsafe { write_wide_if_fits(lparam as *mut u16, cap, path) })
         }
 
         // Known NPPM_* range, but no v1 implementation. Plugins that
@@ -3420,6 +3565,50 @@ fn lang_label_cut(name: &str) -> &str {
     name
 }
 
+/// The capacity the `RUNCOMMAND_USER` path messages write within, from
+/// the plugin's `wparam`: `MAX_PATH` for 0, as above, and never more
+/// than `MAX_PATH` whatever the plugin says. A plugin that passes a byte
+/// count for a `MAX_PATH` buffer is then refused a long path rather
+/// than overrun; the cost is that a path of `MAX_PATH` units or more is
+/// refused even to a plugin whose buffer would hold it. Bug
+/// containment, not a boundary (DESIGN.md §6.5).
+fn path_capacity(wparam: usize) -> usize {
+    if wparam == 0 {
+        MAX_PATH_TCHARS
+    } else {
+        wparam.min(MAX_PATH_TCHARS)
+    }
+}
+
+/// Write `text` as a NUL-terminated wide string into the buffer at
+/// `dst` if it fits in `cap` TCHARs, the NUL included, and say whether
+/// it did. A string that does not fit writes nothing: the contract of
+/// the `RUNCOMMAND_USER` path messages, where a truncated path would be
+/// a different path.
+///
+/// # Safety
+///
+/// `dst` must point to a writable buffer of at least `cap` `u16`
+/// units.
+unsafe fn write_wide_if_fits(dst: *mut u16, cap: usize, text: &str) -> bool {
+    if dst.is_null() {
+        return false;
+    }
+    let mut units: Vec<u16> = text.encode_utf16().collect();
+    // The NUL needs a unit of its own: a string as long as the
+    // buffer does not fit, which is where Notepad++ draws the line.
+    if units.len() >= cap {
+        return false;
+    }
+    units.push(0);
+    // SAFETY: caller promises `dst` has `cap` writable u16 units, and
+    // `units.len() <= cap` was just checked.
+    unsafe {
+        core::ptr::copy_nonoverlapping(units.as_ptr(), dst, units.len());
+    }
+    true
+}
+
 /// Write `path` as a null-terminated wide string into the buffer at
 /// `dst`, capped at `cap` TCHARs (incl. trailing null). Returns the
 /// number of TCHARs written, **including** the trailing null. If
@@ -3519,6 +3708,9 @@ mod tests {
         secondary_scintilla: usize,
         current_buffer: isize,
         buffer_paths: Vec<(isize, PathBuf)>,
+        /// Untitled buffers' names, for `buffer_path_name`: a buffer
+        /// here and not in `buffer_paths` is untitled.
+        untitled_names: Vec<(isize, String)>,
         buffer_lang: i32,
         plugins_dir: PathBuf,
         plugin_menu: usize,
@@ -3699,6 +3891,14 @@ mod tests {
                 .iter()
                 .find(|(i, _)| *i == id)
                 .map(|(_, p)| p.clone())
+        }
+        fn buffer_path_name(&self, id: isize) -> Option<BufferPathName> {
+            self.buffer_path(id).map(BufferPathName::File).or_else(|| {
+                self.untitled_names
+                    .iter()
+                    .find(|(i, _)| *i == id)
+                    .map(|(_, n)| BufferPathName::Untitled(n.clone()))
+            })
         }
         fn buffer_lang_type(&self, _id: isize) -> i32 {
             self.buffer_lang
@@ -5789,15 +5989,105 @@ mod tests {
     }
 
     #[test]
-    fn npp_directory_zero_capacity_returns_zero() {
+    fn npp_directory_refuses_a_buffer_too_small_and_takes_zero_as_max_path() {
+        // Measured against Notepad++ 8.9.8.1: a buffer too small is
+        // refused with nothing written, as the path messages refuse it,
+        // and a capacity of 0 is written to.
         let mut s = MockServices {
             program_dir: Some(PathBuf::from("C:/Program Files/Code++")),
             ..Default::default()
         };
-        let mut buf = vec![0u16; MAX_PATH_TCHARS];
-        let r =
-            unsafe { dispatch_nppm(&mut s, NPPM_GETNPPDIRECTORY, 0, buf.as_mut_ptr() as isize) };
-        assert_eq!(r, Some(0));
+        for msg in [NPPM_GETNPPDIRECTORY, NPPM_GETNPPFULLFILEPATH] {
+            s.program_path = Some(PathBuf::from("C:/Program Files/Code++"));
+            let (r, buf) = send_path_message(&mut s, msg, 8);
+            assert_eq!(r, Some(0));
+            assert!(buf.iter().all(|&u| u == 0xFFFF), "nothing written");
+            let (r, buf) = send_path_message(&mut s, msg, 0);
+            assert_eq!(
+                (r, wide_answer(&buf)),
+                (Some(1), "C:/Program Files/Code++".to_string())
+            );
+        }
+    }
+
+    /// A program path of exactly `units` UTF-16 units.
+    fn program_path_of(units: usize) -> PathBuf {
+        PathBuf::from(format!("C:/{}", "p".repeat(units - 3)))
+    }
+
+    #[test]
+    fn npp_directory_writes_within_max_path_whatever_the_plugin_says() {
+        let mut s = MockServices::default();
+        for msg in [NPPM_GETNPPDIRECTORY, NPPM_GETNPPFULLFILEPATH] {
+            for wparam in [0, MAX_PATH_TCHARS, 4 * MAX_PATH_TCHARS] {
+                // The longest answer that fits MAX_PATH with its NUL...
+                s.program_dir = Some(program_path_of(MAX_PATH_TCHARS - 1));
+                s.program_path = s.program_dir.clone();
+                let (r, buf) = send_path_message(&mut s, msg, wparam);
+                assert_eq!(r, Some(1), "wparam {wparam}");
+                assert_eq!(buf[MAX_PATH_TCHARS - 1], 0);
+                // ...and one unit more, refused even to a buffer said to
+                // be larger.
+                s.program_dir = Some(program_path_of(MAX_PATH_TCHARS));
+                s.program_path = s.program_dir.clone();
+                let (r, buf) = send_path_message(&mut s, msg, wparam);
+                assert_eq!(r, Some(0), "wparam {wparam}");
+                assert!(buf.iter().all(|&u| u == 0xFFFF));
+            }
+        }
+    }
+
+    #[test]
+    fn npp_directory_refuses_a_null_or_kernel_range_pointer() {
+        let mut s = MockServices {
+            program_dir: Some(PathBuf::from("C:/x")),
+            program_path: Some(PathBuf::from("C:/x/codepp.exe")),
+            ..Default::default()
+        };
+        for msg in [NPPM_GETNPPDIRECTORY, NPPM_GETNPPFULLFILEPATH] {
+            for lparam in [0, -8] {
+                let r = unsafe { dispatch_nppm(&mut s, msg, MAX_PATH_TCHARS, lparam) };
+                assert_eq!(r, Some(0));
+            }
+        }
+    }
+
+    /// A path that is not valid Unicode on this platform.
+    fn non_unicode_path() -> PathBuf {
+        #[cfg(windows)]
+        {
+            use std::os::windows::ffi::OsStringExt;
+            // An unpaired surrogate.
+            let units = [u16::from(b'C'), u16::from(b':'), u16::from(b'/'), 0xD800];
+            PathBuf::from(std::ffi::OsString::from_wide(&units))
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::ffi::OsStrExt;
+            PathBuf::from(std::ffi::OsStr::from_bytes(b"/tmp/\xff.txt"))
+        }
+    }
+
+    #[test]
+    fn a_path_that_is_not_unicode_gets_no_answer() {
+        // A lossy answer would name another file.
+        let path = non_unicode_path();
+        assert!(path.to_str().is_none());
+        assert_eq!(
+            path_message_answer(NPPM_GETFULLCURRENTPATH, &BufferPathName::File(path.clone())),
+            None
+        );
+        let mut s = MockServices {
+            current_buffer: 7,
+            buffer_paths: vec![(7, path.clone())],
+            program_dir: Some(path),
+            ..Default::default()
+        };
+        for msg in [NPPM_GETFILENAME, NPPM_GETNPPDIRECTORY] {
+            let (r, buf) = send_path_message(&mut s, msg, 64);
+            assert_eq!(r, Some(0));
+            assert!(buf.iter().all(|&u| u == 0xFFFF));
+        }
     }
 
     #[test]
@@ -5849,12 +6139,12 @@ mod tests {
 
     #[test]
     fn runcmd_range_falls_through_for_unknown_offset() {
-        // RUNCOMMAND_USER + 1 is in-range but unmapped — the
+        // The range's last offset is in range but unmapped — the
         // dispatcher's match-arm fallthrough hits the catch-all and
         // returns Some(0). (The catch-all branch is shared with the
         // NPPMSG family's "unhandled" arm.)
         let mut s = MockServices::default();
-        let r = unsafe { dispatch_nppm(&mut s, RUNCOMMAND_USER + 1, 0, 0) };
+        let r = unsafe { dispatch_nppm(&mut s, RUNCOMMAND_USER + RUNCOMMAND_RANGE - 1, 0, 0) };
         assert_eq!(r, Some(0));
     }
 
@@ -5865,6 +6155,175 @@ mod tests {
         let mut s = MockServices::default();
         let r = unsafe { dispatch_nppm(&mut s, RUNCOMMAND_USER + RUNCOMMAND_RANGE + 1, 0, 0) };
         assert!(r.is_none());
+    }
+
+    /// The five path messages' answers for `name`, in message order.
+    fn path_answers(name: &BufferPathName) -> [String; 5] {
+        [
+            NPPM_GETFULLCURRENTPATH,
+            NPPM_GETCURRENTDIRECTORY,
+            NPPM_GETFILENAME,
+            NPPM_GETNAMEPART,
+            NPPM_GETEXTPART,
+        ]
+        .map(|msg| path_message_answer(msg, name).expect("a path message"))
+    }
+
+    #[test]
+    fn path_messages_split_a_file_as_notepad_plus_plus_does() {
+        // Each answer below was measured in Notepad++ 8.9.8.1 against a
+        // file of that name, through a probe plugin.
+        let file = |n: &str| BufferPathName::File(PathBuf::from(format!("C:/dir/{n}")));
+        assert_eq!(
+            path_answers(&file("Probe File.tar.txt")),
+            [
+                "C:/dir/Probe File.tar.txt",
+                "C:/dir",
+                "Probe File.tar.txt",
+                "Probe File.tar",
+                ".txt"
+            ]
+        );
+        let name_and_ext = |n: &str| {
+            let [_, _, _, name, ext] = path_answers(&file(n));
+            (name, ext)
+        };
+        assert_eq!(
+            name_and_ext(".gitignore"),
+            (String::new(), ".gitignore".into())
+        );
+        assert_eq!(
+            name_and_ext("name.my ext"),
+            ("name.my ext".into(), String::new())
+        );
+        assert_eq!(name_and_ext("noext"), ("noext".into(), String::new()));
+        assert_eq!(
+            name_and_ext("a.b.longextension"),
+            ("a.b".into(), ".longextension".into())
+        );
+        // Not measured, by the same rule: a space before the dot is no
+        // obstacle, only one after it.
+        assert_eq!(
+            name_and_ext("my file.txt"),
+            ("my file".into(), ".txt".into())
+        );
+    }
+
+    #[test]
+    fn path_messages_answer_an_untitled_buffer_with_its_name() {
+        // Measured: `new 1` is its own full path, file name and name
+        // part, with an empty directory and extension.
+        assert_eq!(
+            path_answers(&BufferPathName::Untitled("new 1".into())),
+            ["new 1", "", "new 1", "new 1", ""]
+        );
+        // A name the user chose is split as a file name, and a
+        // separator in it stays part of the name.
+        assert_eq!(
+            path_answers(&BufferPathName::Untitled("draft/notes.md".into())),
+            ["draft/notes.md", "", "draft/notes.md", "draft/notes", ".md"]
+        );
+        assert_eq!(
+            path_message_answer(NPPM_GETNPPDIRECTORY, &BufferPathName::Untitled("x".into())),
+            None
+        );
+    }
+
+    /// Send `msg` with a `cap`-unit buffer of `0xFFFF`s, one unit longer
+    /// than `cap` so a write past it would show, and return the answer
+    /// and the buffer.
+    fn send_path_message(s: &mut MockServices, msg: u32, cap: usize) -> (Option<isize>, Vec<u16>) {
+        let mut buf = vec![0xFFFFu16; cap.max(MAX_PATH_TCHARS) + 1];
+        let r = unsafe { dispatch_nppm(s, msg, cap, buf.as_mut_ptr() as isize) };
+        (r, buf)
+    }
+
+    fn wide_answer(buf: &[u16]) -> String {
+        let nul = buf.iter().position(|&u| u == 0).expect("NUL-terminated");
+        String::from_utf16(&buf[..nul]).unwrap()
+    }
+
+    #[test]
+    fn path_messages_write_only_an_answer_that_fits() {
+        let mut s = MockServices {
+            current_buffer: 7,
+            buffer_paths: vec![(7, PathBuf::from("D:/work/notes.txt"))],
+            ..Default::default()
+        };
+        // "notes.txt" is 9 units: 10 fits it and its NUL, 9 does not,
+        // and a refusal leaves the buffer as it was.
+        let (r, buf) = send_path_message(&mut s, NPPM_GETFILENAME, 10);
+        assert_eq!(r, Some(1));
+        assert_eq!(wide_answer(&buf), "notes.txt");
+        assert_eq!(buf[10], 0xFFFF, "nothing past the capacity");
+        let (r, buf) = send_path_message(&mut s, NPPM_GETFILENAME, 9);
+        assert_eq!(r, Some(0));
+        assert!(buf.iter().all(|&u| u == 0xFFFF), "a refusal writes nothing");
+        // Every message answers through the same gate.
+        for (msg, answer) in [
+            (NPPM_GETFULLCURRENTPATH, "D:/work/notes.txt"),
+            (NPPM_GETCURRENTDIRECTORY, "D:/work"),
+            (NPPM_GETNAMEPART, "notes"),
+            (NPPM_GETEXTPART, ".txt"),
+        ] {
+            let (r, buf) = send_path_message(&mut s, msg, 64);
+            assert_eq!((r, wide_answer(&buf)), (Some(1), answer.to_string()));
+        }
+        // An empty answer needs only its NUL.
+        s.buffer_paths = vec![(7, PathBuf::from("D:/work/noext"))];
+        let (r, buf) = send_path_message(&mut s, NPPM_GETEXTPART, 1);
+        assert_eq!((r, buf[0], buf[1]), (Some(1), 0, 0xFFFF));
+    }
+
+    #[test]
+    fn path_messages_take_a_zero_capacity_as_max_path() {
+        // Notepad++ writes without a bound for a capacity of 0; Code++
+        // takes it as MAX_PATH, so a longer path is refused.
+        let fits = format!("D:/{}", "a".repeat(MAX_PATH_TCHARS - 4));
+        let mut s = MockServices {
+            current_buffer: 7,
+            buffer_paths: vec![(7, PathBuf::from(&fits))],
+            ..Default::default()
+        };
+        let (r, buf) = send_path_message(&mut s, NPPM_GETFULLCURRENTPATH, 0);
+        assert_eq!((r, wide_answer(&buf)), (Some(1), fits.clone()));
+        s.buffer_paths = vec![(7, PathBuf::from(format!("{fits}b")))];
+        for wparam in [0, 4 * MAX_PATH_TCHARS] {
+            // Refused for 0, and for a buffer said to be larger too:
+            // the write never goes past MAX_PATH.
+            let (r, buf) = send_path_message(&mut s, NPPM_GETFULLCURRENTPATH, wparam);
+            assert_eq!(r, Some(0));
+            assert!(buf.iter().all(|&u| u == 0xFFFF));
+        }
+    }
+
+    #[test]
+    fn path_messages_refuse_without_a_buffer_or_a_pointer() {
+        let mut s = MockServices {
+            current_buffer: 7,
+            untitled_names: vec![(7, "new 1".to_string())],
+            ..Default::default()
+        };
+        let (r, buf) = send_path_message(&mut s, NPPM_GETFILENAME, 64);
+        assert_eq!((r, wide_answer(&buf)), (Some(1), "new 1".to_string()));
+        for lparam in [0, -8] {
+            let r = unsafe { dispatch_nppm(&mut s, NPPM_GETFILENAME, 64, lparam) };
+            assert_eq!(r, Some(0));
+        }
+        s.current_buffer = 8;
+        let (r, buf) = send_path_message(&mut s, NPPM_GETFILENAME, 64);
+        assert_eq!(r, Some(0));
+        assert!(buf.iter().all(|&u| u == 0xFFFF));
+    }
+
+    #[test]
+    fn dark_mode_subclass_and_theme_applies_nothing() {
+        let mut s = MockServices::default();
+        for (flags, hwnd) in [(0x0B, 0x1234), (0x0C, 0x1234), (0x0B, 0)] {
+            let r = unsafe { dispatch_nppm(&mut s, NPPM_DARKMODESUBCLASSANDTHEME, flags, hwnd) };
+            assert_eq!(r, Some(0));
+        }
+        assert!(s.calls().is_empty(), "the host is asked nothing");
     }
 
     // --- Session messages + Save As ---

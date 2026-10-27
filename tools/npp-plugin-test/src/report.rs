@@ -584,7 +584,7 @@ mod tests {
     fn a_clean_run_passes() {
         let mut report = Report {
             plugins: vec![loaded("x.dll")],
-            unhandled: vec![(RUNCOMMAND_USER + 1, 2)],
+            unhandled: vec![(RUNCOMMAND_USER + 99, 2)],
             ..Report::default()
         };
         report.judge(false);
@@ -598,7 +598,10 @@ mod tests {
             "{text}"
         );
         assert!(text.contains("  item 1: separator\n"), "{text}");
-        assert!(text.contains("unhandled: RUNCOMMAND_USER+1 x2\n"), "{text}");
+        assert!(
+            text.contains("unhandled: RUNCOMMAND_USER+99 x2\n"),
+            "{text}"
+        );
         assert!(text.ends_with("verdict: PASS\n"), "{text}");
     }
 
@@ -606,14 +609,14 @@ mod tests {
     fn strict_fails_an_unhandled_message() {
         let mut report = Report {
             plugins: vec![loaded("x.dll")],
-            unhandled: vec![(RUNCOMMAND_USER + 1, 2)],
+            unhandled: vec![(RUNCOMMAND_USER + 99, 2)],
             ..Report::default()
         };
         report.judge(true);
         assert_eq!(report.verdict(), Verdict::Fail);
         assert!(report
             .render()
-            .contains("failure: RUNCOMMAND_USER+1 is not handled"));
+            .contains("failure: RUNCOMMAND_USER+99 is not handled"));
     }
 
     #[test]

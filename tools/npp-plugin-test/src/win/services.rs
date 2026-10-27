@@ -30,8 +30,8 @@ use std::path::PathBuf;
 use codepp_core::LangType;
 use codepp_plugin_host::dispatch::L_USER;
 use codepp_plugin_host::{
-    docking::answers_hwnd_lookup, is_plugin_cmd_id, read_dock_disp_info, DockDialogParams,
-    HostServices, Hwnd, NppDarkModeColors, ShortcutKey, LINENUMWIDTH_CONSTANT,
+    docking::answers_hwnd_lookup, is_plugin_cmd_id, read_dock_disp_info, BufferPathName,
+    DockDialogParams, HostServices, Hwnd, NppDarkModeColors, ShortcutKey, LINENUMWIDTH_CONSTANT,
     LINENUMWIDTH_DYNAMIC, MAX_PLUGIN_SCINTILLAS, NPPMAINMENU, NPPPLUGINMENU, UNI_COOKIE,
     WIN_FORMAT,
 };
@@ -263,6 +263,10 @@ impl HostServices for Bridge<'_> {
 
     fn buffer_path(&self, id: isize) -> Option<PathBuf> {
         is_buffer(id).then(|| self.0.env.buffer_path.clone())
+    }
+
+    fn buffer_path_name(&self, id: isize) -> Option<BufferPathName> {
+        self.buffer_path(id).map(BufferPathName::File)
     }
 
     fn buffer_lang_type(&self, id: isize) -> i32 {

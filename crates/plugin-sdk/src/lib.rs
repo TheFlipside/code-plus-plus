@@ -409,6 +409,10 @@ pub const SCI_SETTARGETRANGE: u32 = 2686;
 /// silently truncates at the first interior `\0`).
 pub const SCI_REPLACETARGET: u32 = 2194;
 
+/// `SCI_GETEOLMODE` — the document's line ending: `SC_EOL_CRLF` (0),
+/// `SC_EOL_CR` (1) or `SC_EOL_LF` (2). Read by [`document_eol`].
+pub const SCI_GETEOLMODE: u32 = 2030;
+
 // ---- NppData handle storage -------------------------------------
 
 static NPP_HANDLE: AtomicPtr<c_void> = AtomicPtr::new(core::ptr::null_mut());
@@ -595,6 +599,31 @@ pub fn replace_selection(sci: Hwnd, bytes: &[u8]) {
     // duration of the call; Scintilla doesn't retain the pointer.
     unsafe {
         SendMessageW(sci, SCI_REPLACETARGET, bytes.len(), bytes.as_ptr() as isize);
+    }
+}
+
+/// The line ending of the document in `sci`, as bytes: what a plugin
+/// writes between the lines it inserts so they match the rest of the
+/// file. `\r\n` when `sci` is null or the mode is unknown, the
+/// default on Windows.
+#[must_use]
+// `sci` is a window handle the host routes a message to, never
+// dereferenced here, which the lint cannot tell from a data pointer.
+#[allow(clippy::not_unsafe_ptr_arg_deref)]
+pub fn document_eol(sci: Hwnd) -> &'static [u8] {
+    if sci.is_null() {
+        return eol_bytes(-1);
+    }
+    // SAFETY: a pure query, no pointer arguments.
+    eol_bytes(unsafe { SendMessageW(sci, SCI_GETEOLMODE, 0, 0) })
+}
+
+/// The bytes of a Scintilla EOL mode, as [`document_eol`] answers it.
+fn eol_bytes(mode: isize) -> &'static [u8] {
+    match mode {
+        1 => b"\r",
+        2 => b"\n",
+        _ => b"\r\n",
     }
 }
 
@@ -820,5 +849,40 @@ mod abi_lock {
             super::DMN_FLOATDROPPED,
             codepp_plugin_host::DMN_FLOATDROPPED
         );
+    }
+}
+
+#[cfg(test)]
+mod eol_tests {
+    use super::{document_eol, eol_bytes, SCI_GETEOLMODE};
+
+    /// The vendored Scintilla's header, which the numbers below are
+    /// pinned to.
+    const SCINTILLA_H: &str =
+        include_str!("../../scintilla-sys/vendor/scintilla/include/Scintilla.h");
+
+    #[test]
+    fn each_eol_mode_writes_its_own_line_ending() {
+        for (define, bytes) in [
+            ("SC_EOL_CRLF", &b"\r\n"[..]),
+            ("SC_EOL_CR", b"\r"),
+            ("SC_EOL_LF", b"\n"),
+        ] {
+            let line = format!("#define {define} ");
+            let mode: isize = SCINTILLA_H
+                .lines()
+                .find_map(|l| l.strip_prefix(&line))
+                .and_then(|v| v.trim().parse().ok())
+                .unwrap_or_else(|| panic!("{define} not in Scintilla.h"));
+            assert_eq!(eol_bytes(mode), bytes, "{define}");
+        }
+        assert!(SCINTILLA_H.contains(&format!("#define SCI_GETEOLMODE {SCI_GETEOLMODE}\n")));
+        // A mode Scintilla does not have is the Windows default.
+        assert_eq!(eol_bytes(7), b"\r\n");
+    }
+
+    #[test]
+    fn no_view_is_the_windows_default() {
+        assert_eq!(document_eol(core::ptr::null_mut()), b"\r\n");
     }
 }

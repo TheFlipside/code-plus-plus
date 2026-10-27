@@ -5,11 +5,15 @@
 //!   `messageProc`, `isUnicode`.
 //!
 //! The two menu items operate on the active Scintilla view's
-//! selection: ASCII → HEX rewrites the selection as space-
-//! separated uppercase hex bytes ("AB CD EF"); HEX → ASCII does
-//! the inverse. Both are byte-level — Scintilla's buffer is UTF-8
-//! but the hex form is the standard hex-dump representation,
-//! which doesn't care about encoding.
+//! selection: ASCII → HEX rewrites the selection as uppercase hex
+//! bytes with no separator, 16 bytes to a line ("ABCDEF"), as the
+//! upstream `NppConverter` does with its default settings; HEX → ASCII
+//! does the inverse, and takes the pairs with or without whitespace
+//! between them. Both are byte-level — Scintilla's buffer is UTF-8
+//! but the hex form doesn't care about encoding. Upstream reads its
+//! format from a `converter.ini` (a separator, lower case, the line
+//! length); Code++'s plugin has no settings and always writes the
+//! defaults.
 //!
 //! All shared FFI scaffolding (handle storage, `SyncCell`, the
 //! NPPM/SCI message constants, the selection round-trip helpers,
@@ -93,8 +97,8 @@ extern "C" fn cmd_ascii_to_hex() {
         sdk::set_status("Converter: no selection");
         return;
     }
-    let out = ascii_to_hex(&bytes);
-    sdk::replace_selection(sci, out.as_bytes());
+    let out = ascii_to_hex(&bytes, sdk::document_eol(sci));
+    sdk::replace_selection(sci, &out);
 }
 
 extern "C" fn cmd_hex_to_ascii() {
@@ -110,19 +114,29 @@ extern "C" fn cmd_hex_to_ascii() {
     }
 }
 
-/// Format a byte slice as space-separated uppercase hex pairs.
-/// "Hi!" → "48 69 21".
-fn ascii_to_hex(bytes: &[u8]) -> String {
-    let mut s = String::with_capacity(bytes.len() * 3);
-    for (i, b) in bytes.iter().enumerate() {
-        if i > 0 {
-            s.push(' ');
+/// Input bytes per line of "ASCII -> HEX" output: the upstream
+/// `NppConverter`'s default (`nbCharPerLine=16` in its `converter.ini`).
+const HEX_BYTES_PER_LINE: usize = 16;
+
+/// Format a byte slice as uppercase hex pairs with no separator and
+/// `eol` after every [`HEX_BYTES_PER_LINE`]th input byte, so a full
+/// last line ends with one and a partial one does not: "Hi!" →
+/// "486921". That is the upstream `NppConverter`'s output with its
+/// default settings, measured against the one Notepad++ 8.9.8.1 ships.
+/// A line break in the input is encoded like any other byte (`0D0A`).
+fn ascii_to_hex(bytes: &[u8], eol: &[u8]) -> Vec<u8> {
+    let full_lines = bytes.len() / HEX_BYTES_PER_LINE;
+    let mut out = Vec::with_capacity(bytes.len() * 2 + full_lines * eol.len());
+    for line in bytes.chunks(HEX_BYTES_PER_LINE) {
+        for b in line {
+            out.push(HEX_UPPER[(b >> 4) as usize]);
+            out.push(HEX_UPPER[(b & 0x0f) as usize]);
         }
-        // Uppercase per the convention; lowercase would also work.
-        s.push(HEX_UPPER[(b >> 4) as usize] as char);
-        s.push(HEX_UPPER[(b & 0x0f) as usize] as char);
+        if line.len() == HEX_BYTES_PER_LINE {
+            out.extend_from_slice(eol);
+        }
     }
-    s
+    out
 }
 
 const HEX_UPPER: &[u8; 16] = b"0123456789ABCDEF";
@@ -168,40 +182,70 @@ fn hex_digit(c: u8) -> Option<u8> {
 mod tests {
     use super::*;
 
+    /// `ascii_to_hex` with a CRLF document, as text.
+    fn hex(bytes: &[u8]) -> String {
+        String::from_utf8(ascii_to_hex(bytes, b"\r\n")).unwrap()
+    }
+
     #[test]
     fn ascii_to_hex_empty() {
-        assert_eq!(ascii_to_hex(b""), "");
+        assert_eq!(hex(b""), "");
     }
 
     #[test]
     fn ascii_to_hex_single() {
-        assert_eq!(ascii_to_hex(b"A"), "41");
+        assert_eq!(hex(b"A"), "41");
     }
 
     #[test]
     fn ascii_to_hex_multibyte() {
-        assert_eq!(ascii_to_hex(b"Hi!"), "48 69 21");
+        // Measured against the upstream NppConverter on "hello".
+        assert_eq!(hex(b"hello"), "68656C6C6F");
+        assert_eq!(hex(b"Hi!"), "486921");
     }
 
     #[test]
     fn ascii_to_hex_full_byte_range() {
         // All four nibble combinations: 0x00 / 0x0f / 0xf0 / 0xff.
         // Pin both halves to catch a swapped nibble bug.
-        assert_eq!(ascii_to_hex(&[0x00, 0x0f, 0xf0, 0xff]), "00 0F F0 FF");
+        assert_eq!(hex(&[0x00, 0x0f, 0xf0, 0xff]), "000FF0FF");
     }
 
     #[test]
     fn ascii_to_hex_uppercase() {
-        // Uppercase is the chosen convention; pin it so a future
-        // tweak to lowercase becomes a deliberate decision.
-        assert_eq!(ascii_to_hex(&[0xab, 0xcd]), "AB CD");
+        // Upstream's default; pin it so a change is deliberate.
+        assert_eq!(hex(&[0xab, 0xcd]), "ABCD");
+    }
+
+    #[test]
+    fn ascii_to_hex_encodes_line_breaks_as_bytes() {
+        // Measured: upstream turns "ab\r\ncd" into "61620D0A6364".
+        assert_eq!(hex(b"ab\r\ncd"), "61620D0A6364");
+    }
+
+    #[test]
+    fn ascii_to_hex_breaks_the_line_every_16_bytes() {
+        // Measured: every full line ends with a line break, the last
+        // one included; a partial last line has none.
+        let line = "41".repeat(16);
+        assert_eq!(hex(&[b'A'; 15]), "41".repeat(15));
+        assert_eq!(hex(&[b'A'; 16]), format!("{line}\r\n"));
+        assert_eq!(hex(&[b'A'; 17]), format!("{line}\r\n41"));
+        assert_eq!(hex(&[b'A'; 32]), format!("{line}\r\n{line}\r\n"));
+        // The break is the document's own line ending.
+        for eol in ["\n", "\r"] {
+            let out = ascii_to_hex(&[b'A'; 17], eol.as_bytes());
+            assert_eq!(String::from_utf8(out).unwrap(), format!("{line}{eol}41"));
+        }
     }
 
     #[test]
     fn hex_to_ascii_round_trip_uppercase() {
         let bytes = b"Code++";
-        let hex = ascii_to_hex(bytes);
-        assert_eq!(hex_to_ascii(hex.as_bytes()).unwrap(), bytes);
+        assert_eq!(hex_to_ascii(hex(bytes).as_bytes()).unwrap(), bytes);
+        // Across line breaks too.
+        let long: Vec<u8> = (0u8..40).collect();
+        assert_eq!(hex_to_ascii(hex(&long).as_bytes()).unwrap(), long);
     }
 
     #[test]
@@ -263,7 +307,6 @@ mod tests {
     #[test]
     fn hex_to_ascii_full_byte_range() {
         let all: Vec<u8> = (0u8..=255).collect();
-        let hex = ascii_to_hex(&all);
-        assert_eq!(hex_to_ascii(hex.as_bytes()).unwrap(), all);
+        assert_eq!(hex_to_ascii(hex(&all).as_bytes()).unwrap(), all);
     }
 }
