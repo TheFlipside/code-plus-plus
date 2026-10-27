@@ -3044,27 +3044,6 @@ impl Shell {
         true
     }
 
-    /// Index of the first unpinned tab, i.e. the boundary between the
-    /// pinned prefix and the unpinned suffix. Equal to the number of
-    /// pinned tabs. Returns `tabs.len()` when every tab is pinned
-    /// (rare but supported — no invariant violation).
-    ///
-    /// Cheap linear scan; typical sessions have well under 100 tabs,
-    /// caching would add invalidation surface without measurable
-    /// benefit.
-    ///
-    /// Not the boundary [`Self::move_tab`] and [`Self::set_pinned`]
-    /// use: during a session restore a file still loading reads unpinned
-    /// and can sit in front of pinned tabs, and this then answers its
-    /// index, in front of them ([`slot_behind_pinned_tabs`]).
-    #[must_use]
-    pub fn first_unpinned_idx(&self) -> usize {
-        self.tabs
-            .iter()
-            .position(|t| !t.pinned)
-            .unwrap_or(self.tabs.len())
-    }
-
     /// Toggle the pin state of `idx` to `want`. Idempotent — no-op
     /// (returns `false`) if the tab is already in the requested
     /// state or if `idx` is out of range. Otherwise:
@@ -9879,8 +9858,9 @@ fn is_disk_newer_than_backup(disk_path: &Path, backup_path: &Path) -> bool {
 /// interleaves pinned and unpinned `<tab>` entries: without this
 /// pass, the tab vector would be reassembled in the on-disk order
 /// (which, for `SessionRestoreEntry::OpenFile`, is the order
-/// `apply_load_result` pushes tabs), and `first_unpinned_idx`
-/// would no longer describe the actual pinned prefix.
+/// `apply_load_result` pushes tabs), and pinned and unpinned tabs
+/// would come up interleaved in the strip, where every pinned tab
+/// belongs in front of every unpinned one.
 ///
 /// `apply_load_result`'s by-path lookup on `self.session.tabs`
 /// must observe the same reordered view so a late-arriving async
@@ -23246,6 +23226,21 @@ mod tests {
         shell
     }
 
+    /// Helper: the index of the first unpinned tab, or `tabs.len()`
+    /// when every tab is pinned. While the pinned tabs form a prefix,
+    /// as they do in these tests, that is the number of pinned tabs.
+    /// It is not the boundary [`Shell::move_tab`] and
+    /// [`Shell::set_pinned`] use: during a session restore a file still
+    /// loading reads unpinned and can sit in front of pinned tabs
+    /// ([`slot_behind_pinned_tabs`]).
+    fn first_unpinned_idx(shell: &Shell) -> usize {
+        shell
+            .tabs
+            .iter()
+            .position(|t| !t.pinned)
+            .unwrap_or(shell.tabs.len())
+    }
+
     #[test]
     fn repair_restored_pin_relocates_a_mid_session_open_and_follows_active() {
         // [P(pinned), U, U, U, E] — E is a just-reopened pinned file pushed at
@@ -23781,7 +23776,7 @@ mod tests {
         // Active follows.
         assert_eq!(shell.active_tab, Some(0));
         // Only one pinned tab so far.
-        assert_eq!(shell.first_unpinned_idx(), 1);
+        assert_eq!(first_unpinned_idx(&shell), 1);
     }
 
     /// A second pinned tab lands to the right of the first pinned
@@ -23799,7 +23794,7 @@ mod tests {
         assert_eq!(shell.tabs[1].id, id_second_pinned);
         assert!(shell.tabs[0].pinned);
         assert!(shell.tabs[1].pinned);
-        assert_eq!(shell.first_unpinned_idx(), 2);
+        assert_eq!(first_unpinned_idx(&shell), 2);
     }
 
     /// Unpinning walks the tab to the leftmost slot of the unpinned
@@ -23814,7 +23809,7 @@ mod tests {
         assert!(shell.set_pinned(0, false));
         // Unpinned tab now sits at the boundary (idx 1 — right after
         // the one still-pinned tab).
-        assert_eq!(shell.first_unpinned_idx(), 1);
+        assert_eq!(first_unpinned_idx(&shell), 1);
         assert_eq!(shell.tabs[1].id, unpinned_pin_id);
         assert!(!shell.tabs[1].pinned);
     }
@@ -23842,7 +23837,7 @@ mod tests {
         assert!(!shell.move_tab(0, 1));
         // Layout unchanged.
         assert!(shell.tabs[0].pinned);
-        assert_eq!(shell.first_unpinned_idx(), 1);
+        assert_eq!(first_unpinned_idx(&shell), 1);
     }
 
     /// `move_tab` refuses to drag an unpinned tab into the pinned
@@ -23853,7 +23848,7 @@ mod tests {
         assert!(shell.set_pinned(0, true));
         assert!(shell.set_pinned(1, true));
         // State: two pinned tabs at [0, 1], unpinned at [2, 3].
-        assert_eq!(shell.first_unpinned_idx(), 2);
+        assert_eq!(first_unpinned_idx(&shell), 2);
         // Dragging unpinned tab (idx 2) to idx 0 or 1 would put it
         // inside the pinned zone — rejected.
         assert!(!shell.move_tab(2, 0));
