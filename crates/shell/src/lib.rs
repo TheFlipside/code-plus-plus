@@ -1704,6 +1704,27 @@ fn pinned_restore_target(tabs: &[Tab], idx: usize) -> Option<usize> {
     (first_settled_unpinned < idx).then_some(first_settled_unpinned)
 }
 
+/// The slot just behind the last pinned tab other than the one at `idx`,
+/// counted in the strip with that tab taken out, or 0 when no other tab
+/// is pinned. [`Shell::set_pinned`] puts a tab there, and it is as far
+/// forward as [`Shell::move_tab`] lets a tab go.
+///
+/// Counting pinned tabs gives the same slot only while they form a
+/// prefix, and during a session restore they need not. A tab restored
+/// from a recovery backup is pinned as it is made, while a file tab reads
+/// unpinned until its first load lands, so a file still loading can sit
+/// in front of pinned tabs. Counted, the slot would land inside them.
+#[must_use]
+fn slot_behind_pinned_tabs(tabs: &[Tab], idx: usize) -> usize {
+    tabs.iter()
+        .enumerate()
+        .rev()
+        .find(|&(i, t)| i != idx && t.pinned)
+        // Behind it once the tab at `idx` is out: a tab after `idx` moves
+        // up one, so its own index is the slot behind it.
+        .map_or(0, |(i, _)| if i > idx { i } else { i + 1 })
+}
+
 /// The mirror of [`pinned_restore_target`]: where a tab at `idx` that a
 /// load has just left *unpinned* must move so the pinned-before-unpinned
 /// invariant holds — behind the last settled pinned tab, when one follows
@@ -2967,23 +2988,25 @@ impl Shell {
     /// `move_tab` rejects (returns `false`) any move that would
     /// violate that layout — either dragging a pinned tab (which
     /// the user pinned specifically to fix in place) or dragging
-    /// an unpinned tab into the pinned prefix. Pin/unpin
+    /// an unpinned tab in front of a pinned one. Pin/unpin
     /// operations go through [`Self::set_pinned`] instead, which
     /// is the only path that changes a tab's `pinned` flag.
+    ///
+    /// During a session restore a file still loading reads unpinned and
+    /// can sit in front of pinned tabs, so the boundary is the last
+    /// pinned tab ([`slot_behind_pinned_tabs`]), not the first unpinned
+    /// one: that would be the loading file, and a drag to it would put a
+    /// tab in front of the pinned tabs behind it.
     pub fn move_tab(&mut self, from: usize, to: usize) -> bool {
         if from == to || from >= self.tabs.len() || to >= self.tabs.len() {
             return false;
         }
-        // Pinning invariant: pinned tabs form a fixed prefix. Reject
-        // any drag that would either (a) move a pinned tab at all,
-        // or (b) push an unpinned tab up into the pinned prefix.
-        // The boundary index is `first_unpinned_idx`; any
-        // unpinned-tab `to` below that would violate the layout.
+        // Reject any drag that would either (a) move a pinned tab at
+        // all, or (b) put an unpinned tab in front of a pinned one.
         if self.tabs[from].pinned {
             return false;
         }
-        let first_unpinned = self.first_unpinned_idx();
-        if to < first_unpinned {
+        if to < slot_behind_pinned_tabs(&self.tabs, from) {
             return false;
         }
         let tab = self.tabs.remove(from);
@@ -3028,10 +3051,12 @@ impl Shell {
     ///
     /// Cheap linear scan; typical sessions have well under 100 tabs,
     /// caching would add invalidation surface without measurable
-    /// benefit. Kept `pub` so the UI's drag hit-test can clamp a
-    /// drop target to the unpinned zone before calling `move_tab`
-    /// (which also validates, but the UI wants to render the drop
-    /// as bounded rather than reject a mid-drag frame).
+    /// benefit.
+    ///
+    /// Not the boundary [`Self::move_tab`] and [`Self::set_pinned`]
+    /// use: during a session restore a file still loading reads unpinned
+    /// and can sit in front of pinned tabs, and this then answers its
+    /// index, in front of them ([`slot_behind_pinned_tabs`]).
     #[must_use]
     pub fn first_unpinned_idx(&self) -> usize {
         self.tabs
@@ -3045,13 +3070,20 @@ impl Shell {
     /// state or if `idx` is out of range. Otherwise:
     ///
     /// * **Pin** (`want = true`): flip the flag, then move the tab
-    ///   to the right edge of the pinned prefix (index
-    ///   `first_unpinned_idx() - 1` after the flag flip). Preserves
-    ///   the relative order among tabs that were already pinned.
+    ///   straight behind the last tab that was already pinned, the
+    ///   end of the pinned block. Preserves the relative order among
+    ///   tabs that were already pinned.
     /// * **Unpin** (`want = false`): flip the flag, then move the
-    ///   tab to the left edge of the unpinned zone (index
-    ///   `first_unpinned_idx()` after the flag flip). Preserves
-    ///   the relative order among tabs that stay pinned.
+    ///   tab straight behind the last tab still pinned, the front of
+    ///   the unpinned block. Preserves the relative order among tabs
+    ///   that stay pinned.
+    ///
+    /// Either way the slot is found from the last pinned tab rather than
+    /// by counting pinned tabs, because during a session restore a file
+    /// still loading reads unpinned and can sit in front of pinned tabs
+    /// ([`slot_behind_pinned_tabs`]). A counted slot left an unpinned tab
+    /// in front of a pinned one there, for good, since it never lands
+    /// again for the landing repair to move it.
     ///
     /// The active-tab index follows the moved tab (same rule as
     /// `move_tab` for the "active == from" case). A real state
@@ -3072,31 +3104,11 @@ impl Shell {
             return false;
         }
         tab.pinned = want;
-        // Compute the target slot for the moved tab, expressed in
-        // terms of the vector state AFTER `tabs.remove(idx)` runs.
-        // The remove-then-insert model means the target must land
-        // at the first unpinned position in the shrunken vec:
-        //
-        //   target = (# of tabs at positions != idx that are pinned)
-        //
-        // Pinning (`want = true`): pinned tabs excluding `idx` are
-        // the *already-pinned* prefix — the newly pinned tab lands
-        // right after them, at the end of the pinned block.
-        // Unpinning (`want = false`): pinned tabs excluding `idx`
-        // are the *still-pinned* prefix (the unpinning tab is
-        // already flag-flipped so it doesn't count) — the newly
-        // unpinned tab lands right after them, at the boundary.
-        //
-        // The formula is symmetric across the two cases; the flag
-        // flip above shifts membership in the "pinned" set for the
-        // count, which is what makes the target land in the
-        // correct block.
-        let target = self
-            .tabs
-            .iter()
-            .enumerate()
-            .filter(|(i, t)| *i != idx && t.pinned)
-            .count();
+        // Pinned or unpinned, the tab goes straight behind the last other
+        // pinned tab: the end of the pinned block, or the front of the
+        // unpinned one. The slot is counted in the strip with the tab
+        // taken out, which is what the remove-then-insert below wants.
+        let target = slot_behind_pinned_tabs(&self.tabs, idx);
         // Move without going through `move_tab` — that path enforces
         // the invariant we're currently repairing. Manual splice
         // keeps the tab-move logic in one canonical shape while
@@ -3132,9 +3144,7 @@ impl Shell {
     /// untouched. A no-op unless the tab is a mid-session open of a pinned
     /// file pushed at the end of the strip, or a tab that lands unpinned
     /// after a settled pinned tab behind it: one moved ahead of the tabs
-    /// requested before it while it loaded (see [`unpinned_restore_target`]),
-    /// or one `set_pinned` misplaced while a restore was still loading
-    /// tabs (DESIGN.md §7.4), which this heals the next time it lands.
+    /// requested before it while it loaded (see [`unpinned_restore_target`]).
     fn repair_restored_pin_placement(&mut self, target_idx: usize) {
         let Some(landed) = self.tabs.get(target_idx) else {
             return;
@@ -21189,6 +21199,69 @@ mod tests {
         );
     }
 
+    /// A session restore with a pinned file first and two pinned buffers
+    /// restored from their backups behind it. The buffers are pinned as
+    /// they are made, while the file reads unpinned until it lands, so
+    /// unpinning the first buffer has to put it behind the second, not at
+    /// the count of pinned tabs, which is its own slot. It never lands
+    /// again, so the landing repair would never move it. Real loads.
+    #[test]
+    fn unpinning_a_restored_buffer_while_a_file_loads_ahead_of_it_puts_it_behind_the_pinned_tabs() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("f.txt");
+        std::fs::write(&file, "f").unwrap();
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+        shell.session.tabs.push(codepp_core::session::Tab {
+            path: Some(file.clone()),
+            pinned: true,
+            ..codepp_core::session::Tab::default()
+        });
+        shell.open_file(file.clone());
+        for seq in [1, 2] {
+            shell.restore_untitled_with_text(
+                &mut ui,
+                Some(seq),
+                format!("u{seq}"),
+                ViewPosition::at(0),
+                Vec::new(),
+                Encoding::Utf8,
+                Eol::Lf,
+                false,
+                None,
+                None,
+                true,
+            );
+        }
+        // The file tab as `0`, an untitled buffer as its number.
+        let strip = |shell: &Shell| -> Vec<(u32, bool)> {
+            shell
+                .tabs
+                .iter()
+                .map(|t| (t.untitled_seq.unwrap_or(0), t.pinned))
+                .collect()
+        };
+        assert_eq!(
+            strip(&shell),
+            [(0, false), (1, true), (2, true)],
+            "precondition: the file reads unpinned while it loads"
+        );
+        assert!(shell.tabs[0].pending_load.is_some());
+        let active_id = shell.active_tab.map(|i| shell.tabs[i].id);
+
+        assert!(shell.set_pinned(1, false));
+        assert_eq!(strip(&shell), [(0, false), (2, true), (1, false)]);
+        assert_eq!(
+            shell.active_tab.map(|i| shell.tabs[i].id),
+            active_id,
+            "the active index follows its buffer"
+        );
+
+        drain_until_loads_settle(&mut shell, &mut ui);
+        assert_eq!(strip(&shell), [(0, true), (2, true), (1, false)]);
+    }
+
     /// A pinned file landing behind an unpinned tab that is reloading: a
     /// reload does not change the reloading tab's pin, so it is settled,
     /// and the landing moves the pinned tab in front of it. Before, the
@@ -23787,6 +23860,167 @@ mod tests {
         assert!(!shell.move_tab(2, 1));
         // Dragging unpinned within its zone still works.
         assert!(shell.move_tab(2, 3));
+    }
+
+    /// Whether no tab reads pinned behind a settled unpinned tab: the
+    /// order the strip keeps while a restore is still loading files,
+    /// whose tabs read unpinned until they land and may sit anywhere.
+    fn pin_order_holds(tabs: &[Tab]) -> bool {
+        let Some(last_pinned) = tabs.iter().rposition(|t| t.pinned) else {
+            return true;
+        };
+        tabs[..last_pinned]
+            .iter()
+            .all(|t| t.pinned || !pin_is_settled(t))
+    }
+
+    /// A strip in one letter a tab: `P` pinned, `U` unpinned, lower case
+    /// for a tab still on its first load.
+    fn describe_pins(tabs: &[Tab]) -> String {
+        tabs.iter()
+            .map(|t| match (t.pinned, pin_is_settled(t)) {
+                (true, true) => 'P',
+                (false, true) => 'U',
+                (true, false) => 'p',
+                (false, false) => 'u',
+            })
+            .collect()
+    }
+
+    /// Every strip of up to five tabs that [`pin_order_holds`] for, each
+    /// tab settled or still on its first load and reading pinned or not.
+    /// Buffer ids are 1, 2, … in strip order.
+    fn restore_strips() -> Vec<Vec<Tab>> {
+        let mut strips = Vec::new();
+        for n in 1..=5u32 {
+            for code in 0..4usize.pow(n) {
+                let strip: Vec<Tab> = (0..n as usize)
+                    .map(|i| {
+                        let kind = code / 4usize.pow(i as u32) % 4;
+                        let loading = kind >= 2;
+                        Tab {
+                            id: i as i32 + 1,
+                            pinned: kind % 2 == 1,
+                            path: (!loading).then(|| PathBuf::from(format!("/tmp/file{i}.txt"))),
+                            pending_load: loading.then_some(900 + i as RequestId),
+                            ..Tab::default()
+                        }
+                    })
+                    .collect();
+                if pin_order_holds(&strip) {
+                    strips.push(strip);
+                }
+            }
+        }
+        strips
+    }
+
+    /// `set_pinned` over every strip a restore can leave, every tab, both
+    /// ways and every active tab: the tab goes straight behind the last
+    /// other pinned tab, the others keep their order, the active index
+    /// follows its buffer, and no tab reads pinned behind a settled
+    /// unpinned one. Counting pinned tabs, which assumes they form a
+    /// prefix, fails the last of these when a file still loading sits in
+    /// front of them.
+    #[test]
+    fn set_pinned_keeps_the_pin_order_while_a_restore_loads() {
+        let mut shell = shell_with_synthetic_tabs(0, None);
+        for strip in restore_strips() {
+            let n = strip.len();
+            let ids: Vec<i32> = strip.iter().map(|t| t.id).collect();
+            for idx in 0..n {
+                for want in [false, true] {
+                    for active in std::iter::once(None).chain((0..n).map(Some)) {
+                        shell.tabs = strip.clone();
+                        shell.active_tab = active;
+                        shell.session.active = active;
+                        let _ = shell.take_notifications();
+                        let case = format!(
+                            "{} idx {idx} want {want} active {active:?}",
+                            describe_pins(&strip)
+                        );
+
+                        let changed = shell.set_pinned(idx, want);
+                        assert_eq!(changed, strip[idx].pinned != want, "{case}");
+                        let after: Vec<i32> = shell.tabs.iter().map(|t| t.id).collect();
+                        let at = after.iter().position(|&id| id == ids[idx]).unwrap();
+                        assert_eq!(shell.tabs[at].pinned, want, "{case}");
+                        let others = |v: &[i32]| -> Vec<i32> {
+                            v.iter().copied().filter(|&id| id != ids[idx]).collect()
+                        };
+                        assert_eq!(others(&after), others(&ids), "{case}");
+                        if changed {
+                            let last_other_pinned = shell
+                                .tabs
+                                .iter()
+                                .enumerate()
+                                .rposition(|(i, t)| i != at && t.pinned);
+                            assert_eq!(at, last_other_pinned.map_or(0, |p| p + 1), "{case}");
+                        } else {
+                            assert_eq!(after, ids, "{case}");
+                        }
+                        assert!(pin_order_holds(&shell.tabs), "{case}");
+                        assert_eq!(
+                            shell.active_tab.map(|i| after[i]),
+                            active.map(|i| ids[i]),
+                            "{case}"
+                        );
+                        assert_eq!(shell.session.active, shell.active_tab, "{case}");
+                        let reordered = shell
+                            .take_notifications()
+                            .iter()
+                            .any(|note| matches!(note, Notification::DocOrderChanged));
+                        assert_eq!(reordered, changed, "{case}");
+                    }
+                }
+            }
+        }
+    }
+
+    /// `move_tab` over every strip a restore can leave and every drag: it
+    /// takes a drag exactly when the tab is unpinned and ends behind every
+    /// pinned tab, and a drag it takes keeps the pin order. The first
+    /// unpinned tab is no boundary while a restore loads: it can be a file
+    /// still loading in front of pinned tabs, and a drag to it puts a
+    /// settled tab in front of them.
+    #[test]
+    fn move_tab_keeps_the_pin_order_while_a_restore_loads() {
+        let mut shell = shell_with_synthetic_tabs(0, None);
+        for strip in restore_strips() {
+            let n = strip.len();
+            let ids: Vec<i32> = strip.iter().map(|t| t.id).collect();
+            for from in 0..n {
+                for to in 0..n {
+                    let mut dragged = strip.clone();
+                    let tab = dragged.remove(from);
+                    dragged.insert(to, tab);
+                    let behind_the_pinned = dragged[to + 1..].iter().all(|t| !t.pinned);
+                    let allowed = from != to && !strip[from].pinned && behind_the_pinned;
+                    for active in std::iter::once(None).chain((0..n).map(Some)) {
+                        shell.tabs = strip.clone();
+                        shell.active_tab = active;
+                        shell.session.active = active;
+                        let case =
+                            format!("{} {from} -> {to} active {active:?}", describe_pins(&strip));
+
+                        assert_eq!(shell.move_tab(from, to), allowed, "{case}");
+                        let after: Vec<i32> = shell.tabs.iter().map(|t| t.id).collect();
+                        if allowed {
+                            let expected: Vec<i32> = dragged.iter().map(|t| t.id).collect();
+                            assert_eq!(after, expected, "{case}");
+                            assert!(pin_order_holds(&shell.tabs), "{case}");
+                        } else {
+                            assert_eq!(after, ids, "{case}");
+                        }
+                        assert_eq!(
+                            shell.active_tab.map(|i| after[i]),
+                            active.map(|i| ids[i]),
+                            "{case}"
+                        );
+                    }
+                }
+            }
+        }
     }
 
     /// A `session.xml` whose `<tab>` entries interleave pinned and
