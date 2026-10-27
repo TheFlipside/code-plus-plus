@@ -209,6 +209,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "codepp-npp-plugin-test"
+version = "0.1.0"
+dependencies = [
+ "codepp-core",
+ "codepp-platform",
+ "codepp-plugin-host",
+ "codepp-scintilla-sys",
+ "codepp-udl",
+ "tempfile",
+ "tracing",
+ "tracing-subscriber",
+ "windows",
+]
+
+[[package]]
 name = "codepp-platform"
 version = "0.1.0"
 dependencies = [

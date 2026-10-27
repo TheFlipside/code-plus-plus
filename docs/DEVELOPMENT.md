@@ -416,6 +416,77 @@ On Windows set `APPDATA` instead. On macOS only `HOME` moves it; keep
 `CARGO_HOME` and `RUSTUP_HOME` pointing at the real ones when you override
 it, or rustup installs a fresh toolchain into the scratch home.
 
+### Check a Notepad++ plugin against Code++ (Windows)
+
+`tools/npp-plugin-test` hosts a plugin DLL the way the editor does and
+prints what happened. It opens no editor and no session, its host window
+stays hidden unless `--interactive` asks for it, and the harness itself
+writes nothing outside a scratch folder in `%TEMP%` (a plugin's own code
+is another matter, below):
+
+```powershell
+cargo build --workspace
+target\debug\npp-plugin-test.exe C:\path\to\NppExec\NppExec.dll
+target\debug\npp-plugin-test.exe target\debug\cppmimetools.dll `
+    --text hello --select-all --run "Base64 Encode" --run "Base64 Decode"
+target\debug\npp-plugin-test.exe target\debug\example_hello.dll --interactive
+```
+
+It stages each DLL in Notepad++'s layout (a DLL that already sits in a
+folder named after it brings that folder along), loads it through the
+same three-phase load the editor uses, delivers `NPPN_TBMODIFICATION`,
+`NPPN_BUFFERACTIVATED` and `NPPN_READY`, runs any `--run` commands, sends
+`NPPN_BEFORESHUTDOWN` and `NPPN_SHUTDOWN`, destroys the host window, and
+prints a line-oriented report: the plugin's name and menu items, every `NPPM_*` and `SCI_*`
+message it sent, the ones Code++ does not handle (`unhandled:`), the dock
+panels, toolbar buttons, status texts and clipboard payloads it offered,
+and the buffer's final text. `--help` lists the options.
+
+A dialog that comes up during the load, a notification or the teardown —
+a plugin refusing its host, as NppExec did when it could not read the
+version — would hang an unattended run, so a watchdog closes it and the
+run fails; one a `--run` command opens on purpose (an About box) is closed
+and only reported. Closing escalates from Close to Cancel, No and OK, so
+an unattended run may accept a prompt. A step that takes longer than
+`--timeout` (30 s) ends the run. Exit status 0 is a pass, 1 a failure
+(the `failure:` lines say why), 2 bad arguments, 3 a step timed out; a
+plugin that crashes the process ends it with the crash's own status.
+The `verdict:` line is printed last, after the teardown.
+
+What a plugin *asks the host* to do is recorded, not done: opening
+another file, saving elsewhere, setting the clipboard through
+`CODEPPM_SETCLIPBOARD`. A plugin's own code is not contained: a `--run`
+command can call Windows directly, and the upstream NppExport writes the
+clipboard itself. The staged copy stays locked until the process exits,
+since the host never unmaps a library, so each run leaves its scratch
+folder behind, with a lock file it holds open until the process exits.
+A later run removes such a folder once its lock is free and it is more
+than ten minutes old, so `%TEMP%` holds the folders of recent runs only;
+a folder kept with `--keep` is never removed.
+
+`cargo test -p codepp-npp-plugin-test` runs the harness against the four
+in-tree plugins. It does not rebuild them, so build the workspace first,
+or a stale DLL is what gets tested; under `CI` a missing one is a
+failure, not a skip. To include real third-party plugins, which cannot
+live in the tree, name them in `CODEPP_NPP_PLUGINS`, `;`-separated; each
+must load and pass its lifecycle without a dialog. This is opt-in, under
+`CI` too: with the variable unset that test skips.
+
+```powershell
+$env:CODEPP_NPP_PLUGINS = "C:\npp\plugins\NppExec\NppExec.dll;C:\npp\plugins\mimeTools\mimeTools.dll"
+cargo test -p codepp-npp-plugin-test --test plugins third_party -- --nocapture
+```
+
+The Windows CI runner should set it to the plugins of a portable
+Notepad++ kept on the runner, so every change is checked against real
+plugins rather than only Code++'s own.
+
+The harness has been run on a developer machine only, not yet on the CI
+runner, whose desktop reads as hidden to every window (§2.7). The
+watchdog reads each window's own `WS_VISIBLE` style rather than
+`IsWindowVisible` for that reason, and `--timeout` bounds every step
+there regardless, but how dialogs behave on the runner is unverified.
+
 ### Add or change an `NPPM_*` / `NPPN_*` / docking constant or menu id
 
 Verify the number against Notepad++'s published headers, mechanically:

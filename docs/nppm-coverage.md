@@ -45,6 +45,23 @@ but is a 32-bit DLL on a 64-bit host — `LoadLibraryW` rejects it
 with `ERROR_BAD_EXE_FORMAT` and it does not exercise the dispatcher
 at all, the same as in 64-bit Notepad++.)
 
+**The harness exists since Phase 5.** `tools/npp-plugin-test` hosts a
+plugin DLL against the real dispatcher, a real host window and real
+Scintilla views, and prints every message the plugin sent, with the
+ones Code++ left unanswered on `unhandled:` lines — the per-message
+coverage the strict reading asks for. Its integration tests run the
+four in-tree plugins as part of `cargo test` on Windows, and any
+third-party DLLs named in `CODEPP_NPP_PLUGINS`, which is opt-in
+(DEVELOPMENT.md §5). Run by hand on 2026-10-27 against the upstream
+mimeTools, NppConverter and NppExport from a portable Notepad++ 8.9.8.1
+(`npp-plugin-test <dll>`, then `--run` with each plugin's commands),
+all three load and pass their load and lifecycle notifications, and
+their commands surfaced two messages Code++ does not handle:
+`RUNCOMMAND_USER+3`, from NppExport's "Export to HTML", and
+`NPPMSG+112`, from mimeTools' "About". The harness names a message
+from the compat header and showed these two as offsets, so the header
+does not define them, and neither has a row below yet.
+
 **Re-entrant `NPPM_*` from inside a plugin entry point.** Notepad++
 plugins call `SendMessage(NPPM_*)` from `beNotified` and from their
 menu commands as a matter of course — the version query on
@@ -199,8 +216,10 @@ no borrow held, and delivers those notifications in Notepad++'s order
 
 When a commit promotes an entry from ⚫ → ✅:
 
-1. Add or expand the integration test in `tools/npp-plugin-test/` so
-   the test matrix exercises the message via a real plugin DLL.
+1. Add or expand an integration test in
+   `tools/npp-plugin-test/tests/plugins.rs` so the test matrix
+   exercises the message via a real plugin DLL: assert its `nppm:` line
+   and the absence of an `unhandled:` one.
 2. Update this file's row.
 3. The commit message references the message in the form
    `plugin-host: implement NPPM_GETCURRENTSCINTILLA (v1)`.

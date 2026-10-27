@@ -1,0 +1,47 @@
+[package]
+name = "codepp-npp-plugin-test"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Compatibility harness: hosts a real Notepad++ plugin DLL against Code++'s plugin host and reports what it did."
+
+[lints]
+workspace = true
+
+[lib]
+name = "codepp_npp_plugin_test"
+
+[[bin]]
+name = "npp-plugin-test"
+path = "src/main.rs"
+
+# The report model, the message names, the argument parser and the
+# staging step are platform-neutral and unit-tested on every runner.
+[dependencies]
+codepp-core        = { workspace = true }
+codepp-plugin-host = { workspace = true }
+tempfile           = { workspace = true }
+tracing            = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+# Hosting a plugin is Win32 only: a Notepad++ plugin DLL talks to its host
+# through `SendMessage` on the window handles `setInfo` gave it, so the
+# harness has to own a real window and real Scintilla controls.
+[target.'cfg(target_os = "windows")'.dependencies]
+codepp-platform      = { workspace = true }
+codepp-scintilla-sys = { workspace = true }
+# For the editor's rule that a plugin may not set a buffer to one of
+# Code++'s own User Defined Language ids.
+codepp-udl           = { workspace = true }
+windows = { version = "0.62", features = [
+    "Win32_Foundation",
+    # `WNDCLASSEXW` carries brush and cursor handles, so registering a
+    # window class needs the GDI types.
+    "Win32_Graphics_Gdi",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Threading",
+    "Win32_UI_WindowsAndMessaging",
+] }

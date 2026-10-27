@@ -12,6 +12,7 @@ members = [
     "plugins/cppmimetools",
     "plugins/cppconverter",
     "plugins/cppexport",
+    "tools/npp-plugin-test",
 ]
 default-members = ["crates/app"]
 
