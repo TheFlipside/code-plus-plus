@@ -2945,8 +2945,8 @@ fn on_save_session() {
 
 /// File → Load Session… — open the tabs recorded in a Notepad++-shape
 /// session XML at a user-picked path. The shared `Shell::load_npp_session`
-/// filters empty-name / over-cap entries, pre-seeds each tab's
-/// caret/lang/pin metadata, opens the files, and restores the recorded
+/// filters empty-name / over-cap entries, opens the files, each with its
+/// caret/lang/pin metadata for its landing, and restores the recorded
 /// active tab; the async loads land on their own wakes, so a final
 /// `drain_shell` flushes anything already queued and `rebind_active_view`
 /// moves the view onto the resolved active tab.
@@ -2955,8 +2955,9 @@ fn on_save_session() {
 /// than left beside it, the same outcome [`open_paths`] gives File → Open:
 /// the editor is measured with [`crate::editor_is_pristine`] and the
 /// answer handed to `Shell::load_npp_session`, whose open loop applies
-/// the same `open_file_replacing_scratch` gate. All three backends reach
-/// this through that one parameter, so they cannot disagree on it.
+/// the same pristine-scratch gate as `open_file_replacing_scratch`.
+/// All three backends reach this through that one parameter, so they
+/// cannot disagree on it.
 fn on_load_session() {
     let Some(path) = choose_open_paths().into_iter().next() else {
         return;

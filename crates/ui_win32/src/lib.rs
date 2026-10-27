@@ -430,10 +430,10 @@ const ID_FILE_EXIT: u16 = 1069;
 /// File → Load Session... — pick a Notepad++-shaped session XML from
 /// disk, parse its `<File>` list, and open every path referenced. The
 /// per-file metadata (caret position, pin state, language override)
-/// is applied automatically by `Shell::apply_load_result` because we
-/// pre-populate `shell.session.tabs` with the parsed entries before
-/// kicking each load — same lookup mechanism the internal
-/// startup-restore path uses.
+/// is applied automatically by `Shell::apply_load_result`, because
+/// `Shell::load_npp_session` hands each file's open a record built from
+/// its entry — the record a startup restore's open takes from the
+/// session it read.
 const ID_FILE_LOAD_SESSION: u16 = 1032;
 /// File → Save Session... — prompt for a `.xml` path and write the
 /// currently-open, path-bound tabs in Notepad++'s session shape
@@ -8839,11 +8839,10 @@ fn handle_save_session(hwnd: HWND) {
 
 /// File → Load Session... — pick a Notepad++-shape session XML and
 /// open every path-bound `<File>` entry inside it. Per-file metadata
-/// (caret position, tab pin state, language override) is applied by
-/// pre-populating `shell.session.tabs` with matching entries before
-/// each `open_file` call — `Shell::apply_load_result` picks the
-/// metadata up on load completion via its by-path lookup, the same
-/// mechanism the internal startup-restore path uses.
+/// (caret position, tab pin state, language override) travels with
+/// each file's open as a record built from its entry, and
+/// `Shell::apply_load_result` applies it on load completion — the
+/// record a startup restore's open takes from the session it read.
 ///
 /// Already-open paths are handled by `Shell::open_file`'s built-in
 /// dedupe: the existing tab activates instead of reloading, so the
@@ -8854,7 +8853,8 @@ fn handle_save_session(hwnd: HWND) {
 /// rather than left beside it, the same outcome File → Open gives:
 /// the editor is measured with [`editor_is_pristine`] and the answer
 /// handed to `Shell::load_npp_session`, whose open loop applies the
-/// same `open_file_replacing_scratch` gate [`open_user_path`] does.
+/// same pristine-scratch gate as the `open_file_replacing_scratch`
+/// that [`open_user_path`] calls.
 /// Because the shell *retargets* the scratch rather than closing it,
 /// a parse failure or a session that resolves to zero opens leaves
 /// the workspace exactly as it was — there is no zero-tab window to
@@ -8867,7 +8867,7 @@ fn handle_load_session(hwnd: HWND) {
     };
 
     // 2. Parse + open via the shared shell method. It filters empty-name /
-    //    non-local / over-cap entries, pre-seeds the by-path metadata,
+    //    non-local / over-cap entries, hands each open its metadata,
     //    opens each file, restores pins, and re-activates the recorded tab.
     //    The pristine measurement is taken under the same borrow, right
     //    before the loop that consumes it, so nothing can touch the editor

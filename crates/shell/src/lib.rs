@@ -822,13 +822,13 @@ pub trait UiPlatform {
 pub enum SessionRestoreEntry {
     /// Open `path` from disk via the loader (async). The eventual
     /// load result populates the tab's text + encoding + EOL
-    /// just like a fresh user-initiated open. The persisted
-    /// language override (if any) is looked up from
-    /// `Shell.session` inside `apply_load_result` by path, so no
-    /// dedicated field is needed on this variant — same pattern
-    /// `apply_load_result` already uses for the restored cursor
-    /// position. The persisted `pinned` flag is looked up the same
-    /// way.
+    /// just like a fresh user-initiated open. The persisted caret,
+    /// scroll, folds, language override and `pinned` flag stay in
+    /// `Shell.session`, and the open of `path` takes them to its
+    /// first load, which `apply_load_result` applies at the landing,
+    /// so no dedicated field is needed on this variant. The open
+    /// must be the file's first since the restore: a later one
+    /// finds no record.
     OpenFile(PathBuf),
     /// Re-create an untitled buffer at the next slot with the
     /// pre-loaded text from its backup file. The UI calls
@@ -1951,6 +1951,12 @@ impl HostHandles {
 /// are lazy-loaded, so no DLL is mapped until first menu touch
 /// (DESIGN.md §6.4).
 pub struct Shell {
+    /// The session's window, panel and view state, kept in sync by the UI
+    /// and written by [`Self::save_session`], and the records the session
+    /// read at startup holds for files its restore opens from disk. A
+    /// file's open takes its record ([`Self::record_for_open`]), so the
+    /// tabs here are those no open has reached yet, not the open tabs,
+    /// which `save_session` records from [`Self::tabs`].
     pub session: Session,
     /// Open tabs. Empty at startup; the first `open_file` populates
     /// `tabs[0]` and sets `active_tab = Some(0)`. Subsequent opens
@@ -2156,10 +2162,12 @@ pub struct Shell {
     /// that will give a tab its path. A tab learns its path only when the
     /// load lands, so until then this is the one record of which file the
     /// tab is waiting on. [`Self::save_session`] writes that file for the
-    /// tab, so a session saved in that window reopens it. Taken out when
-    /// the load lands or fails, matched or stale, like
-    /// `loads_onto_existing_tabs`, so it holds only loads in flight.
-    first_loads: HashMap<codepp_core::file::RequestId, PathBuf>,
+    /// tab, so a session saved in that window reopens it. Each carries the
+    /// record a session holds for its file, if one does, for the landing
+    /// to apply. Taken out when the load lands or fails, matched or stale,
+    /// like `loads_onto_existing_tabs`, so it holds only loads in flight,
+    /// and the record goes with it.
+    first_loads: HashMap<codepp_core::file::RequestId, FirstLoad>,
     /// Per-path debounce deadlines for file-change dialogs. An
     /// entry with a future timestamp means new file-change
     /// events for that path are silently discarded until now
@@ -4540,6 +4548,13 @@ impl Shell {
                     tab.untitled_seq = None;
                     tab.custom_name = None;
                 }
+                // A record the session still holds for the file was waiting
+                // for an open of it, and the file has a tab now without one.
+                // Left, it would be handed to the file's open after this tab
+                // closes. Defence: the restore keeps records only for the
+                // files it opens, so one is left only when such an open was
+                // refused, by the tab cap or the loader.
+                self.take_session_record(&new_path);
                 if let Err(e) = self.file_watcher.watch(&new_path) {
                     tracing::warn!(error = ?e, path = ?new_path, "failed to watch new path after Save As");
                 }
@@ -4789,9 +4804,45 @@ impl Shell {
         self.titled_tab_for_path(path).or_else(|| {
             self.first_loads
                 .iter()
-                .filter(|(_, p)| p.as_path() == path)
+                .filter(|(_, load)| load.path.as_path() == path)
                 .find_map(|(req, _)| self.tabs.iter().position(|t| t.pending_load == Some(*req)))
         })
+    }
+
+    /// The record an open of `path` hands its first load: `given`, or else
+    /// the one [`Self::session`] holds for the file, which is taken out
+    /// either way ([`Self::take_session_record`]).
+    ///
+    /// **A session's record is for one open of its file**: the first that
+    /// issues a load of it. An open refused before that, by the tab cap or
+    /// the loader, leaves the record for the file's next open. The records
+    /// [`Self::session`] keeps are those of the files the startup restore
+    /// opens from disk, and the restore's own open of each takes its
+    /// record; a file closed and opened again finds none and lands as any
+    /// file no session names does. Until Phase 5 the landing looked the
+    /// record up by path, and nothing ever removed one, so a file reopened
+    /// later in the session came back with the language, pin, caret, scroll
+    /// and folds it had when the session was read, however the user had
+    /// changed them since.
+    fn record_for_open(
+        &mut self,
+        path: &Path,
+        given: Option<codepp_core::Tab>,
+    ) -> Option<codepp_core::Tab> {
+        let held = self.take_session_record(path);
+        given.or(held)
+    }
+
+    /// Take the record [`Self::session`] holds for `path` out of it. A
+    /// session names a file at most once (`dedupe_session_paths`), and
+    /// nothing else adds one, so there is at most one to take.
+    fn take_session_record(&mut self, path: &Path) -> Option<codepp_core::Tab> {
+        let at = self
+            .session
+            .tabs
+            .iter()
+            .position(|t| t.path.as_deref() == Some(path))?;
+        Some(self.session.tabs.remove(at))
     }
 
     /// [`Self::open_file`], but allowed to consume a pristine scratch
@@ -4829,6 +4880,19 @@ impl Shell {
         path: PathBuf,
         editor_is_pristine: bool,
     ) -> OpenFileOutcome {
+        self.open_file_with_record(path, editor_is_pristine, None)
+    }
+
+    /// [`Self::open_file_replacing_scratch`], with the record the open's
+    /// first load is to apply: `given`, which Load Session builds from the
+    /// file it reads, or else the one [`Self::session`] holds for the file
+    /// ([`Self::record_for_open`]).
+    fn open_file_with_record(
+        &mut self,
+        path: PathBuf,
+        editor_is_pristine: bool,
+        given: Option<codepp_core::Tab>,
+    ) -> OpenFileOutcome {
         // De-duplicate: if the path is already open in some tab, or is
         // still loading into one, switch to that tab rather than
         // allocating a fresh one. One tab per file is what every lookup
@@ -4837,6 +4901,18 @@ impl Shell {
         // second tab, and a reload, a deletion or a close then acted on
         // whichever of the two came first.
         if let Some(idx) = self.tab_for_path(&path) {
+            // A record for a tab still on its first load replaces the one
+            // that load carries, so a Load Session naming a file the
+            // startup restore is still loading applies the session file's
+            // caret, language and pin at the landing, as it did when both
+            // went through one record by path. A tab whose file has landed
+            // keeps what it has, and the record is dropped.
+            if let Some(record) = self.record_for_open(&path, given) {
+                let load = self.tabs.get(idx).and_then(|t| t.pending_load);
+                if let Some(first) = load.and_then(|req| self.first_loads.get_mut(&req)) {
+                    first.record = Some(record);
+                }
+            }
             return if self.switch_to_tab(idx) {
                 OpenFileOutcome::SwitchedToExisting(idx)
             } else {
@@ -4885,7 +4961,8 @@ impl Shell {
                 .push(Notification::FileLoadFailed);
             return OpenFileOutcome::Rejected;
         };
-        self.first_loads.insert(req_id, path);
+        let record = self.record_for_open(&path, given);
+        self.first_loads.insert(req_id, FirstLoad { path, record });
         // Decide where the load result will land. If the active
         // tab is empty *and isn't already waiting for its own load
         // to complete and isn't a user-created File→New buffer*,
@@ -5902,9 +5979,13 @@ impl Shell {
                 // one whose failure `apply_failed_load` has to reason
                 // about. Dropped on success as well as failure and on
                 // the stale-result path above, so the set only ever
-                // holds loads actually in flight. `first_loads` too.
+                // holds loads actually in flight. `first_loads` too, and
+                // the record it carries is this landing's to apply.
                 self.loads_onto_existing_tabs.remove(&loaded.id);
-                self.first_loads.remove(&loaded.id);
+                let record = self
+                    .first_loads
+                    .remove(&loaded.id)
+                    .and_then(|first| first.record);
 
                 // Begin watching the new file before pushing into
                 // the editor — if the watch fails the user still gets
@@ -5929,18 +6010,12 @@ impl Shell {
                 // start.
                 self.note_bound_position(ui);
 
-                // Single by-path lookup covering every attribute the
-                // load path pulls from the persisted session: the view
-                // and folds, the user's Language-menu override, and the
-                // pin state. Rebuilding the find call per
-                // attribute (an earlier shape of this code) had the
-                // same shape three times and pushed the function
-                // over clippy's `too_many_lines` gate.
-                let stored = self
-                    .session
-                    .tabs
-                    .iter()
-                    .find(|t| t.path.as_deref() == Some(loaded.path.as_path()));
+                // The record this load's open took for the file
+                // (`record_for_open`), covering every attribute a first load
+                // takes from a session: the view and folds, the user's
+                // Language-menu override, and the pin state. A reload has
+                // none, and applies none of them anyway.
+                let stored = record.as_ref();
                 let (view, folds) = Self::recorded_view(stored);
                 // The language and pin a first load sets, resolved before
                 // the `&mut tab` borrow below so the UDL-registry read (a
@@ -6054,14 +6129,17 @@ impl Shell {
                 // `Tab::pin_requested_during_load`). The language is the
                 // persisted Language-menu override, else extension-based
                 // auto-detection (built-in lexers plus UDL `ext=`
-                // associations). `self.session.tabs` is the session read at
-                // startup or by Load Session, and nothing refreshes it
-                // during a session, so a reload that applied it put back
-                // what the file had then: a pick made since was undone with
-                // no word to the plugins, and an undone pin could leave an
-                // unpinned tab inside the pinned cluster. Notepad++ keeps a
-                // buffer's language across a reload, as read from its
-                // source; that is not yet measured (DESIGN.md §7.4).
+                // associations). A reload has no record, since the file's
+                // first open took it (`record_for_open`), so a reload that
+                // set them would set them from the extension and the
+                // defaults: a pick made since would be undone with no word to
+                // the plugins, and an undone pin could leave an unpinned tab
+                // inside the pinned cluster. Before records moved with the
+                // open, a reload also put back what the session read at
+                // startup held for the file, which nothing refreshed.
+                // Notepad++ keeps a buffer's language across a reload, as
+                // read from its source; that is not yet measured
+                // (DESIGN.md §7.4).
                 //
                 // The pin follows the same rule. For a full session restore
                 // the tab vector is already assembled pinned-first, so
@@ -6475,6 +6553,9 @@ impl Shell {
         // took the front, and leaving the view there kept it on a
         // document no tab owns.
         let borrowed_an_existing_tab = self.loads_onto_existing_tabs.remove(&err.id);
+        // The session's record for the file goes with it: the tab it
+        // described did not come back, so a later open of the file lands
+        // as any file no session names does.
         self.first_loads.remove(&err.id);
         let target = self
             .tabs
@@ -7856,12 +7937,14 @@ impl Shell {
 
     /// File → Load Session: parse a Notepad++-shape session XML at `path`
     /// and open every path-bound `<File>` entry, applying its recorded
-    /// caret / language / pin. Per-file metadata is applied by pre-seeding
-    /// `self.session.tabs` so [`apply_load_result`](Self::apply_load_result)'s
-    /// by-path lookup picks it up on async load completion — the same
-    /// mechanism startup restore uses. Already-open paths dedupe via
-    /// `open_file`. The recorded active tab is restored by its stable `id`
-    /// (positional indices shift under the pin relocations below).
+    /// caret / language / pin. Each open hands its first load a record
+    /// built from the entry, which
+    /// [`apply_load_result`](Self::apply_load_result) applies on async load
+    /// completion — the record a startup restore's open takes from
+    /// [`Self::session`]. Already-open paths dedupe via `open_file`, and
+    /// the record replaces the one a first load still in flight carries.
+    /// The recorded active tab is restored by its stable `id` (positional
+    /// indices shift under the pin relocations below).
     ///
     /// Untrusted input: empty-`filename` entries are skipped, the list is
     /// capped at [`MAX_SESSION_TABS`], and non-local paths are rejected on
@@ -7958,35 +8041,21 @@ impl Shell {
         let mut recorded_active_target_id: Option<i32> = None;
         for (file_path, cursor, lang, pinned) in entries {
             let is_recorded_active = recorded_active_path.as_deref() == Some(file_path.as_path());
-            // Upsert the by-path metadata so apply_load_result applies the
-            // caret / lang / pin when the async load completes. Overwrite an
-            // existing record rather than piling up duplicates.
-            match self
-                .session
-                .tabs
-                .iter_mut()
-                .find(|t| t.path.as_deref() == Some(file_path.as_path()))
-            {
-                Some(existing) => {
-                    existing.cursor = cursor;
-                    existing.lang = lang;
-                    // The N++ session file is the authority for this record
-                    // now, and its `lang` attribute is a built-in language
-                    // name — it can never name a UDL. Leaving a `@udl` from
-                    // the record this overwrites would let that stale name
-                    // win, since it outranks `@lang` on the way back.
-                    existing.udl = None;
-                    existing.pinned = pinned;
-                }
-                None => self.session.tabs.push(codepp_core::session::Tab {
-                    path: Some(file_path.clone()),
-                    cursor,
-                    lang,
-                    pinned,
-                    ..codepp_core::session::Tab::default()
-                }),
-            }
-            let outcome = self.open_file_replacing_scratch(file_path, editor_is_pristine);
+            // The record the open hands its first load, for the landing to
+            // apply the caret / lang / pin. Built fresh from the N++ file,
+            // which is the authority for it: one the session read at startup
+            // still holds for the file is dropped, not merged into, since
+            // its `@udl` would otherwise outrank the built-in language the
+            // N++ file names (its `lang` attribute can never name a UDL), and
+            // its scroll and folds belong to another session.
+            let record = codepp_core::session::Tab {
+                path: Some(file_path.clone()),
+                cursor,
+                lang,
+                pinned,
+                ..codepp_core::session::Tab::default()
+            };
+            let outcome = self.open_file_with_record(file_path, editor_is_pristine, Some(record));
             if matches!(outcome, OpenFileOutcome::SwitchedToExisting(_)) {
                 deduped = true;
             }
@@ -8034,8 +8103,8 @@ impl Shell {
     /// where the user left it: the live ones for the tab whose document
     /// the view shows, and those the shell kept for every other tab
     /// ([`Self::tab_position`], [`Self::tab_folds`]). A file still loading
-    /// records what the session read at startup recorded for it, which its
-    /// landing would apply. What is written is
+    /// records what its landing would apply: the record its open took from
+    /// the session read at startup or by Load Session. What is written is
     /// [`Self::session_to_save`]'s.
     ///
     /// A backup takes a name nothing in the backup folder has
@@ -8181,7 +8250,7 @@ impl Shell {
             let tab = &self.tabs[idx];
             let id = tab.id;
             let is_active = self.active_tab == Some(idx);
-            let Some(path) = self.first_load_path(tab) else {
+            let Some(first) = self.first_load(tab) else {
                 if let Some(record) = self.tab_record(ui, idx, &mut pass) {
                     if is_active {
                         active = Some(session.tabs.len());
@@ -8193,7 +8262,8 @@ impl Shell {
                 }
                 continue;
             };
-            let (work, file) = self.loading_tab_records(ui, idx, path, &mut pass);
+            let path = first.path.as_path();
+            let (work, file) = self.loading_tab_records(ui, idx, first, &mut pass);
             let second_record = work.is_some();
             if let Some(work) = work {
                 // The landing keeps the front on the work, so the work
@@ -8247,17 +8317,15 @@ impl Shell {
         SavedSession { session, backups }
     }
 
-    /// The file whose first load `tab` is waiting on, from the open that
-    /// will give the tab its path until that load lands or fails
-    /// (`first_loads`). `None` for a tab being reloaded, which has its path
-    /// already.
-    fn first_load_path(&self, tab: &Tab) -> Option<&Path> {
+    /// The first load `tab` is waiting on, from the open that will give the
+    /// tab its path until that load lands or fails (`first_loads`): the
+    /// file, and the record the landing will apply. `None` for a tab being
+    /// reloaded, which has its path already.
+    fn first_load(&self, tab: &Tab) -> Option<&FirstLoad> {
         if tab.path.is_some() {
             return None;
         }
-        tab.pending_load
-            .and_then(|req| self.first_loads.get(&req))
-            .map(PathBuf::as_path)
+        tab.pending_load.and_then(|req| self.first_loads.get(&req))
     }
 
     /// The `session.xml` record for the tab at `idx`, writing its recovery
@@ -8354,13 +8422,14 @@ impl Shell {
     }
 
     /// What a session saved now records for the tab at `idx`, whose first
-    /// load of `path` is still in flight: what that load's landing would
+    /// load (`first`) is still in flight: what that load's landing would
     /// leave ([`Self::apply_load_result`]), so the next start reopens the
     /// file and keeps anything typed while it loaded.
     ///
     /// The file's record carries what the landing would give the file: the
-    /// caret, language and pin the session read at startup recorded for
-    /// it, or a language or pin requested while it loaded. Work typed into
+    /// caret, language and pin of the record the load carries
+    /// ([`FirstLoad::record`]), or a language or pin requested while it
+    /// loaded. Work typed into
     /// the tab meanwhile is kept as the landing keeps it
     /// ([`Self::divert_first_load`]): an untitled buffer, numbered if it
     /// had no number, recorded before the file, keeping the tab's language
@@ -8373,9 +8442,10 @@ impl Shell {
         &self,
         ui: &mut U,
         idx: usize,
-        path: &Path,
+        first: &FirstLoad,
         pass: &mut SavePass<'_>,
     ) -> (Option<codepp_core::Tab>, codepp_core::Tab) {
+        let path = first.path.as_path();
         let tab = &self.tabs[idx];
         let load = tab.pending_load;
         let pin_moves = tab.pin_requested_during_load == load;
@@ -8415,14 +8485,10 @@ impl Shell {
         } else {
             None
         };
-        // The record the session read at startup holds for the file, which
-        // is what the landing would apply, copied as it is so the next start
-        // resolves it as the landing would have.
-        let stored = self
-            .session
-            .tabs
-            .iter()
-            .find(|t| t.path.as_deref() == Some(path));
+        // The record the load carries, which is what the landing would
+        // apply, copied as it is so the next start resolves it as the
+        // landing would have.
+        let stored = first.record.as_ref();
         let (lang, udl) = if tab.lang_requested_during_load == load {
             Self::persisted_lang_fields(tab.lang, Some(path), &self.udl_registry)
         } else {
@@ -8559,10 +8625,12 @@ impl Shell {
     /// session.xml, so the UI just iterates and dispatches per
     /// variant — preserving the user's tab arrangement exactly.
     ///
-    /// The parsed [`Session`] is stored on `self` so
-    /// `apply_load_result` can later look up each restored tab's
-    /// cursor position by path, and so `session_active_index` can
-    /// report the saved active index.
+    /// The parsed [`Session`] is stored on `self` so the open of each
+    /// [`SessionRestoreEntry::OpenFile`] can take its file's record, for
+    /// `apply_load_result` to apply the caret, scroll, folds, language and
+    /// pin at the landing, and so `session_active_index` can report the
+    /// saved active index. It keeps only those records: a buffer restored
+    /// from its backup has what its record held already.
     ///
     /// Returns an empty Vec when the file is missing — first-run
     /// case, never an error. A file that cannot be read (not a
@@ -8662,6 +8730,9 @@ impl Shell {
         // The backups a record restored from, and the bytes of the budget
         // still unread.
         let mut reads = BackupReads::new(budget);
+        // The files restored by opening them from disk, whose records their
+        // opens are to take.
+        let mut opened_from_disk: HashSet<PathBuf> = HashSet::new();
         let entries: Vec<SessionRestoreEntry> = session
             .tabs
             .iter()
@@ -8727,6 +8798,7 @@ impl Shell {
                             pinned: t.pinned,
                         })
                     } else {
+                        opened_from_disk.insert(path.clone());
                         Some(SessionRestoreEntry::OpenFile(path.clone()))
                     }
                 } else {
@@ -8775,11 +8847,20 @@ impl Shell {
             // one tab, so treat it like a file that could not be read.
             self.keep_every_backup(backups_dir);
         }
-        // Only the records the restore reads are kept, now that the backups
-        // the rest name are noted: every lookup by path in `self.session`
-        // scans all of them, and a session file the reader takes can hold
-        // hundreds of thousands.
+        // Only the records of the files the restore opens from disk are
+        // kept, now that the backups the rest name are noted. Each is there
+        // for that open to take (`record_for_open`); a buffer restored from
+        // its backup already has what its record held, and keeping its
+        // record would hand it to the file's next open, after the tab is
+        // closed. Every lookup by path in `self.session` scans what is kept,
+        // and a session file the reader takes can hold hundreds of
+        // thousands of records.
         session.tabs.truncate(MAX_SESSION_TABS);
+        session.tabs.retain(|t| {
+            t.path
+                .as_ref()
+                .is_some_and(|p| opened_from_disk.contains(p))
+        });
         self.session = session;
         entries
     }
@@ -9380,6 +9461,20 @@ fn writable_paths_only(session: &mut Session) {
     }
 }
 
+/// A first load in flight, for [`Shell::first_loads`]: the file it is for,
+/// and the record a session holds for that file, which its landing applies.
+#[derive(Debug)]
+struct FirstLoad {
+    path: PathBuf,
+    /// What the session read at startup, or a Load Session, recorded for the
+    /// file: its caret, scroll and folds, its language and its pin. `None`
+    /// for a file no session names, which lands at its start, unfolded, in
+    /// its extension's language. Taken out of [`Shell::session`] by the open
+    /// ([`Shell::record_for_open`]), so the file's next open, once this
+    /// load has landed or failed or its tab has closed, finds none.
+    record: Option<codepp_core::Tab>,
+}
+
 /// Which restored tab a backup named in `session.xml` belongs to, for
 /// [`Shell::restored_backups`]: an untitled buffer by its number, a file by
 /// its path.
@@ -9862,11 +9957,10 @@ fn is_disk_newer_than_backup(disk_path: &Path, backup_path: &Path) -> bool {
 /// would come up interleaved in the strip, where every pinned tab
 /// belongs in front of every unpinned one.
 ///
-/// `apply_load_result`'s by-path lookup on `self.session.tabs`
-/// must observe the same reordered view so a late-arriving async
-/// load picks up the correct persisted `pinned`/`lang`/`cursor`
-/// fields — that's why the sort mutates the stored `Session`
-/// rather than a copy.
+/// The sort mutates the stored `Session` rather than a copy, so the
+/// entries the restore hands the UI come out in the sorted order and
+/// `session.active` still names the tab in front. Each open takes its
+/// file's record from it by path, which the order does not affect.
 ///
 /// `sort_by_key` with `Reverse(pinned)` is stable in Rust's stdlib
 /// (guaranteed since 1.6), preserving relative order within each
@@ -20585,7 +20679,8 @@ mod tests {
 
     /// Open `path` and let it land, pick Python for it from the Language
     /// menu, change the file on disk and reload it. `session_lang` is what
-    /// the session read at startup recorded for the file, if anything.
+    /// the session read at startup recorded for the file, if anything; the
+    /// open takes that record.
     /// Returns the shell and the fixture once the reload has landed, and
     /// the number of `apply_lang` calls made before it was requested.
     fn reload_after_a_python_pick(
@@ -20652,7 +20747,9 @@ mod tests {
     }
 
     /// The same, where the session read at startup recorded a language
-    /// for the file: C++, picked in an earlier session.
+    /// for the file: C++, picked in an earlier session. The open takes that
+    /// record, so C++ cannot come back now; the extension's Rust could, and
+    /// this checks neither does.
     #[test]
     fn a_reload_keeps_a_pick_over_the_language_the_session_recorded() {
         use codepp_core::lang::{L_CPP, L_PYTHON};
@@ -20922,6 +21019,11 @@ mod tests {
 
     /// And the other way round: the session read at startup pinned the
     /// file, the user unpinned it since, and the reload pinned it again.
+    /// The open now takes the session's record, so nothing of the
+    /// session's reaches the reload, and this checks that end to end. It
+    /// cannot see the reload's own gate: a reload that set the pin would
+    /// set a file's default, unpinned, which is what the user chose.
+    /// `a_reload_keeps_a_pin_set_since_the_file_was_opened` covers that.
     #[test]
     fn a_reload_keeps_an_unpin_made_since_the_file_was_opened() {
         let dir = tempfile::tempdir().unwrap();
@@ -21037,6 +21139,295 @@ mod tests {
         assert!(shell.tabs[0].pinned);
     }
 
+    /// A session record naming `path` in Normal Text, pinned, with its caret
+    /// at 5: everything a first load of a `.rs` file would not give it.
+    fn normal_text_pinned_record(path: &Path) -> codepp_core::Tab {
+        let mut record = codepp_core::Tab {
+            path: Some(path.to_path_buf()),
+            lang: Some(codepp_core::lang::L_TEXT.as_npp_id()),
+            pinned: true,
+            ..codepp_core::Tab::default()
+        };
+        record.set_view_position(ViewPosition::at(5));
+        record
+    }
+
+    /// Restore `session` as a backend does: open each file from disk, and
+    /// put each file restored from its backup back. The loads are left in
+    /// flight.
+    fn restore_as_a_backend_does(
+        shell: &mut Shell,
+        ui: &mut FakeUi,
+        session: Session,
+        backups: Option<&Path>,
+    ) {
+        for entry in shell.restore_entries(session, backups, MAX_RESTORED_BACKUP_BYTES) {
+            match entry {
+                SessionRestoreEntry::OpenFile(path) => {
+                    shell.open_file(path);
+                }
+                SessionRestoreEntry::DirtyFromBackup {
+                    path,
+                    text,
+                    view,
+                    folds,
+                    encoding,
+                    eol,
+                    disk_changed_externally,
+                    backup_modified_externally,
+                    lang,
+                    pinned,
+                } => {
+                    shell.restore_dirty_with_text(
+                        ui,
+                        path,
+                        text,
+                        view,
+                        folds,
+                        encoding,
+                        eol,
+                        disk_changed_externally,
+                        backup_modified_externally,
+                        lang,
+                        pinned,
+                    );
+                }
+                SessionRestoreEntry::UntitledFromBackup { .. } => {
+                    panic!("these sessions name no untitled buffer")
+                }
+            }
+        }
+    }
+
+    /// Close the tab holding or loading `path`, as the UI does.
+    fn close_file(shell: &mut Shell, ui: &mut FakeUi, path: &Path) {
+        let idx = shell.tab_for_path(path).expect("a tab for the file");
+        shell.switch_to_tab(idx);
+        shell.bind_active_view(ui);
+        let closed = shell.close_active_tab().expect("a tab to close");
+        finish_close(shell, ui, &closed);
+    }
+
+    /// Open `path`, let it land, and return its tab's language and pin, and
+    /// the caret the view shows it at.
+    fn reopen(shell: &mut Shell, ui: &mut FakeUi, path: &Path) -> (LangType, bool, u64) {
+        shell.open_file(path.to_path_buf());
+        drain_until_loads_settle(shell, ui);
+        let idx = shell.tab_for_path(path).expect("the file landed");
+        assert_eq!(shell.active_tab, Some(idx), "precondition: shown");
+        (shell.tabs[idx].lang, shell.tabs[idx].pinned, ui.view.caret)
+    }
+
+    /// What a first load of a `.rs` file no session names gives it.
+    const AS_NO_SESSION_NAMES_IT: (LangType, bool, u64) = (codepp_core::lang::L_RUST, false, 0);
+
+    /// A file the session restored, closed and opened again, lands as a
+    /// file no session names: in its extension's language, unpinned, at
+    /// its start. Before, the landing looked the session's record up by
+    /// path and nothing removed it, so the file came back with the
+    /// language, pin and caret the session had for it, however the user
+    /// had changed them since.
+    #[test]
+    fn a_restored_file_closed_and_opened_again_takes_nothing_from_the_session() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("main.rs");
+        std::fs::write(&path, "fn main() {}\n").unwrap();
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+        let mut session = Session::new();
+        session.tabs.push(normal_text_pinned_record(&path));
+        restore_as_a_backend_does(&mut shell, &mut ui, session, None);
+        drain_until_loads_settle(&mut shell, &mut ui);
+        let idx = shell.tab_for_path(&path).expect("restored");
+        assert_eq!(
+            (shell.tabs[idx].lang, shell.tabs[idx].pinned, ui.view.caret),
+            (codepp_core::lang::L_TEXT, true, 5),
+            "precondition: the restore applied the record"
+        );
+        assert!(shell.session.tabs.is_empty(), "the restore's open took it");
+
+        close_file(&mut shell, &mut ui, &path);
+        assert_eq!(reopen(&mut shell, &mut ui, &path), AS_NO_SESSION_NAMES_IT);
+    }
+
+    /// A file restored from its backup has what its record held already, so
+    /// the restore keeps no record for it: closed and opened again, it lands
+    /// as a file no session names.
+    #[test]
+    fn a_file_restored_from_its_backup_and_reopened_takes_nothing_from_the_session() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("main.rs");
+        std::fs::write(&path, "fn main() {}\n").unwrap();
+        let backups = dir.path().join("backup");
+        std::fs::create_dir_all(&backups).unwrap();
+        let name = "main.rs@2026-10-09_110000";
+        std::fs::write(backups.join(name), "fn main() { edited(); }\n").unwrap();
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+        let mut session = Session::new();
+        let mut record = normal_text_pinned_record(&path);
+        record.backup = Some(name.into());
+        session.tabs.push(record);
+        restore_as_a_backend_does(&mut shell, &mut ui, session, Some(&backups));
+        let idx = shell.tab_for_path(&path).expect("restored");
+        assert_eq!(
+            (shell.tabs[idx].lang, shell.tabs[idx].pinned),
+            (codepp_core::lang::L_TEXT, true),
+            "precondition: restored from the backup with its record's values"
+        );
+        assert!(shell.session.tabs.is_empty(), "the restore kept no record");
+
+        close_file(&mut shell, &mut ui, &path);
+        assert_eq!(reopen(&mut shell, &mut ui, &path), AS_NO_SESSION_NAMES_IT);
+    }
+
+    /// The tab a restored file was loading into, closed before the file
+    /// landed, takes the session's record with it.
+    #[test]
+    fn a_file_closed_while_the_restore_loads_it_takes_nothing_from_the_session_when_reopened() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("main.rs");
+        std::fs::write(&path, "fn main() {}\n").unwrap();
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+        let mut session = Session::new();
+        session.tabs.push(normal_text_pinned_record(&path));
+        restore_as_a_backend_does(&mut shell, &mut ui, session, None);
+        assert!(
+            shell.tabs.iter().any(|t| t.pending_load.is_some()),
+            "precondition: still loading"
+        );
+
+        close_file(&mut shell, &mut ui, &path);
+        assert_eq!(reopen(&mut shell, &mut ui, &path), AS_NO_SESSION_NAMES_IT);
+        // The closed tab's load landed first, as stale, and dropped its
+        // record; the reopen's landing dropped its own.
+        assert!(
+            shell.first_loads.is_empty(),
+            "no load is left holding a record"
+        );
+    }
+
+    /// A restored file that cannot be read takes the session's record with
+    /// its failed load, so once the file is back, opening it lands as a
+    /// file no session names.
+    #[test]
+    fn a_restored_file_that_failed_to_load_takes_nothing_from_the_session_when_opened() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("main.rs");
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+        let mut session = Session::new();
+        session.tabs.push(normal_text_pinned_record(&path));
+        restore_as_a_backend_does(&mut shell, &mut ui, session, None);
+        assert!(
+            shell.tab_for_path(&path).is_some(),
+            "precondition: the restore opened the file"
+        );
+        drain_until_loads_settle(&mut shell, &mut ui);
+        assert!(
+            shell.tab_for_path(&path).is_none(),
+            "precondition: the load failed"
+        );
+        assert!(
+            shell.first_loads.is_empty(),
+            "the failed load dropped its record"
+        );
+
+        std::fs::write(&path, "fn main() {}\n").unwrap();
+        assert_eq!(reopen(&mut shell, &mut ui, &path), AS_NO_SESSION_NAMES_IT);
+    }
+
+    /// Write a Notepad++ session naming `path` in Python, pinned, with its
+    /// caret at `caret`, and return where it is.
+    fn npp_session_naming(dir: &Path, path: &Path, caret: u64) -> PathBuf {
+        use codepp_core::npp_session::{NppFile, NppSession, NppSessionDoc, NppView};
+        let doc = NppSessionDoc {
+            session: NppSession {
+                active_view: 0,
+                main_view: NppView {
+                    active_index: 0,
+                    files: vec![NppFile {
+                        filename: path.to_path_buf(),
+                        lang: "Python".to_string(),
+                        start_pos: caret,
+                        ..Default::default()
+                    }],
+                },
+                sub_view: None,
+            },
+        };
+        let at = dir.join("sess.xml");
+        doc.save_to_xml(&at).unwrap();
+        at
+    }
+
+    /// A Load Session naming a file that is already open changes nothing a
+    /// load would, and leaves no record behind: closed and opened again, the
+    /// file lands as one no session names. Before, Load Session added its
+    /// record to the session before the open, and the open of a file
+    /// already open left it there for the file's next open.
+    #[test]
+    fn a_load_session_naming_an_open_file_leaves_nothing_for_its_next_open() {
+        let (mut shell, mut ui, dir, paths) = open_settled(&["main.rs"]);
+        let path = &paths[0];
+        let session = npp_session_naming(dir.path(), path, 3);
+        shell.load_npp_session(&session, false).unwrap();
+        drain_until_loads_settle(&mut shell, &mut ui);
+        assert!(shell.session.tabs.is_empty(), "no record was left");
+
+        close_file(&mut shell, &mut ui, path);
+        assert_eq!(reopen(&mut shell, &mut ui, path), AS_NO_SESSION_NAMES_IT);
+    }
+
+    /// A Load Session naming a file the restore is still loading hands the
+    /// load its own record, so the landing applies the session file's
+    /// language and caret rather than the startup session's.
+    #[test]
+    fn a_load_session_naming_a_file_still_loading_replaces_its_record() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("main.rs");
+        std::fs::write(&path, "fn main() {}\n").unwrap();
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+        let mut session = Session::new();
+        session.tabs.push(normal_text_pinned_record(&path));
+        restore_as_a_backend_does(&mut shell, &mut ui, session, None);
+        let npp = npp_session_naming(dir.path(), &path, 3);
+        shell.load_npp_session(&npp, false).unwrap();
+        drain_until_loads_settle(&mut shell, &mut ui);
+        let idx = shell.tab_for_path(&path).expect("landed");
+        assert_eq!(shell.tabs[idx].lang, codepp_core::lang::L_PYTHON);
+        assert_eq!(ui.view.caret, 3);
+    }
+
+    /// A file given a tab by Save As takes the record the session still
+    /// held for it, so the file's open after that tab closes finds none.
+    #[test]
+    fn save_as_onto_a_file_the_session_names_leaves_nothing_for_its_next_open() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("main.rs");
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+        // A record no open has reached, set by hand: the restore keeps one
+        // only when its open of the file was refused, by the tab cap or the
+        // loader.
+        shell.session.tabs.push(normal_text_pinned_record(&path));
+        shell.new_untitled(&mut ui);
+        ui.buffer_text = "fn main() {}\n".into();
+        shell.save_buffer_as(&mut ui, path.clone()).unwrap();
+        assert!(shell.session.tabs.is_empty(), "Save As took the record");
+
+        close_file(&mut shell, &mut ui, &path);
+        assert_eq!(reopen(&mut shell, &mut ui, &path), AS_NO_SESSION_NAMES_IT);
+    }
+
     /// Restore two tabs, both still loading, both pinned by the session:
     /// `p.txt` in front of `o.txt`, with the buffer `active_id` active. Pin
     /// `o.txt` and clear the pin again while it loads, which moves it to the
@@ -21066,12 +21457,21 @@ mod tests {
         let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
         let mut shell = Shell::new(wake).unwrap();
         let mut ui = FakeUi::default();
-        for path in [&pinned_path, &other_path] {
-            shell.session.tabs.push(codepp_core::session::Tab {
+        // The restore's opens, by hand: each first load carries the record
+        // its open took, pinned by the session.
+        for (req, path) in [(901, &pinned_path), (902, &other_path)] {
+            let record = codepp_core::session::Tab {
                 path: Some(path.clone()),
                 pinned: true,
                 ..codepp_core::session::Tab::default()
-            });
+            };
+            shell.first_loads.insert(
+                req,
+                FirstLoad {
+                    path: path.clone(),
+                    record: Some(record),
+                },
+            );
         }
         shell.tabs = vec![
             Tab {
@@ -22539,7 +22939,13 @@ mod tests {
             .loader
             .open(path.to_path_buf())
             .expect("the loader takes the request");
-        shell.first_loads.insert(req, path.to_path_buf());
+        shell.first_loads.insert(
+            req,
+            FirstLoad {
+                path: path.to_path_buf(),
+                record: None,
+            },
+        );
         let id = shell.allocate_buffer_id();
         shell.tabs.push(Tab {
             id,
@@ -23502,14 +23908,14 @@ mod tests {
         );
     }
 
-    /// An N++ session file is the authority for the records it overwrites,
-    /// and its `lang` attribute is a *built-in* language name — the format
-    /// has no way to name a UDL. So a `@udl` left over from the Code++
-    /// session this replaces would silently outrank the language the N++
-    /// file actually asked for, because the name wins over `@lang` on the
-    /// way back.
+    /// An N++ session file is the authority for the records it hands its
+    /// opens, and its `lang` attribute is a *built-in* language name — the
+    /// format has no way to name a UDL. So a `@udl` left over from a Code++
+    /// session record for the same file would silently outrank the language
+    /// the N++ file actually asked for, because the name wins over `@lang`
+    /// on the way back.
     #[test]
-    fn load_npp_session_clears_a_stale_udl_name_on_the_records_it_overwrites() {
+    fn load_npp_session_drops_the_record_a_code_session_held_for_the_file() {
         use codepp_core::npp_session::{NppFile, NppSession, NppSessionDoc, NppView};
         let dir = tempfile::tempdir().unwrap();
         let f1 = dir.path().join("a.txt");
@@ -23517,7 +23923,9 @@ mod tests {
 
         let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
         let mut shell = Shell::new(wake).unwrap();
-        // A record from a previous Code++ session: this path was on a UDL.
+        let mut ui = FakeUi::default();
+        // A record from a previous Code++ session that no open has taken:
+        // this path was on a UDL.
         shell.session.tabs.push(codepp_core::session::Tab {
             path: Some(f1.clone()),
             udl: Some("Markdown (preinstalled)".to_string()),
@@ -23541,21 +23949,20 @@ mod tests {
         let sess_path = dir.path().join("sess.xml");
         doc.save_to_xml(&sess_path).unwrap();
         shell.load_npp_session(&sess_path, false).unwrap();
+        assert!(
+            shell.session.tabs.is_empty(),
+            "the open took the old record, and none was added"
+        );
+        drain_until_loads_settle(&mut shell, &mut ui);
 
-        let record = shell
-            .session
+        let tab = shell
             .tabs
             .iter()
             .find(|t| t.path.as_deref() == Some(f1.as_path()))
-            .expect("the record is upserted in place, not duplicated");
-        assert_eq!(record.udl, None, "the stale UDL name must not survive");
-        assert_eq!(record.lang, Some(codepp_core::lang::L_PYTHON.as_npp_id()));
-        // And it resolves to what the N++ file asked for rather than to the
-        // UDL the old record named — which is the property that matters.
-        assert_eq!(
-            Shell::resolve_persisted_lang(record.lang, record.udl.as_deref(), &shell.udl_registry),
-            Some(codepp_core::lang::L_PYTHON),
-        );
+            .expect("the file landed");
+        // What the N++ file asked for, rather than the UDL the old record
+        // named — which is the property that matters.
+        assert_eq!(tab.lang, codepp_core::lang::L_PYTHON);
     }
 
     #[test]
