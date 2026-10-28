@@ -155,27 +155,28 @@ use codepp_scintilla_sys::{
     SCI_ENDUNDOACTION, SCI_GETCOLUMN, SCI_GETCURRENTPOS, SCI_GETDIRECTFUNCTION,
     SCI_GETDIRECTPOINTER, SCI_GETDOCPOINTER, SCI_GETFIRSTVISIBLELINE, SCI_GETINDENTATIONGUIDES,
     SCI_GETLENGTH, SCI_GETLINECOUNT, SCI_GETMODIFY, SCI_GETOVERTYPE, SCI_GETSELECTIONEND,
-    SCI_GETSELECTIONSTART, SCI_GETSELTEXT, SCI_GETTEXT, SCI_GETVIEWEOL, SCI_GETVIEWWS,
-    SCI_GETWRAPMODE, SCI_GETZOOM, SCI_GOTOLINE, SCI_GOTOPOS, SCI_LINEFROMPOSITION, SCI_LINESCROLL,
-    SCI_LINESONSCREEN, SCI_PASTE, SCI_POINTYFROMPOSITION, SCI_POSITIONAFTER, SCI_POSITIONFROMLINE,
-    SCI_POSITIONFROMPOINTCLOSE, SCI_REDO, SCI_RELEASEDOCUMENT, SCI_REPLACETARGET, SCI_SELECTALL,
-    SCI_SETCARETSTYLE, SCI_SETCODEPAGE, SCI_SETDOCPOINTER, SCI_SETEMPTYSELECTION, SCI_SETEOLMODE,
-    SCI_SETFONTQUALITY, SCI_SETHSCROLLBAR, SCI_SETINDENTATIONGUIDES, SCI_SETMARGINWIDTHN,
-    SCI_SETREADONLY, SCI_SETSAVEPOINT, SCI_SETSCROLLWIDTH, SCI_SETSCROLLWIDTHTRACKING, SCI_SETSEL,
-    SCI_SETSELECTIONEND, SCI_SETSELECTIONMODE, SCI_SETSELECTIONSTART, SCI_SETTABWIDTH,
-    SCI_SETTARGETEND, SCI_SETTARGETSTART, SCI_SETTEXT, SCI_SETVIEWEOL, SCI_SETVIEWWS,
-    SCI_SETVSCROLLBAR, SCI_SETWRAPMODE, SCI_SETZOOM, SCI_STYLEGETBACK, SCI_STYLEGETFORE,
-    SCI_TEXTHEIGHT, SCI_UNDO, SCI_VISIBLEFROMDOCLINE, SCI_ZOOMIN, SCI_ZOOMOUT, SCN_MODIFIED,
-    SCN_PAINTED, SCN_SAVEPOINTLEFT, SCN_SAVEPOINTREACHED, SCN_STYLENEEDED, SCN_UPDATEUI,
-    SC_AUTOMATICFOLD_CHANGE, SC_AUTOMATICFOLD_CLICK, SC_AUTOMATICFOLD_SHOW, SC_CP_UTF8,
-    SC_DOCUMENTOPTION_DEFAULT, SC_EFF_QUALITY_LCD_OPTIMIZED, SC_EFF_QUALITY_NON_ANTIALIASED,
-    SC_EOL_CR, SC_EOL_CRLF, SC_EOL_LF, SC_FOLDFLAG_LINEAFTER_CONTRACTED, SC_IV_LOOKBOTH,
-    SC_IV_NONE, SC_MARGIN_SYMBOL, SC_MARKNUM_FOLDER, SC_MARKNUM_FOLDEREND,
-    SC_MARKNUM_FOLDERMIDTAIL, SC_MARKNUM_FOLDEROPEN, SC_MARKNUM_FOLDEROPENMID,
-    SC_MARKNUM_FOLDERSUB, SC_MARKNUM_FOLDERTAIL, SC_MARK_BOXMINUS, SC_MARK_BOXMINUSCONNECTED,
-    SC_MARK_BOXPLUS, SC_MARK_BOXPLUSCONNECTED, SC_MARK_LCORNER, SC_MARK_TCORNER, SC_MARK_VLINE,
-    SC_MASK_FOLDERS, SC_MOD_DELETETEXT, SC_MOD_INSERTTEXT, SC_SEL_RECTANGLE, SC_SEL_STREAM,
-    SC_UPDATE_CONTENT, SC_UPDATE_SELECTION, SC_UPDATE_V_SCROLL, STYLE_DEFAULT,
+    SCI_GETSELECTIONS, SCI_GETSELECTIONSTART, SCI_GETSELTEXT, SCI_GETTEXT, SCI_GETVIEWEOL,
+    SCI_GETVIEWWS, SCI_GETWRAPMODE, SCI_GETZOOM, SCI_GOTOLINE, SCI_GOTOPOS, SCI_LINEFROMPOSITION,
+    SCI_LINESCROLL, SCI_LINESONSCREEN, SCI_PASTE, SCI_POINTYFROMPOSITION, SCI_POSITIONAFTER,
+    SCI_POSITIONFROMLINE, SCI_POSITIONFROMPOINTCLOSE, SCI_REDO, SCI_RELEASEDOCUMENT,
+    SCI_REPLACETARGET, SCI_SELECTALL, SCI_SETCARETSTYLE, SCI_SETCODEPAGE, SCI_SETDOCPOINTER,
+    SCI_SETEMPTYSELECTION, SCI_SETEOLMODE, SCI_SETFONTQUALITY, SCI_SETHSCROLLBAR,
+    SCI_SETINDENTATIONGUIDES, SCI_SETMARGINWIDTHN, SCI_SETREADONLY, SCI_SETSAVEPOINT,
+    SCI_SETSCROLLWIDTH, SCI_SETSCROLLWIDTHTRACKING, SCI_SETSEL, SCI_SETSELECTIONEND,
+    SCI_SETSELECTIONMODE, SCI_SETSELECTIONSTART, SCI_SETTABWIDTH, SCI_SETTARGETEND,
+    SCI_SETTARGETSTART, SCI_SETTEXT, SCI_SETVIEWEOL, SCI_SETVIEWWS, SCI_SETVSCROLLBAR,
+    SCI_SETWRAPMODE, SCI_SETZOOM, SCI_STYLEGETBACK, SCI_STYLEGETFORE, SCI_TEXTHEIGHT, SCI_UNDO,
+    SCI_VISIBLEFROMDOCLINE, SCI_ZOOMIN, SCI_ZOOMOUT, SCN_MODIFIED, SCN_PAINTED, SCN_SAVEPOINTLEFT,
+    SCN_SAVEPOINTREACHED, SCN_STYLENEEDED, SCN_UPDATEUI, SC_AUTOMATICFOLD_CHANGE,
+    SC_AUTOMATICFOLD_CLICK, SC_AUTOMATICFOLD_SHOW, SC_CP_UTF8, SC_DOCUMENTOPTION_DEFAULT,
+    SC_EFF_QUALITY_LCD_OPTIMIZED, SC_EFF_QUALITY_NON_ANTIALIASED, SC_EOL_CR, SC_EOL_CRLF,
+    SC_EOL_LF, SC_FOLDFLAG_LINEAFTER_CONTRACTED, SC_IV_LOOKBOTH, SC_IV_NONE, SC_MARGIN_SYMBOL,
+    SC_MARKNUM_FOLDER, SC_MARKNUM_FOLDEREND, SC_MARKNUM_FOLDERMIDTAIL, SC_MARKNUM_FOLDEROPEN,
+    SC_MARKNUM_FOLDEROPENMID, SC_MARKNUM_FOLDERSUB, SC_MARKNUM_FOLDERTAIL, SC_MARK_BOXMINUS,
+    SC_MARK_BOXMINUSCONNECTED, SC_MARK_BOXPLUS, SC_MARK_BOXPLUSCONNECTED, SC_MARK_LCORNER,
+    SC_MARK_TCORNER, SC_MARK_VLINE, SC_MASK_FOLDERS, SC_MOD_DELETETEXT, SC_MOD_INSERTTEXT,
+    SC_SEL_RECTANGLE, SC_SEL_STREAM, SC_UPDATE_CONTENT, SC_UPDATE_SELECTION, SC_UPDATE_V_SCROLL,
+    STYLE_DEFAULT,
 };
 use codepp_shell::{
     close_multi_enabled, pick_next_close_target, sanitize_filename_for_display,
@@ -14911,15 +14912,27 @@ unsafe fn prefill_from_selection(state: &FindReplaceState) {
         return;
     };
     let editor = window_state.editor;
-    let sel_start = editor.send(SCI_GETSELECTIONSTART, 0, 0).max(0) as usize;
-    let sel_end = editor.send(SCI_GETSELECTIONEND, 0, 0).max(0) as usize;
-    if sel_end <= sel_start {
+    // One range only. Several, a multiple selection or a rectangle over
+    // several lines, copy a line end after each, which the find box
+    // refuses below anyway; refusing them here also keeps a selection of a
+    // whole large file from being copied just to learn its length.
+    if editor.send(SCI_GETSELECTIONS, 0, 0) != 1 {
         return;
     }
-    let len = sel_end - sel_start;
+    let sel_start = editor.send(SCI_GETSELECTIONSTART, 0, 0).max(0) as usize;
+    let sel_end = editor.send(SCI_GETSELECTIONEND, 0, 0).max(0) as usize;
     // Cap the prefill at 1 KiB — anyone selecting more than that
     // didn't mean it for the find box.
-    if len > 1024 {
+    if sel_end <= sel_start || sel_end - sel_start > 1024 {
+        return;
+    }
+    // The buffer is sized from what `SCI_GETSELTEXT` says it will copy,
+    // asked with a null pointer first, not from the span: it copies every
+    // range of the selection, and a line end after each when there are
+    // several, so it can be longer. Until Phase 5 the span sized it, and a
+    // rectangle over whole lines then wrote past it.
+    let len = usize::try_from(editor.send(SCI_GETSELTEXT, 0, 0)).unwrap_or(0);
+    if len == 0 || len > 1024 {
         return;
     }
     let mut buf = vec![0u8; len + 1];
@@ -35559,5 +35572,160 @@ mod new_document_eol_guards {
             2,
             "the startup document and the empty window"
         );
+    }
+}
+
+#[cfg(test)]
+mod copy_tests {
+    //! What a selection copies, against a real Scintilla control:
+    //! `SCI_GETSELTEXT` answers it, and the clipboard, a drag and GTK's
+    //! primary selection receive the same text, through Scintilla's one
+    //! `Editor::CopySelectionRange`. Code++ carries its own version of that
+    //! function (`scintilla-sys/cxx/CopySelectionRange.cxx`), which copies
+    //! a selection of several ranges as Notepad++ 8.9.8.1 does, measured
+    //! there with a probe plugin sending `SCI_GETSELTEXT`.
+
+    use codepp_editor::EditorHandle;
+    use codepp_scintilla_sys::{
+        SCI_GETSELECTIONS, SCI_GETSELTEXT, SCI_SETEOLMODE, SCI_SETSEL, SCI_SETSELECTIONMODE,
+        SC_EOL_LF, SC_SEL_RECTANGLE,
+    };
+
+    use super::view_position_tests::scintilla;
+
+    /// A message number from the vendored `Scintilla.h`, for the few the
+    /// tests send that the crate does not import.
+    fn sci(name: &str) -> u32 {
+        include_str!("../../scintilla-sys/vendor/scintilla/include/Scintilla.h")
+            .lines()
+            .find(|l| l.split_whitespace().nth(1) == Some(name))
+            .and_then(|l| l.split_whitespace().nth(2))
+            .and_then(|v| v.parse().ok())
+            .unwrap_or_else(|| panic!("{name} is not in Scintilla.h"))
+    }
+
+    /// What `SCI_GETSELTEXT` answers, without its NUL.
+    fn selected_text(editor: &EditorHandle) -> String {
+        let len = usize::try_from(editor.send(SCI_GETSELTEXT, 0, 0)).unwrap();
+        let mut buf = vec![0xAAu8; len + 2];
+        let written = editor.send(SCI_GETSELTEXT, 0, buf.as_mut_ptr() as isize);
+        assert_eq!(usize::try_from(written).unwrap(), len);
+        assert_eq!(buf[len], 0, "a NUL after the text");
+        assert_eq!(buf[len + 1], 0xAA, "nothing past the NUL");
+        buf.truncate(len);
+        String::from_utf8(buf).unwrap()
+    }
+
+    #[test]
+    fn several_selections_copy_each_range_with_a_line_end_in_the_order_made() {
+        // Measured in Notepad++ 8.9.8.1: `hi\r\nb\r\n`. Upstream Scintilla
+        // copies `hib`.
+        let control = scintilla(400, 300, b"abc def ghi");
+        let editor = &control.editor;
+        editor.send(sci("SCI_SETSELECTION"), 9, 11);
+        editor.send(sci("SCI_ADDSELECTION"), 1, 2);
+        assert_eq!(editor.send(SCI_GETSELECTIONS, 0, 0), 2);
+        assert_eq!(selected_text(editor), "hi\r\nb\r\n");
+        editor.send(sci("SCI_ADDSELECTION"), 4, 7);
+        assert_eq!(selected_text(editor), "hi\r\nb\r\ndef\r\n");
+        // The document's line end, whichever it is.
+        editor.send(SCI_SETEOLMODE, SC_EOL_LF, 0);
+        editor.send(sci("SCI_SETSELECTION"), 1, 2);
+        editor.send(sci("SCI_ADDSELECTION"), 9, 11);
+        assert_eq!(selected_text(editor), "b\nhi\n");
+    }
+
+    #[test]
+    fn a_rectangle_copies_top_down_and_a_one_line_rectangle_has_no_line_end() {
+        // Measured: `b\r\ne\r\nh\r\n` either way the rectangle was drawn,
+        // and `bc` for a one-line rectangle, where upstream copies
+        // `bc\r\n`.
+        let control = scintilla(400, 300, b"abc\r\ndef\r\nghi");
+        let editor = &control.editor;
+        editor.send(SCI_SETSELECTIONMODE, SC_SEL_RECTANGLE as usize, 0);
+        editor.send(sci("SCI_SETRECTANGULARSELECTIONANCHOR"), 12, 0);
+        editor.send(sci("SCI_SETRECTANGULARSELECTIONCARET"), 1, 0);
+        assert_eq!(selected_text(editor), "b\r\ne\r\nh\r\n");
+        editor.send(sci("SCI_SETRECTANGULARSELECTIONANCHOR"), 1, 0);
+        editor.send(sci("SCI_SETRECTANGULARSELECTIONCARET"), 12, 0);
+        assert_eq!(selected_text(editor), "b\r\ne\r\nh\r\n");
+        editor.send(sci("SCI_SETRECTANGULARSELECTIONANCHOR"), 1, 0);
+        editor.send(sci("SCI_SETRECTANGULARSELECTIONCARET"), 3, 0);
+        assert_eq!(editor.send(SCI_GETSELECTIONS, 0, 0), 1);
+        assert_eq!(selected_text(editor), "bc");
+    }
+
+    #[test]
+    fn one_range_copies_its_text_alone() {
+        let control = scintilla(400, 300, b"abc\r\ndef");
+        let editor = &control.editor;
+        editor.send(SCI_SETSEL, 1, 7);
+        assert_eq!(selected_text(editor), "bc\r\nde");
+        // An empty selection copies nothing: `SCI_GETSELTEXT` does not
+        // copy the line, as a clipboard copy may.
+        editor.send(SCI_SETSEL, 2, 2);
+        assert_eq!(selected_text(editor), "");
+    }
+
+    #[test]
+    fn the_find_prefill_sizes_its_buffer_from_what_is_copied() {
+        // `SCI_GETSELTEXT` copies every range and a line end after each
+        // when there are several, so its length is asked first: a buffer
+        // sized from the main selection's span is too small.
+        use super::plugin_reentry_guards::{code_without_strings, fn_body, production_src};
+        let body = code_without_strings(&fn_body(production_src(), "prefill_from_selection"));
+        let ask = body
+            .find("let len = usize::try_from(editor.send(SCI_GETSELTEXT, 0, 0))")
+            .expect("the length asked with a null pointer");
+        let alloc = body.find("vec![0u8; len + 1]").expect("the buffer");
+        assert!(
+            ask < alloc,
+            "the length is asked before the buffer is sized"
+        );
+        assert_eq!(body.matches("let len").count(), 1, "the span sizes nothing");
+        let one = body
+            .find("editor.send(SCI_GETSELECTIONS, 0, 0) != 1")
+            .expect("several ranges refused");
+        assert!(one < ask, "before anything is copied");
+        // The span is too small: a rectangle over two whole lines copies
+        // a line end after the last, past the end of the span.
+        let control = scintilla(400, 300, b"abc\r\ndef");
+        let editor = &control.editor;
+        editor.send(SCI_SETSELECTIONMODE, SC_SEL_RECTANGLE as usize, 0);
+        editor.send(sci("SCI_SETRECTANGULARSELECTIONANCHOR"), 0, 0);
+        editor.send(sci("SCI_SETRECTANGULARSELECTIONCARET"), 8, 0);
+        let span = editor.send(sci("SCI_GETSELECTIONEND"), 0, 0)
+            - editor.send(sci("SCI_GETSELECTIONSTART"), 0, 0);
+        assert_eq!(selected_text(editor), "abc\r\ndef\r\n");
+        assert!(editor.send(SCI_GETSELTEXT, 0, 0) > span);
+    }
+
+    #[test]
+    fn an_empty_range_among_several_copies_its_line_end() {
+        // Each of several ranges is followed by a line end, an empty one
+        // too. Follows from the measured rule; Notepad++'s answer to
+        // `NPPM_GETCURRENTWORD`, which copies through the same function,
+        // was measured to include empty ranges with their line ends.
+        let control = scintilla(400, 300, b"abc def ghi");
+        let editor = &control.editor;
+        editor.send(sci("SCI_SETSELECTION"), 9, 11);
+        editor.send(sci("SCI_ADDSELECTION"), 4, 4);
+        assert_eq!(selected_text(editor), "hi\r\n\r\n");
+    }
+
+    #[test]
+    fn the_copy_separator_no_longer_changes_what_is_copied() {
+        // As in Notepad++: several ranges are separated by the line end,
+        // and one range has nothing to separate. Upstream puts the
+        // separator between a multiple selection's ranges.
+        let control = scintilla(400, 300, b"abc def ghi");
+        let editor = &control.editor;
+        let separator = b",\0";
+        editor.send(sci("SCI_SETCOPYSEPARATOR"), 0, separator.as_ptr() as isize);
+        editor.send(sci("SCI_SETSELECTION"), 9, 11);
+        editor.send(sci("SCI_ADDSELECTION"), 1, 2);
+        assert_eq!(selected_text(editor), "hi\r\nb\r\n");
+        editor.send(SCI_SETSEL, 1, 2);
+        assert_eq!(selected_text(editor), "b");
     }
 }

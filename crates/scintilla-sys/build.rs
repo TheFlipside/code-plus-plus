@@ -70,6 +70,7 @@ fn main() {
     println!("cargo:rerun-if-changed=vendor/lexilla/lexers");
     println!("cargo:rerun-if-changed=vendor/lexilla/include");
     println!("cargo:rerun-if-changed=cxx/LexillaShim.cxx");
+    println!("cargo:rerun-if-changed=cxx/CopySelectionRange.cxx");
     println!("cargo:rerun-if-changed=cxx/ScintillaCocoaShim.mm");
 
     let target_os = std::env::var("CARGO_CFG_TARGET_OS").expect("CARGO_CFG_TARGET_OS");
@@ -210,6 +211,87 @@ fn scintilla_core_sources() -> [&'static str; 33] {
     ]
 }
 
+/// The fingerprint of `Editor::CopySelectionRange` in the vendored
+/// `src/Editor.cxx`, from its first line to the brace that closes it, at
+/// submodule pin rel-5-5-2.
+///
+/// Checked on every build, for the reason
+/// [`VENDORED_QUARTZ_TEXT_LAYOUT_FINGERPRINT`] is: a Scintilla bump that
+/// changes the function fails loudly rather than having its change
+/// silently overwritten by Code++'s copy, or Code++'s silently dropped.
+/// Only the function is fingerprinted, so a bump that leaves it alone
+/// carries the replacement over unchanged. The bump procedure is to diff
+/// upstream's new function against the old, port whatever changed into
+/// `cxx/CopySelectionRange.cxx`, and update this constant.
+const VENDORED_COPY_SELECTION_RANGE_FINGERPRINT: u64 = 0x5d22_dcf8_ef10_2a36;
+
+/// Copy the vendored `src/Editor.cxx` into `OUT_DIR` with
+/// `cxx/CopySelectionRange.cxx` in place of upstream's
+/// `Editor::CopySelectionRange`, and return the staged file, which every
+/// backend compiles in place of the vendored one.
+///
+/// The replacement copies a selection of several ranges as Notepad++
+/// does, each range followed by the document's line end, which reaches
+/// the clipboard, drags, GTK's primary selection and `SCI_GETSELTEXT`
+/// alike; the file's header says what changed and why. It is staged
+/// rather than patched into the submodule for the reasons
+/// [`stage_cocoa_sources`] gives. Every include in `Editor.cxx` is a bare
+/// name resolved through the include path, which already holds `src/`,
+/// so the staged copy compiles as the vendored one does.
+fn stage_patched_editor(scintilla: &Path) -> PathBuf {
+    let upstream = std::fs::read_to_string(scintilla.join("src").join("Editor.cxx"))
+        .expect("read the vendored Editor.cxx")
+        .replace("\r\n", "\n");
+    let head = "void Editor::CopySelectionRange(SelectionText *ss, bool allowLineCopy) {\n";
+    assert!(
+        upstream.matches(head).count() == 1,
+        "vendored src/Editor.cxx no longer defines Editor::CopySelectionRange as expected.\n\
+         Code++ replaces that function with cxx/CopySelectionRange.cxx; see\n\
+         stage_patched_editor in this file."
+    );
+    let start = upstream.find(head).expect("counted above");
+    let end = start
+        + upstream[start..]
+            .find("\n}\n")
+            .expect("the function's closing brace")
+        + "\n}\n".len();
+    let actual = fingerprint(&upstream.as_bytes()[start..end]);
+    let expected = VENDORED_COPY_SELECTION_RANGE_FINGERPRINT;
+    assert!(
+        actual == expected,
+        "vendored Editor::CopySelectionRange has changed (fingerprint {actual:#x}, expected {expected:#x}).\n\
+         Code++ replaces it with cxx/CopySelectionRange.cxx to copy a selection of several\n\
+         ranges as Notepad++ does — see DESIGN.md §7.4. Diff upstream's new function against\n\
+         the old, port any change, then update VENDORED_COPY_SELECTION_RANGE_FINGERPRINT here."
+    );
+    let replacement = std::fs::read_to_string("cxx/CopySelectionRange.cxx")
+        .expect("read cxx/CopySelectionRange.cxx")
+        .replace("\r\n", "\n");
+    let staged = PathBuf::from(std::env::var("OUT_DIR").expect("OUT_DIR set by cargo"))
+        .join("scintilla-src-staged");
+    std::fs::create_dir_all(&staged).expect("create the staging directory");
+    let path = staged.join("Editor.cxx");
+    let patched = format!("{}{replacement}{}", &upstream[..start], &upstream[end..]);
+    std::fs::write(&path, patched).expect("stage the patched Editor.cxx");
+    path
+}
+
+/// The core sources every backend compiles: `src/<name>.cxx` from the
+/// vendored tree, but `editor`, the staged copy
+/// [`stage_patched_editor`] returns, for `Editor`.
+fn core_source_files(scintilla: &Path, editor: &Path) -> Vec<PathBuf> {
+    scintilla_core_sources()
+        .iter()
+        .map(|f| {
+            if *f == "Editor" {
+                editor.to_path_buf()
+            } else {
+                scintilla.join("src").join(format!("{f}.cxx"))
+            }
+        })
+        .collect()
+}
+
 /// Compile Scintilla's GTK 3 backend.
 ///
 /// **Why GTK 3 and not GTK 4:** Scintilla has no GTK 4 backend. Upstream
@@ -275,8 +357,9 @@ fn build_scintilla_gtk(scintilla: &Path) {
         build.flag_if_supported(flag);
     }
 
-    for f in &scintilla_core_sources() {
-        build.file(scintilla.join("src").join(format!("{f}.cxx")));
+    let editor = stage_patched_editor(scintilla);
+    for f in core_source_files(scintilla, &editor) {
+        build.file(f);
     }
     // GTK backend. ScintillaGTKAccessible.cxx is required — ScintillaGTK.cxx
     // references `ScintillaGTKAccessible::` symbols directly.
@@ -407,8 +490,9 @@ fn build_scintilla_cocoa(scintilla: &Path) {
     for flag in &VENDORED_WARNING_OPTOUTS {
         core.flag_if_supported(flag);
     }
-    for f in &scintilla_core_sources() {
-        core.file(scintilla.join("src").join(format!("{f}.cxx")));
+    let editor = stage_patched_editor(scintilla);
+    for f in core_source_files(scintilla, &editor) {
+        core.file(f);
     }
     core.compile("scintilla");
 
@@ -485,8 +569,9 @@ fn build_scintilla_win32(scintilla: &Path) {
         .include(scintilla.join("src"))
         .include(scintilla.join("win32"));
 
-    for f in &scintilla_core_sources() {
-        build.file(scintilla.join("src").join(format!("{f}.cxx")));
+    let editor = stage_patched_editor(scintilla);
+    for f in core_source_files(scintilla, &editor) {
+        build.file(f);
     }
 
     // Win32 backend. ScintillaDLL.cxx is the DLL entry point and is
