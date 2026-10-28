@@ -10944,9 +10944,9 @@ impl<U: UiPlatform> HostServices for HostBridge<'_, U> {
 
     fn reload_buffer_id(&mut self, id: isize, with_alert: bool) -> bool {
         // Resolve the buffer id to its on-disk path. Untitled tabs
-        // (no path) report -1 from `NPPM_GETFULLPATHFROMBUFFERID`
-        // and similarly are not reloadable here — there's nothing
-        // to re-read off disk.
+        // have none, so they are not reloadable here — there's nothing
+        // to re-read off disk — though `NPPM_GETFULLPATHFROMBUFFERID`
+        // answers their name.
         let Some((tab_id, path)) = self
             .shell
             .tabs
@@ -14979,23 +14979,44 @@ mod tests {
         );
 
         const NPPM_GETFULLPATHFROMBUFFERID: u32 = (0x0400 + 1000) + 58;
-        const MAX_PATH_TCHARS: usize = 260;
-        let active_id = shell.active().expect("active tab").id as usize;
-        let mut buf = vec![0u16; MAX_PATH_TCHARS];
-        let r = unsafe {
-            shell.dispatch_plugin_message(
-                &mut ui,
-                HostHandles::null(),
-                NPPM_GETFULLPATHFROMBUFFERID,
-                active_id,
-                buf.as_mut_ptr() as isize,
-            )
+        let ask = |shell: &mut Shell, ui: &mut FakeUi, id: usize, buf: Option<&mut [u16]>| {
+            let lparam = buf.map_or(0, |b| b.as_mut_ptr() as isize);
+            unsafe {
+                shell.dispatch_plugin_message(
+                    ui,
+                    HostHandles::null(),
+                    NPPM_GETFULLPATHFROMBUFFERID,
+                    id,
+                    lparam,
+                )
+            }
         };
-        let written = r.unwrap();
-        assert!(written > 0);
-        let nul = buf.iter().position(|&u| u == 0).unwrap();
-        let got = String::from_utf16_lossy(&buf[..nul]);
-        assert_eq!(PathBuf::from(got), path);
+        // The probe and the write both answer the length, the NUL not
+        // counted, and the write fills exactly that plus one.
+        let want: Vec<u16> = path.to_str().unwrap().encode_utf16().collect();
+        let active_id = shell.active().expect("active tab").id as usize;
+        assert_eq!(
+            ask(&mut shell, &mut ui, active_id, None),
+            Some(want.len() as isize)
+        );
+        let mut buf = vec![0xFFFFu16; want.len() + 2];
+        assert_eq!(
+            ask(&mut shell, &mut ui, active_id, Some(&mut buf)),
+            Some(want.len() as isize)
+        );
+        assert_eq!(&buf[..want.len()], &want[..]);
+        assert_eq!(buf[want.len()], 0);
+        assert_eq!(buf[want.len() + 1], 0xFFFF, "nothing past the NUL");
+
+        // An untitled buffer answers its name, as Notepad++ answers it.
+        shell.new_untitled(&mut ui);
+        let untitled = shell.active().expect("active tab");
+        assert!(untitled.path.is_none());
+        let id = untitled.id as usize;
+        let mut buf = vec![0xFFFFu16; 16];
+        assert_eq!(ask(&mut shell, &mut ui, id, Some(&mut buf)), Some(5));
+        assert_eq!(String::from_utf16_lossy(&buf[..5]), "new 1");
+        assert_eq!(buf[5], 0);
     }
 
     #[cfg(target_os = "windows")]

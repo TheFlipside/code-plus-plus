@@ -192,7 +192,7 @@ pub extern "C" fn beNotified(notification: *const SCNotification) {
         sdk::NPPN_SHUTDOWN => crate::dialog::shutdown(),
         sdk::NPPN_FILEBEFORECLOSE => match sdk::buffer_path(header.id_from) {
             Some(path) => sdk::set_status(&format!("Closing: {path}")),
-            None => sdk::set_status("Closing: (untitled)"),
+            None => sdk::set_status("Closing: (unknown buffer)"),
         },
         _ => {}
     }

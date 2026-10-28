@@ -45,7 +45,8 @@ const NPPM_GETCURRENTSCINTILLA: u32 = NPPMSG + 4;
 /// `NPPM_SETSTATUSBAR(section, *wchar)`.
 const NPPM_SETSTATUSBAR: u32 = NPPMSG + 24;
 /// `NPPM_GETFULLPATHFROMBUFFERID(id, *wchar)` — writes the path and
-/// returns the unit count including the NUL, or -1 for an unknown id.
+/// returns its length in units, the NUL not counted, from the write and
+/// the probe alike, or -1 for an unknown id.
 const NPPM_GETFULLPATHFROMBUFFERID: u32 = NPPMSG + 58;
 /// `SCI_INSERTTEXT(pos, *utf8)`.
 const SCI_INSERTTEXT: u32 = 2003;
@@ -130,7 +131,7 @@ extern "C" fn mock_dispatch(hwnd: *mut c_void, msg: u32, wparam: usize, lparam: 
                 return -1;
             }
             if lparam == 0 {
-                return 260;
+                return CLOSING_PATH.encode_utf16().count().cast_signed();
             }
             let wide: Vec<u16> = CLOSING_PATH.encode_utf16().chain(Some(0)).collect();
             assert!(
@@ -142,7 +143,7 @@ extern "C" fn mock_dispatch(hwnd: *mut c_void, msg: u32, wparam: usize, lparam: 
             unsafe {
                 std::ptr::copy_nonoverlapping(wide.as_ptr(), lparam as *mut u16, wide.len());
             }
-            return wide.len().cast_signed();
+            return (wide.len() - 1).cast_signed();
         }
         if msg == NPPM_SETSTATUSBAR && lparam != 0 {
             // SAFETY: `NPPM_SETSTATUSBAR`'s lparam is a NUL-terminated

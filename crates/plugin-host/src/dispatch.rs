@@ -1898,12 +1898,15 @@ pub unsafe fn dispatch_nppm<S: HostServices>(
             };
             if wparam == 0 {
                 // NULL out-array — plugin is asking "how many
-                // would you write?" without committing storage.
-                // Mirrors the NPPM_GETFULLPATHFROMBUFFERID probe
-                // contract; works identically for the -PRIMARY /
-                // -SECOND aliases (selector is honoured before the
-                // probe short-circuit).
+                // would you write?" without committing storage. Works
+                // identically for the -PRIMARY / -SECOND aliases
+                // (selector is honoured before the probe
+                // short-circuit).
                 return Some(services.open_buffer_paths(selector).len() as isize);
+            }
+            if (wparam as isize) < 0 {
+                // A kernel-range pointer: nothing is read from it.
+                return Some(0);
             }
             let cap = lparam.max(0) as usize;
             let paths = services.open_buffer_paths(selector);
@@ -1939,7 +1942,9 @@ pub unsafe fn dispatch_nppm<S: HostServices>(
                     );
                     continue;
                 }
-                let _ = unsafe { write_wide_path(dst, MAX_PATH_TCHARS, path) };
+                // SAFETY: the slot points at a wide buffer of at least
+                // MAX_PATH_TCHARS units, per the contract above.
+                unsafe { write_path_slot(dst, path) };
                 written_slots += 1;
             }
             written_slots as isize
@@ -2194,18 +2199,17 @@ pub unsafe fn dispatch_nppm<S: HostServices>(
             // (failure) return — `Some(1)` claims success but
             // would leave the plugin's buffer unwritten, producing
             // garbage on the read side.
-            if lparam == 0 || wparam == 0 {
+            if lparam <= 0 || wparam == 0 {
                 0
             } else {
                 let dir = services.plugins_config_dir();
                 let cap = wparam.min(MAX_PATH_TCHARS);
                 // SAFETY: plugin promises lparam points to a wide
                 // buffer of at least `wparam` TCHARs (we further cap
-                // at MAX_PATH_TCHARS).
-                unsafe {
-                    write_wide_path(lparam as *mut u16, cap, &dir);
-                }
-                1
+                // at MAX_PATH_TCHARS). A directory that does not fit,
+                // or is not valid Unicode, is refused rather than cut
+                // or approximated, either of which names another one.
+                isize::from(unsafe { write_dir(lparam as *mut u16, cap, &dir) })
             }
         }
 
@@ -2315,28 +2319,45 @@ pub unsafe fn dispatch_nppm<S: HostServices>(
         NPPM_ISSTATUSBARHIDDEN => isize::from(services.is_statusbar_hidden()),
 
         NPPM_GETFULLPATHFROMBUFFERID => {
-            // wParam: buffer id. lParam: TCHAR* OUT (caller-allocated).
-            // Returns: number of TCHARs written (incl. null) on
-            // success, or -1 if the id is unknown.
-            let id = wparam as isize;
-            let Some(path) = services.buffer_path(id) else {
+            // Notepad++'s contract, from its header and measured against
+            // 8.9.8.1: the probe (a NULL lParam) and the write both answer
+            // the path's length in TCHARs, the NUL not counted, and a
+            // plugin allocates that plus one. The path is what the path
+            // messages answer: an untitled buffer's name, a loading tab's
+            // file. A negative lParam is a kernel-range pointer.
+            if lparam < 0 {
+                return Some(-1);
+            }
+            let Some(name) = services.buffer_path_name(wparam as isize) else {
                 return Some(-1);
             };
-            if lparam == 0 {
-                // Probe: return the documented buffer-size contract
-                // for this message (MAX_PATH minimum). Returning the
-                // *actual* path length would let a plugin allocate
-                // less than MAX_PATH and then take a write up to
-                // MAX_PATH_TCHARS units on the second call — a
-                // host-side overflow into plugin memory.
-                MAX_PATH_TCHARS as isize
-            } else {
-                // SAFETY: per the ABI, plugin promises lparam points
-                // to a wide buffer of at least MAX_PATH_TCHARS.
-                let written =
-                    unsafe { write_wide_path(lparam as *mut u16, MAX_PATH_TCHARS, &path) };
-                written as isize
+            // Up to a NUL, which only an untitled buffer's name could
+            // hold: the plugin's string ends there, so its length does.
+            let path = path_message_answer(NPPM_GETFULLCURRENTPATH, &name)
+                .map(|p| p.split('\0').next().unwrap_or_default().to_owned())
+                .filter(|p| p.encode_utf16().count() < MAX_PATH_TCHARS);
+            let Some(path) = path else {
+                // A path of `MAX_PATH` units or more, or one that is not
+                // valid Unicode, is refused rather than cut or written
+                // lossily, as the path messages refuse one: a plugin that
+                // skips the probe and passes a `MAX_PATH` buffer, as many
+                // do, must not be overrun, and a cut path names another
+                // file. Nothing is written, not even an empty string: this
+                // message's buffer is sized from the probe, and a plugin
+                // that allocates the probe's -1 plus one has room for
+                // nothing.
+                return Some(-1);
+            };
+            if lparam != 0 {
+                // SAFETY: the plugin promises a wide buffer of the
+                // probe's answer plus one, or of `MAX_PATH`; the path and
+                // its NUL, under `MAX_PATH`, fit either. A path renamed
+                // between the probe and the write can be longer than the
+                // probe said, which Notepad++ does not guard against
+                // either; the write still stays within `MAX_PATH`.
+                unsafe { write_wide_if_fits(lparam as *mut u16, MAX_PATH_TCHARS, &path) };
             }
+            path.encode_utf16().count() as isize
         }
 
         NPPM_GETCURRENTBUFFERID => services.current_buffer_id(),
@@ -2544,7 +2565,7 @@ pub unsafe fn dispatch_nppm<S: HostServices>(
             // explicitly (`NPPM_GETSESSIONFILES_BOUNDED` or the
             // like). Documented as a known limitation rather than
             // worked around.
-            if lparam == 0 || wparam == 0 {
+            if lparam <= 0 || (wparam as isize) <= 0 {
                 return Some(0);
             }
             let decoded = unsafe { wide_ptr_to_string(lparam as *const u16) };
@@ -2997,7 +3018,7 @@ pub unsafe fn dispatch_nppm<S: HostServices>(
             // Returns 1 on success, 0 on bad args or unresolvable
             // plugins dir (sandboxed runner with no config_dir).
             // Same out-buffer contract as `NPPM_GETPLUGINSCONFIGDIR`.
-            if lparam == 0 || wparam == 0 {
+            if lparam <= 0 || wparam == 0 {
                 return Some(0);
             }
             let Some(path) = services.plugin_home_dir() else {
@@ -3005,11 +3026,9 @@ pub unsafe fn dispatch_nppm<S: HostServices>(
             };
             let cap = wparam.min(MAX_PATH_TCHARS);
             // SAFETY: plugin promises lparam points to at least
-            // `wparam` TCHARs (capped at MAX_PATH_TCHARS).
-            unsafe {
-                write_wide_path(lparam as *mut u16, cap, &path);
-            }
-            1
+            // `wparam` TCHARs (capped at MAX_PATH_TCHARS). Refused,
+            // not cut, when it does not fit, as for the config dir.
+            isize::from(unsafe { write_dir(lparam as *mut u16, cap, &path) })
         }
 
         NPPM_GETSETTINGSCLOUDPATH => {
@@ -3018,17 +3037,15 @@ pub unsafe fn dispatch_nppm<S: HostServices>(
             // dispatcher writes an empty wide string (just the NUL
             // terminator) so plugins read a length-0 path rather
             // than uninitialised memory.
-            if lparam == 0 || wparam == 0 {
+            if lparam <= 0 || wparam == 0 {
                 return Some(0);
             }
             let path = services
                 .settings_cloud_dir()
                 .unwrap_or_else(|| PathBuf::from(""));
             let cap = wparam.min(MAX_PATH_TCHARS);
-            unsafe {
-                write_wide_path(lparam as *mut u16, cap, &path);
-            }
-            1
+            // SAFETY: as for NPPM_GETPLUGINHOMEPATH above.
+            isize::from(unsafe { write_dir(lparam as *mut u16, cap, &path) })
         }
 
         NPPM_GETBOOKMARKID => services.bookmark_marker_id() as isize,
@@ -3614,20 +3631,10 @@ fn write_lang_string_with_probe(name: Option<&str>, lparam: isize) -> isize {
     } else {
         // SAFETY: per the documented ABI, plugin promises `lparam`
         // points to a wide buffer of at least `MAX_PATH_TCHARS`
-        // (260) units. `Path::new(&str)` is a zero-cost cast — we
-        // reuse `write_wide_path` for the truncation+NUL logic
-        // rather than duplicate its bounds-checking code. The
-        // helper's name says "path" because that was the first
-        // user; the implementation is plain UTF-16 writeout.
-        let written = unsafe {
-            write_wide_path(
-                lparam as *mut u16,
-                MAX_PATH_TCHARS,
-                std::path::Path::new(name),
-            )
-        };
-        // `written` counts the NUL, which the ABI leaves out.
-        written.saturating_sub(1) as isize
+        // (260) units. `lang_label_cut` left the name short enough
+        // for it and its NUL, so the write always happens.
+        unsafe { write_wide_if_fits(lparam as *mut u16, MAX_PATH_TCHARS, name) };
+        name.encode_utf16().count() as isize
     }
 }
 
@@ -3693,42 +3700,55 @@ unsafe fn write_wide_if_fits(dst: *mut u16, cap: usize, text: &str) -> bool {
     true
 }
 
-/// Write `path` as a null-terminated wide string into the buffer at
-/// `dst`, capped at `cap` TCHARs (incl. trailing null). Returns the
-/// number of TCHARs written, **including** the trailing null. If
-/// `path` is longer than `cap - 1`, the result is truncated; the
-/// truncated string is still null-terminated.
+/// Write the directory `dir` into the buffer at `dst` if it is valid
+/// Unicode and fits in `cap` TCHARs, the NUL included, and say whether it
+/// did: [`write_wide_if_fits`] for a path. A directory that does not fit
+/// is refused rather than cut, and one that is not valid Unicode rather
+/// than approximated, since either would name another directory. A
+/// refused directory leaves an empty string, as [`write_path_slot`] does,
+/// so a plugin that ignores the answer reads nothing stale from a buffer
+/// it may never have initialised; Notepad++ writes nothing there, which
+/// a plugin that checks the answer cannot tell apart.
 ///
 /// # Safety
 ///
-/// `dst` must point to a writable buffer of at least `cap` `u16`
-/// units.
-unsafe fn write_wide_path(dst: *mut u16, cap: usize, path: &std::path::Path) -> usize {
-    if cap == 0 || dst.is_null() {
-        return 0;
-    }
-    let mut units: Vec<u16> = path.to_string_lossy().encode_utf16().collect();
-    // Reserve one unit for the null terminator.
-    if units.len() > cap - 1 {
-        // Capture the pre-truncation length for the log so a
-        // future maintainer chasing a truncation warning can see
-        // how badly we ran past the cap; logging post-truncation
-        // length always prints `cap - 1` and is useless.
-        let original_len = units.len();
-        units.truncate(cap - 1);
+/// `dst` must point to a writable buffer of at least `cap` `u16` units.
+unsafe fn write_dir(dst: *mut u16, cap: usize, dir: &std::path::Path) -> bool {
+    let written = dir
+        .to_str()
+        .is_some_and(|dir| unsafe { write_wide_if_fits(dst, cap, dir) });
+    if !written {
         tracing::warn!(
-            cap = cap,
-            original_len = original_len,
-            "wide path truncated to fit plugin buffer",
+            cap,
+            "directory refused: it does not fit the plugin's buffer or is not valid Unicode",
         );
+        // SAFETY: the empty string's NUL is one unit, which a `cap` of
+        // at least one holds; a `cap` of 0 writes nothing.
+        unsafe { write_wide_if_fits(dst, cap, "") };
     }
-    units.push(0);
-    // SAFETY: caller promises `dst` has `cap` writable u16 units;
-    // we wrote at most `cap` (truncation enforced above).
-    unsafe {
-        core::ptr::copy_nonoverlapping(units.as_ptr(), dst, units.len());
+    written
+}
+
+/// Write `path` into one slot of a plugin's array of `MAX_PATH`
+/// buffers, as `NPPM_GETOPENFILENAMES` and `NPPM_GETSESSIONFILES` fill
+/// them: the whole path, or an empty string for one that does not fit or
+/// is not valid Unicode, where a cut or approximated path would name
+/// another file. The slot is written either way, so a plugin reads no
+/// stale text from it.
+///
+/// # Safety
+///
+/// `dst` must point to a writable buffer of at least `MAX_PATH_TCHARS`
+/// `u16` units.
+unsafe fn write_path_slot(dst: *mut u16, path: &std::path::Path) {
+    let written = path
+        .to_str()
+        .is_some_and(|p| unsafe { write_wide_if_fits(dst, MAX_PATH_TCHARS, p) });
+    if !written {
+        tracing::warn!("path written as empty: it is too long for MAX_PATH or not valid Unicode");
+        // SAFETY: the empty string's NUL is one unit.
+        unsafe { write_wide_if_fits(dst, MAX_PATH_TCHARS, "") };
     }
-    units.len()
 }
 
 /// Write each path in `paths` into the corresponding slot of a
@@ -3763,9 +3783,7 @@ unsafe fn write_path_array(array: *mut *mut u16, paths: &[std::path::PathBuf]) {
         }
         // SAFETY: per the message ABI, each slot points at a wide
         // buffer of at least MAX_PATH_TCHARS units.
-        unsafe {
-            write_wide_path(slot, MAX_PATH_TCHARS, path);
-        }
+        unsafe { write_path_slot(slot, path) };
     }
 }
 
@@ -3840,6 +3858,10 @@ mod tests {
         /// long-tail accessors. `None` for the unhappy-path tests.
         plugin_home_dir: Option<PathBuf>,
         settings_cloud_dir: Option<PathBuf>,
+        /// What `read_session_file_paths` answers for any file when
+        /// set, for paths the semicolon list below cannot carry: the
+        /// session file's name is decoded to at most `MAX_PATH` units.
+        session_paths: Option<Vec<PathBuf>>,
         /// Reported zoom level for `CODEPPM_GETZOOMLEVEL`. Real
         /// Scintilla zoom range is approximately `[-10, 20]`;
         /// tests pin specific values.
@@ -4283,6 +4305,9 @@ mod tests {
             true
         }
         fn read_session_file_paths(&self, path: PathBuf) -> Option<Vec<PathBuf>> {
+            if let Some(paths) = &self.session_paths {
+                return Some(paths.clone());
+            }
             // Test surface: the path's filename is read as a
             // semicolon-separated list of "fake" paths the test
             // wants to pretend the session file contains. Lets us
@@ -4843,12 +4868,14 @@ mod tests {
     }
 
     #[test]
-    fn get_full_path_writes_buffer() {
+    fn get_full_path_writes_the_path_and_answers_its_length() {
+        // Notepad++'s contract: the length in TCHARs, the NUL not
+        // counted, from the write as from the probe.
         let mut s = MockServices {
             buffer_paths: vec![(7, PathBuf::from("D:/notes.txt"))],
             ..Default::default()
         };
-        let mut buf = vec![0u16; MAX_PATH_TCHARS];
+        let mut buf = vec![0xFFFFu16; MAX_PATH_TCHARS];
         let r = unsafe {
             dispatch_nppm(
                 &mut s,
@@ -4857,41 +4884,249 @@ mod tests {
                 buf.as_mut_ptr() as isize,
             )
         };
-        let written = r.unwrap();
-        assert!(written > 0);
-        // Decode back, drop trailing null.
-        let len = (written as usize).saturating_sub(1);
-        let s = String::from_utf16_lossy(&buf[..len]);
-        assert_eq!(s, "D:/notes.txt");
+        assert_eq!(r, Some(12));
+        assert_eq!(wide_answer(&buf), "D:/notes.txt");
+        assert_eq!(buf[13], 0xFFFF, "nothing past the NUL");
     }
 
     #[test]
     fn get_full_path_unknown_id_returns_minus_one() {
+        // Notepad++'s header and source say -1; 8.9.8.1 was measured
+        // answering 0. Code++ keeps the documented -1.
         let mut s = MockServices::default();
-        let mut buf = vec![0u16; MAX_PATH_TCHARS];
-        let r = unsafe {
-            dispatch_nppm(
-                &mut s,
-                NPPM_GETFULLPATHFROMBUFFERID,
-                999,
-                buf.as_mut_ptr() as isize,
-            )
-        };
-        assert_eq!(r, Some(-1));
+        let mut buf = vec![0xFFFFu16; MAX_PATH_TCHARS];
+        for lparam in [buf.as_mut_ptr() as isize, 0] {
+            let r = unsafe { dispatch_nppm(&mut s, NPPM_GETFULLPATHFROMBUFFERID, 999, lparam) };
+            assert_eq!(r, Some(-1));
+        }
+        assert!(buf.iter().all(|&u| u == 0xFFFF));
     }
 
     #[test]
-    fn get_full_path_probe_returns_max_path() {
-        // Probe (lParam == 0) must always return MAX_PATH_TCHARS,
-        // never the actual path length. Returning the actual length
-        // lets a plugin allocate less than MAX_PATH and then take a
-        // host-side overflow on the second call.
+    fn get_full_path_probe_returns_the_length() {
+        // A plugin allocates the probe's answer plus one, which the
+        // write fills exactly. Until Phase 5 the probe answered
+        // MAX_PATH whatever the path.
         let mut s = MockServices {
             buffer_paths: vec![(7, PathBuf::from("D:/short.txt"))],
             ..Default::default()
         };
         let r = unsafe { dispatch_nppm(&mut s, NPPM_GETFULLPATHFROMBUFFERID, 7, 0) };
-        assert_eq!(r, Some(MAX_PATH_TCHARS as isize));
+        assert_eq!(r, Some(12));
+        let mut buf = vec![0xFFFFu16; 13];
+        let w = unsafe {
+            dispatch_nppm(
+                &mut s,
+                NPPM_GETFULLPATHFROMBUFFERID,
+                7,
+                buf.as_mut_ptr() as isize,
+            )
+        };
+        assert_eq!(w, r);
+        assert_eq!(wide_answer(&buf), "D:/short.txt");
+    }
+
+    #[test]
+    fn get_full_path_answers_an_untitled_buffer_with_its_name() {
+        // Measured: Notepad++ answers "new 1" with 5 from the probe and
+        // the write. Until Phase 5 Code++ answered -1.
+        let mut s = MockServices {
+            untitled_names: vec![(7, "new 1".to_string())],
+            ..Default::default()
+        };
+        assert_eq!(
+            unsafe { dispatch_nppm(&mut s, NPPM_GETFULLPATHFROMBUFFERID, 7, 0) },
+            Some(5)
+        );
+        let mut buf = vec![0xFFFFu16; 6];
+        let r = unsafe {
+            dispatch_nppm(
+                &mut s,
+                NPPM_GETFULLPATHFROMBUFFERID,
+                7,
+                buf.as_mut_ptr() as isize,
+            )
+        };
+        assert_eq!(r, Some(5));
+        assert_eq!(wide_answer(&buf), "new 1");
+    }
+
+    #[test]
+    fn get_full_path_refuses_a_path_it_cannot_write_whole() {
+        // MAX_PATH units or more, or not valid Unicode: -1 from the
+        // probe and the write, where the path used to be cut or written
+        // lossily. Nothing is written: a plugin that sizes its buffer
+        // from the probe's -1 has room for nothing.
+        for path in [
+            PathBuf::from("z".repeat(MAX_PATH_TCHARS)),
+            non_unicode_path(),
+        ] {
+            let mut s = MockServices {
+                buffer_paths: vec![(7, path.clone())],
+                ..Default::default()
+            };
+            let mut buf = vec![0xFFFFu16; MAX_PATH_TCHARS + 1];
+            let r = unsafe { dispatch_nppm(&mut s, NPPM_GETFULLPATHFROMBUFFERID, 7, 0) };
+            assert_eq!(r, Some(-1), "{path:?}");
+            let r = unsafe {
+                dispatch_nppm(
+                    &mut s,
+                    NPPM_GETFULLPATHFROMBUFFERID,
+                    7,
+                    buf.as_mut_ptr() as isize,
+                )
+            };
+            assert_eq!(r, Some(-1), "{path:?}");
+            assert!(buf.iter().all(|&u| u == 0xFFFF), "{path:?}");
+        }
+        // One unit shorter fits.
+        let fits = "z".repeat(MAX_PATH_TCHARS - 1);
+        let mut s = MockServices {
+            buffer_paths: vec![(7, PathBuf::from(&fits))],
+            ..Default::default()
+        };
+        let mut buf = vec![0xFFFFu16; MAX_PATH_TCHARS + 1];
+        let r = unsafe {
+            dispatch_nppm(
+                &mut s,
+                NPPM_GETFULLPATHFROMBUFFERID,
+                7,
+                buf.as_mut_ptr() as isize,
+            )
+        };
+        assert_eq!(r, Some(MAX_PATH_TCHARS as isize - 1));
+        assert_eq!(wide_answer(&buf), fits);
+        assert_eq!(buf[MAX_PATH_TCHARS], 0xFFFF);
+        let r = unsafe { dispatch_nppm(&mut s, NPPM_GETFULLPATHFROMBUFFERID, 7, -8) };
+        assert_eq!(r, Some(-1));
+    }
+
+    #[test]
+    fn get_full_path_ends_an_untitled_name_at_a_nul() {
+        // The plugin's string ends at the first NUL, so its length
+        // does: a name that holds one is answered up to it, from the
+        // probe and the write alike.
+        let mut s = MockServices {
+            untitled_names: vec![(7, "new\u{0}1".to_string())],
+            ..Default::default()
+        };
+        assert_eq!(
+            unsafe { dispatch_nppm(&mut s, NPPM_GETFULLPATHFROMBUFFERID, 7, 0) },
+            Some(3)
+        );
+        let mut buf = vec![0xFFFFu16; MAX_PATH_TCHARS];
+        let r = unsafe {
+            dispatch_nppm(
+                &mut s,
+                NPPM_GETFULLPATHFROMBUFFERID,
+                7,
+                buf.as_mut_ptr() as isize,
+            )
+        };
+        assert_eq!(r, Some(3));
+        assert_eq!(wide_answer(&buf), "new");
+        assert_eq!(buf[4], 0xFFFF, "nothing past the NUL");
+    }
+
+    #[test]
+    fn get_full_path_unknown_id_and_kernel_range_lparam_write_nothing() {
+        // An unknown id, and a kernel-range lParam, answer -1 and write
+        // nothing, whatever the path: nothing is written through a
+        // negative pointer.
+        let mut s = MockServices {
+            buffer_paths: vec![(7, PathBuf::from("z".repeat(MAX_PATH_TCHARS)))],
+            ..Default::default()
+        };
+        let mut buf = vec![0xFFFFu16; MAX_PATH_TCHARS];
+        let r = unsafe {
+            dispatch_nppm(
+                &mut s,
+                NPPM_GETFULLPATHFROMBUFFERID,
+                8,
+                buf.as_mut_ptr() as isize,
+            )
+        };
+        assert_eq!(r, Some(-1));
+        assert!(buf.iter().all(|&u| u == 0xFFFF));
+        // A path the host would write, but a negative pointer.
+        let r = unsafe { dispatch_nppm(&mut s, NPPM_GETFULLPATHFROMBUFFERID, 7, -8) };
+        assert_eq!(r, Some(-1));
+    }
+
+    #[test]
+    fn the_slot_messages_write_a_path_whole_or_as_an_empty_string() {
+        // Through the dispatcher: a path too long for its `MAX_PATH`
+        // slot is written as an empty string, and the paths beside it
+        // are written whole.
+        let long = "x".repeat(MAX_PATH_TCHARS);
+        let mut s = MockServices {
+            open_files_primary: vec![
+                PathBuf::from("C:/a.txt"),
+                PathBuf::from(&long),
+                PathBuf::from("C:/c.txt"),
+            ],
+            ..Default::default()
+        };
+        let mut bufs = vec![vec![0xFFFFu16; MAX_PATH_TCHARS]; 3];
+        let mut slots: Vec<*mut u16> = bufs.iter_mut().map(Vec::as_mut_ptr).collect();
+        let r = unsafe {
+            dispatch_nppm(
+                &mut s,
+                NPPM_GETOPENFILENAMES,
+                slots.as_mut_ptr() as usize,
+                3,
+            )
+        };
+        assert_eq!(r, Some(3));
+        assert_eq!(wide_answer(&bufs[0]), "C:/a.txt");
+        assert_eq!(bufs[1][0], 0, "the long path is written as nothing");
+        assert!(bufs[1][1..].iter().all(|&u| u == 0xFFFF));
+        assert_eq!(wide_answer(&bufs[2]), "C:/c.txt");
+
+        // The session file's paths go through the same slot writer.
+        s.session_paths = Some(vec![
+            PathBuf::from("C:/a.txt"),
+            PathBuf::from(&long),
+            PathBuf::from("C:/c.txt"),
+        ]);
+        let session = make_wide("C:/sessions/s.xml");
+        let mut bufs = vec![vec![0xFFFFu16; MAX_PATH_TCHARS]; 3];
+        let mut slots: Vec<*mut u16> = bufs.iter_mut().map(Vec::as_mut_ptr).collect();
+        let r = unsafe {
+            dispatch_nppm(
+                &mut s,
+                NPPM_GETSESSIONFILES,
+                slots.as_mut_ptr() as usize,
+                session.as_ptr() as isize,
+            )
+        };
+        assert_eq!(r, Some(1));
+        assert_eq!(wide_answer(&bufs[0]), "C:/a.txt");
+        assert_eq!(bufs[1][0], 0, "the long path is written as nothing");
+        assert!(bufs[1][1..].iter().all(|&u| u == 0xFFFF));
+        assert_eq!(wide_answer(&bufs[2]), "C:/c.txt");
+    }
+
+    #[test]
+    fn the_slot_messages_refuse_a_kernel_range_array() {
+        // A negative wParam is a kernel-range pointer to the array of
+        // slots: nothing is read from it or written through it.
+        let mut s = MockServices {
+            open_files_primary: vec![PathBuf::from("C:/a.txt")],
+            ..Default::default()
+        };
+        let session = make_wide("C:/sessions/a.txt");
+        let r = unsafe { dispatch_nppm(&mut s, NPPM_GETOPENFILENAMES, usize::MAX - 7, 1) };
+        assert_eq!(r, Some(0));
+        let r = unsafe {
+            dispatch_nppm(
+                &mut s,
+                NPPM_GETSESSIONFILES,
+                usize::MAX - 7,
+                session.as_ptr() as isize,
+            )
+        };
+        assert_eq!(r, Some(0));
     }
 
     #[test]
@@ -4941,19 +5176,96 @@ mod tests {
     }
 
     #[test]
-    fn write_wide_path_truncates_overlong_input() {
-        // Construct a longer-than-cap path; write_wide_path must
-        // truncate-with-null and not write past `cap`.
-        let big = "x".repeat(MAX_PATH_TCHARS + 50);
-        let mut buf = vec![0xFFFFu16; MAX_PATH_TCHARS + 4];
-        let path = Path::new(&big);
-        let written = unsafe { write_wide_path(buf.as_mut_ptr(), MAX_PATH_TCHARS, path) };
-        assert_eq!(written, MAX_PATH_TCHARS);
-        // The trailing slot we left at 0xFFFF must be untouched —
-        // proves we didn't overrun.
+    fn a_path_slot_holds_the_whole_path_or_nothing() {
+        // A path too long for `MAX_PATH`, or not valid Unicode, is
+        // written as an empty string, never cut or approximated, and
+        // nothing is written past the slot.
+        for path in [
+            PathBuf::from("x".repeat(MAX_PATH_TCHARS)),
+            non_unicode_path(),
+        ] {
+            let mut buf = vec![0xFFFFu16; MAX_PATH_TCHARS + 1];
+            unsafe { write_path_slot(buf.as_mut_ptr(), &path) };
+            assert_eq!(buf[0], 0, "{path:?}");
+            assert!(buf[1..].iter().all(|&u| u == 0xFFFF), "{path:?}");
+        }
+        // One unit short of `MAX_PATH` fits, its NUL in the last unit.
+        let mut buf = vec![0xFFFFu16; MAX_PATH_TCHARS + 1];
+        let fits = "y".repeat(MAX_PATH_TCHARS - 1);
+        unsafe { write_path_slot(buf.as_mut_ptr(), Path::new(&fits)) };
+        assert_eq!(wide_answer(&buf), fits);
         assert_eq!(buf[MAX_PATH_TCHARS], 0xFFFF);
-        // And the in-bounds last slot is the NUL terminator.
-        assert_eq!(buf[MAX_PATH_TCHARS - 1], 0);
+    }
+
+    #[test]
+    fn a_kernel_range_lparam_is_refused_by_the_directory_and_session_messages() {
+        // A negative lParam is a kernel-range pointer: refused, as the
+        // path messages refuse it, where until Phase 5 only NULL was.
+        let mut s = MockServices {
+            plugins_dir: PathBuf::from("E:/c"),
+            plugin_home_dir: Some(PathBuf::from("E:/c")),
+            settings_cloud_dir: Some(PathBuf::from("E:/c")),
+            ..Default::default()
+        };
+        for msg in [
+            NPPM_GETPLUGINSCONFIGDIR,
+            NPPM_GETPLUGINHOMEPATH,
+            NPPM_GETSETTINGSCLOUDPATH,
+            NPPM_GETSESSIONFILES,
+        ] {
+            assert_eq!(
+                unsafe { dispatch_nppm(&mut s, msg, MAX_PATH_TCHARS, -8) },
+                Some(0),
+                "{msg}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_directory_that_does_not_fit_is_refused_not_cut() {
+        // Until Phase 5 the three directory messages cut a directory
+        // short and answered 1, naming another directory.
+        let dir = PathBuf::from("E:/codepp/plugins/config");
+        let len = dir.to_str().unwrap().len();
+        for (msg, set) in [
+            (NPPM_GETPLUGINSCONFIGDIR, 0),
+            (NPPM_GETPLUGINHOMEPATH, 1),
+            (NPPM_GETSETTINGSCLOUDPATH, 2),
+        ] {
+            let mut s = MockServices::default();
+            match set {
+                0 => s.plugins_dir = dir.clone(),
+                1 => s.plugin_home_dir = Some(dir.clone()),
+                _ => s.settings_cloud_dir = Some(dir.clone()),
+            }
+            let mut buf = vec![0xFFFFu16; MAX_PATH_TCHARS];
+            let r = unsafe { dispatch_nppm(&mut s, msg, len, buf.as_mut_ptr() as isize) };
+            assert_eq!(r, Some(0), "{msg}");
+            assert_eq!(buf[0], 0, "{msg}: an empty string, not a cut one");
+            assert!(buf[1..].iter().all(|&u| u == 0xFFFF), "{msg}");
+            let r = unsafe { dispatch_nppm(&mut s, msg, len + 1, buf.as_mut_ptr() as isize) };
+            assert_eq!(r, Some(1), "{msg}");
+            assert_eq!(wide_answer(&buf), dir.to_str().unwrap(), "{msg}");
+        }
+        // One that is not valid Unicode is refused too, by each.
+        for msg in [
+            NPPM_GETPLUGINSCONFIGDIR,
+            NPPM_GETPLUGINHOMEPATH,
+            NPPM_GETSETTINGSCLOUDPATH,
+        ] {
+            let mut s = MockServices {
+                plugins_dir: non_unicode_path(),
+                plugin_home_dir: Some(non_unicode_path()),
+                settings_cloud_dir: Some(non_unicode_path()),
+                ..Default::default()
+            };
+            let mut buf = vec![0xFFFFu16; MAX_PATH_TCHARS];
+            let r =
+                unsafe { dispatch_nppm(&mut s, msg, MAX_PATH_TCHARS, buf.as_mut_ptr() as isize) };
+            assert_eq!(r, Some(0), "{msg}");
+            assert_eq!(buf[0], 0, "{msg}: an empty string, not a lossy one");
+            assert!(buf[1..].iter().all(|&u| u == 0xFFFF), "{msg}");
+        }
     }
 
     #[test]

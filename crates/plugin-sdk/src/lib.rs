@@ -274,10 +274,12 @@ pub const NPPM_SETSTATUSBAR: u32 = NPPMSG + 24;
 /// here.
 pub const STATUSBAR_DOC_TYPE: usize = 0;
 
-/// `NPPM_GETFULLPATHFROMBUFFERID(id, *wchar)` — write the on-disk
-/// path of buffer `id` through the lparam buffer. Returns the number
-/// of UTF-16 units written including the NUL, or -1 for an unknown
-/// id. Used by [`buffer_path`].
+/// `NPPM_GETFULLPATHFROMBUFFERID(id, *wchar)` — write the full path
+/// name of buffer `id` through the lparam buffer: its file, or an
+/// untitled buffer's name. Returns its length in UTF-16 units, the NUL
+/// not counted, from the write and from a probe with a NULL lparam alike;
+/// -1 for an unknown id, or a path the host will not write whole. Used by
+/// [`buffer_path`].
 pub const NPPM_GETFULLPATHFROMBUFFERID: u32 = NPPMSG + 58;
 
 /// `NPPM_DMMREGASDCKDLG(0, *tTbData)` — register a plugin-owned
@@ -630,10 +632,11 @@ fn eol_bytes(mode: isize) -> &'static [u8] {
 // ---- Status bar -------------------------------------------------
 
 /// Resolve buffer `id` (as carried in an `NPPN_*` notification's
-/// `nmhdr.idFrom`) to its on-disk path via
-/// `NPPM_GETFULLPATHFROMBUFFERID`. `None` when the host does not
-/// know the id, the buffer has no path (untitled), or `setInfo`
-/// hasn't run yet.
+/// `nmhdr.idFrom`) to its full path name via
+/// `NPPM_GETFULLPATHFROMBUFFERID`: its file, or for an untitled buffer
+/// its name (`new 1`), as Notepad++ answers. `None` when the host does
+/// not know the id, will not write the path whole, or `setInfo` hasn't
+/// run yet.
 ///
 /// The interesting caller is a `beNotified` handler: Notepad++
 /// delivers `NPPN_FILEBEFORECLOSE` while the buffer is still open,

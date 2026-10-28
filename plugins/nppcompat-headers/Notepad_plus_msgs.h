@@ -91,7 +91,10 @@
  *     restrict to a single view. Return value is the number of
  *     slots actually written, NOT the count attempted: a slot
  *     whose plugin-allocated pointer is NULL is logged and
- *     skipped, and the return reflects the gap. */
+ *     skipped, and the return reflects the gap. A path too long
+ *     for MAX_PATH, or not valid Unicode, is written as an empty
+ *     string, never cut short. A negative wParam, a kernel-range
+ *     pointer, returns 0. */
 #define NPPM_GETOPENFILENAMES             (NPPMSG + 8)
 /* v3: register or unregister a plugin-owned modeless-dialog
  *     HWND with the host's message pump. The pump consults each
@@ -183,9 +186,11 @@ typedef struct sessionInfo_ {
  *     wParam: TCHAR** array of plugin-allocated buffers, each at
  *             least MAX_PATH wide chars.
  *     lParam: TCHAR* path to the session file.
- *     Returns: 1 on success, 0 on bad arguments / parse failure.
+ *     Returns: 1 on success, 0 on bad arguments (a NULL or
+ *     negative wParam or lParam among them) / parse failure.
  *     Plugins should call NPPM_GETNBSESSIONFILES first to size the
- *     array. */
+ *     array. A path too long for MAX_PATH, or not valid Unicode, is
+ *     written as an empty string, never cut short. */
 #define NPPM_GETSESSIONFILES              (NPPMSG + 14)
 /* v2: write a session-XML containing the supplied file list.
  *     wParam: unused.
@@ -544,7 +549,14 @@ typedef struct toolbarIcons_ {
 #define NPPM_MAKECURRENTBUFFERDIRTY       (NPPMSG + 44)
 #define NPPM_GETENABLETHEMETEXTUREFUNC    (NPPMSG + 45)  /* deprecated upstream */
 
-/* v1: returns the path of the per-user plugin config dir (TCHAR* via lParam). */
+/* v1: the per-user plugin config dir.
+ *     wParam: capacity in TCHARs, the NUL included. lParam: TCHAR* OUT.
+ *     Returns 1 and writes the directory if it fits; 0 and an
+ *     empty string if it does not, or if it is not valid Unicode; 0
+ *     and nothing written for 0 capacity or a NULL or negative
+ *     lParam. Notepad++ answers a NULL lParam with
+ *     the directory's length (read from its source, not measured);
+ *     Code++ does not, yet. */
 #define NPPM_GETPLUGINSCONFIGDIR          (NPPMSG + 46)
 /* v3: forward an inter-plugin message to a named target.
  *     wParam: TCHAR* target plugin name (the value the target's
@@ -613,8 +625,15 @@ typedef struct CommunicationInfo_ {
  *     Returns the tab index, with bit 0x40000000 set if the buffer
  *     lives in the secondary view. -1 if the buffer id is unknown. */
 #define NPPM_GETPOSFROMBUFFERID           (NPPMSG + 57)
-/* v1: lParam (TCHAR*) is filled with the full path of the buffer
- *     whose id is in wParam. */
+/* v1: the full path of the buffer whose id is in wParam: its file,
+ *     or for an untitled buffer its name ("new 1").
+ *     lParam: TCHAR* OUT, or NULL to ask the length.
+ *     Returns the length in TCHARs, the NUL not counted, from the
+ *     write and from the NULL-lParam probe alike: allocate that plus
+ *     one. The path ends at its first NUL. -1, and nothing written,
+ *     for a path of MAX_PATH TCHARs or more or one that is not valid
+ *     Unicode, which is refused rather than cut short, for an unknown
+ *     buffer id, and for a negative lParam. */
 #define NPPM_GETFULLPATHFROMBUFFERID      (NPPMSG + 58)
 /* v1: buffer id of the tab at the requested view-relative position.
  *     wParam: tab position (0-based index into the view's tab list).
@@ -806,8 +825,8 @@ typedef struct CommunicationInfo_ {
  *     plugin subdirectory) into a plugin-allocated wide buffer.
  *     wParam: capacity in TCHARs. lParam: TCHAR* OUT.
  *     Returns 1 on success, 0 on bad args / unresolvable config
- *     dir (sandboxed runner). Same out-buffer protocol as
- *     `NPPM_GETPLUGINSCONFIGDIR`. */
+ *     dir (sandboxed runner), or a directory that does not fit. Same
+ *     out-buffer protocol as `NPPM_GETPLUGINSCONFIGDIR`. */
 #define NPPM_GETPLUGINHOMEPATH            (NPPMSG + 97)
 /* v3: returns the settings cloud-sync directory if the user opted
  *     in. Same out-buffer protocol; Code++ does not implement
