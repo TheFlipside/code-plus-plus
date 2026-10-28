@@ -2282,6 +2282,14 @@ impl UiPlatform for Win32Ui {
         self.editor.apply_folds(lines);
     }
 
+    fn cursor_text(&mut self, which: codepp_shell::CursorText) -> String {
+        self.editor.cursor_text(which)
+    }
+
+    fn caret_line_column(&self) -> (isize, isize) {
+        self.editor.caret_line_column()
+    }
+
     fn update_status(
         &mut self,
         lang: codepp_core::LangType,
@@ -34541,9 +34549,9 @@ mod view_position_tests {
 
     /// An off-screen Scintilla control that is never shown, destroyed when
     /// it drops, so a failed assertion does not leave it behind.
-    struct Control {
+    pub(super) struct Control {
         hwnd: HWND,
-        editor: EditorHandle,
+        pub(super) editor: EditorHandle,
     }
 
     impl Drop for Control {
@@ -34559,7 +34567,7 @@ mod view_position_tests {
     /// A Scintilla control `width` by `height` pixels holding `text`, in
     /// the UTF-8 code page, as every document Code++ creates is. Bytes rather
     /// than a string, so a test can hold a sequence that is not valid UTF-8.
-    fn scintilla(width: i32, height: i32, text: &[u8]) -> Control {
+    pub(super) fn scintilla(width: i32, height: i32, text: &[u8]) -> Control {
         static REGISTER: Once = Once::new();
         // SAFETY: plain Win32 calls on this thread. The direct-call pair is
         // the control's own, read back from it, and the control outlives
@@ -35207,5 +35215,311 @@ mod view_position_tests {
         let control = scintilla(400, 300, b"abc\n\xe2\x82");
         assert_eq!(control.editor.char_boundary_at_or_before(5), 4);
         assert_eq!(control.editor.char_boundary_at_or_before(6), 6);
+    }
+}
+
+#[cfg(test)]
+mod cursor_text_tests {
+    //! The text at the caret that the cursor messages answer
+    //! (`EditorHandle::cursor_text`), against a real Scintilla control.
+    //! The expectations were measured against Notepad++ 8.9.8.1 with probe
+    //! plugins, except where a test says Code++ differs, or that its case
+    //! follows from the measured rules and was not measured itself.
+
+    use codepp_editor::{CursorText, EditorHandle};
+    use codepp_scintilla_sys::{
+        SCI_GETANCHOR, SCI_GETCURRENTPOS, SCI_GETLENGTH, SCI_GETSELECTIONS, SCI_SETEOLMODE,
+        SCI_SETSEL, SCI_SETSELECTIONMODE, SCI_SETTABWIDTH, SC_EOL_LF, SC_SEL_RECTANGLE,
+    };
+
+    use super::view_position_tests::scintilla;
+
+    /// A message number from the vendored `Scintilla.h`, for the few the
+    /// tests send that the editor does not.
+    fn sci(name: &str) -> u32 {
+        include_str!("../../scintilla-sys/vendor/scintilla/include/Scintilla.h")
+            .lines()
+            .find(|l| l.split_whitespace().nth(1) == Some(name))
+            .and_then(|l| l.split_whitespace().nth(2))
+            .and_then(|v| v.parse().ok())
+            .unwrap_or_else(|| panic!("{name} is not in Scintilla.h"))
+    }
+
+    fn select(editor: &EditorHandle, anchor: usize, caret: usize) {
+        editor.send(SCI_SETSEL, anchor, caret as isize);
+    }
+
+    fn selection(editor: &EditorHandle) -> (isize, isize) {
+        (
+            editor.send(SCI_GETANCHOR, 0, 0),
+            editor.send(SCI_GETCURRENTPOS, 0, 0),
+        )
+    }
+
+    #[test]
+    fn the_word_at_the_caret_is_read_and_selected() {
+        let control = scintilla(400, 300, b"hello world foo.bar");
+        let editor = &control.editor;
+        select(editor, 8, 8);
+        assert_eq!(editor.cursor_text(CursorText::Word), "world");
+        assert_eq!(
+            selection(editor),
+            (6, 11),
+            "anchor at the start, caret at the end"
+        );
+        // A selection is read as it is, either way round.
+        select(editor, 8, 3);
+        assert_eq!(editor.cursor_text(CursorText::Word), "lo wo");
+        assert_eq!(selection(editor), (8, 3));
+        // Only word characters: "bar", not "foo.bar".
+        select(editor, 16, 16);
+        assert_eq!(editor.cursor_text(CursorText::Word), "bar");
+        // At the end of a word, the word before the caret.
+        select(editor, 5, 5);
+        assert_eq!(editor.cursor_text(CursorText::Word), "hello");
+    }
+
+    #[test]
+    fn a_caret_between_spaces_reads_nothing_and_selects_nothing() {
+        let control = scintilla(400, 300, b"ab  cd");
+        let editor = &control.editor;
+        select(editor, 3, 3);
+        assert_eq!(editor.cursor_text(CursorText::Word), "");
+        assert_eq!(selection(editor), (3, 3));
+    }
+
+    #[test]
+    fn the_word_is_read_outside_ascii() {
+        let control = scintilla(400, 300, "héllo wörld".as_bytes());
+        let editor = &control.editor;
+        select(editor, 10, 10);
+        assert_eq!(editor.cursor_text(CursorText::Word), "wörld");
+        // A caret inside a character reads what Scintilla's word start and
+        // end make of it there, as Notepad++ does.
+        select(editor, 9, 9);
+        assert_eq!(editor.cursor_text(CursorText::Word), "ö");
+    }
+
+    #[test]
+    fn a_long_selection_answers_2047_units() {
+        let control = scintilla(400, 300, "a".repeat(100_000).as_bytes());
+        let editor = &control.editor;
+        select(editor, 0, 100_000);
+        assert_eq!(editor.cursor_text(CursorText::Word), "a".repeat(2047));
+        // Cut between characters: 2046 letters and the first "你" are 2047
+        // units, and the next does not fit.
+        let text = format!("{}{}", "a".repeat(2046), "你".repeat(3000));
+        let control = scintilla(400, 300, text.as_bytes());
+        let editor = &control.editor;
+        select(editor, 0, text.len());
+        assert_eq!(
+            editor.cursor_text(CursorText::Word),
+            format!("{}你", "a".repeat(2046))
+        );
+        // All three-byte characters: 2047 of them, each whole, so the read
+        // of the selection's start was long enough.
+        let text = "你".repeat(3000);
+        let control = scintilla(400, 300, text.as_bytes());
+        let editor = &control.editor;
+        select(editor, 0, text.len());
+        assert_eq!(editor.cursor_text(CursorText::Word), "你".repeat(2047));
+    }
+
+    #[test]
+    fn several_selections_end_each_range_with_a_line_end_in_order() {
+        let control = scintilla(400, 300, b"abc def ghi");
+        let editor = &control.editor;
+        // The later range made first: kept in the order made.
+        editor.send(sci("SCI_SETSELECTION"), 9, 11);
+        editor.send(sci("SCI_ADDSELECTION"), 1, 2);
+        assert_eq!(editor.send(SCI_GETSELECTIONS, 0, 0), 2);
+        assert_eq!(editor.cursor_text(CursorText::Word), "hi\r\nb\r\n");
+        // The document's line end, whichever it is.
+        editor.send(SCI_SETEOLMODE, SC_EOL_LF, 0);
+        assert_eq!(editor.cursor_text(CursorText::Word), "hi\nb\n");
+    }
+
+    #[test]
+    fn a_rectangle_reads_top_down_and_a_one_line_rectangle_has_no_line_end() {
+        let control = scintilla(400, 300, b"abc\r\ndef\r\nghi");
+        let editor = &control.editor;
+        editor.send(SCI_SETSELECTIONMODE, SC_SEL_RECTANGLE as usize, 0);
+        // Drawn from the bottom up: still read from the top.
+        editor.send(sci("SCI_SETRECTANGULARSELECTIONANCHOR"), 12, 0);
+        editor.send(sci("SCI_SETRECTANGULARSELECTIONCARET"), 1, 0);
+        assert_eq!(editor.cursor_text(CursorText::Word), "b\r\ne\r\nh\r\n");
+        editor.send(sci("SCI_SETRECTANGULARSELECTIONANCHOR"), 1, 0);
+        editor.send(sci("SCI_SETRECTANGULARSELECTIONCARET"), 3, 0);
+        assert_eq!(editor.send(SCI_GETSELECTIONS, 0, 0), 1);
+        assert_eq!(editor.cursor_text(CursorText::Word), "bc");
+    }
+
+    #[test]
+    fn a_tall_rectangle_reads_from_the_top_and_stops_at_2047_units() {
+        // 3000 lines of "ab", the rectangle the first column of all of
+        // them, drawn from the bottom up: "a" and a line end per line,
+        // from the top, cut at 2047 units, inside the 683rd "a\r\n".
+        // Follows from the measured rules (rectangles top-down, the cut);
+        // a rectangle this tall was not measured.
+        let text = format!("{}ab", "ab\r\n".repeat(2999));
+        let control = scintilla(400, 300, text.as_bytes());
+        let editor = &control.editor;
+        editor.send(SCI_SETSELECTIONMODE, SC_SEL_RECTANGLE as usize, 0);
+        editor.send(sci("SCI_SETRECTANGULARSELECTIONANCHOR"), 4 * 2999, 0);
+        editor.send(sci("SCI_SETRECTANGULARSELECTIONCARET"), 1, 0);
+        assert_eq!(editor.send(SCI_GETSELECTIONS, 0, 0), 3000);
+        assert_eq!(
+            editor.cursor_text(CursorText::Word),
+            format!("{}a", "a\r\n".repeat(682))
+        );
+    }
+
+    #[test]
+    fn the_line_is_read_with_its_line_end_and_selects_nothing() {
+        let control = scintilla(400, 300, b"first line\r\nsecond\r\n\r\nlast");
+        let editor = &control.editor;
+        select(editor, 2, 2);
+        assert_eq!(editor.cursor_text(CursorText::Line), "first line\r\n");
+        assert_eq!(selection(editor), (2, 2));
+        select(editor, 15, 15);
+        assert_eq!(editor.cursor_text(CursorText::Line), "second\r\n");
+        select(editor, 22, 22);
+        assert_eq!(editor.cursor_text(CursorText::Line), "last");
+    }
+
+    #[test]
+    fn the_text_stops_at_a_nul_in_the_document() {
+        // Read from Notepad++'s source, which makes a C string of the text;
+        // not measured. `SCI_SETTEXT`, which the fixture uses, stops at a
+        // NUL, so the text goes in with its length.
+        let control = scintilla(400, 300, b"");
+        let editor = &control.editor;
+        let text = b"ab\0cd\r\nx";
+        editor.send(sci("SCI_APPENDTEXT"), text.len(), text.as_ptr() as isize);
+        assert_eq!(
+            editor.send(SCI_GETLENGTH, 0, 0),
+            8,
+            "the NUL is in the document"
+        );
+        select(editor, 0, 5);
+        assert_eq!(editor.cursor_text(CursorText::Word), "ab");
+        select(editor, 1, 1);
+        assert_eq!(editor.cursor_text(CursorText::Line), "ab");
+    }
+
+    #[test]
+    fn a_line_of_2048_bytes_or_more_reads_empty() {
+        // The line's bytes with its line end: 2047 are read, 2048 are not.
+        for (text, whole) in [
+            ("a".repeat(2047), true),
+            ("a".repeat(2048), false),
+            (format!("{}\r\nx", "a".repeat(2045)), true),
+            (format!("{}\r\nx", "a".repeat(2046)), false),
+        ] {
+            let control = scintilla(400, 300, text.as_bytes());
+            let editor = &control.editor;
+            select(editor, 3, 3);
+            let expected = if whole {
+                text.trim_end_matches('x')
+            } else {
+                ""
+            };
+            assert_eq!(
+                editor.cursor_text(CursorText::Line),
+                expected,
+                "{} bytes",
+                text.len()
+            );
+        }
+    }
+
+    #[test]
+    fn the_file_name_is_read_around_the_caret() {
+        for (text, caret, name) in [
+            ("open C:\\dir\\file.txt now", 13, "C:\\dir\\file.txt"),
+            ("see ./a/b.txt x", 9, "./a/b.txt"),
+            // On the space after "foo.txt": the word before the caret.
+            ("foo.txt bar", 7, "txt"),
+            (
+                "go https://ex.com/a?b=c#d end",
+                13,
+                "https://ex.com/a?b=c#d",
+            ),
+            // In "Program": the caret ends up on the space after it, which
+            // ends a name on its left, so the word is the answer.
+            ("\"C:\\Program Files\\x.txt\"", 6, "Program"),
+            // Notepad++ answers "b" here, reading the line at the caret's
+            // byte offset as if it were a character offset.
+            ("éééééé a.txt b", 13, "a.txt"),
+        ] {
+            let control = scintilla(400, 300, text.as_bytes());
+            let editor = &control.editor;
+            select(editor, caret, caret);
+            assert_eq!(editor.cursor_text(CursorText::FileName), name, "{text}");
+        }
+        // A selection holding a slash is the answer, whatever the line.
+        let control = scintilla(400, 300, b"a/b c/d");
+        let editor = &control.editor;
+        select(editor, 0, 3);
+        assert_eq!(editor.cursor_text(CursorText::FileName), "a/b");
+        // Even when the line around the caret reads longer.
+        let control = scintilla(400, 300, b"xa/bc/d y");
+        let editor = &control.editor;
+        select(editor, 2, 5);
+        assert_eq!(editor.cursor_text(CursorText::FileName), "/bc");
+        // One without is not: the line around the caret is.
+        let control = scintilla(400, 300, b"x(foo.txt)y");
+        let editor = &control.editor;
+        select(editor, 3, 4);
+        assert_eq!(editor.cursor_text(CursorText::FileName), "foo.txt");
+    }
+
+    #[test]
+    fn on_a_line_too_long_to_read_the_file_name_is_the_word_or_nothing() {
+        // A line of 2048 bytes or more reads as empty, so the scan finds an
+        // empty name, unless the word holds a separator. Follows from the
+        // measured rules; Notepad++ answered a stray "y" for a word of 3000
+        // letters on such a line, which is not reproduced.
+        let text = format!("x/y {}", "a".repeat(2100));
+        let control = scintilla(400, 300, text.as_bytes());
+        let editor = &control.editor;
+        select(editor, 10, 10);
+        assert_eq!(editor.cursor_text(CursorText::FileName), "");
+        select(editor, 0, 3);
+        assert_eq!(editor.cursor_text(CursorText::FileName), "x/y");
+    }
+
+    #[test]
+    fn a_caret_left_inside_a_character_scans_from_that_character() {
+        // A selection ending inside "é" leaves the caret there, and the
+        // scan starts at the "é" rather than after it. Code++'s reading;
+        // not measured.
+        let control = scintilla(400, 300, "éa b".as_bytes());
+        let editor = &control.editor;
+        select(editor, 0, 1);
+        assert_eq!(editor.cursor_text(CursorText::FileName), "éa");
+    }
+
+    #[test]
+    fn several_ranges_are_one_file_name() {
+        // The ranges joined as the word is, which then holds the slash:
+        // follows from the measured rules, not measured itself.
+        let control = scintilla(400, 300, b"a/b c d");
+        let editor = &control.editor;
+        editor.send(sci("SCI_SETSELECTION"), 0, 3);
+        editor.send(sci("SCI_ADDSELECTION"), 4, 5);
+        assert_eq!(editor.cursor_text(CursorText::FileName), "a/b\r\nc\r\n");
+    }
+
+    #[test]
+    fn the_caret_line_and_column_follow_the_caret() {
+        let control = scintilla(400, 300, b"a\r\n\tb\r\nxyz");
+        let editor = &control.editor;
+        // Notepad++'s tab width.
+        editor.send(SCI_SETTABWIDTH, 4, 0);
+        select(editor, 0, 5);
+        assert_eq!(editor.caret_line_column(), (1, 5), "after the tab and 'b'");
+        select(editor, 5, 9);
+        assert_eq!(editor.caret_line_column(), (2, 2));
     }
 }

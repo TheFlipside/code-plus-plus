@@ -13,8 +13,8 @@
 //! - `SCI_*` from the vendored Scintilla's `Scintilla.h`.
 //!
 //! A number neither table knows is shown as an offset from the base of
-//! its range (`RUNCOMMAND_USER+6`), which is how Notepad++'s own header
-//! writes it. That is the common case for a message Code++ does not
+//! its range (`NPPMSG+110`), which is how Notepad++'s own header writes
+//! it. That is the common case for a message Code++ does not
 //! implement: the compat header declares only what Code++ answers.
 
 use std::collections::HashMap;

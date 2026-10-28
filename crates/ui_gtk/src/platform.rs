@@ -301,6 +301,14 @@ impl UiPlatform for GtkUi {
         self.editor.apply_folds(lines);
     }
 
+    fn cursor_text(&mut self, which: codepp_shell::CursorText) -> String {
+        self.editor.cursor_text(which)
+    }
+
+    fn caret_line_column(&self) -> (isize, isize) {
+        self.editor.caret_line_column()
+    }
+
     fn update_status(&mut self, lang: LangType, encoding: &Encoding, eol: Eol, _byte_len: u64) {
         // Keep Scintilla's own EOL mode in step, so newly typed lines
         // use the same ending as the rest of the file.

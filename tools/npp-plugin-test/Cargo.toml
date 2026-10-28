@@ -31,6 +31,9 @@ tracing-subscriber = { workspace = true }
 # through `SendMessage` on the window handles `setInfo` gave it, so the
 # harness has to own a real window and real Scintilla controls.
 [target.'cfg(target_os = "windows")'.dependencies]
+# For the editor's reads of the text at the caret, which the cursor
+# messages answer with.
+codepp-editor        = { workspace = true }
 codepp-platform      = { workspace = true }
 codepp-scintilla-sys = { workspace = true }
 # For the editor's rule that a plugin may not set a buffer to one of

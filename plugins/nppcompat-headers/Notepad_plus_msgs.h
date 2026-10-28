@@ -948,6 +948,41 @@ typedef struct NppDarkModeColors_ {
  *     holds a space is no extension ("name.my ext" has none) — the
  *     Windows shell's rule, on every platform. */
 #define NPPM_GETEXTPART                   (RUNCOMMAND_USER + 5)
+/* v3: the text at the caret in the main view: the selection, or with
+ *     nothing selected the word around the caret, which is then
+ *     selected (anchor at its start, caret at its end). Only word
+ *     characters count, so on a space the answer is empty and nothing
+ *     is selected. One contract for it and the two text messages
+ *     below:
+ *     wParam: capacity in TCHARs, the terminating NUL included. 0
+ *             means MAX_PATH, except for NPPM_GETFILENAMEATCURSOR,
+ *             which refuses it.
+ *     lParam: TCHAR* OUT.
+ *     Returns TRUE and writes the answer if it fits; FALSE and writes
+ *     nothing if it does not, or for a NULL lParam. A NULL lParam
+ *     selects nothing; an answer that does not fit has had the word
+ *     selected all the same, as in Notepad++. An answer is at most
+ *     2047 TCHARs: a longer selection is cut, between characters. */
+#define NPPM_GETCURRENTWORD               (RUNCOMMAND_USER + 6)
+/* v3: the caret's line, counted from 0. wParam, lParam: 0. */
+#define NPPM_GETCURRENTLINE               (RUNCOMMAND_USER + 8)
+/* v3: the caret's column, counted from 0, with tabs expanded to the
+ *     tab width. wParam, lParam: 0. */
+#define NPPM_GETCURRENTCOLUMN             (RUNCOMMAND_USER + 9)
+/* v3: the file name at the caret: the selection or word, read and
+ *     selected as for NPPM_GETCURRENTWORD, if it holds a backslash or
+ *     a slash. Otherwise the text around where the word's selection
+ *     leaves the caret, at the word's end: from just after a space,
+ *     tab, '[', '(', double quote, '<' or '>' on its left, to just
+ *     before one of those, ':', ')', ']', CR or LF on its right. When
+ *     the character there itself ends a name on its left, the word is
+ *     the answer: with the caret anywhere in "txt" of "foo.txt bar",
+ *     the answer is "txt". Contract as NPPM_GETCURRENTWORD. */
+#define NPPM_GETFILENAMEATCURSOR          (RUNCOMMAND_USER + 11)
+/* v3: the caret's line, its line end included; nothing is selected.
+ *     A line of 2048 bytes or more is answered empty. Contract as
+ *     NPPM_GETCURRENTWORD. */
+#define NPPM_GETCURRENTLINESTR            (RUNCOMMAND_USER + 12)
 /* v1: the host's installation directory (the directory containing
  *     the running executable). The contract of NPPM_GETFULLCURRENTPATH
  *     above; FALSE also when the executable's path cannot be

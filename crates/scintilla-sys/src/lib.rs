@@ -528,6 +528,9 @@ pub const STYLE_INDENTGUIDE: usize = 37;
 /// discipline as `SCI_SETTABWIDTH`. Verified against
 /// `vendor/scintilla/include/Scintilla.h:95` (2031).
 pub const SCI_SETEOLMODE: u32 = 2031;
+/// `SCI_GETEOLMODE` — the `SC_EOL_*` sequence the bound document
+/// inserts for a new line.
+pub const SCI_GETEOLMODE: u32 = 2030;
 /// `SCI_CONVERTEOLS(int eolMode)` — rewrite every line ending in
 /// the bound document to the `SC_EOL_*` sequence given, in place,
 /// as one undoable action (`Document::ConvertLineEnds` wraps the
@@ -1058,6 +1061,26 @@ pub const SCI_SETSEL: u32 = 2160;
 /// document pointers via `SCI_SETDOCPOINTER`, so the user's
 /// pre-swap selection state can be restored on the swap-back.
 pub const SCI_GETANCHOR: u32 = 2009;
+/// How many ranges the selection has: 1 for an ordinary selection, more
+/// for a rectangular or multiple one.
+pub const SCI_GETSELECTIONS: u32 = 2570;
+/// Whether the selection is rectangular (or thin, a rectangle of zero
+/// width).
+pub const SCI_SELECTIONISRECTANGLE: u32 = 2372;
+/// Where range `wparam` of the selection starts: the smaller of its
+/// anchor and caret.
+pub const SCI_GETSELECTIONNSTART: u32 = 2585;
+/// Where range `wparam` of the selection ends: the larger of its anchor
+/// and caret.
+pub const SCI_GETSELECTIONNEND: u32 = 2587;
+/// Where the word around `wparam` starts: `lparam` 1 counts only word
+/// characters, so on a space it answers `wparam` itself.
+pub const SCI_WORDSTARTPOSITION: u32 = 2266;
+/// Where the word around `wparam` ends; `lparam` as for
+/// [`SCI_WORDSTARTPOSITION`].
+pub const SCI_WORDENDPOSITION: u32 = 2267;
+/// The length in bytes of line `wparam`, its line end included.
+pub const SCI_LINELENGTH: u32 = 2350;
 /// Set the selection mode: `wparam = SC_SEL_STREAM | SC_SEL_RECTANGLE
 /// | SC_SEL_LINES | SC_SEL_THIN`. Applied by Notepad++'s Begin/End
 /// Select feature *after* the final `SCI_SETSEL(anchor, caret)` call
@@ -10209,12 +10232,13 @@ pub const SCE_ERR_ES_WHITE: usize = 55;
 mod tests {
     use super::*;
 
-    /// The fold and scroll messages the view-position restore uses carry
+    /// The fold and scroll messages the view-position restore uses, and
+    /// the selection and line messages the cursor-text answers read, carry
     /// the numbers the vendored header gives them. Read from the header
     /// rather than restated, since a transcribed number that is wrong sends
     /// another message, which no other test here would notice.
     #[test]
-    fn the_fold_and_scroll_messages_match_the_vendored_header() {
+    fn the_view_and_cursor_messages_match_the_vendored_header() {
         let header = include_str!("../vendor/scintilla/include/Scintilla.h");
         let defined = |name: &str| -> i64 {
             let line = header
@@ -10250,6 +10274,23 @@ mod tests {
             ("SCI_COLOURISE", i64::from(SCI_COLOURISE)),
             ("SCI_GETLINEVISIBLE", i64::from(SCI_GETLINEVISIBLE)),
             ("SCI_ENSUREVISIBLE", i64::from(SCI_ENSUREVISIBLE)),
+            // The cursor-text messages (`EditorHandle::cursor_text`).
+            ("SCI_GETSELECTIONS", i64::from(SCI_GETSELECTIONS)),
+            (
+                "SCI_SELECTIONISRECTANGLE",
+                i64::from(SCI_SELECTIONISRECTANGLE),
+            ),
+            ("SCI_WORDSTARTPOSITION", i64::from(SCI_WORDSTARTPOSITION)),
+            ("SCI_WORDENDPOSITION", i64::from(SCI_WORDENDPOSITION)),
+            ("SCI_LINELENGTH", i64::from(SCI_LINELENGTH)),
+            ("SCI_GETSELECTIONSTART", i64::from(SCI_GETSELECTIONSTART)),
+            ("SCI_GETSELECTIONEND", i64::from(SCI_GETSELECTIONEND)),
+            ("SCI_SETSELECTIONSTART", i64::from(SCI_SETSELECTIONSTART)),
+            ("SCI_SETSELECTIONEND", i64::from(SCI_SETSELECTIONEND)),
+            ("SCI_GETSELECTIONNSTART", i64::from(SCI_GETSELECTIONNSTART)),
+            ("SCI_GETSELECTIONNEND", i64::from(SCI_GETSELECTIONNEND)),
+            ("SCI_GETEOLMODE", i64::from(SCI_GETEOLMODE)),
+            ("SCI_GETCOLUMN", i64::from(SCI_GETCOLUMN)),
         ] {
             assert_eq!(defined(name), value, "{name}");
         }

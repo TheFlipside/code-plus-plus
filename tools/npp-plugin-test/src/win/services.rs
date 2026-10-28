@@ -28,15 +28,17 @@ use std::cell::RefCell;
 use std::path::PathBuf;
 
 use codepp_core::LangType;
+use codepp_editor::EditorHandle;
 use codepp_plugin_host::dispatch::L_USER;
 use codepp_plugin_host::{
     docking::answers_hwnd_lookup, is_plugin_cmd_id, read_dock_disp_info, BufferPathName,
-    DockDialogParams, HostServices, Hwnd, NppDarkModeColors, ShortcutKey, LINENUMWIDTH_CONSTANT,
-    LINENUMWIDTH_DYNAMIC, MAX_PLUGIN_SCINTILLAS, NPPMAINMENU, NPPPLUGINMENU, UNI_COOKIE,
-    WIN_FORMAT,
+    CursorText, DockDialogParams, HostServices, Hwnd, NppDarkModeColors, ShortcutKey,
+    LINENUMWIDTH_CONSTANT, LINENUMWIDTH_DYNAMIC, MAX_PLUGIN_SCINTILLAS, NPPMAINMENU, NPPPLUGINMENU,
+    UNI_COOKIE, WIN_FORMAT,
 };
 use codepp_scintilla_sys::{
-    SCI_GETZOOM, SCI_SETCODEPAGE, SCI_SETSAVEPOINT, SCI_STYLEGETBACK, SCI_STYLEGETFORE, SC_CP_UTF8,
+    ScintillaDirectFunction, SCI_GETDIRECTFUNCTION, SCI_GETDIRECTPOINTER, SCI_GETZOOM,
+    SCI_SETCODEPAGE, SCI_SETSAVEPOINT, SCI_STYLEGETBACK, SCI_STYLEGETFORE, SC_CP_UTF8,
     STYLE_DEFAULT,
 };
 use windows::core::w;
@@ -215,6 +217,25 @@ impl Bridge<'_> {
         self.0.env.sci[0]
     }
 
+    /// The main view as the editor's own handle, so the text at the
+    /// caret is read exactly as the editor reads it. Its calls go
+    /// through the direct function, past the window procedure, so they
+    /// are not counted among the plugin's Scintilla messages.
+    fn main_editor(&self) -> Option<EditorHandle> {
+        let view = self.main_view();
+        let function = super::sci_send(view, SCI_GETDIRECTFUNCTION, 0, 0);
+        let pointer = super::sci_send(view, SCI_GETDIRECTPOINTER, 0, 0);
+        if function == 0 || pointer == 0 {
+            return None;
+        }
+        // SAFETY: both come from this view's own Scintilla, which lives
+        // as long as the harness; a non-zero `SCI_GETDIRECTFUNCTION` is
+        // Scintilla's direct function, of exactly this type.
+        let function: ScintillaDirectFunction = unsafe { std::mem::transmute(function) };
+        // SAFETY: the pair was read from `view` just above.
+        Some(unsafe { EditorHandle::new(view.0, function, pointer as *mut core::ffi::c_void) })
+    }
+
     fn is_buffer_path(&self, path: &std::path::Path) -> bool {
         path == self.0.env.buffer_path
     }
@@ -267,6 +288,17 @@ impl HostServices for Bridge<'_> {
 
     fn buffer_path_name(&self, id: isize) -> Option<BufferPathName> {
         self.buffer_path(id).map(BufferPathName::File)
+    }
+
+    fn cursor_text(&mut self, which: CursorText) -> String {
+        self.main_editor()
+            .map(|editor| editor.cursor_text(which))
+            .unwrap_or_default()
+    }
+
+    fn caret_line_column(&self) -> (isize, isize) {
+        self.main_editor()
+            .map_or((0, 0), |editor| editor.caret_line_column())
     }
 
     fn buffer_lang_type(&self, id: isize) -> i32 {

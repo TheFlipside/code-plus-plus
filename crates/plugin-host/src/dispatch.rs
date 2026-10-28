@@ -32,6 +32,8 @@ use std::borrow::Cow;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::PathBuf;
 
+use codepp_editor::{CursorText, CURSOR_TEXT_MAX_UNITS};
+
 use crate::codepp_ext::{
     CODEPPMSG, CODEPPMSG_RANGE, CODEPPM_EXPORTSAVEDIALOG, CODEPPM_GETZOOMLEVEL,
     CODEPPM_SETCLIPBOARD,
@@ -276,6 +278,46 @@ pub const NPPM_GETNAMEPART: u32 = RUNCOMMAND_USER + 4;
 /// and a part holding a space is none (`name.my ext` has no
 /// extension). Contract as [`NPPM_GETFULLCURRENTPATH`].
 pub const NPPM_GETEXTPART: u32 = RUNCOMMAND_USER + 5;
+
+/// The selection, or the word around the caret, **which is then
+/// selected** (see [`codepp_editor::EditorHandle::cursor_text`]). It and
+/// [`NPPM_GETCURRENTLINESTR`] share Notepad++'s contract, measured against
+/// 8.9.8.1:
+///
+/// * wparam: the buffer's capacity in `TCHAR`s, its terminating NUL
+///   included. 0 means `MAX_PATH`: Notepad++ takes 0 as "large enough"
+///   and writes up to 2048 units; Code++ bounds it, as for the path
+///   messages.
+/// * lparam: `TCHAR*` OUT.
+/// * Returns TRUE and writes the answer, NUL-terminated, if it fits;
+///   FALSE and writes nothing if it does not, or for a NULL lparam.
+///
+/// The answer is at most 2047 UTF-16 units, cut between characters, and
+/// empty with the caret on a space. A plugin that asks with a NULL
+/// lparam is refused before anything is selected, where Notepad++
+/// selects the word and answers TRUE. One refused because the answer
+/// does not fit its buffer has had the word selected all the same, as in
+/// Notepad++: the answer is only known once it is read.
+pub const NPPM_GETCURRENTWORD: u32 = RUNCOMMAND_USER + 6;
+/// The caret's line, counted from 0. No arguments.
+pub const NPPM_GETCURRENTLINE: u32 = RUNCOMMAND_USER + 8;
+/// The caret's column, counted from 0, with tabs expanded to the tab
+/// width (`SCI_GETCOLUMN`). No arguments.
+pub const NPPM_GETCURRENTCOLUMN: u32 = RUNCOMMAND_USER + 9;
+/// The file name around the caret: the selection or word as
+/// [`NPPM_GETCURRENTWORD`] reads it, selecting it the same way, if it
+/// holds a `\` or `/`; otherwise the run of text between Notepad++'s
+/// delimiters around where the selected word left the caret, at the
+/// word's end, or the word when there is none (see
+/// [`codepp_editor::file_name_around`]). wparam and lparam as for
+/// [`NPPM_GETCURRENTWORD`], except that a capacity of 0 is refused, as
+/// Notepad++ refuses it: this message never took 0 as "large enough".
+/// A NULL lparam answers FALSE, as in Notepad++, but selects nothing.
+pub const NPPM_GETFILENAMEATCURSOR: u32 = RUNCOMMAND_USER + 11;
+/// The caret's line, its line end included. Contract as
+/// [`NPPM_GETCURRENTWORD`]; nothing is selected. A line of 2048 bytes
+/// or more answers empty, as in Notepad++.
+pub const NPPM_GETCURRENTLINESTR: u32 = RUNCOMMAND_USER + 12;
 
 /// The host's installation directory, the one holding the running
 /// executable. Contract as [`NPPM_GETFULLCURRENTPATH`]; FALSE also when
@@ -988,6 +1030,17 @@ pub trait HostServices {
     /// on its first load answers that file. None for an unknown id.
     /// Drives [`NPPM_GETFULLCURRENTPATH`] and its four siblings.
     fn buffer_path_name(&self, id: isize) -> Option<BufferPathName>;
+    /// The text at the caret in the main view that `which` names, as
+    /// [`codepp_editor::EditorHandle::cursor_text`] reads it: the view
+    /// the plugin's own `SCI_*` messages reach. [`CursorText::Word`] and
+    /// [`CursorText::FileName`] select the word when nothing is
+    /// selected. Drives [`NPPM_GETCURRENTWORD`],
+    /// [`NPPM_GETCURRENTLINESTR`] and [`NPPM_GETFILENAMEATCURSOR`].
+    fn cursor_text(&mut self, which: CursorText) -> String;
+    /// The caret's line and column in the main view, both from 0, as
+    /// [`codepp_editor::EditorHandle::caret_line_column`] reads them.
+    /// Drives [`NPPM_GETCURRENTLINE`] and [`NPPM_GETCURRENTCOLUMN`].
+    fn caret_line_column(&self) -> (isize, isize);
     /// Lang-type for buffer `id`, as Notepad++ numbers it (up to
     /// `L_TYPESCRIPT`; from 86 up Code++'s numbers disagree with
     /// Notepad++'s, DESIGN.md §7.4), or `-1` for an unknown id,
@@ -3242,6 +3295,37 @@ pub unsafe fn dispatch_nppm<S: HostServices>(
             isize::from(unsafe { write_wide_if_fits(lparam as *mut u16, cap, &answer) })
         }
 
+        // RUNCOMMAND_USER family: the text at the caret. The path
+        // messages' contract, measured for these too, except that
+        // NPPM_GETFILENAMEATCURSOR refuses a capacity of 0, as Notepad++
+        // does. Both checks come before the host is asked, so a request
+        // refused by either selects nothing. One refused because the
+        // answer does not fit has had the word selected already, as in
+        // Notepad++: the answer's length is known only once it is read.
+        NPPM_GETCURRENTWORD | NPPM_GETCURRENTLINESTR | NPPM_GETFILENAMEATCURSOR => {
+            if lparam <= 0 || (msg == NPPM_GETFILENAMEATCURSOR && wparam == 0) {
+                return Some(0);
+            }
+            let which = match msg {
+                NPPM_GETCURRENTWORD => CursorText::Word,
+                NPPM_GETCURRENTLINESTR => CursorText::Line,
+                _ => CursorText::FileName,
+            };
+            let answer = services.cursor_text(which);
+            // Not `path_capacity`: a capacity up to the 2048 units an
+            // answer and its NUL can need is the plugin's to state here.
+            // The editor bounds the answer; the clamp bounds the write
+            // whatever a host answers.
+            let cap =
+                if wparam == 0 { MAX_PATH_TCHARS } else { wparam }.min(CURSOR_TEXT_MAX_UNITS + 1);
+            // SAFETY: the plugin promises lparam points to a wide buffer
+            // of `wparam` TCHARs, or of `MAX_PATH` when it passes 0;
+            // nothing is written unless the answer and its NUL fit.
+            isize::from(unsafe { write_wide_if_fits(lparam as *mut u16, cap, &answer) })
+        }
+        NPPM_GETCURRENTLINE => services.caret_line_column().0,
+        NPPM_GETCURRENTCOLUMN => services.caret_line_column().1,
+
         // Code++ has no dark mode for a plugin dialog to follow, so it
         // themes nothing and answers that no flag was applied. See
         // [`NPPM_DARKMODESUBCLASSANDTHEME`] for what Notepad++ answers.
@@ -3859,6 +3943,10 @@ mod tests {
         /// Defaults to `true`; tests that exercise the
         /// frame-creation-failure path flip it to false.
         dock_register_succeeds: bool,
+        /// What `cursor_text` answers, whichever text is asked for.
+        cursor_answer: String,
+        /// What `caret_line_column` answers.
+        caret: (isize, isize),
         // recorded mutations
         log: RefCell<Vec<String>>,
     }
@@ -3899,6 +3987,13 @@ mod tests {
                     .find(|(i, _)| *i == id)
                     .map(|(_, n)| BufferPathName::Untitled(n.clone()))
             })
+        }
+        fn cursor_text(&mut self, which: CursorText) -> String {
+            self.record(format!("cursor_text {which:?}"));
+            self.cursor_answer.clone()
+        }
+        fn caret_line_column(&self) -> (isize, isize) {
+            self.caret
         }
         fn buffer_lang_type(&self, _id: isize) -> i32 {
             self.buffer_lang
@@ -5178,6 +5273,13 @@ mod tests {
         assert_eq!(NPPM_GETBOOKMARKID, NPPMSG + 111);
         assert_eq!(NPPM_GETNPPDIRECTORY, RUNCOMMAND_USER + 7);
         assert_eq!(NPPM_GETNPPFULLFILEPATH, RUNCOMMAND_USER + 10);
+        // The cursor messages, added in Phase 5 and checked against
+        // upstream's header with `tools/npp-abi-check/`.
+        assert_eq!(NPPM_GETCURRENTWORD, RUNCOMMAND_USER + 6);
+        assert_eq!(NPPM_GETCURRENTLINE, RUNCOMMAND_USER + 8);
+        assert_eq!(NPPM_GETCURRENTCOLUMN, RUNCOMMAND_USER + 9);
+        assert_eq!(NPPM_GETFILENAMEATCURSOR, RUNCOMMAND_USER + 11);
+        assert_eq!(NPPM_GETCURRENTLINESTR, RUNCOMMAND_USER + 12);
         // Not an NPPM message at all: Notepad++ has no zoom-level
         // query, and NPPMSG + 102 is its NPPM_DOCLISTDISABLEPATHCOLUMN.
         assert_eq!(CODEPPM_GETZOOMLEVEL, CODEPPMSG + 2);
@@ -6241,6 +6343,142 @@ mod tests {
     fn wide_answer(buf: &[u16]) -> String {
         let nul = buf.iter().position(|&u| u == 0).expect("NUL-terminated");
         String::from_utf16(&buf[..nul]).unwrap()
+    }
+
+    #[test]
+    fn the_cursor_messages_ask_for_the_text_they_name() {
+        for (msg, which) in [
+            (NPPM_GETCURRENTWORD, "Word"),
+            (NPPM_GETCURRENTLINESTR, "Line"),
+            (NPPM_GETFILENAMEATCURSOR, "FileName"),
+        ] {
+            let mut s = MockServices {
+                cursor_answer: "foo.txt".into(),
+                ..Default::default()
+            };
+            let (r, buf) = send_path_message(&mut s, msg, 64);
+            assert_eq!(r, Some(1), "{which}");
+            assert_eq!(wide_answer(&buf), "foo.txt", "{which}");
+            assert_eq!(s.calls(), [format!("cursor_text {which}")]);
+        }
+    }
+
+    #[test]
+    fn the_cursor_messages_write_only_an_answer_that_fits() {
+        // Measured against Notepad++ 8.9.8.1: TRUE when the answer is
+        // shorter than the capacity, FALSE and nothing written when it
+        // is not. A capacity equal to its length leaves no room for the
+        // NUL.
+        for msg in [
+            NPPM_GETCURRENTWORD,
+            NPPM_GETCURRENTLINESTR,
+            NPPM_GETFILENAMEATCURSOR,
+        ] {
+            let mut s = MockServices {
+                cursor_answer: "hello".into(),
+                ..Default::default()
+            };
+            let (r, buf) = send_path_message(&mut s, msg, 6);
+            assert_eq!(r, Some(1));
+            assert_eq!(wide_answer(&buf), "hello");
+            assert_eq!(buf[6], 0xFFFF, "nothing past the capacity");
+            let (r, buf) = send_path_message(&mut s, msg, 5);
+            assert_eq!(r, Some(0));
+            assert!(buf.iter().all(|&u| u == 0xFFFF), "nothing written");
+            // An empty answer fits a capacity of 1.
+            s.cursor_answer.clear();
+            let (r, buf) = send_path_message(&mut s, msg, 1);
+            assert_eq!(r, Some(1));
+            assert_eq!(buf[0], 0);
+        }
+    }
+
+    #[test]
+    fn a_capacity_of_0_is_max_path_except_for_the_file_name() {
+        // For the word and the line, 0 is `MAX_PATH`, as for the path
+        // messages: a 259-unit answer fits, a 260-unit one does not.
+        for msg in [NPPM_GETCURRENTWORD, NPPM_GETCURRENTLINESTR] {
+            let mut s = MockServices {
+                cursor_answer: "a".repeat(MAX_PATH_TCHARS - 1),
+                ..Default::default()
+            };
+            let (r, buf) = send_path_message(&mut s, msg, 0);
+            assert_eq!(r, Some(1));
+            assert_eq!(wide_answer(&buf).len(), MAX_PATH_TCHARS - 1);
+            s.cursor_answer.push('a');
+            assert_eq!(send_path_message(&mut s, msg, 0).0, Some(0));
+        }
+        // The file name refuses 0, as Notepad++ does, and asks nothing,
+        // so nothing is selected.
+        let mut s = MockServices {
+            cursor_answer: "a".into(),
+            ..Default::default()
+        };
+        let (r, buf) = send_path_message(&mut s, NPPM_GETFILENAMEATCURSOR, 0);
+        assert_eq!(r, Some(0));
+        assert!(buf.iter().all(|&u| u == 0xFFFF), "nothing written");
+        assert!(s.calls().is_empty(), "{:?}", s.calls());
+    }
+
+    #[test]
+    fn a_capacity_past_max_path_is_the_plugins_to_state() {
+        // Unlike the path messages, a capacity over `MAX_PATH` is taken
+        // as given: the answer is at most 2047 units.
+        let mut s = MockServices {
+            cursor_answer: "a".repeat(2047),
+            ..Default::default()
+        };
+        let mut buf = vec![0xFFFFu16; 2049];
+        let r =
+            unsafe { dispatch_nppm(&mut s, NPPM_GETCURRENTWORD, 2048, buf.as_mut_ptr() as isize) };
+        assert_eq!(r, Some(1));
+        assert_eq!(wide_answer(&buf).len(), 2047);
+        assert_eq!(buf[2048], 0xFFFF, "nothing past the capacity");
+        // A host that answered more than the editor ever does is refused,
+        // whatever capacity the plugin states: the write stays within
+        // 2048 units.
+        s.cursor_answer = "a".repeat(2048);
+        let mut buf = vec![0xFFFFu16; 4097];
+        let r =
+            unsafe { dispatch_nppm(&mut s, NPPM_GETCURRENTWORD, 4096, buf.as_mut_ptr() as isize) };
+        assert_eq!(r, Some(0));
+        assert!(buf.iter().all(|&u| u == 0xFFFF), "nothing written");
+    }
+
+    #[test]
+    fn a_null_buffer_refuses_the_cursor_messages_before_asking() {
+        // Notepad++ answers TRUE for the word and the line with a NULL
+        // lparam, after selecting the word; Code++ refuses first, so a
+        // refused request changes nothing in the editor.
+        for msg in [
+            NPPM_GETCURRENTWORD,
+            NPPM_GETCURRENTLINESTR,
+            NPPM_GETFILENAMEATCURSOR,
+        ] {
+            let mut s = MockServices {
+                cursor_answer: "a".into(),
+                ..Default::default()
+            };
+            assert_eq!(unsafe { dispatch_nppm(&mut s, msg, 64, 0) }, Some(0));
+            assert_eq!(unsafe { dispatch_nppm(&mut s, msg, 64, -8) }, Some(0));
+            assert!(s.calls().is_empty(), "{:?}", s.calls());
+        }
+    }
+
+    #[test]
+    fn the_caret_messages_answer_the_line_and_column() {
+        let mut s = MockServices {
+            caret: (41, 7),
+            ..Default::default()
+        };
+        assert_eq!(
+            unsafe { dispatch_nppm(&mut s, NPPM_GETCURRENTLINE, 0, 0) },
+            Some(41)
+        );
+        assert_eq!(
+            unsafe { dispatch_nppm(&mut s, NPPM_GETCURRENTCOLUMN, 0, 0) },
+            Some(7)
+        );
     }
 
     #[test]

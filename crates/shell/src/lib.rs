@@ -88,6 +88,7 @@ use codepp_plugin_host::{
 
 pub mod fif;
 pub use codepp_core::ViewPosition;
+pub use codepp_editor::CursorText;
 pub use fif::{FifError, FifEvent, FifJobId, FifRequest, FifStats, OpenBufferOutcome};
 
 /// Plugin-driven pre-fill for the next FIF dialog open. Populated
@@ -257,6 +258,24 @@ pub trait UiPlatform {
     /// before [`Self::set_view_position`], since contracting a fold moves
     /// the display lines the scroll is turned into.
     fn apply_folds(&mut self, lines: &[u64]);
+
+    /// The text at the caret that `which` names, from the view the
+    /// plugins' `SCI_*` messages reach
+    /// (`EditorHandle::cursor_text` in `codepp_editor`, which a backend
+    /// calls on its main view). [`CursorText::Word`] and
+    /// [`CursorText::FileName`] select the word around the caret when
+    /// nothing is selected, as Notepad++ does. Drives the cursor messages
+    /// a plugin sends, `NPPM_GETCURRENTWORD` and its two siblings.
+    ///
+    /// Required rather than defaulted, on `release_doc`'s reasoning: an
+    /// empty default would answer every plugin TRUE with nothing, while
+    /// looking implemented.
+    fn cursor_text(&mut self, which: CursorText) -> String;
+
+    /// The caret's line and column in the same view, both from 0
+    /// (`EditorHandle::caret_line_column`). Drives `NPPM_GETCURRENTLINE`
+    /// and `NPPM_GETCURRENTCOLUMN`. Required, as [`Self::cursor_text`] is.
+    fn caret_line_column(&self) -> (isize, isize);
 
     /// Update the status bar with the active buffer's language,
     /// encoding, EOL, and byte count. The leftmost segment shows
@@ -10543,6 +10562,14 @@ impl<U: UiPlatform> HostServices for HostBridge<'_, U> {
         self.shell.buffer_path_name(id)
     }
 
+    fn cursor_text(&mut self, which: CursorText) -> String {
+        self.ui.cursor_text(which)
+    }
+
+    fn caret_line_column(&self) -> (isize, isize) {
+        self.ui.caret_line_column()
+    }
+
     fn buffer_lang_type(&self, id: isize) -> i32 {
         // -1 for an unknown id, Notepad++'s "no such buffer". Until Phase 5
         // this answered L_TEXT, as if the buffer existed in Normal Text.
@@ -12651,6 +12678,12 @@ mod tests {
     #[allow(clippy::struct_excessive_bools)]
     struct FakeUi {
         buffer_text: String,
+        /// What `cursor_text` answers, whichever text is asked for.
+        cursor_answer: String,
+        /// Every text `cursor_text` was asked for, in order.
+        cursor_text_calls: Vec<CursorText>,
+        /// What `caret_line_column` answers.
+        caret: (isize, isize),
         /// Where the view stands in the document it shows. A document swap
         /// clears the selection and keeps the scroll, as
         /// `Editor::SetDocPointer` does, so a position the shell does not
@@ -13029,6 +13062,13 @@ mod tests {
                 }
             }
             self.folds.sort_unstable();
+        }
+        fn cursor_text(&mut self, which: CursorText) -> String {
+            self.cursor_text_calls.push(which);
+            self.cursor_answer.clone()
+        }
+        fn caret_line_column(&self) -> (isize, isize) {
+            self.caret
         }
         fn update_status(
             &mut self,
@@ -14077,6 +14117,49 @@ mod tests {
             Some(BufferPathName::File(file))
         );
         assert_eq!(shell.buffer_path_name(-5), None);
+    }
+
+    /// The cursor messages reach the UI through the shell's bridge and
+    /// the real dispatcher: the text a plugin asks for, and the caret.
+    #[test]
+    fn the_cursor_messages_reach_the_ui() {
+        use codepp_plugin_host::dispatch::{
+            NPPM_GETCURRENTCOLUMN, NPPM_GETCURRENTLINE, NPPM_GETCURRENTLINESTR,
+            NPPM_GETCURRENTWORD, NPPM_GETFILENAMEATCURSOR,
+        };
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi {
+            cursor_answer: "foo.txt".into(),
+            caret: (12, 4),
+            ..FakeUi::default()
+        };
+        shell.new_untitled(&mut ui);
+        for (msg, which) in [
+            (NPPM_GETCURRENTWORD, CursorText::Word),
+            (NPPM_GETCURRENTLINESTR, CursorText::Line),
+            (NPPM_GETFILENAMEATCURSOR, CursorText::FileName),
+        ] {
+            let mut buf = [0xFFFFu16; 16];
+            let r = unsafe {
+                shell.dispatch_plugin_message(
+                    &mut ui,
+                    HostHandles::null(),
+                    msg,
+                    buf.len(),
+                    buf.as_mut_ptr() as isize,
+                )
+            };
+            assert_eq!(r, Some(1));
+            assert_eq!(String::from_utf16(&buf[..7]).unwrap(), "foo.txt");
+            assert_eq!(buf[7], 0);
+            assert_eq!(ui.cursor_text_calls.pop(), Some(which));
+        }
+        for (msg, answer) in [(NPPM_GETCURRENTLINE, 12), (NPPM_GETCURRENTCOLUMN, 4)] {
+            let r =
+                unsafe { shell.dispatch_plugin_message(&mut ui, HostHandles::null(), msg, 0, 0) };
+            assert_eq!(r, Some(answer));
+        }
     }
 
     #[test]

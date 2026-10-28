@@ -74,6 +74,10 @@ pub use dispatch::{
     WIN_FORMAT,
 };
 
+/// Part of [`HostServices`]: which text at the caret a cursor message
+/// asks for.
+pub use codepp_editor::CursorText;
+
 pub use host::{
     execute_load, is_plugin_cmd_id, LoadNotifications, LoadedPlugin, PendingLoad, PluginAdminEntry,
     PluginHost, PluginInfo, PluginReady, PLUGIN_ALLOC_CMD_BASE, PLUGIN_ALLOC_CMD_LIMIT,

@@ -83,22 +83,25 @@ use codepp_scintilla_sys::CreateLexer;
 use codepp_scintilla_sys::{
     sptr_t, uptr_t, ScintillaDirectFunction, SCI_BRACEBADLIGHT, SCI_BRACEHIGHLIGHT, SCI_BRACEMATCH,
     SCI_CONTRACTEDFOLDNEXT, SCI_DOCLINEFROMVISIBLE, SCI_FOLDLINE, SCI_GETANCHOR, SCI_GETCHARAT,
-    SCI_GETCODEPAGE, SCI_GETCURRENTPOS, SCI_GETDOCPOINTER, SCI_GETENDSTYLED,
-    SCI_GETFIRSTVISIBLELINE, SCI_GETFOLDLEVEL, SCI_GETLENGTH, SCI_GETLINECOUNT,
-    SCI_GETRANGEPOINTER, SCI_GETSCROLLWIDTH, SCI_GETTARGETEND, SCI_GETTARGETSTART, SCI_GETWRAPMODE,
-    SCI_GETXOFFSET, SCI_LINEFROMPOSITION, SCI_LINESONSCREEN, SCI_MARKERDEFINE,
-    SCI_MARKERENABLEHIGHLIGHT, SCI_MARKERSETBACK, SCI_MARKERSETBACKSELECTED, SCI_MARKERSETFORE,
-    SCI_POSITIONFROMLINE, SCI_REPLACETARGET, SCI_REPLACETARGETRE, SCI_SEARCHANCHOR,
-    SCI_SEARCHINTARGET, SCI_SEARCHNEXT, SCI_SEARCHPREV, SCI_SETAUTOMATICFOLD, SCI_SETCARETLINEBACK,
-    SCI_SETCARETLINEVISIBLE, SCI_SETCHANGEHISTORY, SCI_SETFIRSTVISIBLELINE, SCI_SETFOLDFLAGS,
-    SCI_SETFOLDMARGINCOLOUR, SCI_SETFOLDMARGINHICOLOUR, SCI_SETILEXER, SCI_SETKEYWORDS,
-    SCI_SETMARGINMASKN, SCI_SETMARGINSENSITIVEN, SCI_SETMARGINTYPEN, SCI_SETMARGINWIDTHN,
-    SCI_SETPROPERTY, SCI_SETSEARCHFLAGS, SCI_SETSEL, SCI_SETSTYLING, SCI_SETTARGETRANGE,
-    SCI_SETXOFFSET, SCI_STARTSTYLING, SCI_STYLECLEARALL, SCI_STYLESETBACK, SCI_STYLESETBOLD,
-    SCI_STYLESETFONT, SCI_STYLESETFORE, SCI_STYLESETITALIC, SCI_STYLESETSIZE,
-    SCI_STYLESETUNDERLINE, SCI_TEXTWIDTH, SCI_VISIBLEFROMDOCLINE, SCI_WRAPCOUNT,
-    SC_CHANGE_HISTORY_ENABLED, SC_CHANGE_HISTORY_MARKERS, SC_CP_UTF8, SC_FOLDACTION_CONTRACT,
-    SC_FOLDLEVELHEADERFLAG, SC_MARGIN_NUMBER, SC_MARGIN_SYMBOL, SC_MARKNUM_HISTORY_MODIFIED,
+    SCI_GETCODEPAGE, SCI_GETCOLUMN, SCI_GETCURRENTPOS, SCI_GETDOCPOINTER, SCI_GETENDSTYLED,
+    SCI_GETEOLMODE, SCI_GETFIRSTVISIBLELINE, SCI_GETFOLDLEVEL, SCI_GETLENGTH, SCI_GETLINECOUNT,
+    SCI_GETRANGEPOINTER, SCI_GETSCROLLWIDTH, SCI_GETSELECTIONEND, SCI_GETSELECTIONNEND,
+    SCI_GETSELECTIONNSTART, SCI_GETSELECTIONS, SCI_GETSELECTIONSTART, SCI_GETTARGETEND,
+    SCI_GETTARGETSTART, SCI_GETWRAPMODE, SCI_GETXOFFSET, SCI_LINEFROMPOSITION, SCI_LINELENGTH,
+    SCI_LINESONSCREEN, SCI_MARKERDEFINE, SCI_MARKERENABLEHIGHLIGHT, SCI_MARKERSETBACK,
+    SCI_MARKERSETBACKSELECTED, SCI_MARKERSETFORE, SCI_POSITIONFROMLINE, SCI_REPLACETARGET,
+    SCI_REPLACETARGETRE, SCI_SEARCHANCHOR, SCI_SEARCHINTARGET, SCI_SEARCHNEXT, SCI_SEARCHPREV,
+    SCI_SELECTIONISRECTANGLE, SCI_SETAUTOMATICFOLD, SCI_SETCARETLINEBACK, SCI_SETCARETLINEVISIBLE,
+    SCI_SETCHANGEHISTORY, SCI_SETFIRSTVISIBLELINE, SCI_SETFOLDFLAGS, SCI_SETFOLDMARGINCOLOUR,
+    SCI_SETFOLDMARGINHICOLOUR, SCI_SETILEXER, SCI_SETKEYWORDS, SCI_SETMARGINMASKN,
+    SCI_SETMARGINSENSITIVEN, SCI_SETMARGINTYPEN, SCI_SETMARGINWIDTHN, SCI_SETPROPERTY,
+    SCI_SETSEARCHFLAGS, SCI_SETSEL, SCI_SETSELECTIONEND, SCI_SETSELECTIONSTART, SCI_SETSTYLING,
+    SCI_SETTARGETRANGE, SCI_SETXOFFSET, SCI_STARTSTYLING, SCI_STYLECLEARALL, SCI_STYLESETBACK,
+    SCI_STYLESETBOLD, SCI_STYLESETFONT, SCI_STYLESETFORE, SCI_STYLESETITALIC, SCI_STYLESETSIZE,
+    SCI_STYLESETUNDERLINE, SCI_TEXTWIDTH, SCI_VISIBLEFROMDOCLINE, SCI_WORDENDPOSITION,
+    SCI_WORDSTARTPOSITION, SCI_WRAPCOUNT, SC_CHANGE_HISTORY_ENABLED, SC_CHANGE_HISTORY_MARKERS,
+    SC_CP_UTF8, SC_EOL_CR, SC_EOL_LF, SC_FOLDACTION_CONTRACT, SC_FOLDLEVELHEADERFLAG,
+    SC_MARGIN_NUMBER, SC_MARGIN_SYMBOL, SC_MARKNUM_HISTORY_MODIFIED,
     SC_MARKNUM_HISTORY_REVERTED_TO_MODIFIED, SC_MARKNUM_HISTORY_REVERTED_TO_ORIGIN,
     SC_MARKNUM_HISTORY_SAVED, SC_MARK_EMPTY, SC_MARK_FULLRECT, SC_WRAP_NONE, STYLE_LINENUMBER,
 };
@@ -859,6 +862,187 @@ impl EditorHandle {
         self.send(SCI_GETCURRENTPOS, 0, 0) as u64
     }
 
+    /// The caret's line and column, both counted from 0: the column with
+    /// tabs expanded to the tab width (`SCI_GETCOLUMN`). Both follow the
+    /// caret, not the anchor. What `NPPM_GETCURRENTLINE` and
+    /// `NPPM_GETCURRENTCOLUMN` answer, as Notepad++ 8.9.8.1 does
+    /// (measured).
+    #[must_use]
+    pub fn caret_line_column(&self) -> (isize, isize) {
+        let caret = self.send(SCI_GETCURRENTPOS, 0, 0).max(0) as uptr_t;
+        (
+            self.send(SCI_LINEFROMPOSITION, caret, 0),
+            self.send(SCI_GETCOLUMN, caret, 0),
+        )
+    }
+
+    /// The text at the caret that one of Notepad++'s cursor messages
+    /// answers, read as Notepad++ 8.9.8.1 reads it. Measured with probe
+    /// plugins and explained by its source, except where this says
+    /// otherwise:
+    ///
+    /// * [`CursorText::Word`]: the selection. With nothing selected, the
+    ///   word around the caret, **which is then selected**, anchor at its
+    ///   start and caret at its end, as Notepad++ selects it. Only word
+    ///   characters count (letters, digits, `_`, and anything outside
+    ///   ASCII), so on a space it is empty and nothing is selected. A
+    ///   rectangular or multiple selection answers each range followed by
+    ///   the document's line end (see `selection_bytes`); one whose main
+    ///   range is empty gets the word at the main caret selected, and
+    ///   answers every range, empty ones included, each with its line end.
+    /// * [`CursorText::Line`]: the caret's line, its line end included.
+    ///   Nothing is selected.
+    /// * [`CursorText::FileName`]: the word as above, selected the same
+    ///   way, if it holds a `\` or `/`. Otherwise [`file_name_around`]'s
+    ///   scan of the caret's line, which starts where the caret is once the
+    ///   word is selected: at the word's end. So with the caret anywhere in
+    ///   `txt` of `foo.txt bar`, the scan starts on the space, finds
+    ///   nothing, and the word `txt` is the answer, as in Notepad++.
+    ///
+    /// The answer is cut, between characters, to [`CURSOR_TEXT_MAX_UNITS`]
+    /// UTF-16 units, as measured. It also stops at a NUL byte in the
+    /// document; that is read from Notepad++'s source, which makes a C
+    /// string of the text, and was not measured. A line longer than
+    /// [`CURSOR_LINE_MAX_BYTES`] reads as empty, so it answers an empty
+    /// line, and an empty file name unless the word holds a separator.
+    ///
+    /// Notepad++ indexes the line with the caret's byte offset where it
+    /// means a character offset, so with text outside ASCII before the
+    /// caret it reads its file name from the wrong place; this reads it
+    /// from the caret.
+    ///
+    /// The document is read as UTF-8, the code page Code++ gives every
+    /// document; bytes that are not UTF-8 read as U+FFFD.
+    #[must_use]
+    pub fn cursor_text(&self, which: CursorText) -> String {
+        match which {
+            CursorText::Word => self.selection_or_word(),
+            CursorText::Line => self.caret_line().0,
+            CursorText::FileName => {
+                let word = self.selection_or_word();
+                if word.contains(['\\', '/']) {
+                    return word;
+                }
+                let (line, caret) = self.caret_line();
+                file_name_around(&line, caret).map_or(word, str::to_owned)
+            }
+        }
+    }
+
+    /// The selection, or the word around the caret, which is then
+    /// selected; see [`Self::cursor_text`]. The calls are Notepad++'s, so
+    /// what Scintilla selects is what Notepad++ selects.
+    fn selection_or_word(&self) -> String {
+        let range = |editor: &Self| {
+            (
+                editor.send(SCI_GETSELECTIONSTART, 0, 0).max(0) as usize,
+                editor.send(SCI_GETSELECTIONEND, 0, 0).max(0) as usize,
+            )
+        };
+        let (mut start, mut end) = range(self);
+        if start == end {
+            let caret = self.send(SCI_GETCURRENTPOS, 0, 0).max(0) as uptr_t;
+            let word_start = self.send(SCI_WORDSTARTPOSITION, caret, 1);
+            let word_end = self.send(SCI_WORDENDPOSITION, caret, 1);
+            if word_start != word_end {
+                self.send(SCI_SETSELECTIONSTART, word_start.max(0) as uptr_t, 0);
+                self.send(SCI_SETSELECTIONEND, word_end.max(0) as uptr_t, 0);
+                (start, end) = range(self);
+            }
+        }
+        if start >= end {
+            return String::new();
+        }
+        cursor_answer(&self.selection_bytes(start, end))
+    }
+
+    /// The text of the selection whose main range, or a rectangle's
+    /// extent, runs from `start` to `end`, as far as an answer needs it:
+    /// the first [`SELECTION_READ_BYTES`], so a selection of the whole of a
+    /// large file costs a few kilobytes, not the file.
+    ///
+    /// One range answers its own text. Several answer each range followed
+    /// by the document's line end, in the order they were made, and a
+    /// rectangle's from its top line down. That is what Notepad++ 8.9.8.1
+    /// answers (measured), and not what the vendored Scintilla's
+    /// `SCI_GETSELTEXT` does: that joins a multiple selection with nothing
+    /// and ends a rectangle of one line with a line end. So the text is put
+    /// together here.
+    fn selection_bytes(&self, start: usize, end: usize) -> Vec<u8> {
+        let count = self.send(SCI_GETSELECTIONS, 0, 0).max(1) as usize;
+        if count == 1 {
+            return self.range_bytes(start, end, SELECTION_READ_BYTES);
+        }
+        let range = |n: usize| {
+            (
+                self.send(SCI_GETSELECTIONNSTART, n, 0).max(0) as usize,
+                self.send(SCI_GETSELECTIONNEND, n, 0).max(0) as usize,
+            )
+        };
+        // A rectangle's ranges are made one line at a time from its
+        // anchor's line to its caret's, so they are in order already, or
+        // in reverse when it was drawn from the bottom up. Reading them
+        // lazily, rather than collecting and sorting them as Scintilla
+        // does, keeps a rectangle down a million lines to the few ranges
+        // the answer needs.
+        let reverse =
+            self.send(SCI_SELECTIONISRECTANGLE, 0, 0) != 0 && range(0).0 > range(count - 1).0;
+        let eol: &[u8] = match self.send(SCI_GETEOLMODE, 0, 0) as usize {
+            SC_EOL_CR => b"\r",
+            SC_EOL_LF => b"\n",
+            _ => b"\r\n",
+        };
+        let mut bytes = Vec::new();
+        for n in 0..count {
+            let room = SELECTION_READ_BYTES.saturating_sub(bytes.len());
+            if room == 0 {
+                break;
+            }
+            let (from, to) = range(if reverse { count - 1 - n } else { n });
+            bytes.extend(self.range_bytes(from, to, room));
+            bytes.extend_from_slice(eol);
+        }
+        bytes
+    }
+
+    /// The document's bytes from `start` to `end`, or only the first
+    /// `limit` of them, cut back to a character boundary.
+    fn range_bytes(&self, start: usize, end: usize, limit: usize) -> Vec<u8> {
+        let stop = if end.saturating_sub(start) > limit {
+            self.char_boundary_at_or_before((start + limit) as u64) as usize
+        } else {
+            end
+        };
+        self.get_range_bytes(start, stop.saturating_sub(start))
+            .unwrap_or_default()
+    }
+
+    /// The caret's line, its line end included and cut at a NUL byte, and
+    /// the caret's offset into it: the start of the character the caret is
+    /// in, when it is inside one. An empty line and 0 for a line longer
+    /// than [`CURSOR_LINE_MAX_BYTES`].
+    fn caret_line(&self) -> (String, usize) {
+        let caret = self.send(SCI_GETCURRENTPOS, 0, 0).max(0) as usize;
+        let line = self.send(SCI_LINEFROMPOSITION, caret, 0).max(0) as uptr_t;
+        let start = self.send(SCI_POSITIONFROMLINE, line, 0).max(0) as usize;
+        let len = self.send(SCI_LINELENGTH, line, 0).max(0) as usize;
+        if len > CURSOR_LINE_MAX_BYTES {
+            return (String::new(), 0);
+        }
+        let bytes = self.get_range_bytes(start, len).unwrap_or_default();
+        // Back out of a character the caret is inside: decoded, a part of
+        // one reads as a U+FFFD three bytes long, which would put the
+        // offset past the character rather than at it.
+        let mut cut = caret.saturating_sub(start).min(bytes.len());
+        while cut > 0 && cut < bytes.len() && bytes[cut] & 0xC0 == 0x80 {
+            cut -= 1;
+        }
+        let at = String::from_utf8_lossy(&bytes[..cut]).len();
+        let text = cursor_answer(&bytes);
+        let at = text.floor_char_boundary(at);
+        (text, at)
+    }
+
     /// Where the view stands in the document it shows: the selection and
     /// the scroll, the scroll as the document line at the top and the
     /// display lines into it when it wraps. The top line is left out while
@@ -1508,9 +1692,192 @@ pub fn line_number_digits(n: u64) -> u32 {
     digits
 }
 
+/// Which text at the caret [`EditorHandle::cursor_text`] reads: one for
+/// each Notepad++ message that asks for it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CursorText {
+    /// The selection, or the word around the caret (`NPPM_GETCURRENTWORD`).
+    Word,
+    /// The caret's line (`NPPM_GETCURRENTLINESTR`).
+    Line,
+    /// The file name around the caret (`NPPM_GETFILENAMEATCURSOR`).
+    FileName,
+}
+
+/// The most UTF-16 units [`EditorHandle::cursor_text`] answers: one less
+/// than the 2048 units Notepad++ copies the text into (its
+/// `CURRENTWORD_MAXLENGTH`, read from its source). Measured against
+/// 8.9.8.1: a selection of 3000 letters answers 2047 of them.
+pub const CURSOR_TEXT_MAX_UNITS: usize = 2047;
+
+/// The longest line, in bytes with its line end, that
+/// [`EditorHandle::cursor_text`] reads. Notepad++ reads a line into the
+/// same 2048-unit buffer and answers a line of 2048 bytes or more as
+/// empty (measured: 2047 bytes are read, 2046 and a CRLF are not).
+pub const CURSOR_LINE_MAX_BYTES: usize = 2047;
+
+/// How much of a selection's start is read to answer it: a UTF-16 unit
+/// takes at most three bytes of UTF-8, so this holds
+/// [`CURSOR_TEXT_MAX_UNITS`] units even after the read stops at a
+/// character boundary up to three bytes short of it. The step back is
+/// `char_boundary_at_or_before`'s, which also steps from between a CR and
+/// its LF to before the CR; the two never add up, since a CR and an LF are
+/// one byte each and neither is part of a longer character.
+const SELECTION_READ_BYTES: usize = (CURSOR_TEXT_MAX_UNITS + 1) * 3;
+
+/// Bytes of the document as a cursor-text answer: decoded as UTF-8, cut at
+/// the first NUL, where the C string Notepad++ makes of them ends, and to
+/// [`CURSOR_TEXT_MAX_UNITS`] UTF-16 units between characters.
+fn cursor_answer(bytes: &[u8]) -> String {
+    let text = String::from_utf8_lossy(bytes);
+    let text = text.split('\0').next().unwrap_or_default();
+    let mut units = 0;
+    for (at, c) in text.char_indices() {
+        units += c.len_utf16();
+        if units > CURSOR_TEXT_MAX_UNITS {
+            return text[..at].to_owned();
+        }
+    }
+    text.to_owned()
+}
+
+/// The characters that end a file name on its left, as Notepad++ scans
+/// for one around the caret.
+const FILE_NAME_LEFT_ENDS: &[char] = &[' ', '\t', '[', '(', '"', '<', '>'];
+/// The characters that end a file name on its right. A `:` is one, so with
+/// the caret on a drive letter the scan stops at its colon; that is
+/// Notepad++'s scan.
+const FILE_NAME_RIGHT_ENDS: &[char] = &[
+    ' ', '\t', ':', '(', ')', '[', ']', '<', '>', '"', '\r', '\n',
+];
+
+/// The file name `NPPM_GETFILENAMEATCURSOR` reads around byte offset
+/// `caret` of `line`, by Notepad++'s scan (measured against 8.9.8.1): back
+/// from the character at the caret to just after one of
+/// `" \t[(\"<>"`, and forward from it to just before one of
+/// `" \t:()[]<>\"\r\n"` or the end of the line. `None` when the
+/// character at the caret ends a name on its left, which ends it on its
+/// right too: Notepad++ then copies nothing and keeps the word it read
+/// first. An empty line, which is how a line too long to read arrives,
+/// gives `Some("")`. A caret past the end of `line` reads as at its end,
+/// and one inside a character as at its start.
+///
+/// The scan starts at the character at the caret, and the caret it is
+/// given is where the word's selection left it: at the word's end. So in
+/// `foo.txt bar`, with the caret anywhere in `txt`, it starts on the space,
+/// finds nothing, and the word `txt` is the answer, as it is in Notepad++.
+#[must_use]
+pub fn file_name_around(line: &str, caret: usize) -> Option<&str> {
+    let caret = line.floor_char_boundary(caret);
+    let at = |i: usize| line[i..].chars().next();
+    let ends_left = |i: usize| at(i).is_some_and(|c| FILE_NAME_LEFT_ENDS.contains(&c));
+    let mut start = caret;
+    while start > 0 && !ends_left(start) {
+        start = line.floor_char_boundary(start - 1);
+    }
+    if ends_left(start) {
+        // Every left end is ASCII, one byte.
+        start += 1;
+    }
+    let mut end = caret;
+    while let Some(c) = at(end) {
+        if FILE_NAME_RIGHT_ENDS.contains(&c) {
+            break;
+        }
+        end += c.len_utf8();
+    }
+    (start <= end).then(|| &line[start..end])
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{line_number_digits, LINE_NUMBER_MARGIN_DIGITS};
+    use super::{
+        cursor_answer, file_name_around, line_number_digits, CURSOR_TEXT_MAX_UNITS,
+        LINE_NUMBER_MARGIN_DIGITS,
+    };
+
+    #[test]
+    fn the_file_name_scan_reads_around_the_caret() {
+        // What Notepad++ 8.9.8.1 answered through a probe plugin.
+        let line = "open C:\\dir\\file.txt now";
+        // In "file", and in "dir": a colon ends a name on its right only.
+        assert_eq!(file_name_around(line, 13), Some("C:\\dir\\file.txt"));
+        assert_eq!(file_name_around(line, 9), Some("C:\\dir\\file.txt"));
+        // Before the space after "foo.txt": nothing, so the word stays.
+        assert_eq!(file_name_around("foo.txt bar", 7), None);
+        assert_eq!(file_name_around("x(foo.txt)y", 4), Some("foo.txt"));
+        // In "ex" of a URL, the whole URL.
+        assert_eq!(
+            file_name_around("go https://ex.com/a?b=c#d end", 11),
+            Some("https://ex.com/a?b=c#d")
+        );
+        // The rest follow from the scan and were not measured. On the
+        // drive letter, the colon ends the name.
+        assert_eq!(file_name_around(line, 5), Some("C"));
+        // At the start and end of the line.
+        assert_eq!(file_name_around("a.txt", 0), Some("a.txt"));
+        assert_eq!(file_name_around("a.txt", 5), Some("a.txt"));
+        assert_eq!(file_name_around("a.txt\r\n", 5), Some("a.txt"));
+        assert_eq!(file_name_around("", 0), Some(""));
+        // A caret past the end reads as at the end.
+        assert_eq!(file_name_around("a.txt", 99), Some("a.txt"));
+    }
+
+    #[test]
+    fn the_file_name_scan_stops_where_notepad_plus_plus_does() {
+        // The sweep the probe made: each delimiter between "a" and "b",
+        // the caret on "b". Space, tab, quote, '(', '<', '>' and '[' end
+        // the name on both sides; ')', ':' and ']' only on its right.
+        for d in [' ', '\t', '"', '(', '<', '>', '['] {
+            let line = format!("a{d}b");
+            assert_eq!(file_name_around(&line, 2), Some("b"), "{d:?}");
+            assert_eq!(file_name_around(&line, 0), Some("a"), "{d:?}");
+        }
+        for d in [')', ':', ']'] {
+            let line = format!("a{d}b");
+            assert_eq!(file_name_around(&line, 2), Some(&line[..]), "{d:?}");
+            assert_eq!(file_name_around(&line, 0), Some("a"), "{d:?}");
+        }
+        // A caret on a right-only end with a left end before it: an empty
+        // name, which follows from the scan and was not measured.
+        assert_eq!(file_name_around("a :b", 2), Some(""));
+    }
+
+    #[test]
+    fn the_file_name_scan_reads_from_the_caret_past_wide_text() {
+        // Notepad++ indexes the line with the caret's byte offset, and
+        // here answers "b"; the caret is before "a".
+        let line = "éééééé a.txt b";
+        assert_eq!(file_name_around(line, 13), Some("a.txt"));
+        // A caret inside a character reads from that character.
+        assert_eq!(file_name_around("éa", 1), Some("éa"));
+    }
+
+    #[test]
+    fn a_cursor_answer_stops_at_a_nul_and_at_2047_units() {
+        // The NUL cut is read from Notepad++'s source, not measured.
+        assert_eq!(cursor_answer(b"ab\0cd"), "ab");
+        assert_eq!(cursor_answer(b""), "");
+        // Bytes that are not UTF-8 read as U+FFFD.
+        assert_eq!(cursor_answer(b"a\xFFb"), "a\u{FFFD}b");
+        // Measured: 3000 letters answer 2047.
+        let long = "a".repeat(3000);
+        assert_eq!(cursor_answer(long.as_bytes()).len(), CURSOR_TEXT_MAX_UNITS);
+        // Cut between characters: 2046 letters, then "é" is the 2047th
+        // unit and fits, and "b" does not (measured). A character outside
+        // the BMP there needs two units, so the whole character is dropped
+        // (Code++'s cut; not measured).
+        let fits = format!("{}éb", "a".repeat(2046));
+        assert_eq!(
+            cursor_answer(fits.as_bytes()),
+            format!("{}é", "a".repeat(2046))
+        );
+        let pair = format!("{}\u{1F600}", "a".repeat(2046));
+        assert_eq!(cursor_answer(pair.as_bytes()), "a".repeat(2046));
+        // 1400 CJK characters, 4200 bytes, are 1400 units and come whole.
+        let wide = "中".repeat(1400);
+        assert_eq!(cursor_answer(wide.as_bytes()), wide);
+    }
 
     #[test]
     fn digit_count_boundaries() {
