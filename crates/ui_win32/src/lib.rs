@@ -4215,7 +4215,7 @@ const FOLD_MARGIN_PX: i32 = 14;
 /// Called from [`Win32Ui::update_status`] on every tab switch
 /// (which already receives the tab's authoritative `eol` from
 /// the Shell layer), plus once at editor construction in
-/// [`run`] with [`Eol::default`] for the initial
+/// [`run`] with [`codepp_shell::NEW_DOCUMENT_EOL`] for the initial
 /// implicit document.
 ///
 /// **`Eol::Mixed` maps to LF.** Scintilla has no "mixed" mode —
@@ -5276,7 +5276,7 @@ unsafe fn handle_close_active_tab_inner(hwnd: HWND) -> CloseOutcome {
                 &mut win32_ui,
                 codepp_core::lang::L_TEXT,
                 &Encoding::default(),
-                Eol::default(),
+                codepp_shell::NEW_DOCUMENT_EOL,
                 0,
             );
         }
@@ -18274,12 +18274,11 @@ pub fn run(initial_path: Option<PathBuf>, perf: codepp_core::perf::Perf) -> Resu
         // Scintilla state (see `apply_eol_mode` doc). Subsequent
         // tab activations pass their authoritative eol through
         // `update_status`, which re-applies via `apply_eol_mode`.
-        // Without this initial call the implicit doc holds
-        // Scintilla's built-in CRLF default on Windows before the
-        // first real tab loads — visible only if the user typed
-        // into the pre-first-tab implicit doc, but harmless to
-        // pin defensively.
-        apply_eol_mode(&editor, Eol::default());
+        // The new-document ending, which on Windows is the CRLF
+        // Scintilla starts with too; pinned so the implicit doc
+        // follows the shell's default rather than Scintilla's,
+        // should either change.
+        apply_eol_mode(&editor, codepp_shell::NEW_DOCUMENT_EOL);
 
         // Fold margin GEOMETRY: allocate margin index 2, install the
         // box-style markers, set colours, enable automatic click-
@@ -35521,5 +35520,44 @@ mod cursor_text_tests {
         assert_eq!(editor.caret_line_column(), (1, 5), "after the tab and 'b'");
         select(editor, 5, 9);
         assert_eq!(editor.caret_line_column(), (2, 2));
+    }
+}
+
+#[cfg(test)]
+mod new_document_eol_guards {
+    //! A buffer's ending is never `Eol::default()` (LF) in this crate's
+    //! production code: the implicit document at startup and the empty
+    //! window after the last tab closes take the shell's
+    //! `NEW_DOCUMENT_EOL`, CRLF here, as a new buffer does.
+
+    use super::plugin_reentry_guards::code_without_strings;
+
+    #[test]
+    fn no_production_code_takes_lf_for_a_buffer() {
+        let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/src");
+        let mut read = 0;
+        for entry in std::fs::read_dir(dir).expect("the crate's sources are readable") {
+            let path = entry.unwrap().path();
+            if path.extension().and_then(|e| e.to_str()) != Some("rs") {
+                continue;
+            }
+            let src = std::fs::read_to_string(&path).unwrap();
+            let production = src.split("#[cfg(test)]").next().unwrap_or("");
+            let code = code_without_strings(production);
+            assert!(
+                !code.contains("Eol::default()"),
+                "{} takes `Eol::default()`, LF, for a buffer; use `codepp_shell::NEW_DOCUMENT_EOL`",
+                path.display()
+            );
+            read += 1;
+        }
+        assert!(read > 5, "the check read only {read} source files");
+        let lib =
+            code_without_strings(include_str!("lib.rs").split("#[cfg(test)]").next().unwrap());
+        assert_eq!(
+            lib.matches("codepp_shell::NEW_DOCUMENT_EOL").count(),
+            2,
+            "the startup document and the empty window"
+        );
     }
 }

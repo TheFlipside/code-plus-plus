@@ -9,6 +9,10 @@ use serde::{Deserialize, Serialize};
 
 /// End-of-line style for a buffer.
 ///
+/// The default, `Lf`, is a session record's when it names none, a session
+/// written before the field existed. It is not what a new buffer starts
+/// with: that is the shell's `NEW_DOCUMENT_EOL`, CRLF on Windows.
+///
 /// Serialized as the human-readable [`label`](Self::label) string
 /// (`"LF"` / `"CRLF"` / `"CR"` / `"Mixed"`) so `session.xml` is
 /// readable. An unrecognised label deserializes to the default (`Lf`).
@@ -104,15 +108,22 @@ impl From<String> for Eol {
 
 /// Detect the dominant EOL style of `bytes` by counting line endings in
 /// the first 64 KiB. Files with mixed endings (e.g., a CRLF file with
-/// stray bare LFs) are reported as `Mixed`; truly empty or single-line
-/// files default to `Lf` (the file has no EOL evidence to suggest
-/// otherwise, and LF is the modern default).
+/// stray bare LFs) are reported as `Mixed`.
 ///
-/// The 64 KiB cap is to keep detection bounded for huge files; it is
+/// When the first 64 KiB holds no line ending, a file whose first line
+/// is longer than that (minified code, a log line), the first ending
+/// after it decides, as Notepad++ takes the first ending it finds
+/// wherever it lies. `None` only for text with no line ending at all, an
+/// empty or one-line file: it says nothing about its ending, and the
+/// caller decides what such a buffer gets, as Notepad++ gives it the New
+/// Document format.
+///
+/// The 64 KiB cap is to keep the count bounded for huge files; it is
 /// extremely rare for the first 64 KiB to disagree with the rest of the
-/// file on dominant EOL.
+/// file on dominant EOL. The search past it stops at the first ending,
+/// and reads the whole text only when there is none.
 #[must_use]
-pub fn detect(bytes: &[u8]) -> Eol {
+pub fn detect(bytes: &[u8]) -> Option<Eol> {
     let scan = if bytes.len() > 65_536 {
         &bytes[..65_536]
     } else {
@@ -145,13 +156,29 @@ pub fn detect(bytes: &[u8]) -> Eol {
         .filter(|present| **present)
         .count();
 
-    match kinds {
-        0 => Eol::Lf,
+    if kinds == 0 {
+        return first_ending_after(bytes, scan.len());
+    }
+    Some(match kinds {
         1 if crlf > 0 => Eol::CrLf,
         1 if bare_lf > 0 => Eol::Lf,
         1 if bare_cr > 0 => Eol::Cr,
         _ => Eol::Mixed,
-    }
+    })
+}
+
+/// The kind of the first line ending in `bytes` at or after `from`, or
+/// `None` if there is none.
+fn first_ending_after(bytes: &[u8], from: usize) -> Option<Eol> {
+    let at = from
+        + bytes[from..]
+            .iter()
+            .position(|&b| b == b'\r' || b == b'\n')?;
+    Some(match (bytes[at], bytes.get(at + 1)) {
+        (b'\r', Some(b'\n')) => Eol::CrLf,
+        (b'\r', _) => Eol::Cr,
+        _ => Eol::Lf,
+    })
 }
 
 /// Rewrite every line ending in `text` to `eol`'s byte sequence.
@@ -241,44 +268,69 @@ mod tests {
     }
 
     #[test]
-    fn empty_defaults_to_lf() {
-        assert_eq!(detect(b""), Eol::Lf);
+    fn empty_has_no_ending() {
+        assert_eq!(detect(b""), None);
     }
 
     #[test]
-    fn single_line_no_newline_defaults_to_lf() {
-        assert_eq!(detect(b"hello world"), Eol::Lf);
+    fn single_line_no_newline_has_no_ending() {
+        assert_eq!(detect(b"hello world"), None);
+    }
+
+    #[test]
+    fn the_first_line_ending_past_64k_decides_when_none_comes_before() {
+        // A first line longer than the 64 KiB counted: the first ending
+        // after it decides, as Notepad++ takes the first ending wherever it
+        // lies, rather than the file reading as having none and taking the
+        // new-document ending. Later endings are not counted.
+        for (tail, eol) in [
+            (&b"\r\nb\nc\n"[..], Eol::CrLf),
+            (b"\nb\r\n", Eol::Lf),
+            (b"\rb", Eol::Cr),
+            (b"\r", Eol::Cr),
+        ] {
+            let mut buf = vec![b'x'; 70_000];
+            buf.extend_from_slice(tail);
+            assert_eq!(detect(&buf), Some(eol), "{tail:?}");
+        }
+        // Text longer than 64 KiB with no ending at all has none.
+        assert_eq!(detect(&vec![b'x'; 70_000]), None);
+        // An ending just inside the window is counted as before.
+        let mut buf = vec![b'x'; 65_534];
+        buf.extend_from_slice(b"\n");
+        buf.extend(std::iter::repeat_n(b'x', 1000));
+        assert_eq!(detect(&buf), Some(Eol::Lf));
     }
 
     #[test]
     fn pure_lf() {
-        assert_eq!(detect(b"a\nb\nc\n"), Eol::Lf);
+        assert_eq!(detect(b"a\nb\nc\n"), Some(Eol::Lf));
     }
 
     #[test]
     fn pure_crlf() {
-        assert_eq!(detect(b"a\r\nb\r\nc\r\n"), Eol::CrLf);
+        assert_eq!(detect(b"a\r\nb\r\nc\r\n"), Some(Eol::CrLf));
     }
 
     #[test]
     fn pure_cr_classic_mac() {
-        assert_eq!(detect(b"a\rb\rc\r"), Eol::Cr);
+        assert_eq!(detect(b"a\rb\rc\r"), Some(Eol::Cr));
     }
 
     #[test]
     fn mixed_lf_and_crlf() {
-        assert_eq!(detect(b"a\nb\r\nc\n"), Eol::Mixed);
+        assert_eq!(detect(b"a\nb\r\nc\n"), Some(Eol::Mixed));
     }
 
     #[test]
     fn mixed_cr_and_lf() {
-        assert_eq!(detect(b"a\rb\nc\r"), Eol::Mixed);
+        assert_eq!(detect(b"a\rb\nc\r"), Some(Eol::Mixed));
     }
 
     #[test]
     fn crlf_not_counted_as_cr_plus_lf() {
         // A CRLF should count as one CRLF, not as one CR + one LF.
-        assert_eq!(detect(b"x\r\ny"), Eol::CrLf);
+        assert_eq!(detect(b"x\r\ny"), Some(Eol::CrLf));
     }
 
     #[test]
@@ -300,7 +352,7 @@ mod tests {
         }
         buf.truncate(65_536);
         buf.extend_from_slice(b"abc\rdef\rghi\r");
-        assert_eq!(detect(&buf), Eol::CrLf);
+        assert_eq!(detect(&buf), Some(Eol::CrLf));
     }
 
     #[test]

@@ -173,6 +173,26 @@ const MAX_RESTORED_BACKUP_BYTES: u64 = 16 * MAX_BACKUP_FILE_BYTES;
 /// striking distance of `i32::MAX`, instead of panicking.
 pub const MAX_OPEN_TABS: usize = 1024;
 
+/// The line ending a new buffer starts with, and that a file with none
+/// to detect takes when it loads, an empty or one-line file: CRLF on
+/// Windows, as Notepad++'s default New Document format is (measured
+/// against 8.9.8.1, where a new buffer, an empty file and a one-line
+/// file are all Windows (CR LF)), and LF elsewhere, the platform's own.
+/// Notepad++ calls that default its OS default, and runs only on
+/// Windows. Until Phase 5 it was LF everywhere.
+pub const NEW_DOCUMENT_EOL: Eol = new_document_eol(cfg!(windows));
+
+/// The new-document line ending on Windows (`windows`) or elsewhere;
+/// [`NEW_DOCUMENT_EOL`] is this platform's. A function so the rule is
+/// tested on every platform.
+const fn new_document_eol(windows: bool) -> Eol {
+    if windows {
+        Eol::CrLf
+    } else {
+        Eol::Lf
+    }
+}
+
 /// Side-effecting operations the shell needs from the UI thread. Each
 /// platform UI crate (`ui_win32`, `ui_gtk`, `ui_cocoa`) implements this
 /// trait.
@@ -1339,7 +1359,7 @@ impl Default for Tab {
             id: 0,
             path: None,
             encoding: Encoding::default(),
-            eol: Eol::default(),
+            eol: NEW_DOCUMENT_EOL,
             byte_len: 0,
             text: String::new(),
             pending_load: None,
@@ -4310,7 +4330,7 @@ impl Shell {
         }
         ui.set_buffer_text("", 0);
         ui.apply_lang(L_TEXT);
-        ui.update_status(L_TEXT, &Encoding::default(), Eol::default(), 0);
+        ui.update_status(L_TEXT, &Encoding::default(), NEW_DOCUMENT_EOL, 0);
 
         // No NPPN_FILEOPENED — that's reserved for "a real file
         // arrived"; matches Notepad++'s convention. BUFFERACTIVATED
@@ -6145,7 +6165,10 @@ impl Shell {
                     );
                 } else {
                     tab.encoding.clone_from(&loaded.encoding);
-                    tab.eol = loaded.eol;
+                    // A file with no ending to detect takes the
+                    // new-document one, as Notepad++ gives it the New
+                    // Document format.
+                    tab.eol = loaded.eol.unwrap_or(NEW_DOCUMENT_EOL);
                     tab.byte_len = loaded.byte_len;
                     tab.text.clone_from(&loaded.text);
                     // Consumed, or discarded with consent, either way.
@@ -6479,7 +6502,7 @@ impl Shell {
                 id,
                 path: Some(path),
                 encoding,
-                eol,
+                eol: eol.unwrap_or(NEW_DOCUMENT_EOL),
                 byte_len,
                 text,
                 lang,
@@ -14113,6 +14136,67 @@ mod tests {
         assert_eq!(shell.buffer_path_name(-5), None);
     }
 
+    /// A new buffer starts with the new-document line ending, and a file
+    /// with none to detect, an empty or one-line file, takes it when it
+    /// lands, as Notepad++ gives both its New Document format (measured
+    /// against 8.9.8.1, where that is CRLF). A file with a line ending
+    /// keeps its own. Until Phase 5 both were LF on every platform.
+    ///
+    /// Where the constant is LF, on Linux and macOS, the tabs' endings
+    /// cannot tell it from the old LF; the rule itself is checked for both
+    /// platforms, and the tabs on Windows.
+    #[test]
+    fn a_new_buffer_and_a_file_with_no_line_ending_take_the_new_document_eol() {
+        assert_eq!(new_document_eol(true), Eol::CrLf, "Notepad++'s default");
+        assert_eq!(new_document_eol(false), Eol::Lf);
+        assert_eq!(NEW_DOCUMENT_EOL, new_document_eol(cfg!(windows)));
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+        shell.new_untitled(&mut ui);
+        assert_eq!(shell.active().unwrap().eol, NEW_DOCUMENT_EOL);
+        assert_eq!(
+            ui.status_calls.last().map(|c| c.2.as_str()),
+            Some(NEW_DOCUMENT_EOL.label()),
+            "the status bar, and so Scintilla's mode, follow it"
+        );
+        let dir = tempfile::tempdir().unwrap();
+        for (name, bytes, eol) in [
+            ("empty.txt", &b""[..], NEW_DOCUMENT_EOL),
+            ("oneline.txt", b"abc", NEW_DOCUMENT_EOL),
+            ("lf.txt", b"a\nb\n", Eol::Lf),
+            ("crlf.txt", b"a\r\nb\r\n", Eol::CrLf),
+            ("cr.txt", b"a\rb\r", Eol::Cr),
+        ] {
+            let path = dir.path().join(name);
+            std::fs::write(&path, bytes).unwrap();
+            shell.open_file(path.clone());
+            land_next_load(&mut shell, &mut ui);
+            let tab = shell
+                .tabs
+                .iter()
+                .find(|t| t.path.as_deref() == Some(path.as_path()))
+                .unwrap();
+            assert_eq!(tab.eol, eol, "{name}");
+        }
+
+        // A file that lands on a tab holding typed work opens in a tab of
+        // its own beside it, which takes the same ending.
+        let late = dir.path().join("late.txt");
+        std::fs::write(&late, "no ending").unwrap();
+        let mut shell = Shell::new(Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>).unwrap();
+        let mut ui = FakeUi::default();
+        shell.new_untitled(&mut ui);
+        let scratch_doc = shell.tabs[0].scintilla_doc;
+        shell.open_file_replacing_scratch(late.clone(), true);
+        ui.buffer_text = "typed\n".to_string();
+        ui.doc_dirty.insert(scratch_doc, true);
+        drain_until_loads_settle(&mut shell, &mut ui);
+        assert_eq!(shell.tabs.len(), 2, "the file opened beside the typed work");
+        assert_eq!(shell.tabs[1].path.as_deref(), Some(late.as_path()));
+        assert_eq!(shell.tabs[1].eol, NEW_DOCUMENT_EOL);
+    }
+
     /// The open-file messages count and name every tab through the
     /// shell's bridge and the real dispatcher, an untitled one included,
     /// in the order `NPPM_GETBUFFERIDFROMPOS` numbers them, as Notepad++
@@ -21181,7 +21265,7 @@ mod tests {
             path: path.to_path_buf(),
             text: text.to_string(),
             encoding: Encoding::Utf8,
-            eol: Eol::Lf,
+            eol: Some(Eol::Lf),
             byte_len: text.len() as u64,
         }
     }
@@ -21683,7 +21767,7 @@ mod tests {
                 path: path.to_path_buf(),
                 text: String::new(),
                 encoding: Encoding::Utf8,
-                eol: Eol::Lf,
+                eol: Some(Eol::Lf),
                 byte_len: 0,
             };
             shell.apply_load_result(ui, Ok(loaded), &mut Vec::new());
@@ -22233,7 +22317,7 @@ mod tests {
             path: path.clone(),
             text: "f\n".to_string(),
             encoding: Encoding::Utf8,
-            eol: Eol::Lf,
+            eol: Some(Eol::Lf),
             byte_len: 2,
         };
         let mut pending = Vec::new();
@@ -22321,7 +22405,7 @@ mod tests {
             path: path.clone(),
             text: "f\n".to_string(),
             encoding: Encoding::Utf8,
-            eol: Eol::Lf,
+            eol: Some(Eol::Lf),
             byte_len: 2,
         };
 
@@ -22354,7 +22438,7 @@ mod tests {
             path: path.clone(),
             text: "f\n".to_string(),
             encoding: Encoding::Utf8,
-            eol: Eol::Lf,
+            eol: Some(Eol::Lf),
             byte_len: 2,
         };
         let mut pending = Vec::new();
@@ -22494,7 +22578,7 @@ mod tests {
             path: b.clone(),
             text: "b\n".to_string(),
             encoding: Encoding::Utf8,
-            eol: Eol::Lf,
+            eol: Some(Eol::Lf),
             byte_len: 2,
         };
         shell.apply_load_result(&mut ui, Ok(loaded), &mut pending);

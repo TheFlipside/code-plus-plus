@@ -38,7 +38,9 @@ pub struct LoadedFile {
     /// second `metadata()` call.
     pub text: String,
     pub encoding: Encoding,
-    pub eol: Eol,
+    /// The file's line ending, `None` when it has none to detect: an
+    /// empty or one-line file. See [`eol::detect`].
+    pub eol: Option<Eol>,
     pub byte_len: u64,
 }
 
@@ -368,8 +370,24 @@ mod tests {
         assert_eq!(loaded.id, id);
         assert_eq!(loaded.text, "hello\nworld\n");
         assert_eq!(loaded.encoding, Encoding::Utf8);
-        assert_eq!(loaded.eol, Eol::Lf);
+        assert_eq!(loaded.eol, Some(Eol::Lf));
         assert_eq!(loaded.byte_len, 12);
+    }
+
+    #[test]
+    fn a_file_with_no_line_ending_reports_none() {
+        // An empty file and a one-line file say nothing about their
+        // ending; the shell gives them the new-document one.
+        for bytes in [&b""[..], b"no ending"] {
+            let f = write_temp(bytes);
+            let (loader, results, _shutdown) = Loader::spawn(std_open);
+            loader.open(f.path()).unwrap();
+            let loaded = results
+                .recv_timeout(Duration::from_secs(2))
+                .unwrap()
+                .unwrap();
+            assert_eq!(loaded.eol, None, "{bytes:?}");
+        }
     }
 
     #[test]
@@ -386,7 +404,7 @@ mod tests {
             .unwrap();
         assert_eq!(loaded.text, "line1\r\nline2\r\n");
         assert_eq!(loaded.encoding, Encoding::Utf8Bom);
-        assert_eq!(loaded.eol, Eol::CrLf);
+        assert_eq!(loaded.eol, Some(Eol::CrLf));
     }
 
     #[test]
@@ -716,7 +734,7 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(loaded.encoding, Encoding::Utf16LeBom);
-        assert_eq!(loaded.eol, Eol::CrLf);
+        assert_eq!(loaded.eol, Some(Eol::CrLf));
     }
 
     #[test]
