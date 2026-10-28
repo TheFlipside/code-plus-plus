@@ -74,27 +74,35 @@
  *     Switch a buffer to a User Defined Language with NPPM_MENUCOMMAND
  *     (see NPPM_GETNBUSERLANG). */
 #define NPPM_SETCURRENTLANGTYPE           (NPPMSG + 6)
-/* v2: count of currently open files. wParam = selector
- *     (ALL_OPEN_FILES, PRIMARY_VIEW, SECOND_VIEW). Code++ is
- *     single-view through Phase 4: ALL and PRIMARY return the same
- *     count; SECOND is always 0. */
+/* v2: the number of open buffers, an untitled one included.
+ *     wParam: not used.
+ *     lParam: the selector, ALL_OPEN_FILES, PRIMARY_VIEW or
+ *             SECOND_VIEW; any other answers 0.
+ *     Code++ has one view, so ALL and PRIMARY count the same and
+ *     SECOND is 0. Notepad++'s hidden second view holds an empty
+ *     "new 1" of its own, which its ALL and SECOND count. Until
+ *     Phase 5 Code++ read the selector from wParam and left untitled
+ *     buffers out. */
 #define NPPM_GETNBOPENFILES               (NPPMSG + 7)
-/* v2: fills wParam (TCHAR**) with full paths of open files.
+/* v2: fills wParam (TCHAR**) with the full path names of the open
+ *     buffers, as NPPM_GETFULLPATHFROMBUFFERID answers them: an
+ *     untitled buffer's name ("new 1") included.
  *     wParam: pointer to caller-allocated array of TCHAR* slots,
  *             each pointing to a buffer of at least MAX_PATH wide
- *             chars. NULL is a probe — host returns the count of
- *             files it would write.
+ *             chars. NULL returns 0; count with NPPM_GETNBOPENFILES.
  *     lParam: array capacity (slot count).
- *     The plain form always queries ALL_OPEN_FILES — there is no
- *     selector field on this message because wParam is consumed as
- *     the pointer. Use the -PRIMARY / -SECOND aliases below to
- *     restrict to a single view. Return value is the number of
- *     slots actually written, NOT the count attempted: a slot
- *     whose plugin-allocated pointer is NULL is logged and
- *     skipped, and the return reflects the gap. A path too long
- *     for MAX_PATH, or not valid Unicode, is written as an empty
- *     string, never cut short. A negative wParam, a kernel-range
- *     pointer, returns 0. */
+ *     Both views' buffers, the main view's first; the -PRIMARY /
+ *     -SECOND aliases below name one view's each. Return value is
+ *     the number of slots actually written, NOT the count
+ *     attempted: a slot whose plugin-allocated pointer is NULL is
+ *     logged and skipped, and the return reflects the gap. A path
+ *     too long for MAX_PATH, or not valid Unicode, is written as an
+ *     empty string, never cut short. A negative wParam, a
+ *     kernel-range pointer, returns 0. Notepad++'s header marks
+ *     this message deprecated, in favour of NPPM_GETBUFFERIDFROMPOS
+ *     and NPPM_GETFULLPATHFROMBUFFERID. Until Phase 5 Code++ left
+ *     untitled buffers out and answered a NULL wParam with the
+ *     count. */
 #define NPPM_GETOPENFILENAMES             (NPPMSG + 8)
 /* v3: register or unregister a plugin-owned modeless-dialog
  *     HWND with the host's message pump. The pump consults each
@@ -211,13 +219,10 @@ typedef struct sessionInfo_ {
 
 /* Multi-view (split-view) — primary / secondary --------------------- */
 
-/* v2: selector-fixed alias of NPPM_GETOPENFILENAMES — same arg
- *     shape, but always uses PRIMARY_VIEW regardless of any
- *     additional selector encoded by the caller. Predates the
- *     selector form on plain GETOPENFILENAMES. */
+/* v2: NPPM_GETOPENFILENAMES for the main view's buffers only. */
 #define NPPM_GETOPENFILENAMESPRIMARY      (NPPMSG + 17)
-/* v2: selector-fixed alias targeting SECOND_VIEW. Returns 0 on
- *     single-view Code++ (Phase 4); split-view is Phase 5 scope. */
+/* v2: NPPM_GETOPENFILENAMES for the second view's buffers only.
+ *     Code++ has one view, so it writes nothing and returns 0. */
 #define NPPM_GETOPENFILENAMESSECOND       (NPPMSG + 18)
 
 /* Scintilla handle management -------------------------------------- */
@@ -1036,11 +1041,10 @@ typedef struct NppDarkModeColors_ {
 #define NPPMAINMENU   1  /* the entire main menu bar (HMENU) */
 
 /*
- * Selectors for NPPM_GETNBOPENFILES / NPPM_GETOPENFILENAMES wParam.
- * ALL_OPEN_FILES queries the union across views; PRIMARY_VIEW and
- * SECOND_VIEW restrict to one. The numeric values match Notepad++'s
- * public ABI so plugins compiled against either header use the same
- * codes on the wire.
+ * Selectors for NPPM_GETNBOPENFILES's lParam. ALL_OPEN_FILES
+ * counts both views; PRIMARY_VIEW and SECOND_VIEW one each. The
+ * numeric values match Notepad++'s public ABI so plugins compiled
+ * against either header use the same codes on the wire.
  */
 #define ALL_OPEN_FILES 0
 #define PRIMARY_VIEW   1

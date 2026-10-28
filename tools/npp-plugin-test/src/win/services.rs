@@ -432,11 +432,11 @@ impl HostServices for Bridge<'_> {
         ));
     }
 
-    fn open_buffer_paths(&self, selector: i32) -> Vec<PathBuf> {
-        if selector == codepp_plugin_host::SECOND_VIEW {
-            Vec::new()
+    fn view_buffer_ids(&self, view: i32) -> Vec<isize> {
+        if view == 0 {
+            vec![BUFFER_ID]
         } else {
-            vec![self.0.env.buffer_path.clone()]
+            Vec::new()
         }
     }
 

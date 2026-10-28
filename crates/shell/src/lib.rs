@@ -10871,25 +10871,14 @@ impl<U: UiPlatform> HostServices for HostBridge<'_, U> {
             .set_fif_launch_prefill(FifLaunchPrefill { directory, filters });
     }
 
-    fn open_buffer_paths(&self, selector: i32) -> Vec<PathBuf> {
-        // Single-view through Phase 4: ALL_OPEN_FILES and
-        // PRIMARY_VIEW return the same set; SECOND_VIEW is empty.
-        // Untitled tabs (no on-disk path) are filtered out so the
-        // TCHAR** plugin contract — each slot receives a real
-        // path — holds. Tab order in `shell.tabs` matches the tab
-        // strip's left-to-right order, which is what plugins
-        // expect for "the i-th open file".
-        match selector {
-            codepp_plugin_host::ALL_OPEN_FILES | codepp_plugin_host::PRIMARY_VIEW => self
-                .shell
-                .tabs
-                .iter()
-                .filter_map(|t| t.path.clone())
-                .collect(),
-            // SECOND_VIEW and any unknown selector both map to
-            // empty — split-view is Phase 5, so the secondary
-            // slot has nothing today.
-            _ => Vec::new(),
+    fn view_buffer_ids(&self, view: i32) -> Vec<isize> {
+        // One view: every tab, untitled ones included, in the tab
+        // strip's left-to-right order, which is what `buffer_id_at`
+        // takes a position in. The second view has none.
+        if view == 0 {
+            self.shell.tabs.iter().map(|t| t.id as isize).collect()
+        } else {
+            Vec::new()
         }
     }
 
@@ -11496,7 +11485,7 @@ impl<U: UiPlatform> HostServices for HostBridge<'_, U> {
     fn buffer_position(&self, id: isize) -> Option<(i32, i32)> {
         // Single-view through Phase 4: every known buffer lives in
         // the primary view (0). Untitled tabs *are* addressable here
-        // — unlike `open_buffer_paths`, the position lookup just
+        // — the position lookup just
         // wants a tab index, so the lack of an on-disk path doesn't
         // exclude the tab.
         let idx = self.shell.tabs.iter().position(|t| t.id as isize == id)?;
@@ -14122,6 +14111,78 @@ mod tests {
             Some(BufferPathName::File(file))
         );
         assert_eq!(shell.buffer_path_name(-5), None);
+    }
+
+    /// The open-file messages count and name every tab through the
+    /// shell's bridge and the real dispatcher, an untitled one included,
+    /// in the order `NPPM_GETBUFFERIDFROMPOS` numbers them, as Notepad++
+    /// counts and names its buffers. Until Phase 5 untitled tabs were
+    /// left out.
+    #[test]
+    fn the_open_file_messages_count_and_name_every_tab() {
+        use codepp_plugin_host::dispatch::{
+            MAX_PATH_TCHARS, NPPM_GETBUFFERIDFROMPOS, NPPM_GETNBOPENFILES, NPPM_GETOPENFILENAMES,
+        };
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+        shell.new_untitled(&mut ui);
+        let untitled = tab_display_name(shell.active().unwrap());
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("a.txt");
+        std::fs::write(&file, "x").unwrap();
+        shell.open_file(file.clone());
+        land_next_load(&mut shell, &mut ui);
+        assert_eq!(shell.tabs.len(), 2);
+
+        for (selector, count) in [
+            (codepp_plugin_host::ALL_OPEN_FILES, 2),
+            (codepp_plugin_host::PRIMARY_VIEW, 2),
+            (codepp_plugin_host::SECOND_VIEW, 0),
+        ] {
+            let r = unsafe {
+                shell.dispatch_plugin_message(
+                    &mut ui,
+                    HostHandles::null(),
+                    NPPM_GETNBOPENFILES,
+                    0,
+                    selector as isize,
+                )
+            };
+            assert_eq!(r, Some(count), "selector {selector}");
+        }
+
+        let mut bufs = vec![vec![0xFFFFu16; MAX_PATH_TCHARS]; 3];
+        let mut slots: Vec<*mut u16> = bufs.iter_mut().map(Vec::as_mut_ptr).collect();
+        let r = unsafe {
+            shell.dispatch_plugin_message(
+                &mut ui,
+                HostHandles::null(),
+                NPPM_GETOPENFILENAMES,
+                slots.as_mut_ptr() as usize,
+                3,
+            )
+        };
+        assert_eq!(r, Some(2));
+        let text = |buf: &[u16]| {
+            let n = buf.iter().position(|&u| u == 0).unwrap();
+            String::from_utf16(&buf[..n]).unwrap()
+        };
+        assert_eq!(text(&bufs[0]), untitled);
+        assert_eq!(text(&bufs[1]), file.to_str().unwrap());
+        assert_eq!(bufs[2][0], 0xFFFF, "a third slot is left alone");
+
+        // The second name is the buffer at position 1.
+        let at_one = unsafe {
+            shell.dispatch_plugin_message(
+                &mut ui,
+                HostHandles::null(),
+                NPPM_GETBUFFERIDFROMPOS,
+                1,
+                0,
+            )
+        };
+        assert_eq!(at_one, Some(shell.tabs[1].id as isize));
     }
 
     /// The cursor messages reach the UI through the shell's bridge and
