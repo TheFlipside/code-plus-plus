@@ -223,6 +223,16 @@ pub const NPPM_GETDARKMODECOLORS: u32 = NPPMSG + 108;
 /// host that lacks the message falls back to its own handling, which
 /// with dark mode off does nothing either.
 pub const NPPM_DARKMODESUBCLASSANDTHEME: u32 = NPPMSG + 112;
+/// wparam: capacity in TCHARs, the NUL included.
+/// lparam: TCHAR* OUT, or NULL to ask for the length.
+/// Returns the length of the directory Code++ keeps its own settings
+/// in, `config.xml` and `session.xml` among them, the NUL not counted:
+/// from a NULL lparam, and from a write that fits. Contract as the
+/// other directory messages, [`NPPM_GETPLUGINHOMEPATH`] among them.
+/// Notepad++ answers its settings directory (`-settingsDir`, the cloud
+/// directory, `%APPDATA%\Notepad++` or its own folder, whichever is in
+/// use); Code++ has one, its configuration directory.
+pub const NPPM_GETNPPSETTINGSDIRPATH: u32 = NPPMSG + 119;
 
 /// `NPPM_SETLINENUMBERWIDTHMODE` / `GETLINENUMBERWIDTHMODE`
 /// values. Match the upstream `LineNumberWidthMode` enum so
@@ -1408,8 +1418,14 @@ pub trait HostServices {
     /// Cloud-sync settings directory if the user has opted in.
     /// Drives [`NPPM_GETSETTINGSCLOUDPATH`]. Code++ does not
     /// implement settings cloud-sync, so this is `None` and the
-    /// dispatcher writes an empty wide string.
+    /// dispatcher answers an empty directory: length 0, and an empty
+    /// wide string written.
     fn settings_cloud_dir(&self) -> Option<PathBuf>;
+
+    /// The directory the host keeps its own settings in. Drives
+    /// [`NPPM_GETNPPSETTINGSDIRPATH`]. `None` when it cannot be
+    /// resolved, which the dispatcher answers with 0.
+    fn settings_dir(&self) -> Option<PathBuf>;
 
     /// Scintilla marker number reserved for bookmarks. Drives
     /// [`NPPM_GETBOOKMARKID`]. Code++ uses N++'s convention of
@@ -2194,23 +2210,14 @@ pub unsafe fn dispatch_nppm<S: HostServices>(
         }
 
         NPPM_GETPLUGINSCONFIGDIR => {
-            // wParam: capacity in TCHARs. lParam: TCHAR* OUT.
-            // Reject `wparam == 0` and `lparam == 0` with a 0
-            // (failure) return — `Some(1)` claims success but
-            // would leave the plugin's buffer unwritten, producing
-            // garbage on the read side.
-            if lparam <= 0 || wparam == 0 {
-                0
-            } else {
-                let dir = services.plugins_config_dir();
-                let cap = wparam.min(MAX_PATH_TCHARS);
-                // SAFETY: plugin promises lparam points to a wide
-                // buffer of at least `wparam` TCHARs (we further cap
-                // at MAX_PATH_TCHARS). A directory that does not fit,
-                // or is not valid Unicode, is refused rather than cut
-                // or approximated, either of which names another one.
-                isize::from(unsafe { write_dir(lparam as *mut u16, cap, &dir) })
-            }
+            // wParam: capacity in TCHARs. lParam: TCHAR* OUT, or NULL
+            // to ask for the length. A write that fits answers TRUE,
+            // "for the retro-compatibility" in Notepad++'s words; the
+            // newer directory messages answer the length.
+            let dir = services.plugins_config_dir();
+            // SAFETY: a positive lparam points at `wparam` TCHARs, per
+            // the message's contract.
+            unsafe { answer_dir(wparam, lparam, Some(&dir), DirWritten::True) }
         }
 
         NPPM_MSGTOPLUGIN => {
@@ -3014,38 +3021,28 @@ pub unsafe fn dispatch_nppm<S: HostServices>(
         NPPM_GETCURRENTVIEW => services.current_view() as isize,
 
         NPPM_GETPLUGINHOMEPATH => {
-            // wparam: capacity in TCHARs. lparam: TCHAR* OUT.
-            // Returns 1 on success, 0 on bad args or unresolvable
-            // plugins dir (sandboxed runner with no config_dir).
-            // Same out-buffer contract as `NPPM_GETPLUGINSCONFIGDIR`.
-            if lparam <= 0 || wparam == 0 {
-                return Some(0);
-            }
-            let Some(path) = services.plugin_home_dir() else {
-                return Some(0);
-            };
-            let cap = wparam.min(MAX_PATH_TCHARS);
-            // SAFETY: plugin promises lparam points to at least
-            // `wparam` TCHARs (capped at MAX_PATH_TCHARS). Refused,
-            // not cut, when it does not fit, as for the config dir.
-            isize::from(unsafe { write_dir(lparam as *mut u16, cap, &path) })
+            // wparam: capacity in TCHARs. lparam: TCHAR* OUT, or NULL
+            // to ask for the length. An unresolvable plugins directory
+            // (a sandboxed runner with no config dir) answers 0.
+            let dir = services.plugin_home_dir();
+            // SAFETY: as for NPPM_GETPLUGINSCONFIGDIR above.
+            unsafe { answer_dir(wparam, lparam, dir.as_deref(), DirWritten::Length) }
         }
 
         NPPM_GETSETTINGSCLOUDPATH => {
-            // Same out-buffer contract; an empty path is
-            // legitimate ("no cloud sync configured"). The
-            // dispatcher writes an empty wide string (just the NUL
-            // terminator) so plugins read a length-0 path rather
-            // than uninitialised memory.
-            if lparam <= 0 || wparam == 0 {
-                return Some(0);
-            }
-            let path = services
-                .settings_cloud_dir()
-                .unwrap_or_else(|| PathBuf::from(""));
-            let cap = wparam.min(MAX_PATH_TCHARS);
-            // SAFETY: as for NPPM_GETPLUGINHOMEPATH above.
-            isize::from(unsafe { write_dir(lparam as *mut u16, cap, &path) })
+            // Same contract. No cloud directory is an empty one, as
+            // Notepad++ answers it: length 0, and an empty string
+            // written into a buffer that holds one.
+            let dir = services.settings_cloud_dir().unwrap_or_default();
+            // SAFETY: as for NPPM_GETPLUGINSCONFIGDIR above.
+            unsafe { answer_dir(wparam, lparam, Some(&dir), DirWritten::Length) }
+        }
+
+        NPPM_GETNPPSETTINGSDIRPATH => {
+            // Same contract, for the host's own settings directory.
+            let dir = services.settings_dir();
+            // SAFETY: as for NPPM_GETPLUGINSCONFIGDIR above.
+            unsafe { answer_dir(wparam, lparam, dir.as_deref(), DirWritten::Length) }
         }
 
         NPPM_GETBOOKMARKID => services.bookmark_marker_id() as isize,
@@ -3700,33 +3697,84 @@ unsafe fn write_wide_if_fits(dst: *mut u16, cap: usize, text: &str) -> bool {
     true
 }
 
-/// Write the directory `dir` into the buffer at `dst` if it is valid
-/// Unicode and fits in `cap` TCHARs, the NUL included, and say whether it
-/// did: [`write_wide_if_fits`] for a path. A directory that does not fit
-/// is refused rather than cut, and one that is not valid Unicode rather
-/// than approximated, since either would name another directory. A
-/// refused directory leaves an empty string, as [`write_path_slot`] does,
-/// so a plugin that ignores the answer reads nothing stale from a buffer
-/// it may never have initialised; Notepad++ writes nothing there, which
-/// a plugin that checks the answer cannot tell apart.
+/// What a directory message answers for a directory it wrote.
+#[derive(Clone, Copy)]
+enum DirWritten {
+    /// TRUE, as [`NPPM_GETPLUGINSCONFIGDIR`] answers.
+    True,
+    /// The directory's length, the NUL not counted, as the newer
+    /// directory messages answer.
+    Length,
+}
+
+/// Answer a directory message, [`NPPM_GETPLUGINSCONFIGDIR`] and its
+/// siblings, as Notepad++ answers it (measured against 8.9.8.1):
+///
+/// - A NULL `lparam` asks for the directory's length in TCHARs, the NUL
+///   not counted, for the plugin to allocate that plus one.
+/// - Otherwise the directory is written if it fits `wparam` TCHARs with
+///   its NUL, and answered with `written`. A capacity equal to the
+///   length is too small, and answers 0. So an empty directory, the
+///   unset cloud path, answers 0 whether it was written or not, as in
+///   Notepad++, under [`DirWritten::Length`].
+///
+/// Where Code++ differs, deliberately:
+///
+/// - A directory of `MAX_PATH` TCHARs or more, or one that is not valid
+///   Unicode, is refused from the probe and the write alike, with 0,
+///   rather than cut short or approximated, either of which would name
+///   another directory. So no write exceeds `MAX_PATH` units, as for the
+///   path messages, and a plugin that passes a byte count for a
+///   `MAX_PATH` buffer is not overrun. A missing directory (`None`) is
+///   refused the same way.
+/// - A refused write leaves an empty string, as [`write_path_slot`]
+///   does, so a plugin that ignores the 0 reads nothing stale from a
+///   buffer it may never have initialised. Notepad++ writes nothing,
+///   which a plugin that checks the answer cannot tell apart.
+/// - A negative `lparam`, a kernel-range pointer, answers 0 and nothing
+///   is written through it.
 ///
 /// # Safety
 ///
-/// `dst` must point to a writable buffer of at least `cap` `u16` units.
-unsafe fn write_dir(dst: *mut u16, cap: usize, dir: &std::path::Path) -> bool {
-    let written = dir
-        .to_str()
-        .is_some_and(|dir| unsafe { write_wide_if_fits(dst, cap, dir) });
-    if !written {
-        tracing::warn!(
-            cap,
-            "directory refused: it does not fit the plugin's buffer or is not valid Unicode",
-        );
-        // SAFETY: the empty string's NUL is one unit, which a `cap` of
-        // at least one holds; a `cap` of 0 writes nothing.
-        unsafe { write_wide_if_fits(dst, cap, "") };
+/// A positive `lparam` must point at a writable buffer of at least
+/// `wparam` `u16` units.
+unsafe fn answer_dir(
+    wparam: usize,
+    lparam: isize,
+    dir: Option<&std::path::Path>,
+    written: DirWritten,
+) -> isize {
+    if lparam < 0 {
+        return 0;
     }
-    written
+    // The directory and its length in UTF-16 units, if it can be
+    // answered at all.
+    let answer = dir
+        .and_then(std::path::Path::to_str)
+        .map(|d| (d, d.encode_utf16().count()))
+        .filter(|&(_, len)| len < MAX_PATH_TCHARS);
+    let len = answer.map_or(0, |(_, len)| len);
+    if lparam == 0 {
+        // A length below `MAX_PATH` fits an `isize`.
+        return len as isize;
+    }
+    let dst = lparam as *mut u16;
+    let cap = wparam.min(MAX_PATH_TCHARS);
+    // SAFETY: `dst` holds `wparam` units, and `cap` is no more.
+    if answer.is_some_and(|(d, _)| unsafe { write_wide_if_fits(dst, cap, d) }) {
+        return match written {
+            DirWritten::True => 1,
+            DirWritten::Length => len as isize,
+        };
+    }
+    tracing::warn!(
+        cap,
+        "directory refused: it does not fit the plugin's buffer, is not valid Unicode, or is unknown",
+    );
+    // SAFETY: the empty string's NUL is one unit, which a `cap` of at
+    // least one holds; a `cap` of 0 writes nothing.
+    unsafe { write_wide_if_fits(dst, cap, "") };
+    0
 }
 
 /// Write `path` into one slot of a plugin's array of `MAX_PATH`
@@ -3858,6 +3906,8 @@ mod tests {
         /// long-tail accessors. `None` for the unhappy-path tests.
         plugin_home_dir: Option<PathBuf>,
         settings_cloud_dir: Option<PathBuf>,
+        /// What `settings_dir` answers.
+        settings_dir: Option<PathBuf>,
         /// What `read_session_file_paths` answers for any file when
         /// set, for paths the semicolon list below cannot carry: the
         /// session file's name is decoded to at most `MAX_PATH` units.
@@ -4370,6 +4420,9 @@ mod tests {
         }
         fn settings_cloud_dir(&self) -> Option<PathBuf> {
             self.settings_cloud_dir.clone()
+        }
+        fn settings_dir(&self) -> Option<PathBuf> {
+            self.settings_dir.clone()
         }
         fn bookmark_marker_id(&self) -> i32 {
             24
@@ -5153,26 +5206,20 @@ mod tests {
     }
 
     #[test]
-    fn get_plugins_config_dir_zero_capacity_returns_zero() {
-        // Plugin passes `wparam == 0` (broken caller, or accidental
-        // probe). Returning Some(1) would claim success without
-        // having written; we must return Some(0).
-        let mut s = MockServices {
-            plugins_dir: PathBuf::from("E:/codepp/plugins/config"),
-            ..Default::default()
-        };
-        let mut buf = vec![0u16; MAX_PATH_TCHARS];
-        let r = unsafe {
-            dispatch_nppm(
-                &mut s,
-                NPPM_GETPLUGINSCONFIGDIR,
-                0,
-                buf.as_mut_ptr() as isize,
-            )
-        };
-        assert_eq!(r, Some(0));
-        // Buffer must be untouched.
-        assert!(buf.iter().all(|&u| u == 0));
+    fn a_directory_message_with_no_capacity_writes_nothing() {
+        // A plugin passes `wparam == 0` with a buffer: a broken caller,
+        // or a probe that forgot to pass NULL. Notepad++ answers 0 and
+        // writes nothing, and so does Code++, not even the empty string
+        // a refusal otherwise leaves, since there is no room for one.
+        // The unset cloud path, whose length is 0 too, included.
+        for (msg, _) in DIR_MESSAGES {
+            let mut s = dirs_all(Path::new("E:/codepp/plugins/config"));
+            s.settings_cloud_dir = None;
+            let mut buf = vec![0xFFFFu16; MAX_PATH_TCHARS];
+            let r = unsafe { dispatch_nppm(&mut s, msg, 0, buf.as_mut_ptr() as isize) };
+            assert_eq!(r, Some(0), "{msg}");
+            assert!(buf.iter().all(|&u| u == 0xFFFF), "{msg}: nothing written");
+        }
     }
 
     #[test]
@@ -5205,12 +5252,14 @@ mod tests {
             plugins_dir: PathBuf::from("E:/c"),
             plugin_home_dir: Some(PathBuf::from("E:/c")),
             settings_cloud_dir: Some(PathBuf::from("E:/c")),
+            settings_dir: Some(PathBuf::from("E:/c")),
             ..Default::default()
         };
         for msg in [
             NPPM_GETPLUGINSCONFIGDIR,
             NPPM_GETPLUGINHOMEPATH,
             NPPM_GETSETTINGSCLOUDPATH,
+            NPPM_GETNPPSETTINGSDIRPATH,
             NPPM_GETSESSIONFILES,
         ] {
             assert_eq!(
@@ -5221,44 +5270,51 @@ mod tests {
         }
     }
 
+    /// The four directory messages, with what each answers for a
+    /// directory it wrote: TRUE for the config dir, the length for the
+    /// rest.
+    const DIR_MESSAGES: [(u32, bool); 4] = [
+        (NPPM_GETPLUGINSCONFIGDIR, false),
+        (NPPM_GETPLUGINHOMEPATH, true),
+        (NPPM_GETSETTINGSCLOUDPATH, true),
+        (NPPM_GETNPPSETTINGSDIRPATH, true),
+    ];
+
+    /// A mock whose every directory message answers `dir`.
+    fn dirs_all(dir: &Path) -> MockServices {
+        MockServices {
+            plugins_dir: dir.to_path_buf(),
+            plugin_home_dir: Some(dir.to_path_buf()),
+            settings_cloud_dir: Some(dir.to_path_buf()),
+            settings_dir: Some(dir.to_path_buf()),
+            ..Default::default()
+        }
+    }
+
     #[test]
     fn a_directory_that_does_not_fit_is_refused_not_cut() {
         // Until Phase 5 the three directory messages cut a directory
         // short and answered 1, naming another directory.
         let dir = PathBuf::from("E:/codepp/plugins/config");
         let len = dir.to_str().unwrap().len();
-        for (msg, set) in [
-            (NPPM_GETPLUGINSCONFIGDIR, 0),
-            (NPPM_GETPLUGINHOMEPATH, 1),
-            (NPPM_GETSETTINGSCLOUDPATH, 2),
-        ] {
-            let mut s = MockServices::default();
-            match set {
-                0 => s.plugins_dir = dir.clone(),
-                1 => s.plugin_home_dir = Some(dir.clone()),
-                _ => s.settings_cloud_dir = Some(dir.clone()),
-            }
+        for (msg, answers_length) in DIR_MESSAGES {
+            let mut s = dirs_all(&dir);
             let mut buf = vec![0xFFFFu16; MAX_PATH_TCHARS];
             let r = unsafe { dispatch_nppm(&mut s, msg, len, buf.as_mut_ptr() as isize) };
             assert_eq!(r, Some(0), "{msg}");
             assert_eq!(buf[0], 0, "{msg}: an empty string, not a cut one");
             assert!(buf[1..].iter().all(|&u| u == 0xFFFF), "{msg}");
             let r = unsafe { dispatch_nppm(&mut s, msg, len + 1, buf.as_mut_ptr() as isize) };
-            assert_eq!(r, Some(1), "{msg}");
+            let expected = if answers_length { len as isize } else { 1 };
+            assert_eq!(r, Some(expected), "{msg}");
             assert_eq!(wide_answer(&buf), dir.to_str().unwrap(), "{msg}");
         }
-        // One that is not valid Unicode is refused too, by each.
-        for msg in [
-            NPPM_GETPLUGINSCONFIGDIR,
-            NPPM_GETPLUGINHOMEPATH,
-            NPPM_GETSETTINGSCLOUDPATH,
-        ] {
-            let mut s = MockServices {
-                plugins_dir: non_unicode_path(),
-                plugin_home_dir: Some(non_unicode_path()),
-                settings_cloud_dir: Some(non_unicode_path()),
-                ..Default::default()
-            };
+        // One that is not valid Unicode is refused too, by each, from
+        // the probe and the write alike.
+        for (msg, _) in DIR_MESSAGES {
+            let mut s = dirs_all(&non_unicode_path());
+            let r = unsafe { dispatch_nppm(&mut s, msg, 0, 0) };
+            assert_eq!(r, Some(0), "{msg}: the probe");
             let mut buf = vec![0xFFFFu16; MAX_PATH_TCHARS];
             let r =
                 unsafe { dispatch_nppm(&mut s, msg, MAX_PATH_TCHARS, buf.as_mut_ptr() as isize) };
@@ -5266,6 +5322,133 @@ mod tests {
             assert_eq!(buf[0], 0, "{msg}: an empty string, not a lossy one");
             assert!(buf[1..].iter().all(|&u| u == 0xFFFF), "{msg}");
         }
+    }
+
+    #[test]
+    fn a_directory_message_answers_a_probe_with_the_length() {
+        // Notepad++ answers a NULL lParam with the directory's length,
+        // whatever wParam says, for the plugin to allocate that plus
+        // one (measured against 8.9.8.1). Until Phase 5 Code++ answered
+        // 0, so a plugin following that protocol allocated one unit
+        // and was then refused.
+        let dir = PathBuf::from("E:/codepp/plugins/config");
+        let len = dir.to_str().unwrap().len() as isize;
+        for (msg, answers_length) in DIR_MESSAGES {
+            let mut s = dirs_all(&dir);
+            for wparam in [0, 1000] {
+                let r = unsafe { dispatch_nppm(&mut s, msg, wparam, 0) };
+                assert_eq!(r, Some(len), "{msg}, wparam {wparam}");
+            }
+            // The protocol end to end: allocate the probe plus one.
+            let probe = unsafe { dispatch_nppm(&mut s, msg, 0, 0) }.unwrap();
+            let size = usize::try_from(probe).unwrap() + 1;
+            let mut buf = vec![0xFFFFu16; size + 1];
+            let r = unsafe { dispatch_nppm(&mut s, msg, size, buf.as_mut_ptr() as isize) };
+            assert_eq!(r, Some(if answers_length { len } else { 1 }), "{msg}");
+            assert_eq!(wide_answer(&buf), dir.to_str().unwrap(), "{msg}");
+            assert_eq!(buf[size], 0xFFFF, "{msg}: nothing past the buffer");
+        }
+    }
+
+    #[test]
+    fn a_directory_message_counts_utf16_units() {
+        // A TCHAR is a UTF-16 unit: `ä` is one, `𝔸` two, and either is
+        // more than one byte of UTF-8.
+        let dir = PathBuf::from("E:/ä/𝔸");
+        let units = dir.to_str().unwrap().encode_utf16().count();
+        assert_eq!(units, 7);
+        for (msg, answers_length) in DIR_MESSAGES {
+            let mut s = dirs_all(&dir);
+            let r = unsafe { dispatch_nppm(&mut s, msg, 0, 0) };
+            assert_eq!(r, Some(units as isize), "{msg}: the probe");
+            let mut buf = vec![0xFFFFu16; units + 2];
+            let r = unsafe { dispatch_nppm(&mut s, msg, units, buf.as_mut_ptr() as isize) };
+            assert_eq!(r, Some(0), "{msg}: no room for the NUL");
+            let r = unsafe { dispatch_nppm(&mut s, msg, units + 1, buf.as_mut_ptr() as isize) };
+            let expected = if answers_length { units as isize } else { 1 };
+            assert_eq!(r, Some(expected), "{msg}");
+            assert_eq!(wide_answer(&buf), dir.to_str().unwrap(), "{msg}");
+            assert_eq!(buf[units + 1], 0xFFFF, "{msg}: nothing past the buffer");
+        }
+    }
+
+    #[test]
+    fn a_directory_message_refuses_a_directory_of_max_path_or_more() {
+        // One unit short of `MAX_PATH` is answered and written whole;
+        // `MAX_PATH` itself is refused from the probe and the write,
+        // where Notepad++ would answer it and write it into a buffer
+        // as large as the plugin says it has.
+        let fits = PathBuf::from("d".repeat(MAX_PATH_TCHARS - 1));
+        let long = PathBuf::from("d".repeat(MAX_PATH_TCHARS));
+        for (msg, answers_length) in DIR_MESSAGES {
+            let mut s = dirs_all(&fits);
+            let r = unsafe { dispatch_nppm(&mut s, msg, 0, 0) };
+            assert_eq!(r, Some(MAX_PATH_TCHARS as isize - 1), "{msg}");
+            let mut buf = vec![0xFFFFu16; MAX_PATH_TCHARS + 1];
+            let r = unsafe { dispatch_nppm(&mut s, msg, usize::MAX, buf.as_mut_ptr() as isize) };
+            let expected = if answers_length {
+                MAX_PATH_TCHARS as isize - 1
+            } else {
+                1
+            };
+            assert_eq!(
+                r,
+                Some(expected),
+                "{msg}: a huge capacity is taken as MAX_PATH"
+            );
+            assert_eq!(wide_answer(&buf), fits.to_str().unwrap(), "{msg}");
+            assert_eq!(buf[MAX_PATH_TCHARS], 0xFFFF, "{msg}");
+
+            let mut s = dirs_all(&long);
+            let r = unsafe { dispatch_nppm(&mut s, msg, 0, 0) };
+            assert_eq!(r, Some(0), "{msg}: the probe");
+            let mut buf = vec![0xFFFFu16; 2 * MAX_PATH_TCHARS];
+            let r = unsafe {
+                dispatch_nppm(&mut s, msg, 2 * MAX_PATH_TCHARS, buf.as_mut_ptr() as isize)
+            };
+            assert_eq!(r, Some(0), "{msg}: the write");
+            assert_eq!(buf[0], 0, "{msg}");
+            assert!(buf[1..].iter().all(|&u| u == 0xFFFF), "{msg}");
+        }
+    }
+
+    #[test]
+    fn a_missing_directory_answers_zero() {
+        // An unresolvable plugins or settings directory answers 0 from
+        // the probe and the write, the write leaving an empty string.
+        for msg in [NPPM_GETPLUGINHOMEPATH, NPPM_GETNPPSETTINGSDIRPATH] {
+            let mut s = MockServices::default();
+            assert_eq!(
+                unsafe { dispatch_nppm(&mut s, msg, 0, 0) },
+                Some(0),
+                "{msg}"
+            );
+            let mut buf = vec![0xFFFFu16; MAX_PATH_TCHARS];
+            let r =
+                unsafe { dispatch_nppm(&mut s, msg, MAX_PATH_TCHARS, buf.as_mut_ptr() as isize) };
+            assert_eq!(r, Some(0), "{msg}");
+            assert_eq!(buf[0], 0, "{msg}");
+        }
+    }
+
+    #[test]
+    fn the_settings_dir_answers_the_host_settings_directory() {
+        let dir = PathBuf::from("C:/Users/me/AppData/Roaming/Code++");
+        let mut s = MockServices {
+            settings_dir: Some(dir.clone()),
+            ..Default::default()
+        };
+        let mut buf = vec![0u16; MAX_PATH_TCHARS];
+        let r = unsafe {
+            dispatch_nppm(
+                &mut s,
+                NPPM_GETNPPSETTINGSDIRPATH,
+                MAX_PATH_TCHARS,
+                buf.as_mut_ptr() as isize,
+            )
+        };
+        assert_eq!(r, Some(dir.to_str().unwrap().len() as isize));
+        assert_eq!(wide_answer(&buf), dir.to_str().unwrap());
     }
 
     #[test]
@@ -5583,6 +5766,7 @@ mod tests {
         assert_eq!(NPPM_ISDARKMODEENABLED, NPPMSG + 107);
         assert_eq!(NPPM_GETDARKMODECOLORS, NPPMSG + 108);
         assert_eq!(NPPM_GETBOOKMARKID, NPPMSG + 111);
+        assert_eq!(NPPM_GETNPPSETTINGSDIRPATH, NPPMSG + 119);
         assert_eq!(NPPM_GETNPPDIRECTORY, RUNCOMMAND_USER + 7);
         assert_eq!(NPPM_GETNPPFULLFILEPATH, RUNCOMMAND_USER + 10);
         // The cursor messages, added in Phase 5 and checked against
@@ -8499,8 +8683,9 @@ mod tests {
 
     #[test]
     fn plugin_home_path_writes_wide_path() {
+        let home = "C:/Users/me/AppData/Roaming/Code++/plugins";
         let mut s = MockServices {
-            plugin_home_dir: Some(PathBuf::from("C:/Users/me/AppData/Roaming/Code++/plugins")),
+            plugin_home_dir: Some(PathBuf::from(home)),
             ..Default::default()
         };
         let mut buf = vec![0u16; MAX_PATH_TCHARS];
@@ -8512,7 +8697,9 @@ mod tests {
                 buf.as_mut_ptr() as isize,
             )
         };
-        assert_eq!(r, Some(1));
+        // The length, as Notepad++ answers, where until Phase 5 it
+        // answered 1.
+        assert_eq!(r, Some(home.len() as isize));
         let nul = buf.iter().position(|&u| u == 0).unwrap();
         let s = String::from_utf16(&buf[..nul]).unwrap();
         assert_eq!(s, "C:/Users/me/AppData/Roaming/Code++/plugins");
@@ -8545,11 +8732,16 @@ mod tests {
                 buf.as_mut_ptr() as isize,
             )
         };
-        // Always succeeds — empty path is a legitimate "no cloud
-        // sync configured" answer. The dispatcher writes a NUL
+        // An empty path, "no cloud sync configured", answers its
+        // length, 0, as Notepad++ answers an unset cloud path, where
+        // until Phase 5 it answered 1. The dispatcher writes a NUL
         // terminator so plugins read length 0.
-        assert_eq!(r, Some(1));
+        assert_eq!(r, Some(0));
         assert_eq!(buf[0], 0, "empty path should be just a NUL terminator");
+        assert!(buf[1..].iter().all(|&u| u == 0xFFFF));
+        // The probe answers 0 too.
+        let r = unsafe { dispatch_nppm(&mut s, NPPM_GETSETTINGSCLOUDPATH, 0, 0) };
+        assert_eq!(r, Some(0));
     }
 
     #[test]

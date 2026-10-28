@@ -635,6 +635,12 @@ impl HostServices for Bridge<'_> {
         None
     }
 
+    fn settings_dir(&self) -> Option<PathBuf> {
+        // The scratch root, as a portable Notepad++ keeps its settings
+        // beside itself.
+        Some(self.0.env.root.clone())
+    }
+
     fn bookmark_marker_id(&self) -> i32 {
         // Notepad++'s, and the editor's.
         24

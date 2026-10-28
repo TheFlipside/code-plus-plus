@@ -549,14 +549,23 @@ typedef struct toolbarIcons_ {
 #define NPPM_MAKECURRENTBUFFERDIRTY       (NPPMSG + 44)
 #define NPPM_GETENABLETHEMETEXTUREFUNC    (NPPMSG + 45)  /* deprecated upstream */
 
-/* v1: the per-user plugin config dir.
- *     wParam: capacity in TCHARs, the NUL included. lParam: TCHAR* OUT.
- *     Returns 1 and writes the directory if it fits; 0 and an
- *     empty string if it does not, or if it is not valid Unicode; 0
- *     and nothing written for 0 capacity or a NULL or negative
- *     lParam. Notepad++ answers a NULL lParam with
- *     the directory's length (read from its source, not measured);
- *     Code++ does not, yet. */
+/* v1: the per-user plugin config dir. The contract of the four
+ *     directory messages, as measured against Notepad++ 8.9.8.1:
+ *     wParam: capacity in TCHARs, the NUL included.
+ *     lParam: TCHAR* OUT, or NULL to ask for the directory's length.
+ *     A NULL lParam returns the length in TCHARs, the NUL not counted,
+ *     whatever wParam says: allocate that plus one and call again.
+ *     A write returns 1 here (NPPM_GETPLUGINHOMEPATH,
+ *     NPPM_GETSETTINGSCLOUDPATH and NPPM_GETNPPSETTINGSDIRPATH return
+ *     the length) if the directory fits with its NUL, and 0 if it
+ *     does not, a capacity equal to the length included. Code++ also
+ *     leaves an empty string then, where Notepad++ writes nothing.
+ *     Code++ takes a capacity as at most MAX_PATH, and returns 0
+ *     from the probe and the write alike for a directory of
+ *     MAX_PATH TCHARs or more, or one that is not valid Unicode,
+ *     rather than cut it short; 0 and nothing written for a
+ *     negative lParam. Until Phase 5 Code++ returned 0 for a NULL
+ *     lParam. */
 #define NPPM_GETPLUGINSCONFIGDIR          (NPPMSG + 46)
 /* v3: forward an inter-plugin message to a named target.
  *     wParam: TCHAR* target plugin name (the value the target's
@@ -821,19 +830,19 @@ typedef struct CommunicationInfo_ {
  *             handle on every iteration, so the change takes effect on
  *             the very next keystroke. */
 #define NPPM_REMOVESHORTCUTBYCMDID        (NPPMSG + 96)
-/* v3: returns the per-user plugins directory (parent of every
- *     plugin subdirectory) into a plugin-allocated wide buffer.
- *     wParam: capacity in TCHARs. lParam: TCHAR* OUT.
- *     Returns 1 on success, 0 on bad args / unresolvable config
- *     dir (sandboxed runner), or a directory that does not fit. Same
- *     out-buffer protocol as `NPPM_GETPLUGINSCONFIGDIR`. */
+/* v3: the per-user plugins directory (parent of every plugin
+ *     subdirectory). Contract as NPPM_GETPLUGINSCONFIGDIR, except a
+ *     write that fits returns the directory's length. 0 for an
+ *     unresolvable config dir (a sandboxed runner). Until Phase 5
+ *     a write returned 1 and a NULL lParam 0. */
 #define NPPM_GETPLUGINHOMEPATH            (NPPMSG + 97)
-/* v3: returns the settings cloud-sync directory if the user opted
- *     in. Same out-buffer protocol; Code++ does not implement
- *     cloud-sync, so the dispatcher writes an empty wide string
- *     (just the NUL terminator) and returns 1 (the path lookup
- *     itself didn't fail; the user simply has no cloud sync
- *     configured). */
+/* v3: the settings cloud-sync directory if the user opted in.
+ *     Contract as NPPM_GETPLUGINHOMEPATH. Code++ has no cloud sync,
+ *     so the directory is empty, which Notepad++ answers for an unset
+ *     one: 0 from the probe and the write, and an empty string
+ *     written into a buffer of at least one TCHAR. Until Phase 5 a
+ *     write returned 1. Notepad++'s header names this message
+ *     NPPM_GETSETTINGSONCLOUDPATH; the number is the same. */
 #define NPPM_GETSETTINGSCLOUDPATH         (NPPMSG + 98)
 /* v3: set the line-number margin width mode (DYNAMIC / CONSTANT).
  *     wParam: one of `LINENUMWIDTH_DYNAMIC` (0) or
@@ -930,6 +939,14 @@ typedef struct NppDarkModeColors_ {
  *             returns 7 for 0x0B and 4 for 0x0C on a dialog, 0 for
  *             a NULL HWND. */
 #define NPPM_DARKMODESUBCLASSANDTHEME     (NPPMSG + 112)
+
+/* v3: the directory the host keeps its own settings in. Contract as
+ *     NPPM_GETPLUGINHOMEPATH. Code++ answers its configuration
+ *     directory, where config.xml and session.xml live; Notepad++
+ *     answers whichever of -settingsDir, the cloud directory,
+ *     %APPDATA%\Notepad++ or its own folder holds its settings.
+ *     Until Phase 5 Code++ did not handle it, and returned 0. */
+#define NPPM_GETNPPSETTINGSDIRPATH        (NPPMSG + 119)
 
 /*
  * RUNCOMMAND_USER family. Notepad++ split a handful of host-state-

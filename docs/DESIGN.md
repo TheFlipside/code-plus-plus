@@ -3129,8 +3129,29 @@ These are not blockers for the phase that surfaced them, but get addressed in Ph
     * *`NPPM_GETOPENFILENAMES` read slot pointers from a kernel-range wParam* (the audit, informational, older than this change); it and `NPPM_GETSESSIONFILES` refuse one now.
     * *Smaller:* a comment on `NPPM_GETOPENFILENAMES` that still called its probe the full-path message's.
   * **Found on the way, not changed here.**
-    * The three directory messages take no probe: Notepad++ answers a NULL lParam with the directory's length, and `NPPM_GETPLUGINHOMEPATH` and `NPPM_GETSETTINGSCLOUDPATH` answer the length from the write too, where Code++ answers 1. Read from Notepad++'s header; not measured.
+    * The three directory messages take no probe: Notepad++ answers a NULL lParam with the directory's length, and `NPPM_GETPLUGINHOMEPATH` and `NPPM_GETSETTINGSCLOUDPATH` answer the length from the write too, where Code++ answers 1. Read from Notepad++'s header; not measured. *(Since answered as Notepad++ does, and measured: see the entry "The directory messages answer a probe" below.)*
     * `NPPM_GETNBOPENFILES` and `NPPM_GETOPENFILENAMES` leave untitled buffers out, so with an untitled tab open the count disagrees with the tab positions `NPPM_GETBUFFERIDFROMPOS` takes; Notepad++ counts every buffer and writes an untitled one's name. `NPPM_GETNBOPENFILES` also reads its view selector from wParam, where Notepad++ reads it from lParam, so a plugin asking for the second view is told the count of all files. And `NPPM_GETOPENFILENAMES` with a NULL array answers the count, where Notepad++ answers 0. All three read from Notepad++'s source; not measured.
+
+- **The directory messages answer a probe, and return what Notepad++ returns (landed, Phase 5).** The entry above found that `NPPM_GETPLUGINSCONFIGDIR`, `NPPM_GETPLUGINHOMEPATH` and `NPPM_GETSETTINGSCLOUDPATH` answered a NULL lParam with 0. Notepad++'s header tells a plugin to send that NULL first and allocate the answer plus one, so a plugin following it allocated one TCHAR and was refused.
+  * **Measured first.** A probe plugin built outside the tree asked each message, and `NPPM_GETNPPSETTINGSDIRPATH` (+119) beside them, for its length with wParam 0 and 1000, then wrote with a capacity of the length plus one, the length, 0, 260 and 1. It was loaded unchanged into the portable Notepad++ 8.9.8.1 and into Code++, before and after this change:
+
+    | | Notepad++ 8.9.8.1 | Code++ before | Code++ after |
+    | --- | --- | --- | --- |
+    | NULL lParam, any wParam | the length | 0 | the length |
+    | A write that fits: config dir | 1 | 1 | 1 |
+    | A write that fits: plugins dir, settings dir | the length | 1; +119 unhandled, 0 | the length |
+    | A capacity equal to the length, or 0 | 0, nothing written | 0 | 0 |
+    | The unset cloud path: probe, and a write into one TCHAR | 0, and `""` written | 0, and 1 with `""` | 0, and `""` written |
+
+  * **What ships.** One helper, `answer_dir`, answers all four, with what each answers for a write: TRUE for the config dir, "for the retro-compatibility" in Notepad++'s words, and the length for the rest. `NPPM_GETNPPSETTINGSDIRPATH` is new: Code++ answers its configuration directory, where `config.xml` and `session.xml` live, through a new required `HostServices::settings_dir`. The harness answers its scratch root, as a portable Notepad++ keeps its settings beside itself.
+  * **Where Code++ still differs, deliberately.** The same three choices the path messages make. A directory of `MAX_PATH` TCHARs or more, or one that is not valid Unicode, answers 0 from the probe and the write alike rather than being cut short, so no write exceeds `MAX_PATH` units; Notepad++ would copy it whole into a buffer as large as the plugin says it has. A refused write leaves an empty string, where Notepad++ writes nothing. A negative lParam answers 0.
+  * **Verified.**
+    * *Dispatcher tests:* the probe for each of the four messages at two wParams; the probe-then-allocate protocol end to end, with nothing written past the buffer; each message's answer to a write; a directory outside ASCII, counted in UTF-16 units; the `MAX_PATH` boundary from the probe and the write; a capacity of 0 writing nothing; a missing directory; and the cloud path's 0.
+    * *Mutations:* eight. Seven are caught: the probe answering 0; the config dir answering the length; the others answering TRUE; the refusal off by one; no empty string after a refusal; bytes counted instead of UTF-16 units; and a negative lParam written through, which faults the test process. The eighth survives and is equivalent: it removes the write's `MAX_PATH` cap, which the refusal of a directory of `MAX_PATH` or more already enforces. The cap stays as a second bound.
+    * *The real Win32 app,* with the probe plugin, as in the table.
+    * *The ABI checker,* against upstream's header, which defines +119 under the same name.
+    * *Everything else:* fmt; clippy pedantic and rustdoc with warnings denied, on Windows and Linux; the plugin-host, shell, plugin-SDK and harness tests on Windows, and the first three on Linux. The first Windows run of the shell's tests hung in two tests unrelated to this change, beside two notify watcher threads: the race in the entry "On Windows, a watch notify 8.2.0 stops can start a read on another thread's handle" above. The re-run passed.
+  * **What the pre-commit gate found.** A code review, which passed, and a security audit, which came back secure. The review raised one doc sentence and two test gaps, all fixed. The doc claimed an empty directory answers 0 for the config dir too, where that message answers TRUE for any directory it writes. No test wrote with a capacity of 0 for the three newer messages, and none used a directory outside ASCII, so counting bytes instead of UTF-16 units would have passed. The audit's notes were informational: no wParam or lParam makes the host write past the buffer the plugin states, or past `MAX_PATH`; and the settings directory tells a plugin nothing it could not already learn.
 
 ### 7.5 Phase 5 cross-platform parity checklist
 

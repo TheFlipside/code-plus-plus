@@ -107,7 +107,8 @@ pub(crate) struct Env {
     pub main_menu: HMENU,
     /// The Plugins popup, for `NPPM_GETMENUHANDLE(NPPPLUGINMENU)`.
     pub plugin_menu: HMENU,
-    /// The scratch root: `NPPM_GETNPPDIRECTORY`.
+    /// The scratch root: `NPPM_GETNPPDIRECTORY` and
+    /// `NPPM_GETNPPSETTINGSDIRPATH`.
     pub root: PathBuf,
     /// `<root>/plugins`: `NPPM_GETPLUGINHOMEPATH`.
     pub plugins_dir: PathBuf,

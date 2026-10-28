@@ -11176,10 +11176,15 @@ impl<U: UiPlatform> HostServices for HostBridge<'_, U> {
 
     fn settings_cloud_dir(&self) -> Option<PathBuf> {
         // Code++ doesn't implement settings cloud-sync — the
-        // dispatcher writes an empty wide string into the plugin
-        // buffer. Plugins reading the result get a length-0 path
-        // and should treat it as "no cloud sync configured".
+        // dispatcher answers an empty directory. Plugins reading the
+        // result get a length-0 path and should treat it as "no
+        // cloud sync configured".
         None
+    }
+
+    fn settings_dir(&self) -> Option<PathBuf> {
+        // Where `config.xml` and `session.xml` live.
+        codepp_platform::config_dir()
     }
 
     fn bookmark_marker_id(&self) -> i32 {
