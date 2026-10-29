@@ -549,6 +549,17 @@ define_class!(
             });
         }
 
+        /// Edit → EOL Conversion. Carries its row's index in
+        /// [`codepp_shell::EOL_CONVERSION_ROWS`] as the tag.
+        #[unsafe(method(codeppConvertEol:))]
+        fn convert_eol(&self, sender: Option<&NSMenuItem>) {
+            crate::at_callback_boundary("menu:convertEol", (), || {
+                if let Some(sender) = sender {
+                    crate::convert_active_eol_by_tag(sender.tag());
+                }
+            });
+        }
+
         #[unsafe(method(codeppSetLanguage:))]
         fn set_language(&self, sender: Option<&NSMenuItem>) {
             crate::at_callback_boundary("menu:setLanguage", (), || {
@@ -801,6 +812,12 @@ fn validate(item: &NSMenuItem) -> bool {
         // `with_state`: AppKit validates while menus track, which can be
         // inside a borrow.
         item.setState(isize::from(crate::plugin::menu_mark(tag as i32)));
+    } else if action == sel!(codeppConvertEol:) {
+        // Enabled rather than marked: the row for the kind the buffer
+        // already has is greyed, as Notepad++ greys it, and every row
+        // while the tab's file is still loading. A declined state read
+        // greys it too, until the next validation.
+        return crate::eol_conversion_offered_by_tag(tag);
     } else if action == sel!(codeppRestoreRecentClosed:)
         || action == sel!(codeppOpenAllRecent:)
         || action == sel!(codeppEmptyRecentFiles:)
@@ -894,7 +911,7 @@ pub fn install(app: &NSApplication, actions: &Actions, mtm: MainThreadMarker) ->
     let main_menu = NSMenu::new(mtm);
     main_menu.addItem(&build_app_menu(actions, mtm));
     main_menu.addItem(&build_file_menu(actions, mtm));
-    main_menu.addItem(&build_edit_menu(mtm));
+    main_menu.addItem(&build_edit_menu(actions, mtm));
     main_menu.addItem(&build_search_menu(actions, mtm));
     main_menu.addItem(&build_view_menu(actions, mtm));
     main_menu.addItem(&build_encoding_menu(actions, mtm));
@@ -1285,7 +1302,11 @@ fn rebuild_recent_region(menu: &NSMenu, actions: &Actions) {
 /// `:928` `copy:`, `:943` `undo:`, and the rest alongside) plus
 /// `validateUserInterfaceItem:` (`:966`), so the items also grey
 /// themselves out correctly with no work on our side.
-fn build_edit_menu(mtm: MainThreadMarker) -> Retained<NSMenuItem> {
+///
+/// The one exception is EOL Conversion, below a separator as Notepad++
+/// has it: its rows are Code++ commands, not the Scintilla view's, so
+/// they target `actions` and are greyed by [`validate`].
+fn build_edit_menu(actions: &Actions, mtm: MainThreadMarker) -> Retained<NSMenuItem> {
     let edit_item = NSMenuItem::new(mtm);
     let edit_menu = NSMenu::new(mtm);
     edit_menu.setTitle(&NSString::from_str("Edit"));
@@ -1297,6 +1318,20 @@ fn build_edit_menu(mtm: MainThreadMarker) -> Retained<NSMenuItem> {
     add(&edit_menu, mtm, "Paste", sel!(paste:), "v", None);
     add(&edit_menu, mtm, "Delete", sel!(delete:), "", None);
     add(&edit_menu, mtm, "Select All", sel!(selectAll:), "a", None);
+    edit_menu.addItem(&NSMenuItem::separatorItem(mtm));
+    let (eol_item, eol_menu) = submenu("EOL Conversion", mtm);
+    for (tag, (label, _)) in codepp_shell::EOL_CONVERSION_ROWS.iter().enumerate() {
+        let row = add(
+            &eol_menu,
+            mtm,
+            label,
+            sel!(codeppConvertEol:),
+            "",
+            Some(actions),
+        );
+        row.setTag(isize::try_from(tag).unwrap_or(isize::MAX));
+    }
+    edit_menu.addItem(&eol_item);
     edit_item.setSubmenu(Some(&edit_menu));
     edit_item
 }

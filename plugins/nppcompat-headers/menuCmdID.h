@@ -108,6 +108,9 @@
  * IDM_FORMAT_UTF_8 is UTF-8 *with* the byte-order mark and
  * IDM_FORMAT_AS_UTF_8 is UTF-8 without it. */
 #define IDM_FORMAT     (IDM + 5000)
+/* Edit -> EOL Conversion: convert the current buffer's line endings to
+ * CRLF, LF or CR. Sent with NPPM_MENUCOMMAND, these work on every
+ * platform. */
 #define IDM_FORMAT_TODOS          (IDM_FORMAT + 1)
 #define IDM_FORMAT_TOUNIX         (IDM_FORMAT + 2)
 #define IDM_FORMAT_TOMAC          (IDM_FORMAT + 3)

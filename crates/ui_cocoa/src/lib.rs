@@ -2716,6 +2716,43 @@ pub(crate) fn apply_language(lang_id: i32) {
     }
 }
 
+/// The kind the EOL Conversion row tagged `tag` converts to, or `None`
+/// for a tag no row has. A row's tag is its index in
+/// [`codepp_shell::EOL_CONVERSION_ROWS`].
+fn eol_conversion_target(tag: isize) -> Option<codepp_core::Ending> {
+    let row = codepp_shell::EOL_CONVERSION_ROWS.get(usize::try_from(tag).ok()?)?;
+    Some(row.1)
+}
+
+/// Whether the EOL Conversion row tagged `tag` is enabled
+/// ([`codepp_shell::Shell::eol_conversion_offered`]). `false` for a
+/// declined state read, so the row is greyed until the next validation
+/// rather than offering a command that could not be checked.
+pub(crate) fn eol_conversion_offered_by_tag(tag: isize) -> bool {
+    eol_conversion_target(tag).is_some_and(|ending| {
+        with_state(|st| st.shell.eol_conversion_offered(ending)) == Some(true)
+    })
+}
+
+/// Convert the active tab's line endings from the EOL Conversion row
+/// tagged `tag` ([`codepp_shell::Shell::convert_active_eol`], which also
+/// repaints the status bar). The tab strip and title are repainted once
+/// the borrow has ended: the conversion's own `SCN_SAVEPOINTLEFT` reaches
+/// `on_sci_notify` from inside the edit, while the borrow is held, where
+/// `with_state` declines it.
+pub(crate) fn convert_active_eol_by_tag(tag: isize) {
+    let Some(ending) = eol_conversion_target(tag) else {
+        return;
+    };
+    let converted = with_state(|st| {
+        let (shell, mut ui) = st.split();
+        shell.convert_active_eol(&mut ui, ending)
+    }) == Some(true);
+    if converted {
+        refresh_tab_chrome();
+    }
+}
+
 /// The Encoding menu tag matching the active buffer's encoding, or
 /// `None` when it is one this menu does not list (a codepage, or a
 /// BOM-less UTF-16). Those simply show no mark rather than being
@@ -4080,6 +4117,23 @@ mod scroll_floor_tests {
             resize(26_525, &[1500, 900, 1200, 600]),
             [26_525, 26_525, 26_525, 26_525]
         );
+    }
+}
+
+#[cfg(test)]
+mod eol_conversion_tests {
+    use super::eol_conversion_target;
+    use codepp_core::Ending;
+
+    /// An Edit → EOL Conversion row's tag is its index in the shell's
+    /// table, and a tag no row has converts nothing.
+    #[test]
+    fn a_rows_tag_names_the_kind_it_converts_to() {
+        assert_eq!(eol_conversion_target(0), Some(Ending::CrLf));
+        assert_eq!(eol_conversion_target(1), Some(Ending::Lf));
+        assert_eq!(eol_conversion_target(2), Some(Ending::Cr));
+        assert_eq!(eol_conversion_target(3), None);
+        assert_eq!(eol_conversion_target(-1), None);
     }
 }
 
@@ -7755,5 +7809,62 @@ let msg = \"found scintilla_cocoa_new() calls\";
                 "`{f}` reaches for the state"
             );
         }
+    }
+
+    /// Edit → EOL Conversion's wiring, which only a run on a Mac could see
+    /// fail. Each row targets Code++'s own receiver: the Edit menu's other
+    /// items go down the responder chain to the Scintilla view, where
+    /// nothing implements `codeppConvertEol:`, so a row given a nil target
+    /// would stay greyed for good. `validateMenuItem:` greys the rows from
+    /// the shell. A row converts through the shell and repaints the tab
+    /// strip once the borrow has ended: the conversion's notification is
+    /// declined inside it.
+    #[test]
+    fn the_eol_conversion_rows_reach_code_plus_plus_and_repaint_after() {
+        let squash = |s: &str| s.chars().filter(|c| !c.is_whitespace()).collect::<String>();
+        let menu = {
+            let src = include_str!("menu.rs");
+            let cut = src.find("#[cfg(test)]").unwrap_or(src.len());
+            code_only(&src[..cut])
+        };
+        let edit = squash(&fn_body(&menu, "build_edit_menu"));
+        assert!(
+            edit.contains("incodepp_shell::EOL_CONVERSION_ROWS.iter().enumerate(){"),
+            "the rows no longer come from the shell's table"
+        );
+        assert!(
+            edit.contains("sel!(codeppConvertEol:),,Some(actions),"),
+            "a row no longer targets Code++'s receiver"
+        );
+        assert!(
+            squash(&fn_body(&menu, "validate")).contains(
+                "elseifaction==sel!(codeppConvertEol:){returncrate::eol_conversion_offered_by_tag(tag);}"
+            ),
+            "validateMenuItem: no longer greys the rows from the shell"
+        );
+        let lib = code_only(production_src());
+        let body = fn_body(&lib, "convert_active_eol_by_tag");
+        assert_eq!(
+            body.matches("with_state(").count(),
+            1,
+            "the state is taken once"
+        );
+        let borrow = block_after(&body, "with_state(|st| {");
+        assert!(
+            borrow.contains(".convert_active_eol(&mut ui, ending)"),
+            "a row no longer converts through Shell::convert_active_eol"
+        );
+        assert!(
+            !borrow.contains("refresh_tab_chrome"),
+            "the tab strip is repainted inside the borrow, where its dirty read is declined"
+        );
+        assert!(
+            occurs_at_depth_one(&body, "if converted {")
+                && occurs_at_depth_one(
+                    &block_after(&body, "if converted {"),
+                    "refresh_tab_chrome();"
+                ),
+            "a conversion no longer repaints the tab strip once the borrow has ended"
+        );
     }
 }

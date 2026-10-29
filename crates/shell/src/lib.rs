@@ -182,6 +182,17 @@ pub const MAX_OPEN_TABS: usize = 1024;
 /// Windows. Until Phase 5 it was LF everywhere.
 pub const NEW_DOCUMENT_EOL: Eol = new_document_eol(cfg!(windows));
 
+/// Edit → EOL Conversion's rows, in menu order: Notepad++'s labels (its
+/// `Notepad_plus.rc`) and the line-ending kind each converts the tab in
+/// front to, through [`Shell::convert_active_eol`]. Every backend builds
+/// its submenu from this table, so the three cannot drift on a label or
+/// the order.
+pub const EOL_CONVERSION_ROWS: [(&str, codepp_core::Ending); 3] = [
+    ("Windows (CR LF)", codepp_core::Ending::CrLf),
+    ("Unix (LF)", codepp_core::Ending::Lf),
+    ("Macintosh (CR)", codepp_core::Ending::Cr),
+];
+
 /// The new-document line ending on Windows (`windows`) or elsewhere;
 /// [`NEW_DOCUMENT_EOL`] is this platform's. A function so the rule is
 /// tested on every platform.
@@ -7656,6 +7667,76 @@ impl Shell {
         true
     }
 
+    /// Whether Edit → EOL Conversion offers converting the tab in front to
+    /// `to`. Every backend greys a row this answers `false` for.
+    ///
+    /// As in Notepad++, the row for the kind the buffer already has is
+    /// greyed: Windows (CR LF) for a CRLF buffer, and so on (measured
+    /// against 8.9.8.1 with a probe plugin; its source does it in
+    /// `enableConvertMenuItems`). A buffer whose lines end in more
+    /// than one way ([`codepp_core::Eol::Mixed`]) is offered all three, its
+    /// first ending included, since converting to that ending is what makes
+    /// the file uniform; Notepad++ has no such state and greys its first
+    /// ending's row. No row is offered with no tab in front, nor while that
+    /// tab waits on its first load: until the file lands there is nothing of
+    /// it to convert, and the landing sets the tab's line ending from the
+    /// file.
+    pub fn eol_conversion_offered(&self, to: codepp_core::Ending) -> bool {
+        let Some(tab) = self.active() else {
+            return false;
+        };
+        self.first_load(tab).is_none() && tab.eol != codepp_core::Eol::from(to)
+    }
+
+    /// Convert the tab in front's line endings to `to`: Edit → EOL
+    /// Conversion, on every backend. Ends in [`Self::set_buffer_eol_by_id`],
+    /// as a plugin's `NPPM_SETBUFFERFORMAT` does, so the bytes are converted
+    /// wherever they live, the conversion is one undo action, and the
+    /// buffer reads unsaved until it is saved. The status bar is repainted
+    /// here.
+    ///
+    /// Converts unconditionally, as Notepad++'s command does: the row for
+    /// the buffer's own kind is greyed ([`Self::eol_conversion_offered`]),
+    /// but a posted command still reaches this, and a buffer labelled LF
+    /// can hold CRLF lines a paste put there. It refuses, changing nothing,
+    /// with no tab in front and while that tab waits on its first load.
+    /// A plugin's `NPPM_MENUCOMMAND` with Notepad++'s EOL Conversion
+    /// commands does not come here: the dispatcher sends those to
+    /// `NPPM_SETBUFFERFORMAT`'s path, which does not refuse a loading tab,
+    /// and whose label the landing then replaces with the file's.
+    ///
+    /// Returns whether it converted. The caller then repaints the tab
+    /// strip once its borrow on the state has ended: the conversion's own
+    /// save-point notification arrives while the borrow is held, where
+    /// every backend declines it.
+    #[must_use = "true means the tab may have become unsaved: repaint the tab strip"]
+    pub fn convert_active_eol<U: UiPlatform>(
+        &mut self,
+        ui: &mut U,
+        to: codepp_core::Ending,
+    ) -> bool {
+        let Some(idx) = self.active_tab else {
+            return false;
+        };
+        let Some(tab) = self.tabs.get(idx) else {
+            return false;
+        };
+        if self.first_load(tab).is_some() {
+            tracing::debug!(
+                buffer_id = tab.id,
+                "EOL conversion asked for a tab whose file is still loading; nothing changed"
+            );
+            return false;
+        }
+        let id = tab.id as isize;
+        if !self.set_buffer_eol_by_id(ui, id, to.into()) {
+            return false;
+        }
+        let tab = &self.tabs[idx];
+        ui.update_status(tab.lang, &tab.encoding, tab.eol, tab.byte_len);
+        true
+    }
+
     /// Convert the line endings of `idx`'s shadow `Tab::text` — the
     /// content a not-yet-materialised (or stale, see `doc_needs_text`)
     /// tab will be filled from — and, when that changed anything, mark
@@ -14557,6 +14638,247 @@ mod tests {
         }
         assert_eq!(shell.tabs[0].eol, codepp_core::Eol::CrLf);
         assert_eq!(ui.converted_docs.len(), 2);
+    }
+
+    /// Open `text` as a file and let it land, so the tab in front has a
+    /// document holding it: what Edit → EOL Conversion acts on.
+    fn shell_with_a_loaded_file(text: &str) -> (Shell, FakeUi, tempfile::TempDir) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("eol.txt");
+        std::fs::write(&path, text).unwrap();
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+        shell.open_file(path);
+        drain_until(
+            &mut shell,
+            &mut ui,
+            |u, _| !u.set_text_calls.is_empty(),
+            Duration::from_secs(2),
+        );
+        assert_ne!(shell.tabs[0].scintilla_doc, 0, "the file has landed");
+        (shell, ui, dir)
+    }
+
+    #[test]
+    fn the_eol_conversion_rows_are_notepad_plus_pluses() {
+        // Its `Notepad_plus.rc`: the labels, in this order. Every backend
+        // builds its submenu from this table.
+        use codepp_core::Ending;
+        assert_eq!(
+            EOL_CONVERSION_ROWS,
+            [
+                ("Windows (CR LF)", Ending::CrLf),
+                ("Unix (LF)", Ending::Lf),
+                ("Macintosh (CR)", Ending::Cr),
+            ]
+        );
+    }
+
+    #[test]
+    fn the_eol_conversion_menu_converts_the_tab_in_front() {
+        use codepp_core::{Ending, Eol};
+        let (mut shell, mut ui, _dir) = shell_with_a_loaded_file("one\ntwo\n");
+        let doc = shell.tabs[0].scintilla_doc;
+        assert_eq!(shell.tabs[0].eol, Eol::Lf);
+        assert!(!shell.tabs[0].dirty, "precondition: clean");
+
+        // The buffer's own kind still converts, as Notepad++'s command
+        // does; a uniform buffer is left as it was, and clean.
+        assert!(shell.convert_active_eol(&mut ui, Ending::Lf));
+        assert_eq!(ui.converted_docs, vec![(doc, Eol::Lf)]);
+        assert_eq!(ui.get_buffer_text(), "one\ntwo\n");
+        assert!(!shell.tabs[0].dirty, "nothing changed, so nothing to save");
+
+        for (to, text) in [
+            (Ending::CrLf, "one\r\ntwo\r\n"),
+            (Ending::Cr, "one\rtwo\r"),
+            (Ending::Lf, "one\ntwo\n"),
+        ] {
+            let status_before = ui.status_calls.len();
+            assert!(shell.convert_active_eol(&mut ui, to));
+            assert_eq!(shell.tabs[0].eol, Eol::from(to));
+            assert_eq!(ui.converted_docs.last(), Some(&(doc, Eol::from(to))));
+            assert_eq!(ui.get_buffer_text(), text, "the bytes a save writes");
+            assert_eq!(
+                ui.status_calls.len(),
+                status_before + 1,
+                "the status bar is repainted"
+            );
+            assert_eq!(
+                ui.status_calls.last().unwrap().2,
+                Eol::from(to).label(),
+                "with the new kind"
+            );
+        }
+        assert!(
+            shell.tabs[0].dirty,
+            "a conversion leaves the buffer unsaved until it is saved"
+        );
+    }
+
+    #[test]
+    fn the_eol_conversion_menu_makes_a_mixed_buffer_uniform() {
+        use codepp_core::{Ending, Eol};
+        let (mut shell, mut ui, _dir) = shell_with_a_loaded_file("a\r\nb\nc\rd\n");
+        assert_eq!(shell.tabs[0].eol, Eol::Mixed(Ending::CrLf));
+        // Its first ending's row is offered, unlike Notepad++'s, since
+        // converting to it is what makes the file uniform.
+        assert!(shell.eol_conversion_offered(Ending::CrLf));
+        assert!(shell.convert_active_eol(&mut ui, Ending::CrLf));
+        assert_eq!(shell.tabs[0].eol, Eol::CrLf);
+        assert_eq!(ui.get_buffer_text(), "a\r\nb\r\nc\r\nd\r\n");
+        assert!(!shell.eol_conversion_offered(Ending::CrLf));
+    }
+
+    #[test]
+    fn the_eol_conversion_menu_greys_the_kind_the_buffer_has() {
+        use codepp_core::{Ending, Eol};
+        let all = [Ending::Lf, Ending::CrLf, Ending::Cr];
+        let mut shell = shell_with_synthetic_tabs(1, Some(0));
+        for eol in [Eol::Lf, Eol::CrLf, Eol::Cr] {
+            shell.tabs[0].eol = eol;
+            for to in all {
+                assert_eq!(
+                    shell.eol_conversion_offered(to),
+                    Eol::from(to) != eol,
+                    "{to:?} offered for a {eol:?} buffer",
+                );
+            }
+        }
+        for first in all {
+            shell.tabs[0].eol = Eol::Mixed(first);
+            for to in all {
+                assert!(
+                    shell.eol_conversion_offered(to),
+                    "{to:?} offered for a buffer mixed {first:?} first",
+                );
+            }
+        }
+        // Nothing with no tab in front, and nothing converted.
+        shell.active_tab = None;
+        let mut ui = FakeUi::default();
+        for to in all {
+            assert!(!shell.eol_conversion_offered(to));
+            assert!(!shell.convert_active_eol(&mut ui, to));
+        }
+        assert!(ui.converted_docs.is_empty());
+        assert!(ui.status_calls.is_empty());
+    }
+
+    #[test]
+    fn the_eol_conversion_menu_does_nothing_while_the_file_loads() {
+        // A tab waiting on its first load has nothing of the file to
+        // convert, and the landing sets its line ending from the file.
+        use codepp_core::{Ending, Eol};
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("loading.txt");
+        std::fs::write(&path, "a\nb\n").unwrap();
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+        shell.open_file(path);
+        let idx = shell.active_tab.expect("the open put its tab in front");
+        assert!(
+            shell.first_load(&shell.tabs[idx]).is_some(),
+            "precondition: nothing drained, so the first load is in flight"
+        );
+        let before = shell.tabs[idx].eol;
+        for to in [Ending::Lf, Ending::CrLf, Ending::Cr] {
+            assert!(!shell.eol_conversion_offered(to));
+            assert!(!shell.convert_active_eol(&mut ui, to));
+        }
+        assert_eq!(shell.tabs[idx].eol, before);
+        assert!(ui.converted_docs.is_empty());
+
+        drain_until(
+            &mut shell,
+            &mut ui,
+            |u, _| !u.set_text_calls.is_empty(),
+            Duration::from_secs(2),
+        );
+        assert_eq!(shell.tabs[idx].eol, Eol::Lf);
+        assert!(shell.eol_conversion_offered(Ending::CrLf));
+        assert!(!shell.eol_conversion_offered(Ending::Lf));
+    }
+
+    #[test]
+    fn the_eol_conversion_menu_converts_a_tab_whose_document_is_not_made_yet() {
+        // A tab in front with no document yet, its content in `Tab::text`
+        // (a plugin's switch onto a background tab without a rebind): the
+        // text is converted and marked unsaved, and the status bar shows
+        // the new kind.
+        use codepp_core::{Ending, Eol};
+        let mut shell = shell_with_synthetic_tabs(1, Some(0));
+        shell.tabs[0].text = "a\nb\n".to_string();
+        shell.tabs[0].eol = Eol::Lf;
+        assert_eq!(shell.tabs[0].scintilla_doc, 0, "precondition: no document");
+        let mut ui = FakeUi::default();
+        assert!(shell.convert_active_eol(&mut ui, Ending::CrLf));
+        assert_eq!(shell.tabs[0].text, "a\r\nb\r\n");
+        assert_eq!(shell.tabs[0].eol, Eol::CrLf);
+        assert!(shell.tabs[0].shadow_unsaved && shell.tabs[0].dirty);
+        assert!(ui.converted_docs.is_empty(), "no document to convert");
+        assert_eq!(ui.status_calls.last().unwrap().2, Eol::CrLf.label());
+    }
+
+    #[test]
+    fn a_plugins_eol_conversion_command_on_a_loading_tab_yields_to_the_file() {
+        // Unlike the menu, a plugin's command reaches a tab still on its
+        // first load, through NPPM_SETBUFFERFORMAT's path. It sets the
+        // label, and the landing then replaces it with the file's.
+        use codepp_core::Eol;
+        use codepp_plugin_host::dispatch::NPPM_MENUCOMMAND;
+        use codepp_plugin_host::idm::IDM_FORMAT_TOMAC;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("loading.txt");
+        std::fs::write(&path, "a\r\nb\r\n").unwrap();
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+        shell.open_file(path);
+        let idx = shell.active_tab.expect("the open put its tab in front");
+        assert!(shell.first_load(&shell.tabs[idx]).is_some(), "precondition");
+        let r = plugin_call(
+            &mut shell,
+            &mut ui,
+            NPPM_MENUCOMMAND,
+            0,
+            IDM_FORMAT_TOMAC as isize,
+        );
+        assert_eq!(r, 1);
+        assert_eq!(shell.tabs[idx].eol, Eol::Cr, "the label is set");
+        drain_until(
+            &mut shell,
+            &mut ui,
+            |u, _| !u.set_text_calls.is_empty(),
+            Duration::from_secs(2),
+        );
+        assert_eq!(shell.tabs[idx].eol, Eol::CrLf, "the file's kind wins");
+        assert_eq!(ui.get_buffer_text(), "a\r\nb\r\n");
+    }
+
+    #[test]
+    fn an_eol_conversion_menu_command_converts_the_buffer_in_front() {
+        // A plugin's NPPM_MENUCOMMAND with Notepad++'s IDM_FORMAT_TOUNIX
+        // and its siblings, through the real dispatcher.
+        use codepp_core::Eol;
+        use codepp_plugin_host::dispatch::NPPM_MENUCOMMAND;
+        use codepp_plugin_host::idm::{IDM_FORMAT_TODOS, IDM_FORMAT_TOMAC, IDM_FORMAT_TOUNIX};
+        let (mut shell, mut ui, _dir) = shell_with_a_loaded_file("a\r\nb\r\n");
+        let doc = shell.tabs[0].scintilla_doc;
+        for (cmd, eol, text) in [
+            (IDM_FORMAT_TOUNIX, Eol::Lf, "a\nb\n"),
+            (IDM_FORMAT_TOMAC, Eol::Cr, "a\rb\r"),
+            (IDM_FORMAT_TODOS, Eol::CrLf, "a\r\nb\r\n"),
+        ] {
+            let r = plugin_call(&mut shell, &mut ui, NPPM_MENUCOMMAND, 0, cmd as isize);
+            assert_eq!(r, 1);
+            assert_eq!(shell.tabs[0].eol, eol);
+            assert_eq!(ui.converted_docs.last(), Some(&(doc, eol)));
+            assert_eq!(ui.get_buffer_text(), text);
+            assert_eq!(ui.status_calls.last().unwrap().2, eol.label());
+        }
     }
 
     #[test]

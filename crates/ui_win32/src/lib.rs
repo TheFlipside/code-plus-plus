@@ -117,7 +117,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
-use codepp_core::{Encoding, Eol, LangType, WindowGeometry};
+use codepp_core::{Encoding, Ending, Eol, LangType, WindowGeometry};
 use codepp_editor::{sc_eol_mode, EditorHandle};
 // Style helpers that used to live in this file. They moved to
 // `editor` with the lexer theme table (see `codepp_editor::theme`)
@@ -181,7 +181,7 @@ use codepp_shell::{
     close_multi_enabled, pick_next_close_target, sanitize_filename_for_display,
     sanitize_path_for_display, sanitize_str_for_display, tab_display_name, CloseMultiKind,
     HostHandles, OpenFileOutcome, PendingDialog, SearchFlags, SessionRestoreEntry, Shell, Tab,
-    UiPlatform, MAX_SESSION_TABS,
+    UiPlatform, EOL_CONVERSION_ROWS, MAX_SESSION_TABS,
 };
 use windows::core::{w, Result, HSTRING, PCWSTR, PWSTR};
 use windows::Win32::Foundation::{
@@ -461,6 +461,16 @@ const ID_EDIT_BEGIN_END_SELECT: u16 = 1107;
 /// press produces a rectangular selection via `SC_SEL_RECTANGLE`.
 /// While armed, the stream entry is greyed out.
 const ID_EDIT_BEGIN_END_SELECT_COLUMN: u16 = 1108;
+/// Edit → EOL Conversion → Windows (CR LF): convert the active tab's line
+/// endings to CRLF, through `Shell::convert_active_eol`. The row for the
+/// kind the buffer already has is greyed on every open, by
+/// [`refresh_eol_conversion_menu`]. A plugin reaches the same conversion
+/// with Notepad++'s `IDM_FORMAT_TODOS`, which the dispatcher runs itself.
+const ID_EDIT_EOL_WINDOWS: u16 = 1109;
+/// Edit → EOL Conversion → Unix (LF).
+const ID_EDIT_EOL_UNIX: u16 = 1110;
+/// Edit → EOL Conversion → Macintosh (CR).
+const ID_EDIT_EOL_MAC: u16 = 1111;
 
 // Search (1200-1299) — disabled stubs until Phase 4 m3 wires
 // Find/Replace dialogs.
@@ -1495,6 +1505,10 @@ struct WindowState {
     /// drive Begin/End Select's check + grey state — see
     /// [`refresh_edit_menu`].
     edit_menu: HMENU,
+    /// Edit → EOL Conversion's submenu HMENU, so `WM_INITMENUPOPUP` can
+    /// grey its rows when it opens as well as when the Edit menu does —
+    /// see [`refresh_eol_conversion_menu`].
+    eol_menu: HMENU,
     view_menu: HMENU,
     encoding_menu: HMENU,
     language_menu: HMENU,
@@ -5889,6 +5903,9 @@ struct BuiltMenuBar {
     /// the Begin/End Select entries' check + grey state via
     /// [`refresh_edit_menu`].
     edit_menu: HMENU,
+    /// Edit → EOL Conversion's submenu; see
+    /// [`refresh_eol_conversion_menu`].
+    eol_menu: HMENU,
     view_menu: HMENU,
     encoding_menu: HMENU,
     language_menu: HMENU,
@@ -6216,6 +6233,22 @@ fn build_main_menu() -> windows::core::Result<BuiltMenuBar> {
             MF_STRING,
             ID_EDIT_BEGIN_END_SELECT_COLUMN as usize,
             w!("Begin/End Select in Column &Mode\tAlt+Shift+B"),
+        )?;
+        // EOL Conversion, with the shell's rows. Notepad++ puts it after a
+        // separator below the selection commands, among submenus Code++
+        // does not have yet (read from its `Notepad_plus.rc`).
+        AppendMenuW(edit_menu, MF_SEPARATOR, 0, PCWSTR::null())?;
+        let eol_menu = CreatePopupMenu()?;
+        for (id, (label, _)) in EOL_CONVERSION_IDS.into_iter().zip(EOL_CONVERSION_ROWS) {
+            // `AppendMenuW` copies the label before it returns.
+            let label = wide_terminated(label);
+            AppendMenuW(eol_menu, MF_STRING, usize::from(id), PCWSTR(label.as_ptr()))?;
+        }
+        AppendMenuW(
+            edit_menu,
+            MF_POPUP,
+            eol_menu.0 as usize,
+            w!("&EOL Conversion"),
         )?;
         AppendMenuW(bar, MF_POPUP, edit_menu.0 as usize, w!("&Edit"))?;
 
@@ -6557,6 +6590,7 @@ fn build_main_menu() -> windows::core::Result<BuiltMenuBar> {
             plugin_menu,
             file_menu,
             edit_menu,
+            eol_menu,
             view_menu,
             encoding_menu,
             language_menu,
@@ -6613,6 +6647,45 @@ unsafe fn refresh_edit_menu(edit_menu: HMENU, mode: SelectMarkMode) {
         SelectMarkMode::Column { .. } => {
             enable(ID_EDIT_BEGIN_END_SELECT, false);
             enable(ID_EDIT_BEGIN_END_SELECT_COLUMN, true);
+        }
+    }
+}
+
+/// Edit → EOL Conversion's command ids, in the order of the shell's
+/// rows ([`EOL_CONVERSION_ROWS`]), which give each its label and the kind
+/// it converts to.
+const EOL_CONVERSION_IDS: [u16; 3] = [ID_EDIT_EOL_WINDOWS, ID_EDIT_EOL_UNIX, ID_EDIT_EOL_MAC];
+
+/// The kind the EOL Conversion row with command `id` converts to, or
+/// `None` for an id no row has.
+fn eol_conversion_target(id: u16) -> Option<Ending> {
+    EOL_CONVERSION_IDS
+        .into_iter()
+        .zip(EOL_CONVERSION_ROWS)
+        .find(|&(row, _)| row == id)
+        .map(|(_, (_, ending))| ending)
+}
+
+/// Grey the EOL Conversion rows `shell` does not offer for the tab in
+/// front ([`Shell::eol_conversion_offered`]): the row for the kind the
+/// buffer already has, as Notepad++ greys it, or every row while the tab's
+/// file is still loading. Called whenever the Edit menu or the submenu
+/// opens. `MF_BYCOMMAND` finds the rows from either handle, since it
+/// searches submenus.
+///
+/// A greyed row cannot be clicked, but a posted `WM_COMMAND` still runs
+/// its conversion, as in Notepad++.
+///
+/// # Safety
+///
+/// `menu` must be a live HMENU holding the rows (the Edit menu or the
+/// submenu from `build_main_menu`); caller runs on the UI thread.
+unsafe fn refresh_eol_conversion_menu(menu: HMENU, shell: &Shell) {
+    for (id, (_, ending)) in EOL_CONVERSION_IDS.into_iter().zip(EOL_CONVERSION_ROWS) {
+        let on = shell.eol_conversion_offered(ending);
+        let flags = MENU_ITEM_FLAGS(MF_BYCOMMAND.0 | if on { MF_ENABLED.0 } else { MF_GRAYED.0 });
+        unsafe {
+            let _ = EnableMenuItem(menu, u32::from(id), flags);
         }
     }
 }
@@ -18422,6 +18495,7 @@ pub fn run(initial_path: Option<PathBuf>, perf: codepp_core::perf::Perf) -> Resu
             file_menu: menus.file_menu,
             file_menu_recent_count: 0,
             edit_menu: menus.edit_menu,
+            eol_menu: menus.eol_menu,
             view_menu: menus.view_menu,
             encoding_menu: menus.encoding_menu,
             language_menu: menus.language_menu,
@@ -27152,6 +27226,36 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                             state.editor.send(SCI_SETZOOM, 0, 0);
                         }
                     }
+                    // Edit → EOL Conversion. The shell converts the
+                    // active tab's bytes and repaints the status bar. The
+                    // guard is armed across the whole conversion, not only
+                    // around the `SCI_CONVERTEOLS` `convert_doc_eols`
+                    // guards: the dirty read after it may swap documents,
+                    // and any notification sent back into this window
+                    // procedure while the split below is held must be
+                    // declined rather than handed a second
+                    // `&mut WindowState`. So the conversion's
+                    // `SCN_SAVEPOINTLEFT` is declined, and the tab's glyph
+                    // is repainted here from the cached bit the shell
+                    // re-read. `state_from_hwnd` answered, so no guard is
+                    // armed yet.
+                    ID_EDIT_EOL_WINDOWS | ID_EDIT_EOL_UNIX | ID_EDIT_EOL_MAC => {
+                        let converted =
+                            match (eol_conversion_target(cmd_u16), state_from_hwnd(hwnd)) {
+                                (Some(ending), Some(state)) => {
+                                    let _call_guard = PluginCallGuard::enter();
+                                    let tab_hwnd = state.tab_hwnd;
+                                    let (shell, mut ui) = state.split();
+                                    shell
+                                        .convert_active_eol(&mut ui, ending)
+                                        .then_some((tab_hwnd, shell.active_tab))
+                                }
+                                _ => None,
+                            };
+                        if let Some((tab_hwnd, Some(idx))) = converted {
+                            invalidate_tab(tab_hwnd, idx);
+                        }
+                    }
                     // Encoding menu (m5): "Convert to ..." items.
                     // Code++'s Scintilla view always holds UTF-8
                     // internally — the conversion is purely a
@@ -27619,6 +27723,11 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                         refresh_file_menu(state.file_menu, &state.shell);
                     } else if popup_hmenu_value == state.edit_menu.0 as usize {
                         refresh_edit_menu(state.edit_menu, state.select_mark);
+                        refresh_eol_conversion_menu(state.edit_menu, &state.shell);
+                    } else if popup_hmenu_value == state.eol_menu.0 as usize {
+                        // Again as the submenu opens: a load landing while
+                        // the Edit menu is up can change the tab's kind.
+                        refresh_eol_conversion_menu(state.eol_menu, &state.shell);
                     } else if popup_hmenu_value == state.view_menu.0 as usize {
                         refresh_view_menu(
                             state.view_menu,
@@ -35709,5 +35818,225 @@ mod copy_tests {
         assert_eq!(selected_text(editor), "hi\r\nb\r\n");
         editor.send(SCI_SETSEL, 1, 2);
         assert_eq!(selected_text(editor), "b");
+    }
+}
+
+/// Edit → EOL Conversion against the real menu `build_main_menu` makes:
+/// where it sits, Notepad++'s labels on the rows, the command each row
+/// sends, and which rows [`refresh_eol_conversion_menu`] greys.
+#[cfg(test)]
+mod eol_conversion_menu_tests {
+    use super::*;
+    use windows::Win32::UI::WindowsAndMessaging::{GetMenuState, GetMenuStringW};
+
+    /// The text of the item at `pos` in `menu`.
+    fn label_at(menu: HMENU, pos: u32) -> String {
+        let mut buf = [0u16; 128];
+        // SAFETY: `menu` is a live menu this test built; `buf` outlives the call.
+        let len = unsafe { GetMenuStringW(menu, pos, Some(&mut buf), MF_BYPOSITION) };
+        String::from_utf16_lossy(&buf[..usize::try_from(len).unwrap_or(0)])
+    }
+
+    #[test]
+    fn the_edit_menu_ends_in_notepad_plus_pluses_eol_conversion_submenu() {
+        let menus = build_main_menu().expect("the menu builds");
+        // SAFETY: every handle below comes from the menu just built, which
+        // is destroyed only at the end of the test.
+        unsafe {
+            let count = GetMenuItemCount(Some(menus.edit_menu));
+            let last = count - 1;
+            assert_eq!(label_at(menus.edit_menu, last as u32), "&EOL Conversion");
+            assert_eq!(GetSubMenu(menus.edit_menu, last), menus.eol_menu);
+            assert!(
+                label_at(menus.edit_menu, (last - 1) as u32).is_empty(),
+                "a separator above it, as in Notepad++"
+            );
+            assert_eq!(GetMenuItemCount(Some(menus.eol_menu)), 3);
+            for (pos, (label, id)) in [
+                ("Windows (CR LF)", ID_EDIT_EOL_WINDOWS),
+                ("Unix (LF)", ID_EDIT_EOL_UNIX),
+                ("Macintosh (CR)", ID_EDIT_EOL_MAC),
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                // Notepad++'s labels, in its order.
+                let pos = i32::try_from(pos).unwrap();
+                assert_eq!(label_at(menus.eol_menu, pos as u32), label);
+                assert_eq!(GetMenuItemID(menus.eol_menu, pos), u32::from(id));
+            }
+            let _ = DestroyMenu(menus.bar);
+        }
+        // Each row converts to the kind its label names, and an id no row
+        // has converts nothing.
+        assert_eq!(
+            eol_conversion_target(ID_EDIT_EOL_WINDOWS),
+            Some(Ending::CrLf)
+        );
+        assert_eq!(eol_conversion_target(ID_EDIT_EOL_UNIX), Some(Ending::Lf));
+        assert_eq!(eol_conversion_target(ID_EDIT_EOL_MAC), Some(Ending::Cr));
+        assert_eq!(eol_conversion_target(ID_EDIT_SELECTALL), None);
+    }
+
+    #[test]
+    fn the_row_for_the_kind_the_buffer_has_is_greyed() {
+        let menus = build_main_menu().expect("the menu builds");
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        shell.tabs = vec![codepp_shell::Tab {
+            id: 1,
+            path: Some(std::path::PathBuf::from("C:/eol.txt")),
+            ..codepp_shell::Tab::default()
+        }];
+        shell.active_tab = Some(0);
+        let greyed = |menu: HMENU, id: u16| {
+            // SAFETY: `menu` is live until the end of the test.
+            let state = unsafe { GetMenuState(menu, u32::from(id), MF_BYCOMMAND) };
+            assert_ne!(state, u32::MAX, "row {id} is in the menu");
+            state & MF_GRAYED.0 != 0
+        };
+        let ids = [ID_EDIT_EOL_WINDOWS, ID_EDIT_EOL_UNIX, ID_EDIT_EOL_MAC];
+        for (eol, greyed_row) in [
+            (Eol::CrLf, Some(ID_EDIT_EOL_WINDOWS)),
+            (Eol::Lf, Some(ID_EDIT_EOL_UNIX)),
+            (Eol::Cr, Some(ID_EDIT_EOL_MAC)),
+            (Eol::Mixed(Ending::CrLf), None),
+        ] {
+            shell.tabs[0].eol = eol;
+            // From the Edit menu's handle, as when the Edit menu opens:
+            // `MF_BYCOMMAND` reaches the rows in its submenu.
+            // SAFETY: the menus are live; this is the test's own thread.
+            unsafe { refresh_eol_conversion_menu(menus.edit_menu, &shell) };
+            for id in ids {
+                assert_eq!(
+                    greyed(menus.eol_menu, id),
+                    greyed_row == Some(id),
+                    "row {id} for a {eol:?} buffer"
+                );
+            }
+        }
+        // Nothing with no tab in front.
+        shell.active_tab = None;
+        // SAFETY: as above.
+        unsafe { refresh_eol_conversion_menu(menus.eol_menu, &shell) };
+        assert!(ids.iter().all(|&id| greyed(menus.eol_menu, id)));
+        // SAFETY: the bar owns every submenu; nothing uses them after this.
+        unsafe {
+            let _ = DestroyMenu(menus.bar);
+        }
+    }
+}
+
+/// Source-level guards for Edit → EOL Conversion's wiring in
+/// `main_wnd_proc`, which a runtime test cannot reach without a window:
+/// the rows are greyed whenever the Edit menu or the submenu opens, and a
+/// row converts through the shell and repaints the tab after. Each compiles
+/// wrong as readily as right; the posted-command runs are the behavioural
+/// check (DESIGN.md §7.4).
+#[cfg(test)]
+mod eol_conversion_guards {
+    use super::plugin_reentry_guards::{block_after, code_without_strings, production_src};
+
+    /// `text` with every whitespace character removed.
+    fn squashed(text: &str) -> String {
+        text.chars().filter(|c| !c.is_whitespace()).collect()
+    }
+
+    /// The brace depth at which `needle` first occurs in `block`, which
+    /// opens with its own `{` (depth 1 is a statement of the block itself).
+    fn depth_at(block: &str, needle: &str) -> Option<usize> {
+        let at = block.find(needle)?;
+        let open = block[..at].matches('{').count();
+        let close = block[..at].matches('}').count();
+        Some(open - close)
+    }
+
+    #[test]
+    fn depth_at_tells_a_statement_from_a_nested_one() {
+        assert_eq!(depth_at("{a;{b;}c;}", "a;"), Some(1));
+        assert_eq!(depth_at("{a;{b;}c;}", "b;"), Some(2));
+        assert_eq!(depth_at("{a;{b;}c;}", "c;"), Some(1));
+        assert_eq!(depth_at("{a;}", "z;"), None);
+    }
+
+    /// The production source from `main_wnd_proc`'s signature on, with
+    /// comments and string literals removed.
+    fn from_main_wnd_proc() -> String {
+        let src = code_without_strings(production_src());
+        let start = src
+            .find("fn main_wnd_proc(")
+            .expect("main_wnd_proc is gone");
+        src[start..].to_string()
+    }
+
+    #[test]
+    fn the_rows_are_greyed_when_the_edit_menu_or_the_submenu_opens() {
+        let src = squashed(&from_main_wnd_proc());
+        assert!(
+            src.contains(
+                "ifpopup_hmenu_value==state.edit_menu.0asusize{\
+                 refresh_edit_menu(state.edit_menu,state.select_mark);\
+                 refresh_eol_conversion_menu(state.edit_menu,&state.shell);}"
+            ),
+            "the Edit menu's popup no longer greys the EOL Conversion rows"
+        );
+        assert!(
+            src.contains(
+                "elseifpopup_hmenu_value==state.eol_menu.0asusize{\
+                 refresh_eol_conversion_menu(state.eol_menu,&state.shell);}"
+            ),
+            "the submenu's own popup no longer greys its rows"
+        );
+    }
+
+    /// The order of the arm's steps: the guard is armed, then the shell
+    /// converts, then the tab is repainted. Not where the split's borrow
+    /// ends, which the arm's shape decides.
+    #[test]
+    fn a_row_converts_through_the_shell_and_repaints_its_tab() {
+        let src = from_main_wnd_proc();
+        let arm = squashed(&block_after(
+            &src,
+            "ID_EDIT_EOL_WINDOWS | ID_EDIT_EOL_UNIX | ID_EDIT_EOL_MAC => {",
+        ));
+        let guard = arm
+            .find("let_call_guard=PluginCallGuard::enter();")
+            .expect("the conversion no longer runs under PluginCallGuard");
+        let split = arm.find("state.split()").expect("the arm no longer splits");
+        assert!(guard < split, "the guard is armed after the split is taken");
+        // A statement of the block that takes the split, not of a nested
+        // block that ends, and drops the guard, before the conversion.
+        let converting = block_after(&arm, "(Some(ending),Some(state))=>{");
+        for statement in [
+            "let_call_guard=PluginCallGuard::enter();",
+            "let(shell,mutui)=state.split();",
+        ] {
+            assert_eq!(
+                depth_at(&converting, statement),
+                Some(1),
+                "`{statement}` is no longer a statement of the block that converts"
+            );
+        }
+        let convert = arm
+            .find(".convert_active_eol(&mutui,ending)")
+            .expect("a row no longer converts through Shell::convert_active_eol");
+        assert!(split < convert, "the conversion runs before the split");
+        let repaint = arm
+            .find("invalidate_tab(tab_hwnd,idx);")
+            .expect("a row no longer repaints its tab's glyph");
+        assert!(
+            convert < repaint,
+            "the tab is repainted before the conversion"
+        );
+        for by_hand in [
+            "convert_doc_eols",
+            "SCI_CONVERTEOLS",
+            "set_buffer_eol_by_id",
+        ] {
+            assert!(
+                !arm.contains(by_hand),
+                "a row converts by hand (`{by_hand}`), past the shell's refusals"
+            );
+        }
     }
 }

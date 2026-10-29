@@ -40,7 +40,9 @@ use crate::codepp_ext::{
 };
 use crate::ffi::{Hwnd, SCNotification};
 use crate::host::{is_plugin_cmd_id, PluginHost};
-use crate::idm::{IDM_LANG_USER, IDM_LANG_USER_LIMIT};
+use crate::idm::{
+    IDM_FORMAT_TODOS, IDM_FORMAT_TOMAC, IDM_FORMAT_TOUNIX, IDM_LANG_USER, IDM_LANG_USER_LIMIT,
+};
 
 /// `WM_USER` from `<winuser.h>`. Mirrored here so the dispatcher can
 /// be unit-tested without pulling the `windows` crate into a test
@@ -2289,11 +2291,18 @@ pub unsafe fn dispatch_nppm<S: HostServices>(
 
         NPPM_MENUCOMMAND => {
             // A User Defined Language's command switches the current
-            // buffer to it here, since only the shell knows the UDLs;
-            // every other command goes to the UI's menu.
+            // buffer to it here, since only the shell knows the UDLs, and
+            // an EOL Conversion command converts the current buffer as
+            // `NPPM_SETBUFFERFORMAT` would, on every backend. Every other
+            // command goes to the UI's menu.
             let cmd_id = lparam as i32;
             if let Some(index) = user_lang_menu_index(cmd_id) {
                 services.set_current_user_lang(index);
+            } else if let Some(format) = eol_conversion_format(cmd_id) {
+                // FALSE only with no current buffer, which the message
+                // cannot report: it answers TRUE whatever happens.
+                let id = services.current_buffer_id();
+                services.set_buffer_format(id, format);
             } else {
                 services.menu_command(cmd_id);
             }
@@ -3606,6 +3615,21 @@ fn user_lang_menu_index(cmd_id: i32) -> Option<usize> {
         usize::try_from(cmd_id - IDM_LANG_USER - 1).ok()
     } else {
         None
+    }
+}
+
+/// The `NPPM_SETBUFFERFORMAT` format an Edit → EOL Conversion command
+/// converts to: [`WIN_FORMAT`] for [`IDM_FORMAT_TODOS`], [`UNIX_FORMAT`]
+/// for [`IDM_FORMAT_TOUNIX`], [`MAC_FORMAT`] for [`IDM_FORMAT_TOMAC`], and
+/// `None` for any other command. Notepad++ converts the current buffer for
+/// these whatever its format already is (its `NppCommands.cpp`), and so
+/// does the conversion they reach here.
+const fn eol_conversion_format(cmd_id: i32) -> Option<i32> {
+    match cmd_id {
+        IDM_FORMAT_TODOS => Some(WIN_FORMAT),
+        IDM_FORMAT_TOUNIX => Some(UNIX_FORMAT),
+        IDM_FORMAT_TOMAC => Some(MAC_FORMAT),
+        _ => None,
     }
 }
 
@@ -5859,6 +5883,52 @@ mod tests {
             assert_eq!(r, Some(1));
         }
         assert_eq!(s.calls(), vec!["set_udl=1", "set_udl=8"]);
+    }
+
+    #[test]
+    fn an_eol_conversion_command_converts_the_current_buffer() {
+        // NPPM_MENUCOMMAND with Notepad++'s IDM_FORMAT_TODOS and its two
+        // siblings converts the current buffer, as NPPM_SETBUFFERFORMAT
+        // would, and never reaches the UI's menu. TRUE whatever happens,
+        // as for every NPPM_MENUCOMMAND.
+        let mut s = MockServices {
+            current_buffer: 7,
+            buffer_paths: vec![(7, PathBuf::from("C:/x.txt"))],
+            ..Default::default()
+        };
+        for cmd in [IDM_FORMAT_TODOS, IDM_FORMAT_TOUNIX, IDM_FORMAT_TOMAC] {
+            let r = unsafe { dispatch_nppm(&mut s, NPPM_MENUCOMMAND, 0, cmd as isize) };
+            assert_eq!(r, Some(1));
+        }
+        assert_eq!(
+            s.calls(),
+            vec![
+                format!("set_format[7]={WIN_FORMAT}"),
+                format!("set_format[7]={UNIX_FORMAT}"),
+                format!("set_format[7]={MAC_FORMAT}"),
+            ]
+        );
+    }
+
+    #[test]
+    fn the_commands_around_the_eol_conversions_go_to_the_menu() {
+        // IDM_FORMAT itself and Encode in ANSI, either side of the three.
+        let mut s = MockServices {
+            current_buffer: 7,
+            buffer_paths: vec![(7, PathBuf::from("C:/x.txt"))],
+            ..Default::default()
+        };
+        for cmd in [IDM_FORMAT_TODOS - 1, IDM_FORMAT_TOMAC + 1] {
+            let r = unsafe { dispatch_nppm(&mut s, NPPM_MENUCOMMAND, 0, cmd as isize) };
+            assert_eq!(r, Some(1));
+        }
+        assert_eq!(
+            s.calls(),
+            vec![
+                format!("menu_cmd={}", IDM_FORMAT_TODOS - 1),
+                format!("menu_cmd={}", IDM_FORMAT_TOMAC + 1),
+            ]
+        );
     }
 
     #[test]

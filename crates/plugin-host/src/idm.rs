@@ -123,13 +123,21 @@ pub const IDM_VIEW_ZOOMRESTORE: i32 = IDM_VIEW + 33;
 /// off Print Now, for the reason given there.
 pub const IDM_VIEW_GOTO_ANOTHER_VIEW: i32 = 10_001;
 
-/// The Encoding menu. The commands below are its "Encode in" ones, which
-/// set the current buffer's encoding; the names mislead about the
-/// byte-order mark, so each says which. `ui_win32` maps them onto
-/// Code++'s own Encoding commands, which keep the text and change the
-/// encoding it is saved in; Code++ does not implement its ANSI command
-/// yet, so Encode in ANSI does nothing.
+/// The Encoding menu. The "Encode in" commands below set the current
+/// buffer's encoding; the names mislead about the byte-order mark, so each
+/// says which. `ui_win32` maps them onto Code++'s own Encoding commands,
+/// which keep the text and change the encoding it is saved in; Code++ does
+/// not implement its ANSI command yet, so Encode in ANSI does nothing.
 pub const IDM_FORMAT: i32 = IDM + 5000;
+/// Edit → EOL Conversion → Windows (CR LF): convert the current buffer's
+/// line endings to CRLF. Notepad++ numbers its EOL Conversion commands in
+/// its Encoding section. The dispatcher runs all three itself, on every
+/// backend, as `NPPM_SETBUFFERFORMAT` on the current buffer.
+pub const IDM_FORMAT_TODOS: i32 = IDM_FORMAT + 1;
+/// Edit → EOL Conversion → Unix (LF).
+pub const IDM_FORMAT_TOUNIX: i32 = IDM_FORMAT + 2;
+/// Edit → EOL Conversion → Macintosh (CR).
+pub const IDM_FORMAT_TOMAC: i32 = IDM_FORMAT + 3;
 /// Encode in ANSI.
 pub const IDM_FORMAT_ANSI: i32 = IDM_FORMAT + 4;
 /// Encode in UTF-8 *with* the byte-order mark, despite the name.
@@ -231,6 +239,9 @@ mod tests {
             10_001,
         ),
         ("IDM_FORMAT", IDM_FORMAT, 45_000),
+        ("IDM_FORMAT_TODOS", IDM_FORMAT_TODOS, 45_001),
+        ("IDM_FORMAT_TOUNIX", IDM_FORMAT_TOUNIX, 45_002),
+        ("IDM_FORMAT_TOMAC", IDM_FORMAT_TOMAC, 45_003),
         ("IDM_FORMAT_ANSI", IDM_FORMAT_ANSI, 45_004),
         ("IDM_FORMAT_UTF_8", IDM_FORMAT_UTF_8, 45_005),
         ("IDM_FORMAT_UTF_16BE", IDM_FORMAT_UTF_16BE, 45_006),

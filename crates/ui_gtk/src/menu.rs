@@ -1368,7 +1368,129 @@ fn build_edit_menu(bar: &gtk::MenuBar, accel: &gtk::AccelGroup) {
     menu.append(&begin_end_column);
     BEGIN_END_SELECT_ITEM.with(|c| *c.borrow_mut() = Some(begin_end));
     BEGIN_END_SELECT_COLUMN_ITEM.with(|c| *c.borrow_mut() = Some(begin_end_column));
+    // After a separator below the selection commands, where Notepad++ puts
+    // it among submenus Code++ does not have yet.
+    menu.append(&gtk::SeparatorMenuItem::new());
+    menu.append(&build_eol_conversion_submenu());
     menu.show_all();
+}
+
+/// Edit → EOL Conversion, its rows from
+/// [`codepp_shell::EOL_CONVERSION_ROWS`]. Each row converts the active tab
+/// through [`convert_active_eol`]. The rows are made sensitive afresh each
+/// time the submenu shows, from [`codepp_shell::Shell::eol_conversion_offered`]:
+/// the row for the kind the buffer already has is greyed, as in
+/// Notepad++, and every row while the tab's file is still loading. A
+/// declined state read greys them all until the next show, which errs
+/// towards doing nothing.
+fn build_eol_conversion_submenu() -> gtk::MenuItem {
+    let sub = gtk::Menu::new();
+    let mut rows = Vec::with_capacity(codepp_shell::EOL_CONVERSION_ROWS.len());
+    for (label, ending) in codepp_shell::EOL_CONVERSION_ROWS {
+        // Plain labels, not mnemonics, as Notepad++'s carry none.
+        let item = gtk::MenuItem::with_label(label);
+        item.connect_activate(move |_| {
+            crate::at_callback_boundary("menu:eol_conversion:activate", (), || {
+                convert_active_eol(ending);
+            });
+        });
+        sub.append(&item);
+        rows.push((ending, item));
+    }
+    sub.connect_show(move |_| {
+        crate::at_callback_boundary("menu:eol_conversion:show", (), || {
+            for (ending, item) in &rows {
+                let offered =
+                    with_state(|st| st.shell.eol_conversion_offered(*ending)).unwrap_or(false);
+                item.set_sensitive(offered);
+            }
+        });
+    });
+    let parent = gtk::MenuItem::with_mnemonic("_EOL Conversion");
+    parent.set_submenu(Some(&sub));
+    parent
+}
+
+/// Convert the active tab's line endings to `ending`, from Edit → EOL
+/// Conversion ([`codepp_shell::Shell::convert_active_eol`], which also
+/// repaints the status bar). The tab strip is repainted once the borrow
+/// has ended: the conversion's own `SCN_SAVEPOINTLEFT` arrives from inside
+/// the edit, while the borrow is held, where `with_state` declines it.
+fn convert_active_eol(ending: codepp_core::Ending) {
+    let converted = with_state(|st| {
+        let (shell, mut ui) = st.split();
+        shell.convert_active_eol(&mut ui, ending)
+    }) == Some(true);
+    if converted {
+        crate::refresh_tab_chrome();
+    }
+}
+
+/// Edit → EOL Conversion's wiring, which only a live run could see fail:
+/// the rows are greyed on every show from the shell, and a row converts
+/// through the shell and repaints the tab strip once the borrow has ended.
+/// A repaint moved into the borrow compiles, and the conversion's dirty
+/// marker then goes stale: the `sci-notify` it rests on is declined there.
+#[cfg(test)]
+mod eol_conversion_guard {
+    use crate::source_scan::{
+        block_after, code_only, fn_body, occurs_at_depth_one, strip_test_modules,
+    };
+
+    fn menu() -> String {
+        strip_test_modules(&code_only(include_str!("menu.rs")))
+    }
+
+    #[test]
+    fn a_row_converts_through_the_shell_and_repaints_after_the_borrow() {
+        let body = fn_body(&menu(), "convert_active_eol");
+        assert_eq!(
+            body.matches("with_state(").count(),
+            1,
+            "a row takes the state once, for the conversion"
+        );
+        let borrow = block_after(&body, "with_state(|st| {");
+        assert!(
+            borrow.contains(".convert_active_eol(&mut ui, ending)"),
+            "a row no longer converts through Shell::convert_active_eol"
+        );
+        for by_hand in [
+            "convert_doc_eols",
+            "set_buffer_eol_by_id",
+            "SCI_CONVERTEOLS",
+        ] {
+            assert!(
+                !body.contains(by_hand),
+                "a row converts by hand (`{by_hand}`)"
+            );
+        }
+        assert!(
+            !borrow.contains("refresh_tab_chrome"),
+            "the tab strip is repainted inside the borrow, where the dirty read is declined"
+        );
+        assert!(
+            occurs_at_depth_one(&body, "if converted {")
+                && occurs_at_depth_one(
+                    &block_after(&body, "if converted {"),
+                    "crate::refresh_tab_chrome();"
+                ),
+            "a conversion no longer repaints the tab strip once the borrow has ended"
+        );
+    }
+
+    #[test]
+    fn the_rows_are_greyed_from_the_shell_on_every_show() {
+        let body = fn_body(&menu(), "build_eol_conversion_submenu");
+        assert!(
+            body.contains("in codepp_shell::EOL_CONVERSION_ROWS {"),
+            "the rows no longer come from the shell's table"
+        );
+        let show = block_after(&body, "sub.connect_show(move |_| {");
+        assert!(
+            show.contains(".eol_conversion_offered(*ending)") && show.contains("set_sensitive("),
+            "the submenu no longer greys its rows from the shell when it shows"
+        );
+    }
 }
 
 /// Toggle Begin/End Select for the active view. `column = false` is

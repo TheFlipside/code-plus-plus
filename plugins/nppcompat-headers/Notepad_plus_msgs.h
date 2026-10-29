@@ -601,7 +601,10 @@ typedef struct CommunicationInfo_ {
 #endif
 /* v1: invoke the menu command identified by lParam (cmdID). A User
  *     Defined Language's command (see NPPM_GETNBUSERLANG) switches the
- *     current buffer to that language. */
+ *     current buffer to that language, and IDM_FORMAT_TODOS,
+ *     IDM_FORMAT_TOUNIX and IDM_FORMAT_TOMAC (Edit -> EOL Conversion)
+ *     convert its line endings as NPPM_SETBUFFERFORMAT does, whatever its
+ *     format already is, on every platform. */
 #define NPPM_MENUCOMMAND                  (NPPMSG + 48)
 /* v3: open the tab-bar context menu programmatically.
  *     wParam: view (0 = primary, 1 = secondary).
