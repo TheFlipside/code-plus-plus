@@ -118,7 +118,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use codepp_core::{Encoding, Eol, LangType, WindowGeometry};
-use codepp_editor::EditorHandle;
+use codepp_editor::{sc_eol_mode, EditorHandle};
 // Style helpers that used to live in this file. They moved to
 // `editor` with the lexer theme table (see `codepp_editor::theme`)
 // so the GTK backend can share them; imported by name here so the
@@ -169,14 +169,13 @@ use codepp_scintilla_sys::{
     SCI_VISIBLEFROMDOCLINE, SCI_ZOOMIN, SCI_ZOOMOUT, SCN_MODIFIED, SCN_PAINTED, SCN_SAVEPOINTLEFT,
     SCN_SAVEPOINTREACHED, SCN_STYLENEEDED, SCN_UPDATEUI, SC_AUTOMATICFOLD_CHANGE,
     SC_AUTOMATICFOLD_CLICK, SC_AUTOMATICFOLD_SHOW, SC_CP_UTF8, SC_DOCUMENTOPTION_DEFAULT,
-    SC_EFF_QUALITY_LCD_OPTIMIZED, SC_EFF_QUALITY_NON_ANTIALIASED, SC_EOL_CR, SC_EOL_CRLF,
-    SC_EOL_LF, SC_FOLDFLAG_LINEAFTER_CONTRACTED, SC_IV_LOOKBOTH, SC_IV_NONE, SC_MARGIN_SYMBOL,
-    SC_MARKNUM_FOLDER, SC_MARKNUM_FOLDEREND, SC_MARKNUM_FOLDERMIDTAIL, SC_MARKNUM_FOLDEROPEN,
-    SC_MARKNUM_FOLDEROPENMID, SC_MARKNUM_FOLDERSUB, SC_MARKNUM_FOLDERTAIL, SC_MARK_BOXMINUS,
-    SC_MARK_BOXMINUSCONNECTED, SC_MARK_BOXPLUS, SC_MARK_BOXPLUSCONNECTED, SC_MARK_LCORNER,
-    SC_MARK_TCORNER, SC_MARK_VLINE, SC_MASK_FOLDERS, SC_MOD_DELETETEXT, SC_MOD_INSERTTEXT,
-    SC_SEL_RECTANGLE, SC_SEL_STREAM, SC_UPDATE_CONTENT, SC_UPDATE_SELECTION, SC_UPDATE_V_SCROLL,
-    STYLE_DEFAULT,
+    SC_EFF_QUALITY_LCD_OPTIMIZED, SC_EFF_QUALITY_NON_ANTIALIASED, SC_FOLDFLAG_LINEAFTER_CONTRACTED,
+    SC_IV_LOOKBOTH, SC_IV_NONE, SC_MARGIN_SYMBOL, SC_MARKNUM_FOLDER, SC_MARKNUM_FOLDEREND,
+    SC_MARKNUM_FOLDERMIDTAIL, SC_MARKNUM_FOLDEROPEN, SC_MARKNUM_FOLDEROPENMID,
+    SC_MARKNUM_FOLDERSUB, SC_MARKNUM_FOLDERTAIL, SC_MARK_BOXMINUS, SC_MARK_BOXMINUSCONNECTED,
+    SC_MARK_BOXPLUS, SC_MARK_BOXPLUSCONNECTED, SC_MARK_LCORNER, SC_MARK_TCORNER, SC_MARK_VLINE,
+    SC_MASK_FOLDERS, SC_MOD_DELETETEXT, SC_MOD_INSERTTEXT, SC_SEL_RECTANGLE, SC_SEL_STREAM,
+    SC_UPDATE_CONTENT, SC_UPDATE_SELECTION, SC_UPDATE_V_SCROLL, STYLE_DEFAULT,
 };
 use codepp_shell::{
     close_multi_enabled, pick_next_close_target, sanitize_filename_for_display,
@@ -4204,10 +4203,10 @@ const FOLD_MARGIN: u32 = 2;
 /// Pixel width of [`FOLD_MARGIN`]. 14 px matches N++'s default.
 const FOLD_MARGIN_PX: i32 = 14;
 
-/// Map [`Eol`] to Scintilla's `SC_EOL_*` code and issue
-/// `SCI_SETEOLMODE` on the currently-bound document. Sets the
-/// byte sequence Scintilla inserts when the user presses Enter
-/// (and the target sequence for a subsequent `SCI_CONVERTEOLS`).
+/// Issue `SCI_SETEOLMODE` for [`Eol`] on the currently-bound
+/// document. Sets the byte sequence Scintilla inserts when the user
+/// presses Enter (and the target sequence for a subsequent
+/// `SCI_CONVERTEOLS`).
 ///
 /// **Per-document Scintilla state.** `SCI_SETEOLMODE` mutates
 /// `pdoc->eolMode`, so every fresh document minted via
@@ -4219,12 +4218,9 @@ const FOLD_MARGIN_PX: i32 = 14;
 /// [`run`] with [`codepp_shell::NEW_DOCUMENT_EOL`] for the initial
 /// implicit document.
 ///
-/// **`Eol::Mixed` maps to LF.** Scintilla has no "mixed" mode —
-/// the enum is a Code++-level bookkeeping construct for
-/// "preserve each line's original ending on re-write." When the
-/// user presses Enter in a Mixed buffer, LF is the least
-/// surprising choice and matches [`Eol::bytes`]'s own Mixed
-/// fall-through convention.
+/// **A mixed buffer inserts its file's first ending**, as Notepad++
+/// does: see [`codepp_editor::sc_eol_mode`], which every backend maps
+/// through.
 ///
 /// Without this call, Scintilla's built-in default of CRLF on
 /// Windows applies universally — pressing Enter in a pure-LF
@@ -4232,7 +4228,7 @@ const FOLD_MARGIN_PX: i32 = 14;
 /// otherwise LF file, breaking the EOL-preservation contract
 /// documented in DESIGN.md §5.2.
 fn apply_eol_mode(editor: &EditorHandle, eol: Eol) {
-    editor.send(SCI_SETEOLMODE, sc_eol_for(eol), 0);
+    editor.send(SCI_SETEOLMODE, sc_eol_mode(eol), 0);
 }
 
 /// Rewrite every line ending in the currently-bound document to
@@ -4248,23 +4244,9 @@ fn apply_eol_mode(editor: &EditorHandle, eol: Eol) {
 /// trait contract. The mode is set first so that a document with
 /// no endings to convert still ends up inserting the requested one.
 fn convert_eols(editor: &EditorHandle, eol: Eol) {
-    let sc_eol = sc_eol_for(eol);
+    let sc_eol = sc_eol_mode(eol);
     editor.send(SCI_SETEOLMODE, sc_eol, 0);
     editor.send(SCI_CONVERTEOLS, sc_eol, 0);
-}
-
-/// Map [`Eol`] to Scintilla's `SC_EOL_*` code. Shared by
-/// [`apply_eol_mode`] and [`convert_eols`] so the two cannot
-/// disagree on where `Mixed` lands.
-fn sc_eol_for(eol: Eol) -> usize {
-    match eol {
-        Eol::CrLf => SC_EOL_CRLF,
-        Eol::Cr => SC_EOL_CR,
-        // Mixed collapses to LF, matching `Eol::bytes()`'s own
-        // convention for "preserve on re-write, but if we must
-        // pick one here, use LF."
-        Eol::Lf | Eol::Mixed => SC_EOL_LF,
-    }
 }
 
 /// Set the visible TAB-character width to [`TAB_WIDTH_DEFAULT`]

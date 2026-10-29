@@ -1168,11 +1168,10 @@ pub trait HostServices {
 
     /// EOL format of the buffer with id `id`. Returns one of
     /// [`WIN_FORMAT`] / [`MAC_FORMAT`] / [`UNIX_FORMAT`], or `-1`
-    /// when `id` is unknown. Code++'s internal `Eol::Mixed` (a
-    /// per-line preservation mode N++ does not have) maps to
-    /// [`UNIX_FORMAT`] — the modern default and the one Code++'s
-    /// "Edit → EOL Conversion" picks if the user normalises a
-    /// mixed buffer.
+    /// when `id` is unknown. A buffer whose file ends its lines in
+    /// more than one way (Code++'s internal `Eol::Mixed`, which N++
+    /// does not have) answers the format of its first ending, as
+    /// Notepad++ does: the ending Enter inserts there.
     fn buffer_format(&self, id: isize) -> i32;
 
     /// Reload the buffer identified by `id` from disk, blowing away

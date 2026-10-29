@@ -780,9 +780,11 @@ pub trait UiPlatform {
     /// group, no save-point write), so an implementation is a plain
     /// send, not a `set_buffer_text`-style reinstall.
     ///
-    /// [`Eol::Mixed`] has no Scintilla equivalent and the shell refuses
-    /// it before reaching here; an implementation that receives it maps
-    /// it to LF like every other `SCI_SETEOLMODE` site does.
+    /// [`Eol::Mixed`] names no single ending to convert to, and the shell
+    /// refuses it before reaching here; an implementation that receives
+    /// one converts to its first ending, through
+    /// `codepp_editor::sc_eol_mode` like every other `SCI_SETEOLMODE`
+    /// site.
     ///
     /// Returns `false` when `doc` is zero, so the caller can tell
     /// "nothing was converted" from "converted, changing nothing".
@@ -7590,9 +7592,10 @@ impl Shell {
     /// detected value, as it did before this method converted anything.
     ///
     /// Returns `false` for an unknown id, and for [`Eol::Mixed`]: that
-    /// variant means "keep each line's own ending", so there is no
-    /// sequence to convert to, and the plugin ABI cannot ask for it
-    /// (`NPPM_SETBUFFERFORMAT` maps only WIN/MAC/UNIX).
+    /// variant describes a file that ends its lines in more than one
+    /// way, so there is no single sequence to convert to, and the plugin
+    /// ABI cannot ask for it (`NPPM_SETBUFFERFORMAT` maps only
+    /// WIN/MAC/UNIX).
     ///
     /// Refreshing the chrome is the caller's job — the plugin bridge
     /// refreshes the status bar for the active tab, the same way
@@ -7605,7 +7608,7 @@ impl Shell {
         id: isize,
         eol: codepp_core::Eol,
     ) -> bool {
-        if eol == codepp_core::Eol::Mixed {
+        if eol.is_mixed() {
             return false;
         }
         let Some(idx) = self.tabs.iter().position(|t| t.id as isize == id) else {
@@ -10939,18 +10942,18 @@ impl<U: UiPlatform> HostServices for HostBridge<'_, U> {
     }
 
     fn buffer_format(&self, id: isize) -> i32 {
-        // Map Code++'s internal `Eol` to N++'s `EolType`. `Mixed` is
-        // unique to Code++ (per-line preservation when a file's EOL
-        // is inconsistent); we report `UNIX_FORMAT` since LF is the
-        // modern default and matches what "Edit → EOL Conversion"
-        // would normalise a mixed file to.
+        // Map Code++'s internal `Eol` to N++'s `EolType`. A buffer whose
+        // file ends its lines in more than one way (`Eol::Mixed`, which
+        // Notepad++ does not have) answers its first ending, the format
+        // Notepad++ 8.9.8.1 gives such a file (measured with a probe
+        // plugin) and the ending Enter inserts there.
         let Some(tab) = self.shell.tabs.iter().find(|t| t.id as isize == id) else {
             return -1;
         };
-        match tab.eol {
-            codepp_core::Eol::CrLf => codepp_plugin_host::WIN_FORMAT,
-            codepp_core::Eol::Cr => codepp_plugin_host::MAC_FORMAT,
-            codepp_core::Eol::Lf | codepp_core::Eol::Mixed => codepp_plugin_host::UNIX_FORMAT,
+        match tab.eol.ending() {
+            codepp_core::Ending::CrLf => codepp_plugin_host::WIN_FORMAT,
+            codepp_core::Ending::Cr => codepp_plugin_host::MAC_FORMAT,
+            codepp_core::Ending::Lf => codepp_plugin_host::UNIX_FORMAT,
         }
     }
 
@@ -11040,10 +11043,11 @@ impl<U: UiPlatform> HostServices for HostBridge<'_, U> {
 
     fn set_buffer_format(&mut self, id: isize, eoltype: i32) -> bool {
         // Inverse of `Self::buffer_format`'s mapping. Code++'s
-        // `Eol::Mixed` is per-line preservation — a state plugins
-        // cannot ask for since it has no N++ counterpart. The
-        // setter never produces `Mixed`; only WIN/MAC/UNIX_FORMAT
-        // are accepted.
+        // `Eol::Mixed` describes a file that ends its lines in more than
+        // one way, which plugins cannot ask for since it has no N++
+        // counterpart. The setter never produces `Mixed`; only
+        // WIN/MAC/UNIX_FORMAT are accepted, and a conversion leaves the
+        // buffer uniform.
         let eol = match eoltype {
             codepp_plugin_host::WIN_FORMAT => codepp_core::Eol::CrLf,
             codepp_plugin_host::MAC_FORMAT => codepp_core::Eol::Cr,
@@ -14543,8 +14547,14 @@ mod tests {
         // Unknown id rejected, and nothing converted for it.
         assert!(!shell.set_buffer_eol_by_id(&mut ui, 9999, codepp_core::Eol::Lf));
         // `Mixed` has no target sequence and is refused before the
-        // label is touched.
-        assert!(!shell.set_buffer_eol_by_id(&mut ui, id, codepp_core::Eol::Mixed));
+        // label is touched, whatever its first ending.
+        for first in [
+            codepp_core::Ending::Lf,
+            codepp_core::Ending::CrLf,
+            codepp_core::Ending::Cr,
+        ] {
+            assert!(!shell.set_buffer_eol_by_id(&mut ui, id, codepp_core::Eol::Mixed(first)));
+        }
         assert_eq!(shell.tabs[0].eol, codepp_core::Eol::CrLf);
         assert_eq!(ui.converted_docs.len(), 2);
     }
@@ -15171,49 +15181,59 @@ mod tests {
 
     #[cfg(target_os = "windows")]
     #[test]
-    fn plugin_dispatch_get_buffer_format_maps_mixed_to_unix() {
+    fn plugin_dispatch_get_buffer_format_answers_a_mixed_files_first_ending() {
         // `Eol::Mixed` is unique to Code++ — N++'s ABI has no
-        // equivalent. The HostBridge mapping reports `UNIX_FORMAT`
-        // (LF) so a plugin doing `if (format == WIN_FORMAT)` on a
-        // mixed-EOL file gets a stable answer rather than depending
-        // on which line ending happens to be most common in the
-        // buffer. This test pins that contract.
-        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
-        let mut shell = Shell::new(wake).unwrap();
-        let mut ui = FakeUi::default();
-
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("mixed.txt");
-        std::fs::write(&path, "a\nb\r\nc\n").unwrap();
-        shell.open_file(path);
-        drain_until(
-            &mut shell,
-            &mut ui,
-            |u, _| !u.set_text_calls.is_empty(),
-            Duration::from_secs(2),
-        );
-
-        // Force the tab into the Mixed-EOL state. The on-disk
-        // detection rounds to a single dominant EOL; explicit
-        // assignment lets this test cover the Mixed branch
-        // without crafting a file the detector classifies that
-        // way (the detector's threshold is intentionally lenient
-        // and may shift in future tuning).
-        let active_id = shell.active().expect("active tab").id as usize;
-        shell.tabs[0].eol = codepp_core::Eol::Mixed;
-
+        // equivalent. A plugin is told the file's first ending, the
+        // format Notepad++ 8.9.8.1 gave the same three files through a
+        // probe plugin, while Code++'s own status bar says "Mixed".
         const NPPM_GETBUFFERFORMAT: u32 = (0x0400 + 1000) + 68;
-        const UNIX_FORMAT: isize = 2;
-        let r = unsafe {
-            shell.dispatch_plugin_message(
+        for (bytes, first, format) in [
+            (
+                "a\r\nb\nc\n",
+                codepp_core::Ending::CrLf,
+                codepp_plugin_host::WIN_FORMAT,
+            ),
+            (
+                "a\nb\r\nc\r\n",
+                codepp_core::Ending::Lf,
+                codepp_plugin_host::UNIX_FORMAT,
+            ),
+            (
+                "a\rb\nc\r\n",
+                codepp_core::Ending::Cr,
+                codepp_plugin_host::MAC_FORMAT,
+            ),
+        ] {
+            let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+            let mut shell = Shell::new(wake).unwrap();
+            let mut ui = FakeUi::default();
+
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("mixed.txt");
+            std::fs::write(&path, bytes).unwrap();
+            shell.open_file(path);
+            drain_until(
+                &mut shell,
                 &mut ui,
-                HostHandles::null(),
-                NPPM_GETBUFFERFORMAT,
-                active_id,
-                0,
-            )
-        };
-        assert_eq!(r, Some(UNIX_FORMAT));
+                |u, _| !u.set_text_calls.is_empty(),
+                Duration::from_secs(2),
+            );
+
+            let tab = shell.active().expect("active tab");
+            assert_eq!(tab.eol, codepp_core::Eol::Mixed(first), "{bytes:?}");
+            assert_eq!(tab.eol.long_label(), "Mixed");
+            let active_id = tab.id as usize;
+            let r = unsafe {
+                shell.dispatch_plugin_message(
+                    &mut ui,
+                    HostHandles::null(),
+                    NPPM_GETBUFFERFORMAT,
+                    active_id,
+                    0,
+                )
+            };
+            assert_eq!(r, Some(format as isize), "{bytes:?}");
+        }
     }
 
     #[cfg(target_os = "windows")]

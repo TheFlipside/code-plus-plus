@@ -72,7 +72,7 @@ pub mod udl_paint;
 
 use core::ffi::c_void;
 
-use codepp_core::{ViewPosition, MAX_KEPT_FOLDS};
+use codepp_core::{Ending, Eol, ViewPosition, MAX_KEPT_FOLDS};
 
 // Lexilla is only built on the backends that have a Scintilla build,
 // so `CreateLexer` exists on exactly those targets — see the gate on
@@ -100,7 +100,7 @@ use codepp_scintilla_sys::{
     SCI_STYLESETBOLD, SCI_STYLESETFONT, SCI_STYLESETFORE, SCI_STYLESETITALIC, SCI_STYLESETSIZE,
     SCI_STYLESETUNDERLINE, SCI_TEXTWIDTH, SCI_VISIBLEFROMDOCLINE, SCI_WORDENDPOSITION,
     SCI_WORDSTARTPOSITION, SCI_WRAPCOUNT, SC_CHANGE_HISTORY_ENABLED, SC_CHANGE_HISTORY_MARKERS,
-    SC_CP_UTF8, SC_EOL_CR, SC_EOL_LF, SC_FOLDACTION_CONTRACT, SC_FOLDLEVELHEADERFLAG,
+    SC_CP_UTF8, SC_EOL_CR, SC_EOL_CRLF, SC_EOL_LF, SC_FOLDACTION_CONTRACT, SC_FOLDLEVELHEADERFLAG,
     SC_MARGIN_NUMBER, SC_MARGIN_SYMBOL, SC_MARKNUM_HISTORY_MODIFIED,
     SC_MARKNUM_HISTORY_REVERTED_TO_MODIFIED, SC_MARKNUM_HISTORY_REVERTED_TO_ORIGIN,
     SC_MARKNUM_HISTORY_SAVED, SC_MARK_EMPTY, SC_MARK_FULLRECT, SC_WRAP_NONE, STYLE_LINENUMBER,
@@ -1692,6 +1692,21 @@ pub fn line_number_digits(n: u64) -> u32 {
     digits
 }
 
+/// Scintilla's `SC_EOL_*` mode for a buffer's line ending: what
+/// `SCI_SETEOLMODE` takes, so that Enter inserts it, and what
+/// `SCI_CONVERTEOLS` converts to. A buffer whose file ends its lines in
+/// more than one way takes the first of them, as Notepad++ does
+/// ([`Eol::Mixed`]). Every backend maps through here, so the three
+/// cannot disagree on it.
+#[must_use]
+pub const fn sc_eol_mode(eol: Eol) -> usize {
+    match eol.ending() {
+        Ending::CrLf => SC_EOL_CRLF,
+        Ending::Cr => SC_EOL_CR,
+        Ending::Lf => SC_EOL_LF,
+    }
+}
+
 /// Which text at the caret [`EditorHandle::cursor_text`] reads: one for
 /// each Notepad++ message that asks for it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1792,9 +1807,21 @@ pub fn file_name_around(line: &str, caret: usize) -> Option<&str> {
 #[cfg(test)]
 mod tests {
     use super::{
-        cursor_answer, file_name_around, line_number_digits, CURSOR_TEXT_MAX_UNITS,
+        cursor_answer, file_name_around, line_number_digits, sc_eol_mode, CURSOR_TEXT_MAX_UNITS,
         LINE_NUMBER_MARGIN_DIGITS,
     };
+    use codepp_core::{Ending, Eol};
+    use codepp_scintilla_sys::{SC_EOL_CR, SC_EOL_CRLF, SC_EOL_LF};
+
+    #[test]
+    fn a_mixed_buffer_takes_the_scintilla_mode_of_its_first_ending() {
+        assert_eq!(sc_eol_mode(Eol::Lf), SC_EOL_LF);
+        assert_eq!(sc_eol_mode(Eol::CrLf), SC_EOL_CRLF);
+        assert_eq!(sc_eol_mode(Eol::Cr), SC_EOL_CR);
+        assert_eq!(sc_eol_mode(Eol::Mixed(Ending::Lf)), SC_EOL_LF);
+        assert_eq!(sc_eol_mode(Eol::Mixed(Ending::CrLf)), SC_EOL_CRLF);
+        assert_eq!(sc_eol_mode(Eol::Mixed(Ending::Cr)), SC_EOL_CR);
+    }
 
     #[test]
     fn the_file_name_scan_reads_around_the_caret() {

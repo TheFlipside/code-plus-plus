@@ -16,7 +16,7 @@
 
 use codepp_core::styles::{parse_rgb_hex, Styles};
 use codepp_core::{Encoding, Eol, LangType};
-use codepp_editor::EditorHandle;
+use codepp_editor::{sc_eol_mode, EditorHandle};
 use codepp_scintilla_sys::{
     SCI_ADDUNDOACTION, SCI_BEGINUNDOACTION, SCI_COLOURISE, SCI_CONVERTEOLS, SCI_EMPTYUNDOBUFFER,
     SCI_ENDUNDOACTION, SCI_GETCOLUMN, SCI_GETCURRENTPOS, SCI_GETDOCPOINTER,
@@ -25,8 +25,7 @@ use codepp_scintilla_sys::{
     SCI_LINEFROMPOSITION, SCI_LINESCROLL, SCI_LINESONSCREEN, SCI_POSITIONAFTER,
     SCI_RELEASEDOCUMENT, SCI_SETDOCPOINTER, SCI_SETEMPTYSELECTION, SCI_SETEOLMODE,
     SCI_SETSAVEPOINT, SCI_SETSELECTIONEND, SCI_SETSELECTIONSTART, SCI_SETTABWIDTH, SCI_SETTEXT,
-    SCI_STYLEGETBACK, SCI_STYLEGETFORE, SC_DOCUMENTOPTION_DEFAULT, SC_EOL_CR, SC_EOL_CRLF,
-    SC_EOL_LF, STYLE_DEFAULT,
+    SCI_STYLEGETBACK, SCI_STYLEGETFORE, SC_DOCUMENTOPTION_DEFAULT, STYLE_DEFAULT,
 };
 
 /// Visible width of a TAB, in spaces. Matches `ui_win32`'s tab-width
@@ -209,19 +208,6 @@ fn read_all(editor: &EditorHandle) -> String {
     String::from_utf8_lossy(&buf).into_owned()
 }
 
-/// Map [`Eol`] to Scintilla's `SC_EOL_*` code. One place, so
-/// `update_status`'s insert mode and `convert_doc_eols`'s target
-/// cannot disagree on where `Mixed` lands: it has no Scintilla
-/// equivalent, and LF is the least surprising ending for new lines —
-/// matching `Eol::bytes()` and the other two backends.
-fn sc_eol_for(eol: Eol) -> usize {
-    match eol {
-        Eol::CrLf => SC_EOL_CRLF,
-        Eol::Cr => SC_EOL_CR,
-        Eol::Lf | Eol::Mixed => SC_EOL_LF,
-    }
-}
-
 impl UiPlatform for GtkUi {
     fn activate_tab(&mut self, _idx: usize, scintilla_doc: isize) -> isize {
         // 0 means "this tab has no document yet" — mint one. Every
@@ -312,7 +298,7 @@ impl UiPlatform for GtkUi {
     fn update_status(&mut self, lang: LangType, encoding: &Encoding, eol: Eol, _byte_len: u64) {
         // Keep Scintilla's own EOL mode in step, so newly typed lines
         // use the same ending as the rest of the file.
-        self.editor.send(SCI_SETEOLMODE, sc_eol_for(eol), 0);
+        self.editor.send(SCI_SETEOLMODE, sc_eol_mode(eol), 0);
         // Resolve the language label: a UDL id shows the UDL's own name
         // (from the registry), a built-in shows its `language_name`, both
         // falling back to "Normal Text". Mirrors Win32's `resolve_lang_label`
@@ -764,7 +750,7 @@ impl UiPlatform for GtkUi {
         self.with_doc(
             doc,
             |s| {
-                let mode = sc_eol_for(eol);
+                let mode = sc_eol_mode(eol);
                 // Mode first, so a document with nothing to convert
                 // still ends up inserting the requested ending. The
                 // conversion is one undo group and leaves the save

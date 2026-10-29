@@ -27,7 +27,7 @@ pub use dock::{
     DockPanel, DockRect, DockSide, DragSubject, DropTarget, DropZones,
 };
 pub use encoding::{Encoding, EncodingError};
-pub use eol::Eol;
+pub use eol::{Ending, Eol};
 pub use fif::{
     FifMatch, FifQuery, FifQueryError, FifQueryOpts, FifWalkOpts, FifWalkOptsError,
     FileSearchOutcome,

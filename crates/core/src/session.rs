@@ -786,6 +786,7 @@ impl Session {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::eol::Ending;
 
     /// Open `path` and read the session in it, as the shell does with its
     /// own opener.
@@ -1061,6 +1062,39 @@ mod tests {
         session.save_to_xml(&path).unwrap();
         let loaded = read_file(&path).unwrap();
         assert_eq!(session, loaded);
+    }
+
+    /// A mixed buffer's first ending is written with it, so a buffer
+    /// restored from its backup goes on inserting that ending.
+    #[test]
+    fn a_mixed_buffers_first_ending_round_trips() {
+        let (_dir, path) = temp_session_path();
+        let mut session = Session::default();
+        for first in [Ending::Lf, Ending::CrLf, Ending::Cr] {
+            session.tabs.push(Tab {
+                path: Some(PathBuf::from("mixed.txt")),
+                eol: Eol::Mixed(first),
+                ..Tab::default()
+            });
+        }
+        session.save_to_xml(&path).unwrap();
+        let xml = std::fs::read_to_string(&path).unwrap();
+        for label in ["eol=\"Mixed LF\"", "eol=\"Mixed CRLF\"", "eol=\"Mixed CR\""] {
+            assert!(xml.contains(label), "{label} in {xml}");
+        }
+        assert_eq!(read_file(&path).unwrap(), session);
+    }
+
+    /// A session written before a mixed buffer kept its first ending
+    /// says only `Mixed`; that buffer inserted LF, and goes on doing so.
+    #[test]
+    fn a_bare_mixed_in_an_older_session_reads_as_lf_first() {
+        let (_dir, path) = temp_session_path();
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<session active="0"><tab path="hello.txt" cursor="0" encoding="UTF-8" eol="Mixed"/></session>"#;
+        std::fs::write(&path, xml).unwrap();
+        let loaded = read_file(&path).unwrap();
+        assert_eq!(loaded.tabs[0].eol, Eol::Mixed(Ending::Lf));
     }
 
     /// Untitled buffers carry `path: None`, an `untitled_seq`, and a

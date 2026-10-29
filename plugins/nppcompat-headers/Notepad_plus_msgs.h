@@ -690,10 +690,10 @@ typedef struct CommunicationInfo_ {
 #define NPPM_SETBUFFERENCODING            (NPPMSG + 67)
 /* v2: returns the EOL format (EolType enum) of the buffer at wParam.
  *     -1 if the buffer id is unknown — same separation rationale as
- *     NPPM_GETBUFFERENCODING. Code++'s internal `Eol::Mixed`
- *     (per-line preservation when the file's EOL is inconsistent)
- *     reports UNIX_FORMAT (LF) since that is what the
- *     "Edit -> EOL Conversion" normalisation picks. */
+ *     NPPM_GETBUFFERENCODING. A buffer whose file ends its lines in
+ *     more than one way (Code++'s status bar says "Mixed") answers the
+ *     format of its first line ending, which is what Enter inserts
+ *     there, as in Notepad++. */
 #define NPPM_GETBUFFERFORMAT              (NPPMSG + 68)
 #define NPPM_SETBUFFERFORMAT              (NPPMSG + 69)
 
