@@ -10919,34 +10919,6 @@ impl<U: UiPlatform> HostServices for HostBridge<'_, U> {
         }
     }
 
-    fn switch_to_file(&mut self, path: PathBuf) -> bool {
-        // If the path is already open in some tab, activate it.
-        // Otherwise route through the regular open path, which
-        // either reuses an empty active tab or pushes a new one.
-        if let Some(idx) = self
-            .shell
-            .tabs
-            .iter()
-            .position(|t| t.path.as_deref() == Some(path.as_path()))
-        {
-            // TRUE whether or not this moved anything: a switch to
-            // the buffer already in front succeeds, and announces
-            // nothing — see `Shell::switch_to_tab`.
-            self.shell.switch_to_tab(idx);
-            true
-        } else {
-            // Return value discarded: the position() check above
-            // already handled the "already open" case, so this arm
-            // only enqueues a fresh load — `OpenFileOutcome::Loading`
-            // is handled by the drain's `activate_tab` when the
-            // loader posts its wake, no dedupe hook needed.
-            let _ = self.shell.open_file(path);
-            // open_file's load completion will fire BUFFERACTIVATED
-            // for the new tab via apply_load_result.
-            true
-        }
-    }
-
     fn menu_command(&mut self, cmd_id: i32) {
         // Routes the plugin's N++-ABI `IDM_*` id through the
         // UI-side mapping onto the equivalent Code++ `ID_*`, then
@@ -11075,10 +11047,15 @@ impl<U: UiPlatform> HostServices for HostBridge<'_, U> {
         // switch to its hidden second view and activates the position in
         // the view in front (measured). Until Phase 5 Code++ refused
         // view 1. An out-of-range position activates nothing.
+        // `NPPM_SWITCHTOFILE` comes here too, with the position of the
+        // tab it found by name. It searches the second view only while
+        // `current_doc_index(1)` reports it shown, which it never does
+        // here; a host that shows it must take a second-view position in
+        // that view, or the switch would land on a main-view tab.
         //
-        // Same metadata-only pattern as `switch_to_file`'s
-        // activate-existing-tab branch: `Shell::switch_to_tab` moves
-        // `active_tab` and announces a real change, and each backend
+        // Metadata only: `Shell::switch_to_tab` moves `active_tab` and
+        // announces a real change, a switch to the tab already in front
+        // succeeding and announcing nothing, and each backend
         // rebinds the visible Scintilla view once the dispatch returns
         // (its post-dispatch `needs_rebind` check) — unless the tab's
         // load is still in flight, which binds it when it lands.
@@ -11787,8 +11764,9 @@ impl<U: UiPlatform> HostServices for HostBridge<'_, U> {
                 // arm in `main_wnd_proc` snapshots `active_tab`
                 // around `dispatch_plugin_message` and fires the
                 // synchronous rebind on any net change — same hook
-                // that catches HostBridge::open_file and
-                // switch_to_file's dedupe cases.
+                // that catches HostBridge::open_file's dedupe case and
+                // the switches NPPM_SWITCHTOFILE and NPPM_ACTIVATEDOC
+                // make through `activate_doc`.
                 let _ = self.shell.open_file(p);
             }
         }
@@ -17324,6 +17302,111 @@ mod tests {
             shell.take_notifications().is_empty(),
             "switch-to-already-active must not queue any notification"
         );
+    }
+
+    /// `NPPM_SWITCHTOFILE` with `name`, through the real dispatcher.
+    fn switch_to_named(shell: &mut Shell, ui: &mut FakeUi, name: &str) -> Option<isize> {
+        let wide: Vec<u16> = name.encode_utf16().chain(std::iter::once(0)).collect();
+        // SAFETY: a NUL-terminated string that outlives the call.
+        unsafe {
+            shell.dispatch_plugin_message(
+                ui,
+                HostHandles::null(),
+                codepp_plugin_host::dispatch::NPPM_SWITCHTOFILE,
+                0,
+                wide.as_ptr() as isize,
+            )
+        }
+    }
+
+    /// A name no shown buffer has answers FALSE and opens nothing, as in
+    /// Notepad++ 8.9.8.1 (measured): a file on disk that is not open, and
+    /// `new 1` while only the hidden second view holds one. Until Phase 5
+    /// Code++ opened the name as a file, so `new 1` put up "Open failed".
+    #[test]
+    fn switch_to_file_opens_nothing_it_does_not_find() {
+        let dir = tempfile::tempdir().unwrap();
+        let open = dir.path().join("a.txt");
+        let elsewhere = dir.path().join("c.txt");
+        std::fs::write(&open, "a").unwrap();
+        std::fs::write(&elsewhere, "c").unwrap();
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+        shell.open_file(open);
+        land_next_load(&mut shell, &mut ui);
+        assert_eq!(shell.tabs.len(), 1);
+        let _ = shell.take_notifications();
+
+        for name in [elsewhere.to_str().unwrap(), SECOND_VIEW_BUFFER_NAME] {
+            assert_eq!(
+                switch_to_named(&mut shell, &mut ui, name),
+                Some(0),
+                "{name}"
+            );
+            assert_eq!(shell.tabs.len(), 1, "{name}: no tab opened");
+            assert!(shell.first_loads.is_empty(), "{name}: no load issued");
+            assert_eq!(shell.active_tab, Some(0));
+            assert!(shell.take_notifications().is_empty(), "{name}");
+        }
+    }
+
+    /// An untitled buffer is found by its name, and a name matches
+    /// regardless of ASCII case, as Notepad++ 8.9.8.1 matches it
+    /// (measured).
+    #[test]
+    fn switch_to_file_finds_an_untitled_buffer_and_ignores_ascii_case() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("a.txt");
+        std::fs::write(&path, "a").unwrap();
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+        shell.new_untitled(&mut ui);
+        shell.open_file(path.clone());
+        land_next_load(&mut shell, &mut ui);
+        assert_eq!(tab_display_name(&shell.tabs[0]), "new 1");
+        assert_eq!(shell.active_tab, Some(1));
+        let _ = shell.take_notifications();
+
+        assert_eq!(switch_to_named(&mut shell, &mut ui, "NEW 1"), Some(1));
+        assert_eq!(shell.active_tab, Some(0));
+        let untitled = shell.tabs[0].id as isize;
+        assert!(matches!(
+            shell.take_notifications()[..],
+            [Notification::BufferActivated { buffer_id }] if buffer_id == untitled
+        ));
+
+        let upper = path.to_str().unwrap().to_ascii_uppercase();
+        assert_eq!(switch_to_named(&mut shell, &mut ui, &upper), Some(1));
+        assert_eq!(shell.active_tab, Some(1));
+    }
+
+    /// A tab still on its first load is found by its file, which is the
+    /// full path name `NPPM_GETFULLPATHFROMBUFFERID` answers for it.
+    #[test]
+    fn switch_to_file_finds_a_file_still_on_its_first_load() {
+        let dir = tempfile::tempdir().unwrap();
+        let path_a = dir.path().join("a.txt");
+        let path_b = dir.path().join("b.txt");
+        std::fs::write(&path_a, "a").unwrap();
+        std::fs::write(&path_b, "b").unwrap();
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+        shell.open_file(path_a.clone());
+        land_next_load(&mut shell, &mut ui);
+        shell.open_file(path_b.clone());
+        assert!(shell.tabs[1].path.is_none(), "b.txt is still loading");
+
+        let a = path_a.to_str().unwrap();
+        assert_eq!(switch_to_named(&mut shell, &mut ui, a), Some(1));
+        assert_eq!(shell.active_tab, Some(0));
+        let b = path_b.to_str().unwrap();
+        assert_eq!(switch_to_named(&mut shell, &mut ui, b), Some(1));
+        assert_eq!(shell.active_tab, Some(1));
+        assert_eq!(shell.tabs.len(), 2, "no second tab for b.txt");
+        land_next_load(&mut shell, &mut ui);
     }
 
     #[test]

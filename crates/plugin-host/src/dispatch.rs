@@ -1029,6 +1029,39 @@ fn full_path_answer(name: &BufferPathName) -> Option<String> {
         .map(|p| p.split('\0').next().unwrap_or_default().to_owned())
 }
 
+/// The view and position of the buffer [`NPPM_SWITCHTOFILE`] names: the
+/// first in a shown view whose full path name, as
+/// [`NPPM_GETFULLPATHFROMBUFFERID`] answers it, equals `name` regardless of
+/// ASCII case. That is Notepad++ 8.9.8.1's rule, measured with a probe
+/// plugin: `ÖLFELD.TXT` names `Ölfeld.txt`, `ölfeld.txt` does not, and no
+/// other spelling of a path matches, neither forward slashes, a relative
+/// path, nor a space before or after. An untitled buffer is matched by its
+/// name, `new 1`.
+///
+/// Only a shown view is searched, as Notepad++ searches only those: the
+/// main view, and the second while it shows a buffer. Code++'s second view
+/// is always hidden, so its `new 1` is never matched. Notepad++ takes the
+/// first buffer it created that matches, Code++ the first in tab order.
+/// That differs only for two shown buffers whose names match each other:
+/// Code++ can hold one file in two tabs spelled in different case, which
+/// Notepad++ cannot (read from its source).
+fn buffer_named<S: HostServices + ?Sized>(services: &S, name: &str) -> Option<(i32, i32)> {
+    let mut views = vec![MAIN_VIEW];
+    if services.current_doc_index(SUB_VIEW) >= 0 {
+        views.push(SUB_VIEW);
+    }
+    views.into_iter().find_map(|view| {
+        let pos = services.view_buffer_ids(view).into_iter().position(|id| {
+            services
+                .buffer_path_name(id)
+                .as_ref()
+                .and_then(full_path_answer)
+                .is_some_and(|full| full.eq_ignore_ascii_case(name))
+        })?;
+        Some((view, i32::try_from(pos).ok()?))
+    })
+}
+
 /// Where a file name's extension starts, by the Windows shell's rule
 /// (`PathFindExtension`, measured through Notepad++): at the last dot,
 /// unless a space follows it. A leading dot counts, so `.gitignore` is
@@ -1128,7 +1161,6 @@ pub trait HostServices {
     /// a file that does not need saving too; Code++ writes that buffer and
     /// answers `true`.
     fn save_current_file(&mut self) -> bool;
-    fn switch_to_file(&mut self, path: PathBuf) -> bool;
     fn menu_command(&mut self, cmd_id: i32);
     fn make_current_buffer_dirty(&mut self);
     /// Set buffer `id`'s language, from [`NPPM_SETBUFFERLANGTYPE`] and
@@ -1158,7 +1190,9 @@ pub trait HostServices {
     /// position is taken in the view in front, as Notepad++ does; Code++'s
     /// second view is always hidden. Returns whether a buffer was
     /// activated, which only the log reads: [`NPPM_ACTIVATEDOC`] answers
-    /// TRUE either way, as Notepad++'s does.
+    /// TRUE either way, as Notepad++'s does. [`NPPM_SWITCHTOFILE`] activates
+    /// the buffer it found by name through this too, and answers what it
+    /// returns.
     fn activate_doc(&mut self, view: i32, pos: i32) -> bool;
     /// Open the Find in Files dialog (FIF tab), optionally pre-
     /// filling the directory and filter combobox text. Both args
@@ -2163,15 +2197,31 @@ pub unsafe fn dispatch_nppm<S: HostServices>(
         }
 
         NPPM_SWITCHTOFILE => {
-            if lparam == 0 {
-                0
+            // lparam: TCHAR* the full path name of an open buffer, as
+            // NPPM_GETFULLPATHFROMBUFFERID answers it: a file's path, or an
+            // untitled buffer's name. Brings that buffer to the front and
+            // answers TRUE, or answers FALSE when no buffer in a shown view
+            // has that name. Never opens a file, as Notepad++ 8.9.8.1 never
+            // does (measured): until Phase 5 Code++ opened a name it did not
+            // find, so SWITCHTOFILE("new 1") tried to open a file called
+            // `new 1`. See `buffer_named` for how a name matches.
+            //
+            // NULL, a kernel-range pointer and a name that does not decode
+            // whole answer FALSE without a lookup. Notepad++ does not guard
+            // a NULL name (read from its source, not measured).
+            if lparam <= 0 {
+                return Some(0);
+            }
+            // SAFETY: the plugin promises a NUL-terminated wide string; the
+            // read stops at the NUL and at `MAX_PATH_TCHARS` units.
+            let Some(name) = (unsafe { decode_whole_wide_ptr(lparam as *const u16) }) else {
+                return Some(0);
+            };
+            if let Some((view, pos)) = buffer_named(services, &name) {
+                isize::from(services.activate_doc(view, pos))
             } else {
-                // SAFETY: plugin promises lparam is a valid wide path.
-                let decoded = unsafe { wide_ptr_to_string(lparam as *const u16) };
-                if decoded.is_empty() {
-                    return Some(0);
-                }
-                isize::from(services.switch_to_file(PathBuf::from(decoded)))
+                tracing::debug!("NPPM_SWITCHTOFILE: no shown buffer has that name");
+                0
             }
         }
 
@@ -3679,7 +3729,7 @@ unsafe fn decode_wide_ptr(mut p: *const u16) -> Option<String> {
         // Reject rather than mangle: a path with a substituted
         // U+FFFD might resolve to a different file than the plugin
         // intended, and the dispatcher routes path-typed payloads
-        // straight into open_file/reload_file/switch_to_file.
+        // straight into open_file/reload_file/save_current_as.
         tracing::warn!(
             len = units.len(),
             "plugin-supplied wide string contained invalid surrogates; rejecting",
@@ -3687,6 +3737,36 @@ unsafe fn decode_wide_ptr(mut p: *const u16) -> Option<String> {
         return None;
     }
     Some(s)
+}
+
+/// [`decode_wide_ptr`], answering `None` too for a string with no NUL in
+/// its first [`MAX_PATH_TCHARS`] units, that is one of `MAX_PATH_TCHARS`
+/// characters or more, the NUL not counted, where `decode_wide_ptr`
+/// answers those units. For a name compared whole: a cut one could match
+/// another buffer whose name is its first `MAX_PATH_TCHARS` units.
+///
+/// The string is read twice, once to find the NUL and once to decode it.
+/// Each read stops at the first NUL and before `MAX_PATH_TCHARS` units, so
+/// a plugin thread that changes the string in between can make it decode
+/// as something else, or not at all, but never makes either read go
+/// further.
+///
+/// # Safety
+///
+/// `p` must be NULL, or valid to read up to and including its first NUL
+/// or for `MAX_PATH_TCHARS` units, whichever comes first.
+unsafe fn decode_whole_wide_ptr(p: *const u16) -> Option<String> {
+    // SAFETY: the caller's contract; the scan stops at the first NUL and
+    // before MAX_PATH_TCHARS units, and `decode_wide_ptr` reads no further.
+    let ends = p.is_null() || (0..MAX_PATH_TCHARS).any(|i| unsafe { *p.add(i) } == 0);
+    if !ends {
+        tracing::debug!(
+            max = MAX_PATH_TCHARS,
+            "plugin-supplied wide string has no NUL within the bound; rejecting",
+        );
+        return None;
+    }
+    unsafe { decode_wide_ptr(p) }
 }
 
 /// The command id `NPPM_MENUCOMMAND` uses for the `index`-th User
@@ -4056,6 +4136,9 @@ mod tests {
         /// Active tab index in the primary view (used for
         /// `NPPM_GETCURRENTDOCINDEX`). `-1` means no active tab.
         active_tab_primary: i32,
+        /// The second view shows a buffer, so its current index is 0
+        /// rather than the hidden view's -1. Code++'s never does.
+        second_view_shown: bool,
         /// The view `current_view` answers: the view in front.
         view_in_front: i32,
         /// `activate_doc` answers `false`, as for a position past the
@@ -4312,10 +4395,6 @@ mod tests {
             self.record("save");
             !self.save_fails
         }
-        fn switch_to_file(&mut self, path: PathBuf) -> bool {
-            self.record(format!("switch={}", path.display()));
-            true
-        }
         fn menu_command(&mut self, cmd_id: i32) {
             self.record(format!("menu_cmd={cmd_id}"));
         }
@@ -4357,6 +4436,7 @@ mod tests {
         fn current_doc_index(&self, view: i32) -> i32 {
             match view {
                 0 => self.active_tab_primary,
+                1 if self.second_view_shown => 0,
                 _ => -1,
             }
         }
@@ -5875,13 +5955,123 @@ mod tests {
         );
     }
 
+    /// `NPPM_SWITCHTOFILE` with `name`, answering what it returned.
+    fn switch_to(s: &mut MockServices, name: &str) -> isize {
+        let p = make_wide(name);
+        unsafe { dispatch_nppm(s, NPPM_SWITCHTOFILE, 0, p.as_ptr() as isize) }.unwrap()
+    }
+
     #[test]
-    fn switch_to_file_path() {
-        let mut s = MockServices::default();
-        let p = make_wide("D:/notes.txt");
-        let r = unsafe { dispatch_nppm(&mut s, NPPM_SWITCHTOFILE, 0, p.as_ptr() as isize) };
-        assert_eq!(r, Some(1));
-        assert_eq!(s.calls(), vec!["switch=D:/notes.txt"]);
+    fn switch_to_file_activates_the_buffer_with_that_name() {
+        // A file by its path and an untitled buffer by its name, each at
+        // its own position in the main view.
+        let mut s = open_tabs(&["D:/a.txt", "D:/b.txt"], &["new 1"]);
+        assert_eq!(switch_to(&mut s, "D:/b.txt"), 1);
+        assert_eq!(switch_to(&mut s, "new 1"), 1);
+        assert_eq!(s.calls(), vec!["activate[0,1]", "activate[0,2]"]);
+    }
+
+    #[test]
+    fn switch_to_file_never_opens_a_file() {
+        // Notepad++ 8.9.8.1 answers FALSE for a name no shown buffer
+        // has, and opens nothing (measured). Until Phase 5 Code++ opened
+        // the name as a file.
+        let mut s = open_tabs(&["D:/a.txt"], &[]);
+        assert_eq!(switch_to(&mut s, "D:/c.txt"), 0);
+        assert!(s.calls().is_empty(), "{:?}", s.calls());
+    }
+
+    #[test]
+    fn switch_to_file_folds_ascii_case_only() {
+        // Measured against Notepad++ 8.9.8.1: ASCII letters match in
+        // either case, and no other letter does.
+        let mut s = open_tabs(&["D:/\u{D6}lfeld.txt"], &["new 1"]);
+        assert_eq!(switch_to(&mut s, "NEW 1"), 1);
+        assert_eq!(switch_to(&mut s, "d:/\u{D6}LFELD.TXT"), 1);
+        assert_eq!(switch_to(&mut s, "D:/\u{F6}lfeld.txt"), 0);
+        assert_eq!(s.calls(), vec!["activate[0,1]", "activate[0,0]"]);
+    }
+
+    #[test]
+    fn switch_to_file_takes_no_other_spelling() {
+        // The name is compared whole, as a string: another spelling of the
+        // same path, a relative one, or one with a space before or after,
+        // names no buffer (measured against Notepad++ 8.9.8.1).
+        let mut s = open_tabs(&["D:\\work\\a.txt"], &["new 1"]);
+        for other in ["D:/work/a.txt", "a.txt", "D:\\work\\a.txt ", " new 1", ""] {
+            assert_eq!(switch_to(&mut s, other), 0, "{other:?}");
+        }
+        assert!(s.calls().is_empty(), "{:?}", s.calls());
+    }
+
+    #[test]
+    fn switch_to_file_searches_only_a_shown_second_view() {
+        // A hidden view's buffer is not switched to, as in Notepad++
+        // (measured): Code++'s second view is always hidden, with a
+        // `new 1` of its own. A second view that shows a buffer is
+        // searched, after the main view.
+        let mut s = open_tabs(&["D:/a.txt"], &[]);
+        s.untitled_names.push((9, "new 1".to_string()));
+        s.view_ids[1].push(9);
+        assert_eq!(switch_to(&mut s, "new 1"), 0);
+        assert!(s.calls().is_empty(), "{:?}", s.calls());
+        s.second_view_shown = true;
+        assert_eq!(switch_to(&mut s, "new 1"), 1);
+        assert_eq!(s.calls(), vec!["activate[1,0]"]);
+    }
+
+    #[test]
+    fn switch_to_file_takes_the_first_match_in_tab_order() {
+        // Two shown buffers whose names match: the main view's first.
+        let mut s = open_tabs(&["D:/b.txt", "D:/B.TXT"], &[]);
+        s.untitled_names.push((9, "d:/b.txt".to_string()));
+        s.view_ids[1].push(9);
+        s.second_view_shown = true;
+        assert_eq!(switch_to(&mut s, "D:/B.txt"), 1);
+        assert_eq!(s.calls(), vec!["activate[0,0]"]);
+    }
+
+    #[test]
+    fn switch_to_file_answers_what_the_activation_answers() {
+        let mut s = MockServices {
+            activate_fails: true,
+            ..open_tabs(&["D:/a.txt"], &[])
+        };
+        assert_eq!(switch_to(&mut s, "D:/a.txt"), 0);
+        assert_eq!(s.calls(), vec!["activate[0,0]"]);
+    }
+
+    #[test]
+    fn switch_to_file_refuses_what_it_cannot_read_whole() {
+        let mut s = open_tabs(&["D:/a.txt"], &[]);
+        // NULL and a kernel-range pointer: never read.
+        for lparam in [0, -8] {
+            assert_eq!(
+                unsafe { dispatch_nppm(&mut s, NPPM_SWITCHTOFILE, 0, lparam) },
+                Some(0)
+            );
+        }
+        // An unpaired surrogate.
+        let bad: Vec<u16> = vec![u16::from(b'D'), 0xD800, 0];
+        assert_eq!(
+            unsafe { dispatch_nppm(&mut s, NPPM_SWITCHTOFILE, 0, bad.as_ptr() as isize) },
+            Some(0)
+        );
+        // A name with no NUL within MAX_PATH_TCHARS units is not cut to
+        // match a buffer named by its first MAX_PATH_TCHARS units.
+        let cut = "z".repeat(MAX_PATH_TCHARS);
+        s.buffer_paths.push((2, PathBuf::from(&cut)));
+        s.view_ids[0].push(2);
+        assert_eq!(switch_to(&mut s, &format!("{cut}.bak")), 0);
+        assert!(s.calls().is_empty(), "{:?}", s.calls());
+        // A name one unit shorter ends in time: read whole, it is looked
+        // up, finding nothing until a buffer has that name.
+        assert_eq!(switch_to(&mut s, &"z".repeat(MAX_PATH_TCHARS - 1)), 0);
+        s.buffer_paths
+            .push((3, PathBuf::from("z".repeat(MAX_PATH_TCHARS - 1))));
+        s.view_ids[0].push(3);
+        assert_eq!(switch_to(&mut s, &"z".repeat(MAX_PATH_TCHARS - 1)), 1);
+        assert_eq!(s.calls(), vec!["activate[0,2]"]);
     }
 
     #[test]

@@ -478,7 +478,19 @@ typedef struct sessionInfo_ {
 
 /* v1: reload the current buffer from disk. */
 #define NPPM_RELOADFILE                   (NPPMSG + 36)
-/* v1: switch to the buffer whose path is at lParam. */
+/* v1: bring an open buffer to the front by its full path name.
+ *     lParam: TCHAR* the name NPPM_GETFULLPATHFROMBUFFERID answers for
+ *             the buffer: a file's path, or an untitled buffer's name
+ *             ("new 1"), compared whole and regardless of ASCII case
+ *             only. No other spelling of a path matches: not forward
+ *             slashes, not a relative path.
+ *     Returns TRUE when a buffer in a shown view has that name, and
+ *     FALSE otherwise. Never opens a file: use NPPM_DOOPEN for that. The
+ *     hidden second view's "new 1" is in no shown view, so it is never
+ *     switched to. As Notepad++ 8.9.8.1 does, measured; until Phase 5
+ *     Code++ opened a name it did not find as a file.
+ *     A name of MAX_PATH (260) TCHARs or more, the NUL not counted,
+ *     answers FALSE. */
 #define NPPM_SWITCHTOFILE                 (NPPMSG + 37)
 /* v1: save the active buffer. Returns TRUE if the file was written,
  *     FALSE if the save was refused or failed: an untitled buffer, a

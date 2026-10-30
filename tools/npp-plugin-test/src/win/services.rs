@@ -387,10 +387,6 @@ impl HostServices for Bridge<'_> {
         self.save_buffer()
     }
 
-    fn switch_to_file(&mut self, path: PathBuf) -> bool {
-        self.is_buffer_path(&path)
-    }
-
     fn menu_command(&mut self, cmd_id: i32) {
         self.0.rec.request(format!("menu command {cmd_id}"));
         // A plugin's own command runs from the message loop, as the
