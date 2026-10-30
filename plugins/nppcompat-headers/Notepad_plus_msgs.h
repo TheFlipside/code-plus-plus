@@ -78,11 +78,11 @@
  *     wParam: not used.
  *     lParam: the selector, ALL_OPEN_FILES, PRIMARY_VIEW or
  *             SECOND_VIEW; any other answers 0.
- *     Code++ has one view, so ALL and PRIMARY count the same and
- *     SECOND is 0. Notepad++'s hidden second view holds an empty
- *     "new 1" of its own, which its ALL and SECOND count. Until
- *     Phase 5 Code++ read the selector from wParam and left untitled
- *     buffers out. */
+ *     Code++ has one view, so its second view is always hidden. As
+ *     Notepad++'s hidden second view does, it holds an empty "new 1"
+ *     of its own, which ALL and SECOND count: SECOND is 1. Until
+ *     Phase 5 Code++ read the selector from wParam, left untitled
+ *     buffers out, and had no second-view buffer. */
 #define NPPM_GETNBOPENFILES               (NPPMSG + 7)
 /* v2: fills wParam (TCHAR**) with the full path names of the open
  *     buffers, as NPPM_GETFULLPATHFROMBUFFERID answers them: an
@@ -222,7 +222,10 @@ typedef struct sessionInfo_ {
 /* v2: NPPM_GETOPENFILENAMES for the main view's buffers only. */
 #define NPPM_GETOPENFILENAMESPRIMARY      (NPPMSG + 17)
 /* v2: NPPM_GETOPENFILENAMES for the second view's buffers only.
- *     Code++ has one view, so it writes nothing and returns 0. */
+ *     Code++'s second view is always hidden and holds an empty
+ *     "new 1" of its own, as Notepad++'s hidden second view does, so
+ *     given an array of at least one slot it writes "new 1" and
+ *     returns 1. Until Phase 5 it wrote nothing and returned 0. */
 #define NPPM_GETOPENFILENAMESSECOND       (NPPMSG + 18)
 
 /* Scintilla handle management -------------------------------------- */
@@ -324,10 +327,13 @@ typedef struct sessionInfo_ {
  *     that + 1 + i switches the current buffer to the i-th of them,
  *     while the command stays below IDM_LANG_USER_LIMIT (46210). */
 #define NPPM_GETNBUSERLANG                (NPPMSG + 22)
-/* v2: returns the active tab index in the requested view
- *     (wParam: 0 = primary, 1 = secondary). Returns -1 when the
- *     view has no active tab — including the secondary view in
- *     single-view Code++ (Phase 4). */
+/* v2: returns the active tab index in the requested view.
+ *     wParam: not used.
+ *     lParam: the view, SUB_VIEW or else MAIN_VIEW, as Notepad++
+ *             reads it (read from its source).
+ *     Returns -1 when the view has no active tab or is hidden, as
+ *     Code++'s second view always is. Until Phase 5 Code++ read the
+ *     view from wParam. */
 #define NPPM_GETCURRENTDOCINDEX           (NPPMSG + 23)
 
 /* UI / menu / status bar ------------------------------------------- */
@@ -342,8 +348,10 @@ typedef struct sessionInfo_ {
  *     active tab's encoding, the same path as
  *     NPPM_SETBUFFERENCODING(id, UNI_COOKIE). Returns the new
  *     encoding numeric (UNI_COOKIE) on success, -1 if the view has
- *     no active buffer. Single-view Code++ (Phase 4) only has a
- *     primary view, so `wParam == 1` always returns -1. */
+ *     no active buffer. Code++'s second view is always hidden, and
+ *     there is no Scintilla view behind its "new 1", so `wParam == 1`
+ *     always returns -1; Notepad++ converts its hidden view's buffer
+ *     (read from its source). */
 #define NPPM_ENCODESCI                    (NPPMSG + 26)
 /* v2: inverse of NPPM_ENCODESCI — convert the active buffer of the
  *     view at wParam to single-byte ANSI. Same metadata-flip path
@@ -352,7 +360,16 @@ typedef struct sessionInfo_ {
  *     new encoding numeric (UNI_8BIT) on success, -1 if the view
  *     has no active buffer. */
 #define NPPM_DECODESCI                    (NPPMSG + 27)
-/* v1: switches focus to the buffer at lParam (path). */
+/* v1: activates the buffer at a position in a view.
+ *     wParam: the view, MAIN_VIEW or SUB_VIEW; any other means the
+ *             view in front.
+ *     lParam: the position in that view.
+ *     A hidden view cannot be switched to, so the position is taken
+ *     in the view in front; Code++'s second view is always hidden.
+ *     Returns TRUE whether or not a buffer was activated, as
+ *     Notepad++ does. Until Phase 5 Code++ returned FALSE for the
+ *     second view, any other view, and a position past the last
+ *     buffer. */
 #define NPPM_ACTIVATEDOC                  (NPPMSG + 28)
 
 /* Find-in-files dialog --------------------------------------------- */
@@ -638,11 +655,12 @@ typedef struct CommunicationInfo_ {
 
 /* v1: tab-strip position of the buffer whose id is in wParam.
  *     wParam: buffer id.
- *     lParam: priority view selector (0 = main, 1 = sub) — advisory
- *             in single-view Code++; Phase 5 split-view will honour
- *             it.
- *     Returns the tab index, with bit 0x40000000 set if the buffer
- *     lives in the secondary view. -1 if the buffer id is unknown. */
+ *     lParam: priority view, MAIN_VIEW or SUB_VIEW: the view
+ *             Notepad++ searches first (read from its source). A
+ *             buffer is in one view only, so it changes nothing.
+ *     Returns the position in its view, with bit 0x40000000 set if
+ *     the buffer is in the second view: the hidden second view's own
+ *     "new 1" answers 0x40000000. -1 if the buffer id is unknown. */
 #define NPPM_GETPOSFROMBUFFERID           (NPPMSG + 57)
 /* v1: the full path of the buffer whose id is in wParam: its file,
  *     or for an untitled buffer its name ("new 1").
@@ -664,12 +682,15 @@ typedef struct CommunicationInfo_ {
  *     negative lParam. Until Phase 5 Code++ refused a path of
  *     MAX_PATH TCHARs or more from the probe and the write alike. */
 #define NPPM_GETFULLPATHFROMBUFFERID      (NPPMSG + 58)
-/* v1: buffer id of the tab at the requested view-relative position.
- *     wParam: tab position (0-based index into the view's tab list).
- *     lParam: view selector (0 = main, 1 = sub).
+/* v1: buffer id of the buffer at the requested view-relative
+ *     position.
+ *     wParam: position (0-based index into the view's buffers).
+ *     lParam: the view, MAIN_VIEW or SUB_VIEW.
  *     Returns the buffer id, or 0 (N++'s "no buffer" sentinel) if
- *     the position is out of range, the view is unknown, or — in
- *     single-view Code++ — `view == 1`. */
+ *     the position is out of range or the view is unknown. Position 0
+ *     of the second view is its hidden "new 1", whose id answers the
+ *     buffer messages as any buffer's does. Until Phase 5 Code++
+ *     answered 0 for the second view. */
 #define NPPM_GETBUFFERIDFROMPOS           (NPPMSG + 59)
 /* v1: returns the active buffer's id (LRESULT). */
 #define NPPM_GETCURRENTBUFFERID           (NPPMSG + 60)
@@ -797,8 +818,9 @@ typedef struct CommunicationInfo_ {
  *     restriction). Code++ always loads from the per-user dir, so
  *     this is unconditionally `TRUE`. */
 #define NPPM_GETAPPDATAPLUGINSALLOWED     (NPPMSG + 87)
-/* v3: returns the active view index (0 = primary, 1 = secondary).
- *     Code++ is single-view through Phase 4 → always 0. */
+/* v3: returns the view in front, MAIN_VIEW or SUB_VIEW. Code++
+ *     shows one view, and its second is always hidden → always
+ *     MAIN_VIEW. */
 #define NPPM_GETCURRENTVIEW               (NPPMSG + 88)
 /* v3: disable a column in the doc-switcher's listview.
  *     wParam: column index. lParam: BOOL disable flag.
@@ -1066,6 +1088,14 @@ typedef struct NppDarkModeColors_ {
 #define ALL_OPEN_FILES 0
 #define PRIMARY_VIEW   1
 #define SECOND_VIEW    2
+
+/*
+ * The views, as NPPM_GETCURRENTDOCINDEX, NPPM_ACTIVATEDOC,
+ * NPPM_GETBUFFERIDFROMPOS and NPPM_GETPOSFROMBUFFERID name them.
+ * Numeric values match Notepad++'s public ABI.
+ */
+#define MAIN_VIEW 0
+#define SUB_VIEW  1
 
 /*
  * Encoding (UniMode) values returned by NPPM_GETBUFFERENCODING.

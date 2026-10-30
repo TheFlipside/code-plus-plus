@@ -64,6 +64,16 @@ pub use watchdog::TIMEOUT_EXIT_CODE;
 /// The id of the one buffer the harness has open.
 pub(crate) const BUFFER_ID: isize = 1;
 
+/// The id of the buffer the hidden second view holds: Notepad++ keeps an
+/// empty `new 1` there, and the editor answers for one
+/// (`codepp_shell::SECOND_VIEW_BUFFER_ID`, whose value this is; the harness
+/// does not depend on the shell, so the two are kept equal by hand).
+pub(crate) const SECOND_VIEW_BUFFER_ID: isize = i32::MAX as isize;
+
+/// That buffer's name, as the editor gives it
+/// (`codepp_shell::SECOND_VIEW_BUFFER_NAME`).
+pub(crate) const SECOND_VIEW_BUFFER_NAME: &str = "new 1";
+
 /// How long the harness pumps messages after each step, so messages a
 /// plugin posted (to itself, or `NPPM_MENUCOMMAND`'s `WM_COMMAND`) land
 /// before the next step and before the report.

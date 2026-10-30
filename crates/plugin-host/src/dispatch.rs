@@ -355,6 +355,18 @@ pub const ALL_OPEN_FILES: i32 = 0;
 pub const PRIMARY_VIEW: i32 = 1;
 pub const SECOND_VIEW: i32 = 2;
 
+// The views, as the messages that take one name them:
+// `NPPM_GETCURRENTDOCINDEX`, `NPPM_ACTIVATEDOC`, `NPPM_GETBUFFERIDFROMPOS`
+// and `NPPM_GETPOSFROMBUFFERID`. `NPPM_GETNBOPENFILES` counts with
+// `PRIMARY_VIEW` and `SECOND_VIEW` instead. Notepad++'s second view is
+// hidden until a document is moved to it; Code++'s always is, holding one
+// empty buffer of its own, as Notepad++'s hidden second view does.
+
+/// The main view, the one Code++ shows.
+pub const MAIN_VIEW: i32 = 0;
+/// The second view: always hidden in Code++, holding an empty `new 1`.
+pub const SUB_VIEW: i32 = 1;
+
 /// Selectors for [`NPPM_MODELESSDIALOG`] (`wparam`).
 /// `MODELESSDIALOGADD` registers the plugin's modeless-dialog
 /// HWND with the host so the message pump consults it via
@@ -1141,8 +1153,12 @@ pub trait HostServices {
     /// Notepad++'s does, so nothing is reported back.
     fn set_current_user_lang(&mut self, index: usize);
     fn set_menu_item_check(&mut self, cmd_id: i32, checked: bool);
-    /// Activate the buffer at index `pos` in view `view`. Phase 3
-    /// single-tab is a no-op success.
+    /// Activate the buffer at index `pos` in view `view`, [`MAIN_VIEW`] or
+    /// [`SUB_VIEW`]. A view that is hidden cannot be switched to, so the
+    /// position is taken in the view in front, as Notepad++ does; Code++'s
+    /// second view is always hidden. Returns whether a buffer was
+    /// activated, which only the log reads: [`NPPM_ACTIVATEDOC`] answers
+    /// TRUE either way, as Notepad++'s does.
     fn activate_doc(&mut self, view: i32, pos: i32) -> bool;
     /// Open the Find in Files dialog (FIF tab), optionally pre-
     /// filling the directory and filter combobox text. Both args
@@ -1151,17 +1167,20 @@ pub trait HostServices {
     /// plugin can drive a project-wide search.
     fn launch_find_in_files_dialog(&mut self, directory: Option<PathBuf>, filters: Option<String>);
 
-    /// Buffer ids of the tabs in `view` (0 = main, 1 = second), in tab
-    /// order: the positions [`NPPM_GETBUFFERIDFROMPOS`] takes. Every
-    /// tab, an untitled one included, as Notepad++ counts its buffers.
-    /// Drives [`NPPM_GETNBOPENFILES`] and [`NPPM_GETOPENFILENAMES`].
-    /// Code++ has one view, so view 1 has none.
+    /// Buffer ids of the buffers in `view` ([`MAIN_VIEW`] or
+    /// [`SUB_VIEW`]), in tab order: the positions
+    /// [`NPPM_GETBUFFERIDFROMPOS`] takes. Every tab, an untitled one
+    /// included, as Notepad++ counts its buffers. Drives
+    /// [`NPPM_GETNBOPENFILES`] and [`NPPM_GETOPENFILENAMES`]. Code++ has
+    /// one view, so the second is hidden; it holds one empty buffer of its
+    /// own, as Notepad++'s hidden second view does, which a host answers
+    /// for like any other.
     fn view_buffer_ids(&self, view: i32) -> Vec<isize>;
 
-    /// Index of the active tab in `view` (0 = primary, 1 = secondary)
+    /// Index of the active tab in `view` ([`MAIN_VIEW`] or [`SUB_VIEW`])
     /// — same convention as [`Self::scintilla_hwnd_for_view`]. Returns
-    /// `-1` when the view has no active tab (the only "no view" the
-    /// secondary path produces in single-view Code++).
+    /// `-1` when the view has no active tab, and for a hidden view, as
+    /// Notepad++ does: Code++'s second view always is.
     fn current_doc_index(&self, view: i32) -> i32;
 
     /// Encoding (`UniMode`) of the buffer with id `id`. Return values
@@ -1243,8 +1262,9 @@ pub trait HostServices {
     ///
     /// Returns the new encoding numeric ([`UNI_COOKIE`]) on
     /// success, or `-1` if the requested view has no active
-    /// buffer (the only failure mode in single-view Code++ is
-    /// `view == 1`, the secondary view, which is empty).
+    /// buffer. Code++ answers -1 for `view == 1`: its second view is
+    /// always hidden, and there is no Scintilla view behind the buffer
+    /// it holds.
     fn encode_sci(&mut self, view: i32) -> i32;
 
     /// Inverse of [`Self::encode_sci`]: switch the active buffer
@@ -1338,9 +1358,9 @@ pub trait HostServices {
     /// encoding the N++ ABI documents.
     fn buffer_position(&self, id: isize) -> Option<(i32, i32)>;
 
-    /// Buffer id of the tab at index `pos` in `view`. Returns 0
-    /// for an out-of-range index, an unknown view, or — in
-    /// single-view Code++ — `view == 1`. Drives
+    /// Buffer id of the buffer at index `pos` in `view`, as
+    /// [`Self::view_buffer_ids`] lists them. Returns 0 for an
+    /// out-of-range index or an unknown view. Drives
     /// [`NPPM_GETBUFFERIDFROMPOS`].
     fn buffer_id_at(&self, view: i32, pos: i32) -> isize;
 
@@ -1414,9 +1434,10 @@ pub trait HostServices {
     /// the per-user dir, so this is unconditionally `true`.
     fn appdata_plugins_allowed(&self) -> bool;
 
-    /// Active view index (0 = primary, 1 = secondary). Drives
-    /// [`NPPM_GETCURRENTVIEW`]. Code++ is single-view through
-    /// Phase 4 → always 0.
+    /// The view in front, [`MAIN_VIEW`] or [`SUB_VIEW`]. Drives
+    /// [`NPPM_GETCURRENTVIEW`], and is the view [`NPPM_ACTIVATEDOC`]
+    /// takes a wParam that names neither in. Code++'s second view is
+    /// always hidden, so its answer is always [`MAIN_VIEW`].
     fn current_view(&self) -> i32;
 
     /// Per-user plugins directory (the parent of every plugin
@@ -1850,7 +1871,7 @@ pub unsafe fn dispatch_nppm<S: HostServices>(
     Some(match msg {
         NPPM_GETCURRENTSCINTILLA => {
             // lParam is `int*` OUT — the active view index, 0 (main)
-            // or 1 (secondary). Phase 3 single-view always reports 0.
+            // or 1 (secondary). Code++ shows one view, so always 0.
             // Plugins read NppData._scintillaMainHandle or
             // _scintillaSecondHandle (set by setInfo) to get the
             // HWND; the LRESULT is the view index, **not** the HWND.
@@ -1903,12 +1924,13 @@ pub unsafe fn dispatch_nppm<S: HostServices>(
             // lparam: the selector, `ALL_OPEN_FILES`, `PRIMARY_VIEW` or
             // `SECOND_VIEW`; wparam is not used. Returns the number of
             // buffers in the views it names, an untitled one included,
-            // and 0 for any other selector, as Notepad++ does (measured
-            // against 8.9.8.1). Until Phase 5 Code++ read the selector
-            // from wparam and left untitled buffers out. The whole
-            // lparam is compared, as Notepad++ compares it (read from its
-            // source): one whose low 32 bits are a selector and whose
-            // high bits are not 0 is no selector.
+            // and the hidden second view's own buffer, and 0 for any
+            // other selector, as Notepad++ does (measured against
+            // 8.9.8.1). Until Phase 5 Code++ read the selector from
+            // wparam, left untitled buffers out, and had no second-view
+            // buffer. The whole lparam is compared, as Notepad++ compares
+            // it (read from its source): one whose low 32 bits are a
+            // selector and whose high bits are not 0 is no selector.
             let views: &[i32] = match i32::try_from(lparam) {
                 Ok(ALL_OPEN_FILES) => &[0, 1],
                 Ok(PRIMARY_VIEW) => &[0],
@@ -1931,8 +1953,9 @@ pub unsafe fn dispatch_nppm<S: HostServices>(
             // names it, an untitled one included: the plain message
             // both views' buffers, the main view's first, and the
             // -PRIMARY / -SECOND aliases one view's each, as Notepad++
-            // does (measured against 8.9.8.1). Until Phase 5 Code++
-            // left untitled buffers out.
+            // does (measured against 8.9.8.1). The hidden second view's
+            // buffer is `new 1`. Until Phase 5 Code++ left untitled
+            // buffers out, and the second view's buffer with them.
             let views: &[i32] = match msg {
                 NPPM_GETOPENFILENAMESPRIMARY => &[0],
                 NPPM_GETOPENFILENAMESSECOND => &[1],
@@ -2055,13 +2078,22 @@ pub unsafe fn dispatch_nppm<S: HostServices>(
         }
 
         NPPM_GETCURRENTDOCINDEX => {
-            // wparam: view selector (0 = primary, 1 = secondary).
-            // Returns the active tab index in that view, or -1 if
-            // the view has no active tab. N++ uses `int` here, so
-            // the negative-on-empty signal fits. The `i as i32` cast
-            // in `HostBridge::current_doc_index` is safe because the
-            // shell caps open tabs at `MAX_OPEN_TABS` (1024).
-            services.current_doc_index(wparam as i32) as isize
+            // lparam: the view, `SUB_VIEW` or else the main view, the
+            // whole lparam compared, as Notepad++ reads it (read from its
+            // source, and measured against 8.9.8.1); wparam is not used.
+            // Returns the active tab's index in that view, or -1 if the
+            // view has none or is hidden: Code++'s second view always is.
+            // Until Phase 5 Code++ read the view from wparam, so a plugin
+            // asking for the second view was told the main view's index.
+            // The `i as i32` cast in `HostBridge::current_doc_index` is
+            // safe because the shell caps open tabs at `MAX_OPEN_TABS`
+            // (1024).
+            let view = if lparam == SUB_VIEW as isize {
+                SUB_VIEW
+            } else {
+                MAIN_VIEW
+            };
+            services.current_doc_index(view) as isize
         }
 
         NPPM_SETSTATUSBAR => {
@@ -2081,20 +2113,27 @@ pub unsafe fn dispatch_nppm<S: HostServices>(
         NPPM_GETMENUHANDLE => services.menu_handle(wparam as i32) as isize,
 
         NPPM_ACTIVATEDOC => {
-            // wparam: view selector (0 = primary, 1 = secondary).
-            // lparam: tab position in that view.
-            //
-            // Range-check `wparam` *before* the `usize -> i32`
-            // truncation: a plugin sending `wparam = 0x1_0000_0000`
-            // would truncate to 0 and silently be accepted as
-            // "primary view". Same shape as the pre-cast guard on
-            // `NPPM_ENCODESCI` / `NPPM_DECODESCI`.
-            if wparam > 1 {
-                return Some(0);
-            }
-            let view = wparam as i32;
+            // wparam: the view, `MAIN_VIEW` or `SUB_VIEW`; any other
+            // (the whole wparam compared) names the view in front.
+            // lparam: the position in that view, its low 32 bits. Both as
+            // Notepad++ reads them (read from its source). A hidden view
+            // cannot be switched to, so the host takes the position in the
+            // view in front (`HostServices::activate_doc`), and Code++'s
+            // second view is always hidden. Answers TRUE whether or not a
+            // buffer was activated, as Notepad++ 8.9.8.1 does (measured:
+            // view 1, an unknown view and a position past the last tab all
+            // answer TRUE). Until Phase 5 Code++ answered FALSE for view
+            // 1, an unknown view and an out-of-range position.
+            let view = match wparam {
+                0 => MAIN_VIEW,
+                1 => SUB_VIEW,
+                _ => services.current_view(),
+            };
             let pos = lparam as i32;
-            isize::from(services.activate_doc(view, pos))
+            if !services.activate_doc(view, pos) {
+                tracing::debug!(view, pos, "NPPM_ACTIVATEDOC: no buffer at that position");
+            }
+            1
         }
 
         NPPM_RELOADFILE => {
@@ -2151,12 +2190,13 @@ pub unsafe fn dispatch_nppm<S: HostServices>(
 
         NPPM_GETPOSFROMBUFFERID => {
             // wparam: buffer id. lparam: priority view selector
-            // (0 = main, 1 = sub) — currently advisory in single-
-            // view Code++; the impl always returns the position in
-            // the primary view. Returns the tab index, with the
-            // 0x40000000 bit set if the buffer lives in the
-            // secondary view (always clear in Phase 4 single-view).
-            // Returns -1 if the buffer doesn't exist anywhere.
+            // (0 = main, 1 = sub), which view Notepad++ searches first
+            // (read from its source). A buffer is in one view only, so it
+            // changes nothing.
+            // Returns the tab index, with the 0x40000000 bit set if the
+            // buffer lives in the secondary view: the hidden second
+            // view's own buffer answers 0x40000000. Returns -1 if the
+            // buffer doesn't exist anywhere.
             let id = wparam as isize;
             match services.buffer_position(id) {
                 Some((view, idx)) => {
@@ -2171,17 +2211,22 @@ pub unsafe fn dispatch_nppm<S: HostServices>(
         }
 
         NPPM_GETBUFFERIDFROMPOS => {
-            // wparam: tab position. lparam: view selector
-            // (0 = main, 1 = sub). Returns the buffer id, or 0
-            // for an out-of-range index, an unknown view, or
-            // (in single-view Code++) `view == 1`.
-            //
-            // `wparam as i32` truncates the upper bits; positions
-            // are bounded by the open-files count, well below
-            // i32::MAX, so no real plugin sends a wparam that
-            // would suffer from the truncation.
-            let view = lparam as i32;
-            let pos = wparam as i32;
+            // wparam: position in the view. lparam: the view, `MAIN_VIEW`
+            // or `SUB_VIEW`. Both whole, as Notepad++ compares them (read
+            // from its source): a value whose low 32 bits name a view or a
+            // position, and whose high bits are not 0, names neither.
+            // Returns the buffer id, or 0 for an out-of-range position or
+            // an unknown view. Position 0 of the second view is the hidden
+            // second view's own buffer, as in Notepad++ (measured against
+            // 8.9.8.1); until Phase 5 Code++ answered 0 for view 1.
+            let view = match lparam {
+                0 => MAIN_VIEW,
+                1 => SUB_VIEW,
+                _ => return Some(0),
+            };
+            let Ok(pos) = i32::try_from(wparam) else {
+                return Some(0);
+            };
             services.buffer_id_at(view, pos)
         }
 
@@ -4005,11 +4050,17 @@ mod tests {
         /// Buffer ids of each view's tabs, in tab order, for
         /// `view_buffer_ids`; their names come from `buffer_paths` and
         /// `untitled_names`. Drives the `NPPM_GETNBOPENFILES` /
-        /// `NPPM_GETOPENFILENAMES` tests.
+        /// `NPPM_GETOPENFILENAMES` tests, and the second view's half the
+        /// position messages too.
         view_ids: [Vec<isize>; 2],
         /// Active tab index in the primary view (used for
         /// `NPPM_GETCURRENTDOCINDEX`). `-1` means no active tab.
         active_tab_primary: i32,
+        /// The view `current_view` answers: the view in front.
+        view_in_front: i32,
+        /// `activate_doc` answers `false`, as for a position past the
+        /// last tab.
+        activate_fails: bool,
         /// Tab-strip visibility for `NPPM_HIDETABBAR` /
         /// `NPPM_ISTABBARHIDDEN`. `false` (visible) by default,
         /// matching the host's startup state.
@@ -4283,7 +4334,7 @@ mod tests {
         }
         fn activate_doc(&mut self, view: i32, pos: i32) -> bool {
             self.record(format!("activate[{view},{pos}]"));
-            true
+            !self.activate_fails
         }
         fn launch_find_in_files_dialog(
             &mut self,
@@ -4375,9 +4426,8 @@ mod tests {
             true
         }
         fn encode_sci(&mut self, view: i32) -> i32 {
-            // Single-view mock: only view 0 has an active buffer
-            // (when one is configured). Mirrors the production
-            // single-view-through-Phase-4 contract.
+            // Only view 0 has an active buffer (when one is configured),
+            // as in the production host, whose second view is hidden.
             if view != 0 || self.current_buffer == 0 {
                 return -1;
             }
@@ -4440,10 +4490,12 @@ mod tests {
             self.windows_version
         }
         fn buffer_position(&self, id: isize) -> Option<(i32, i32)> {
-            // Mirror the production HostBridge: tab position is the
-            // index in `open_files_primary` of the path bound to
-            // `id` via `buffer_paths`. Untitled tabs (no path) are
-            // therefore not addressable here, same as production.
+            // The second view's buffers by their place in `view_ids[1]`.
+            if let Some(idx) = self.view_ids[1].iter().position(|&i| i == id) {
+                return Some((1, idx as i32));
+            }
+            // The main view's: the index in `open_files_primary` of the
+            // path bound to `id` via `buffer_paths`.
             let path = self
                 .buffer_paths
                 .iter()
@@ -4455,12 +4507,18 @@ mod tests {
                 .map(|idx| (0, idx as i32))
         }
         fn buffer_id_at(&self, view: i32, pos: i32) -> isize {
-            // Single-view: only view 0 yields a valid id. Out-of-
-            // range index returns 0 (N++'s "no buffer" sentinel).
-            if view != 0 || pos < 0 {
+            // Out-of-range index returns 0 (N++'s "no buffer"
+            // sentinel). The second view's buffers come from
+            // `view_ids[1]`, the main view's from `open_files_primary`.
+            let Ok(pos) = usize::try_from(pos) else {
+                return 0;
+            };
+            if view == 1 {
+                return self.view_ids[1].get(pos).copied().unwrap_or(0);
+            }
+            if view != 0 {
                 return 0;
             }
-            let pos = pos as usize;
             let Some(path) = self.open_files_primary.get(pos) else {
                 return 0;
             };
@@ -4552,7 +4610,7 @@ mod tests {
             true
         }
         fn current_view(&self) -> i32 {
-            0
+            self.view_in_front
         }
         fn plugin_home_dir(&self) -> Option<PathBuf> {
             self.plugin_home_dir.clone()
@@ -4827,7 +4885,7 @@ mod tests {
         let mut view: i32 = -1;
         let r =
             unsafe { dispatch_nppm(&mut s, NPPM_GETCURRENTSCINTILLA, 0, &raw mut view as isize) };
-        // LRESULT is the view index (0 for Phase 3 single-view), not
+        // LRESULT is the view index (0: Code++ shows one view), not
         // the HWND — plugins read the HWND from NppData.
         assert_eq!(r, Some(0));
         assert_eq!(view, 0);
@@ -6563,9 +6621,10 @@ mod tests {
     }
 
     #[test]
-    fn open_filenames_second_view_is_empty_in_single_view_code_plus_plus() {
-        // Code++ has one view: the -SECOND alias writes nothing,
-        // however many buffers the main view holds.
+    fn open_filenames_second_writes_nothing_for_an_empty_second_view() {
+        // A host whose second view holds nothing: the -SECOND alias
+        // writes nothing, however many buffers the main view holds.
+        // Code++'s holds its hidden `new 1`, the shell's tests check.
         let mut s = open_tabs(&["/p.txt"], &["new 1"]);
         let (r, text) = open_filenames(&mut s, NPPM_GETOPENFILENAMESSECOND, 1);
         assert_eq!((r, text[0].as_str()), (0, "<unwritten>"));
@@ -6606,13 +6665,27 @@ mod tests {
     }
 
     #[test]
-    fn current_doc_index_for_secondary_returns_minus_one() {
+    fn current_doc_index_reads_its_view_from_lparam() {
+        // `int NPPM_GETCURRENTDOCINDEX(0, int inView)`: lParam names the
+        // view, `SUB_VIEW` or else the main view, and wParam is not used,
+        // as in Notepad++ 8.9.8.1 (measured). Until Phase 5 Code++ read
+        // the view from wParam.
         let mut s = MockServices {
             active_tab_primary: 2,
             ..Default::default()
         };
-        let r = unsafe { dispatch_nppm(&mut s, NPPM_GETCURRENTDOCINDEX, 1, 0) };
-        assert_eq!(r, Some(-1));
+        let mut ask =
+            |w: usize, l: isize| unsafe { dispatch_nppm(&mut s, NPPM_GETCURRENTDOCINDEX, w, l) };
+        assert_eq!(ask(0, SUB_VIEW as isize), Some(-1));
+        assert_eq!(ask(1, MAIN_VIEW as isize), Some(2));
+        assert_eq!(ask(1, SUB_VIEW as isize), Some(-1));
+        // Any lParam but `SUB_VIEW` is the main view, the whole lParam
+        // compared: on a 64-bit target, low 32 bits of 1 with a high bit
+        // set is not `SUB_VIEW`.
+        assert_eq!(ask(0, 7), Some(2));
+        if let Ok(high) = isize::try_from((1i64 << 40) | 1) {
+            assert_eq!(ask(0, high), Some(2));
+        }
     }
 
     #[test]
@@ -6796,10 +6869,9 @@ mod tests {
 
     #[test]
     fn encode_sci_secondary_view_returns_minus_one() {
-        // View 1 is the secondary view (split-view), which has no
-        // active buffer in single-view Code++. Plugins calling
-        // ENCODESCI on it should observe the same "view has no
-        // buffer" return value N++ produces (-1).
+        // View 1 is the second view, which a host with no Scintilla
+        // view there answers -1 for, N++'s "view has no buffer"
+        // return value.
         let mut s = MockServices {
             current_buffer: 7,
             ..Default::default()
@@ -6958,9 +7030,54 @@ mod tests {
         // pos beyond the open count.
         let r = unsafe { dispatch_nppm(&mut s, NPPM_GETBUFFERIDFROMPOS, 99, 0) };
         assert_eq!(r, Some(0));
-        // Secondary view in single-view Code++.
+        // A second view with no buffers.
         let r = unsafe { dispatch_nppm(&mut s, NPPM_GETBUFFERIDFROMPOS, 0, 1) };
         assert_eq!(r, Some(0));
+    }
+
+    #[test]
+    fn buffer_id_from_pos_finds_the_second_views_buffer() {
+        // The second view's buffers by their position in it, and the
+        // second view's buffer's position from its id: 0x40000000 marks
+        // the second view, whichever view the plugin asks to search
+        // first.
+        let mut s = MockServices {
+            view_ids: [vec![], vec![9]],
+            ..Default::default()
+        };
+        let r = unsafe { dispatch_nppm(&mut s, NPPM_GETBUFFERIDFROMPOS, 0, SUB_VIEW as isize) };
+        assert_eq!(r, Some(9));
+        let r = unsafe { dispatch_nppm(&mut s, NPPM_GETBUFFERIDFROMPOS, 1, SUB_VIEW as isize) };
+        assert_eq!(r, Some(0));
+        for priority in [MAIN_VIEW, SUB_VIEW] {
+            let r = unsafe { dispatch_nppm(&mut s, NPPM_GETPOSFROMBUFFERID, 9, priority as isize) };
+            assert_eq!(r, Some(0x4000_0000), "priority view {priority}");
+        }
+    }
+
+    #[test]
+    fn buffer_id_from_pos_compares_its_whole_parameters() {
+        // As Notepad++ compares them (read from its source): a view that
+        // is neither `MAIN_VIEW` nor `SUB_VIEW`, a whole lParam included,
+        // names no view, and a position whose low 32 bits are in range
+        // and whose high bits are not 0 is past the last buffer.
+        let mut s = MockServices {
+            buffer_paths: vec![(7, PathBuf::from("D:/a.txt"))],
+            open_files_primary: vec![PathBuf::from("D:/a.txt")],
+            view_ids: [vec![7], vec![9]],
+            ..Default::default()
+        };
+        let mut ask =
+            |w: usize, l: isize| unsafe { dispatch_nppm(&mut s, NPPM_GETBUFFERIDFROMPOS, w, l) };
+        assert_eq!(ask(0, MAIN_VIEW as isize), Some(7));
+        assert_eq!(ask(0, 2), Some(0));
+        assert_eq!(ask(0, -1), Some(0));
+        assert_eq!(ask(0, isize::MIN + 1), Some(0));
+        assert_eq!(ask(usize::MAX, MAIN_VIEW as isize), Some(0));
+        if let Ok(high) = usize::try_from(1u64 << 32) {
+            assert_eq!(ask(high, MAIN_VIEW as isize), Some(0));
+            assert_eq!(ask(high, SUB_VIEW as isize), Some(0));
+        }
     }
 
     #[test]
@@ -7976,25 +8093,47 @@ mod tests {
     fn activate_doc_routes_view_and_pos_to_services() {
         let mut s = MockServices::default();
         let r = unsafe { dispatch_nppm(&mut s, NPPM_ACTIVATEDOC, 0, 3) };
-        // The mock's `activate_doc` always succeeds; the dispatcher
-        // forwards (view, pos) verbatim and turns the bool into 1.
         assert_eq!(r, Some(1));
-        assert_eq!(s.calls(), vec!["activate[0,3]"]);
+        let r = unsafe { dispatch_nppm(&mut s, NPPM_ACTIVATEDOC, 1, 4) };
+        assert_eq!(r, Some(1));
+        assert_eq!(s.calls(), vec!["activate[0,3]", "activate[1,4]"]);
     }
 
     #[test]
-    fn activate_doc_out_of_range_wparam_returns_zero() {
-        // Pre-cast guard: a wparam outside [0, 1] is rejected
-        // before the `usize -> i32` truncation. Without this, a
-        // plugin sending `wparam = 0x1_0000_0000` would truncate
-        // to 0 and silently be accepted as "primary view". Same
-        // shape as the guard on `NPPM_ENCODESCI`.
-        let mut s = MockServices::default();
-        let r = unsafe { dispatch_nppm(&mut s, NPPM_ACTIVATEDOC, 2, 0) };
-        assert_eq!(r, Some(0));
-        // Mock should not have been called — the dispatcher arm
-        // short-circuited before reaching it.
-        assert!(s.calls().is_empty());
+    fn activate_doc_takes_any_other_view_as_the_view_in_front() {
+        // Notepad++ resolves a wParam that is neither `MAIN_VIEW` nor
+        // `SUB_VIEW`, the whole wParam compared, to the view in front
+        // (read from its source; measured against 8.9.8.1 with view 7).
+        // Until Phase 5 Code++ refused it.
+        let mut s = MockServices {
+            view_in_front: 1,
+            ..Default::default()
+        };
+        let r = unsafe { dispatch_nppm(&mut s, NPPM_ACTIVATEDOC, 7, 0) };
+        assert_eq!(r, Some(1));
+        let r = unsafe { dispatch_nppm(&mut s, NPPM_ACTIVATEDOC, usize::MAX, 2) };
+        assert_eq!(r, Some(1));
+        let mut expected = vec!["activate[1,0]", "activate[1,2]"];
+        if let Ok(high) = usize::try_from(1u64 << 32) {
+            let r = unsafe { dispatch_nppm(&mut s, NPPM_ACTIVATEDOC, high, 5) };
+            assert_eq!(r, Some(1));
+            expected.push("activate[1,5]");
+        }
+        assert_eq!(s.calls(), expected);
+    }
+
+    #[test]
+    fn activate_doc_answers_true_when_nothing_is_activated() {
+        // Notepad++ 8.9.8.1 answers TRUE for a position past the last tab
+        // (measured), as for every other request. Until Phase 5 Code++
+        // answered FALSE.
+        let mut s = MockServices {
+            activate_fails: true,
+            ..Default::default()
+        };
+        let r = unsafe { dispatch_nppm(&mut s, NPPM_ACTIVATEDOC, 0, 99) };
+        assert_eq!(r, Some(1));
+        assert_eq!(s.calls(), vec!["activate[0,99]"]);
     }
 
     // --- Long-tail accessors ---

@@ -1,5 +1,6 @@
-//! The host a plugin talks to: one buffer in one view, real menus and
-//! real Scintilla, and a record of everything the plugin asks for.
+//! The host a plugin talks to: one buffer in the main view, the hidden
+//! second view's empty `new 1` as the editor has it, real menus and real
+//! Scintilla, and a record of everything the plugin asks for.
 //!
 //! The dispatcher (`dispatch_nppm`) decodes every message and does the
 //! pointer work; what it asks of the host goes through these methods.
@@ -29,7 +30,7 @@ use std::path::PathBuf;
 
 use codepp_core::LangType;
 use codepp_editor::EditorHandle;
-use codepp_plugin_host::dispatch::L_USER;
+use codepp_plugin_host::dispatch::{L_USER, MAIN_VIEW};
 use codepp_plugin_host::{
     docking::answers_hwnd_lookup, is_plugin_cmd_id, read_dock_disp_info, BufferPathName,
     CursorText, DockDialogParams, HostServices, Hwnd, NppDarkModeColors, ShortcutKey,
@@ -49,7 +50,10 @@ use windows::Win32::UI::WindowsAndMessaging::{
     MF_UNCHECKED, WINDOW_EX_STYLE, WM_COMMAND, WS_CHILD, WS_CLIPCHILDREN, WS_HSCROLL, WS_VSCROLL,
 };
 
-use super::{buffer_text, set_buffer_text, Harness, BUFFER_ID};
+use super::{
+    buffer_text, set_buffer_text, Harness, BUFFER_ID, SECOND_VIEW_BUFFER_ID,
+    SECOND_VIEW_BUFFER_NAME,
+};
 use crate::report::{DockReport, Report};
 
 /// The most requests, status texts and clipboard offers kept; a plugin
@@ -116,9 +120,9 @@ pub(crate) struct Recorder {
     /// Registrations refused at a cap, by kind, for `Report::dropped`.
     refused: std::collections::BTreeMap<&'static str, usize>,
     removed_shortcuts: Vec<i32>,
-    lang: i32,
-    encoding: i32,
-    format: i32,
+    /// The open buffer's language, encoding and format, then the hidden
+    /// second view's buffer's ([`buffer_slot`]).
+    buffers: [BufferState; 2],
     tabbar_hidden: bool,
     toolbar_hidden: bool,
     menu_hidden: bool,
@@ -139,15 +143,32 @@ impl Default for Recorder {
             plugin_scintillas: 0,
             refused: std::collections::BTreeMap::new(),
             removed_shortcuts: Vec::new(),
-            lang: 0,
-            encoding: UNI_COOKIE,
-            format: WIN_FORMAT,
+            buffers: [BufferState::default(); 2],
             tabbar_hidden: false,
             toolbar_hidden: false,
             menu_hidden: false,
             statusbar_hidden: false,
             doc_switcher_shown: false,
             line_number_mode: LINENUMWIDTH_DYNAMIC,
+        }
+    }
+}
+
+/// What a plugin reads of, and sets on, a buffer: its language, `UniMode`
+/// and `EolType`, as Notepad++ numbers them. A new buffer's to start with.
+#[derive(Clone, Copy)]
+struct BufferState {
+    lang: i32,
+    encoding: i32,
+    format: i32,
+}
+
+impl Default for BufferState {
+    fn default() -> Self {
+        Self {
+            lang: 0,
+            encoding: UNI_COOKIE,
+            format: WIN_FORMAT,
         }
     }
 }
@@ -207,6 +228,16 @@ impl Recorder {
 /// Whether `id` names the one buffer the harness has open.
 fn is_buffer(id: isize) -> bool {
     id == BUFFER_ID
+}
+
+/// Where `id`'s state is kept in `Recorder::buffers`: the open buffer's
+/// first, then the hidden second view's. `None` for any other id.
+fn buffer_slot(id: isize) -> Option<usize> {
+    match id {
+        BUFFER_ID => Some(0),
+        SECOND_VIEW_BUFFER_ID => Some(1),
+        _ => None,
+    }
 }
 
 /// The harness as the dispatcher sees it.
@@ -287,6 +318,11 @@ impl HostServices for Bridge<'_> {
     }
 
     fn buffer_path_name(&self, id: isize) -> Option<BufferPathName> {
+        if id == SECOND_VIEW_BUFFER_ID {
+            return Some(BufferPathName::Untitled(
+                SECOND_VIEW_BUFFER_NAME.to_string(),
+            ));
+        }
         self.buffer_path(id).map(BufferPathName::File)
     }
 
@@ -302,11 +338,7 @@ impl HostServices for Bridge<'_> {
     }
 
     fn buffer_lang_type(&self, id: isize) -> i32 {
-        if is_buffer(id) {
-            self.0.rec.lang
-        } else {
-            -1
-        }
+        buffer_slot(id).map_or(-1, |slot| self.0.rec.buffers[slot].lang)
     }
 
     fn language_name(&self, lang: i32) -> Option<&'static str> {
@@ -388,14 +420,18 @@ impl HostServices for Bridge<'_> {
         // a number in Code++'s own User Defined Language range, which no
         // plugin is given, or a negative number is refused; `L_USER`
         // keeps a buffer's UDL, so it is TRUE only for a buffer already in
-        // one — never here, where the buffer is plain text.
-        if !is_buffer(id) || codepp_udl::is_udl_lang_id(lang) || lang < 0 {
+        // one — never here, where no buffer is in one.
+        let Some(slot) = buffer_slot(id) else {
+            return false;
+        };
+        if codepp_udl::is_udl_lang_id(lang) || lang < 0 {
             return false;
         }
+        let state = &mut self.0.rec.buffers[slot];
         if lang == L_USER {
-            return self.0.rec.lang == L_USER;
+            return state.lang == L_USER;
         }
-        self.0.rec.lang = lang;
+        state.lang = lang;
         true
     }
 
@@ -421,8 +457,10 @@ impl HostServices for Bridge<'_> {
         }
     }
 
-    fn activate_doc(&mut self, view: i32, pos: i32) -> bool {
-        view == 0 && pos == 0
+    fn activate_doc(&mut self, _view: i32, pos: i32) -> bool {
+        // The second view is hidden, so the position is taken in the main
+        // view, as the editor and Notepad++ take it.
+        pos == 0
     }
 
     fn launch_find_in_files_dialog(&mut self, directory: Option<PathBuf>, filters: Option<String>) {
@@ -433,10 +471,10 @@ impl HostServices for Bridge<'_> {
     }
 
     fn view_buffer_ids(&self, view: i32) -> Vec<isize> {
-        if view == 0 {
-            vec![BUFFER_ID]
-        } else {
-            Vec::new()
+        match view {
+            0 => vec![BUFFER_ID],
+            1 => vec![SECOND_VIEW_BUFFER_ID],
+            _ => Vec::new(),
         }
     }
 
@@ -449,19 +487,11 @@ impl HostServices for Bridge<'_> {
     }
 
     fn buffer_encoding(&self, id: isize) -> i32 {
-        if is_buffer(id) {
-            self.0.rec.encoding
-        } else {
-            -1
-        }
+        buffer_slot(id).map_or(-1, |slot| self.0.rec.buffers[slot].encoding)
     }
 
     fn buffer_format(&self, id: isize) -> i32 {
-        if is_buffer(id) {
-            self.0.rec.format
-        } else {
-            -1
-        }
+        buffer_slot(id).map_or(-1, |slot| self.0.rec.buffers[slot].format)
     }
 
     fn reload_buffer_id(&mut self, id: isize, with_alert: bool) -> bool {
@@ -481,29 +511,29 @@ impl HostServices for Bridge<'_> {
     }
 
     fn set_buffer_encoding(&mut self, id: isize, unimode: i32) -> bool {
-        if !is_buffer(id) {
+        let Some(slot) = buffer_slot(id) else {
             return false;
-        }
-        self.0.rec.encoding = unimode;
+        };
+        self.0.rec.buffers[slot].encoding = unimode;
         true
     }
 
     fn set_buffer_format(&mut self, id: isize, eoltype: i32) -> bool {
-        if !is_buffer(id) {
+        let Some(slot) = buffer_slot(id) else {
             return false;
-        }
-        self.0.rec.format = eoltype;
+        };
+        self.0.rec.buffers[slot].format = eoltype;
         true
     }
 
     fn encode_sci(&mut self, view: i32) -> i32 {
         self.0.rec.request(format!("encode view {view}"));
-        self.0.rec.encoding
+        self.0.rec.buffers[0].encoding
     }
 
     fn decode_sci(&mut self, view: i32) -> i32 {
         self.0.rec.request(format!("decode view {view}"));
-        self.0.rec.encoding
+        self.0.rec.buffers[0].encoding
     }
 
     fn is_tabbar_hidden(&self) -> bool {
@@ -558,15 +588,18 @@ impl HostServices for Bridge<'_> {
     }
 
     fn buffer_position(&self, id: isize) -> Option<(i32, i32)> {
-        is_buffer(id).then_some((0, 0))
+        match id {
+            BUFFER_ID => Some((0, 0)),
+            SECOND_VIEW_BUFFER_ID => Some((1, 0)),
+            _ => None,
+        }
     }
 
     fn buffer_id_at(&self, view: i32, pos: i32) -> isize {
-        if view == 0 && pos == 0 {
-            BUFFER_ID
-        } else {
-            0
-        }
+        let Ok(pos) = usize::try_from(pos) else {
+            return 0;
+        };
+        self.view_buffer_ids(view).get(pos).copied().unwrap_or(0)
     }
 
     fn save_current_as(&mut self, path: PathBuf, as_copy: bool) -> bool {
@@ -624,7 +657,7 @@ impl HostServices for Bridge<'_> {
     }
 
     fn current_view(&self) -> i32 {
-        0
+        MAIN_VIEW
     }
 
     fn plugin_home_dir(&self) -> Option<PathBuf> {
@@ -953,5 +986,31 @@ impl HostServices for Bridge<'_> {
             "export save kind={kind} name={suggested_name:?} bytes={}",
             data.len()
         ));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The open buffer's state and the hidden second view's buffer's are
+    /// kept apart, and no other id has any: the two slots a plugin's
+    /// getters and setters reach.
+    #[test]
+    fn each_buffer_has_a_slot_of_its_own() {
+        assert_eq!(buffer_slot(BUFFER_ID), Some(0));
+        assert_eq!(buffer_slot(SECOND_VIEW_BUFFER_ID), Some(1));
+        assert_eq!(buffer_slot(0), None);
+        assert_eq!(buffer_slot(BUFFER_ID + 1), None);
+        assert_ne!(BUFFER_ID, SECOND_VIEW_BUFFER_ID);
+    }
+
+    /// The editor's values (`codepp_shell::SECOND_VIEW_BUFFER_ID` and
+    /// `SECOND_VIEW_BUFFER_NAME`), which the harness repeats by hand since
+    /// it does not depend on the shell.
+    #[test]
+    fn the_second_view_buffer_is_the_editors() {
+        assert_eq!(SECOND_VIEW_BUFFER_ID, i32::MAX as isize);
+        assert_eq!(SECOND_VIEW_BUFFER_NAME, "new 1");
     }
 }

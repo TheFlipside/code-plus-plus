@@ -182,6 +182,28 @@ pub const MAX_OPEN_TABS: usize = 1024;
 /// Windows. Until Phase 5 it was LF everywhere.
 pub const NEW_DOCUMENT_EOL: Eol = new_document_eol(cfg!(windows));
 
+/// The id of the buffer Notepad++'s second view holds while that view is
+/// hidden, which in Code++ it always is: Code++ has one view. Notepad++
+/// gives each of its two views an empty `new 1` at startup, and its hidden
+/// second view keeps its own for the whole session, so a plugin that
+/// counts or names the open buffers is told about it (measured against
+/// 8.9.8.1; see [`SecondViewBuffer`]). Tab ids count up from 1 and stop
+/// short of this one ([`Shell::allocate_buffer_id`]), so it is never a
+/// tab's. Until Phase 5 Code++ had no such buffer.
+pub const SECOND_VIEW_BUFFER_ID: i32 = i32::MAX;
+
+/// The name of the buffer [`SECOND_VIEW_BUFFER_ID`] names: `new 1`, whatever
+/// the tabs are called, as in Notepad++ 8.9.8.1, where it and a `new 1` in
+/// the main view were both `new 1` (measured). Untitled numbering counts the
+/// tabs only, so it takes `new 1` from no tab either.
+pub const SECOND_VIEW_BUFFER_NAME: &str = "new 1";
+
+/// Whether `id` is the hidden second view's buffer's,
+/// [`SECOND_VIEW_BUFFER_ID`].
+fn is_second_view_buffer(id: isize) -> bool {
+    id == SECOND_VIEW_BUFFER_ID as isize
+}
+
 /// Edit → EOL Conversion's rows, in menu order: Notepad++'s labels (its
 /// `Notepad_plus.rc`) and the line-ending kind each converts the tab in
 /// front to, through [`Shell::convert_active_eol`]. Every backend builds
@@ -1394,6 +1416,31 @@ impl Default for Tab {
     }
 }
 
+/// What a plugin can read of, and set on, the buffer the hidden second view
+/// holds ([`SECOND_VIEW_BUFFER_ID`]). It has no text, no document and no
+/// tab: Code++ shows it nowhere, and only the plugin messages read it. It
+/// starts with a new buffer's defaults, as in Notepad++, where it is a new
+/// document like any other, and `NPPM_SETBUFFERLANGTYPE`,
+/// `NPPM_SETBUFFERENCODING` and `NPPM_SETBUFFERFORMAT` change it and tell
+/// nobody, as they do there (measured against 8.9.8.1).
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct SecondViewBuffer {
+    lang: LangType,
+    encoding: Encoding,
+    eol: Eol,
+}
+
+impl Default for SecondViewBuffer {
+    fn default() -> Self {
+        let tab = Tab::default();
+        Self {
+            lang: tab.lang,
+            encoding: tab.encoding,
+            eol: tab.eol,
+        }
+    }
+}
+
 /// Upper bound on a display name, in `char`s, for chrome that renders
 /// one: tab labels, window titles, status-bar parts, confirmation
 /// prompts.
@@ -2032,8 +2079,11 @@ pub struct Shell {
     /// Next buffer id to hand out. Starts at 1 (0 is "no buffer").
     /// Monotonically increasing; never reused so closed-tab ids
     /// don't accidentally resolve a plugin lookup to a different
-    /// buffer.
+    /// buffer. Stops short of [`SECOND_VIEW_BUFFER_ID`].
     next_buffer_id: i32,
+    /// The buffer the hidden second view holds, which only the plugin
+    /// messages read ([`SECOND_VIEW_BUFFER_ID`]).
+    second_view: SecondViewBuffer,
     /// Plugin registry. Cross-platform since Phase 5 (Win32 via
     /// `LoadLibraryW`, GTK/Linux via `dlopen`).
     plugins: PluginHost,
@@ -2714,6 +2764,7 @@ impl Shell {
             tabs: Vec::new(),
             active_tab: None,
             next_buffer_id: 1,
+            second_view: SecondViewBuffer::default(),
             plugins: PluginHost::new(),
             pending_notifications: Vec::new(),
             loader,
@@ -2925,21 +2976,23 @@ impl Shell {
     /// installing it on a `Tab`. Bumps the `next_buffer_id` counter
     /// without reuse — see the field doc.
     ///
-    /// Uses `checked_add` rather than `saturating_add`: saturation
-    /// would silently start handing out colliding ids at
-    /// `i32::MAX`, breaking the per-tab plugin-ABI `BufferID`
-    /// contract. Two billion tab opens in a single session is
-    /// unreachable in practice, but a hostile in-process plugin
-    /// could in principle call `NPPM_DOOPEN` in a tight loop —
+    /// Panics rather than hand out [`SECOND_VIEW_BUFFER_ID`], which the
+    /// hidden second view's buffer holds: a tab given it would answer
+    /// plugins as that buffer. Two billion tab opens in a single
+    /// session is unreachable in practice, but a hostile in-process
+    /// plugin could in principle call `NPPM_DOOPEN` in a tight loop —
     /// the panic here turns that `DoS` path into a clean abort
-    /// rather than a silent ABI break. The panic is caught by the
-    /// `wnd_proc`'s `catch_unwind` wrappers.
+    /// rather than a silent ABI break. A release build, whose profile
+    /// aborts on a panic, ends there; a debug build's `wnd_proc`
+    /// `catch_unwind` wrappers catch it.
     fn allocate_buffer_id(&mut self) -> i32 {
         let id = self.next_buffer_id;
-        self.next_buffer_id = self
-            .next_buffer_id
-            .checked_add(1)
-            .expect("buffer id space exhausted (i32::MAX opens in one session)");
+        assert!(
+            id < SECOND_VIEW_BUFFER_ID,
+            "buffer id space exhausted (i32::MAX opens in one session)"
+        );
+        // Below `i32::MAX`, so this does not overflow.
+        self.next_buffer_id = id + 1;
         id
     }
 
@@ -7527,7 +7580,8 @@ impl Shell {
     /// menu-driven active-tab setter.
     ///
     /// Same metadata-only semantics: the next save through the
-    /// affected tab encodes via the new variant.
+    /// affected tab encodes via the new variant. The hidden second
+    /// view's buffer ([`SECOND_VIEW_BUFFER_ID`]) takes it too.
     ///
     /// Returns `true` whenever the buffer ends up in the requested
     /// state — both for an actual change and for a same-value
@@ -7544,6 +7598,11 @@ impl Shell {
         id: isize,
         encoding: codepp_core::Encoding,
     ) -> bool {
+        if is_second_view_buffer(id) {
+            // The hidden second view's buffer has no text to re-encode.
+            self.second_view.encoding = encoding;
+            return true;
+        }
         let Some(tab) = self.tabs.iter_mut().find(|t| t.id as isize == id) else {
             return false;
         };
@@ -7602,6 +7661,9 @@ impl Shell {
     /// an empty `Tab::text`; its completion overwrites `Tab::eol` with the
     /// detected value, as it did before this method converted anything.
     ///
+    /// The hidden second view's buffer ([`SECOND_VIEW_BUFFER_ID`]) has
+    /// no lines, so only its label changes.
+    ///
     /// Returns `false` for an unknown id, and for [`Eol::Mixed`]: that
     /// variant describes a file that ends its lines in more than one
     /// way, so there is no single sequence to convert to, and the plugin
@@ -7621,6 +7683,11 @@ impl Shell {
     ) -> bool {
         if eol.is_mixed() {
             return false;
+        }
+        if is_second_view_buffer(id) {
+            // The hidden second view's buffer has no lines to convert.
+            self.second_view.eol = eol;
+            return true;
         }
         let Some(idx) = self.tabs.iter().position(|t| t.id as isize == id) else {
             return false;
@@ -8064,7 +8131,9 @@ impl Shell {
                     active_index,
                     files,
                 },
-                // Empty sub view for N++ shape parity (Code++ is single-view).
+                // Empty sub view for N++ shape parity: Code++ shows one
+                // view, and its hidden second view's `new 1` is untitled,
+                // which a session file does not record.
                 sub_view: Some(NppView::default()),
             },
         };
@@ -8456,9 +8525,15 @@ impl Shell {
     /// What Notepad++ calls a buffer's full path name, for the
     /// `RUNCOMMAND_USER` path messages: the tab's file, the file its first
     /// load is for while that load is in flight, or for an untitled buffer
-    /// its name ([`untitled_name`]). `None` for an unknown id.
+    /// its name ([`untitled_name`]); for the hidden second view's buffer,
+    /// [`SECOND_VIEW_BUFFER_NAME`]. `None` for an unknown id.
     #[must_use]
     pub fn buffer_path_name(&self, id: isize) -> Option<BufferPathName> {
+        if is_second_view_buffer(id) {
+            return Some(BufferPathName::Untitled(
+                SECOND_VIEW_BUFFER_NAME.to_string(),
+            ));
+        }
         let tab = self.tabs.iter().find(|t| t.id as isize == id)?;
         let file = tab
             .path
@@ -8468,6 +8543,20 @@ impl Shell {
             || BufferPathName::Untitled(untitled_name(tab)),
             BufferPathName::File,
         ))
+    }
+
+    /// The language, encoding and line ending a plugin is told buffer `id`
+    /// has: a tab's, or the hidden second view's buffer's
+    /// ([`SECOND_VIEW_BUFFER_ID`]). `None` for an unknown id.
+    fn plugin_buffer(&self, id: isize) -> Option<(LangType, &Encoding, Eol)> {
+        if is_second_view_buffer(id) {
+            let buffer = &self.second_view;
+            return Some((buffer.lang, &buffer.encoding, buffer.eol));
+        }
+        self.tabs
+            .iter()
+            .find(|t| t.id as isize == id)
+            .map(|t| (t.lang, &t.encoding, t.eol))
     }
 
     /// The first load `tab` is waiting on, from the open that will give the
@@ -10621,6 +10710,36 @@ fn plugin_lang_id(lang: LangType) -> i32 {
     }
 }
 
+/// The encoding a plugin is told a buffer has: Notepad++'s `UniMode` for
+/// Code++'s `Encoding`. `Other` (an unknown WHATWG codepage label, e.g.
+/// `windows-1252`, `shift_jis`) collapses to `UNI_8BIT` — N++'s ABI doesn't
+/// carry the codepage identity past this point either, and plugins gating
+/// on "is this Unicode?" still get the right answer (`UNI_8BIT` is "no").
+fn plugin_unimode(encoding: &codepp_core::Encoding) -> i32 {
+    match encoding {
+        codepp_core::Encoding::Utf8 => codepp_plugin_host::UNI_COOKIE,
+        codepp_core::Encoding::Utf8Bom => codepp_plugin_host::UNI_UTF8,
+        codepp_core::Encoding::Utf16LeBom => codepp_plugin_host::UNI_UTF16LE,
+        codepp_core::Encoding::Utf16BeBom => codepp_plugin_host::UNI_UTF16BE,
+        codepp_core::Encoding::Utf16Le => codepp_plugin_host::UNI_UTF16LE_NO_BOM,
+        codepp_core::Encoding::Utf16Be => codepp_plugin_host::UNI_UTF16BE_NO_BOM,
+        codepp_core::Encoding::Other(_) => codepp_plugin_host::UNI_8BIT,
+    }
+}
+
+/// The line-ending format a plugin is told a buffer has: Notepad++'s
+/// `EolType` for Code++'s `Eol`. A buffer whose file ends its lines in more
+/// than one way (`Eol::Mixed`, which Notepad++ does not have) answers its
+/// first ending, the format Notepad++ 8.9.8.1 gives such a file (measured
+/// with a probe plugin) and the ending Enter inserts there.
+fn plugin_eol_format(eol: Eol) -> i32 {
+    match eol.ending() {
+        codepp_core::Ending::CrLf => codepp_plugin_host::WIN_FORMAT,
+        codepp_core::Ending::Cr => codepp_plugin_host::MAC_FORMAT,
+        codepp_core::Ending::Lf => codepp_plugin_host::UNIX_FORMAT,
+    }
+}
+
 /// Adapter that exposes `Shell` + the per-call platform handles to the
 /// plugin-host's `HostServices` trait. Lives only for the duration of
 /// one `dispatch_plugin_message` call; carries `&mut Shell` and
@@ -10655,6 +10774,8 @@ impl<U: UiPlatform> HostServices for HostBridge<'_, U> {
     }
 
     fn buffer_path(&self, id: isize) -> Option<PathBuf> {
+        // `None` for the hidden second view's buffer, as for any untitled
+        // buffer: it has a name (`buffer_path_name`) and no file.
         // Linear scan over tabs. Phase 3's tab counts are small
         // (handful at most); a HashMap<id, idx> is overkill until
         // multi-window or session-restore lands hundreds of tabs.
@@ -10681,10 +10802,8 @@ impl<U: UiPlatform> HostServices for HostBridge<'_, U> {
         // -1 for an unknown id, Notepad++'s "no such buffer". Until Phase 5
         // this answered L_TEXT, as if the buffer existed in Normal Text.
         self.shell
-            .tabs
-            .iter()
-            .find(|t| t.id as isize == id)
-            .map_or(-1, |t| plugin_lang_id(t.lang))
+            .plugin_buffer(id)
+            .map_or(-1, |(lang, _, _)| plugin_lang_id(lang))
     }
 
     fn plugins_config_dir(&self) -> PathBuf {
@@ -10867,9 +10986,15 @@ impl<U: UiPlatform> HostServices for HostBridge<'_, U> {
         // same-language set only a record against the buffer's load in
         // flight — is `Shell::set_tab_lang`'s, which the Language menus
         // reach too. The notification is delivered later, with no borrow
-        // held, like the other lifecycle ones.
-        let Some(idx) = self.shell.tabs.iter().position(|t| t.id as isize == id) else {
-            return false;
+        // held, like the other lifecycle ones. The hidden second view's
+        // buffer takes the same rules, and its language is only recorded:
+        // nothing shows it, and Notepad++ 8.9.8.1 tells no plugin of the
+        // change (measured).
+        let idx = self.shell.tabs.iter().position(|t| t.id as isize == id);
+        let current = match idx {
+            Some(idx) => self.shell.tabs[idx].lang,
+            None if is_second_view_buffer(id) => self.shell.second_view.lang,
+            None => return false,
         };
         if codepp_udl::is_udl_lang_id(lang) {
             tracing::debug!(
@@ -10880,14 +11005,19 @@ impl<U: UiPlatform> HostServices for HostBridge<'_, U> {
             return false;
         }
         if lang == codepp_plugin_host::dispatch::L_USER {
-            return plugin_lang_id(self.shell.tabs[idx].lang) == lang;
+            return plugin_lang_id(current) == lang;
         }
         // No language is negative: Notepad++ refuses anything below L_TEXT,
         // and -1 is what NPPM_GETBUFFERLANGTYPE answers for no such buffer.
         if lang < L_TEXT.as_npp_id() {
             return false;
         }
-        self.shell.set_tab_lang(self.ui, idx, LangType(lang));
+        match idx {
+            Some(idx) => {
+                self.shell.set_tab_lang(self.ui, idx, LangType(lang));
+            }
+            None => self.shell.second_view.lang = LangType(lang),
+        }
         true
     }
 
@@ -10939,13 +11069,12 @@ impl<U: UiPlatform> HostServices for HostBridge<'_, U> {
         let _ = self.ui.set_npp_menu_item_check(cmd_id, checked);
     }
 
-    fn activate_doc(&mut self, view: i32, pos: i32) -> bool {
-        // wparam: view selector (0 = primary, 1 = secondary).
-        // lparam: tab position in that view.
-        //
-        // Single-view through Phase 4: only `view == 0` resolves to
-        // a real tab list; secondary view is reserved for split-
-        // view (Phase 5). Out-of-range pos returns false.
+    fn activate_doc(&mut self, _view: i32, pos: i32) -> bool {
+        // The second view is hidden, so the position is taken in the view
+        // in front, the only one Code++ has: Notepad++ 8.9.8.1 refuses to
+        // switch to its hidden second view and activates the position in
+        // the view in front (measured). Until Phase 5 Code++ refused
+        // view 1. An out-of-range position activates nothing.
         //
         // Same metadata-only pattern as `switch_to_file`'s
         // activate-existing-tab branch: `Shell::switch_to_tab` moves
@@ -10953,10 +11082,9 @@ impl<U: UiPlatform> HostServices for HostBridge<'_, U> {
         // rebinds the visible Scintilla view once the dispatch returns
         // (its post-dispatch `needs_rebind` check) — unless the tab's
         // load is still in flight, which binds it when it lands.
-        if view != 0 || pos < 0 {
+        let Ok(idx) = usize::try_from(pos) else {
             return false;
-        }
-        let idx = pos as usize;
+        };
         if idx >= self.shell.tabs.len() {
             return false;
         }
@@ -10979,22 +11107,23 @@ impl<U: UiPlatform> HostServices for HostBridge<'_, U> {
     }
 
     fn view_buffer_ids(&self, view: i32) -> Vec<isize> {
-        // One view: every tab, untitled ones included, in the tab
-        // strip's left-to-right order, which is what `buffer_id_at`
-        // takes a position in. The second view has none.
-        if view == 0 {
-            self.shell.tabs.iter().map(|t| t.id as isize).collect()
-        } else {
-            Vec::new()
+        // The main view: every tab, untitled ones included, in the tab
+        // strip's left-to-right order. The hidden second view: its one
+        // buffer. These are the positions `buffer_id_at` takes. Until
+        // Phase 5 the second view had none.
+        match view {
+            0 => self.shell.tabs.iter().map(|t| t.id as isize).collect(),
+            1 => vec![SECOND_VIEW_BUFFER_ID as isize],
+            _ => Vec::new(),
         }
     }
 
     fn current_doc_index(&self, view: i32) -> i32 {
-        // Primary view exposes the active tab's `tabs[]` index;
-        // secondary view doesn't exist yet (split-view is Phase 5),
-        // so it reports -1 — the documented "no view" sentinel.
-        // The `i as i32` cast is safe: `MAX_OPEN_TABS` (1024) bounds
-        // the tab list, well below `i32::MAX`.
+        // The main view exposes the active tab's `tabs[]` index. The
+        // second view is hidden, and Notepad++ answers -1 for a hidden
+        // view whatever it holds. The `i as i32` cast is safe:
+        // `MAX_OPEN_TABS` (1024) bounds the tab list, well below
+        // `i32::MAX`.
         match view {
             0 => self.shell.active_tab.map_or(-1, |i| i as i32),
             _ => -1,
@@ -11002,40 +11131,15 @@ impl<U: UiPlatform> HostServices for HostBridge<'_, U> {
     }
 
     fn buffer_encoding(&self, id: isize) -> i32 {
-        // Map Code++'s internal `Encoding` to N++'s `UniMode` enum.
-        // `Other` (unknown WHATWG codepage label, e.g. `windows-1252`,
-        // `shift_jis`) collapses to `UNI_8BIT` — N++'s ABI doesn't
-        // carry the codepage identity past this point either, and
-        // plugins gating on "is this Unicode?" still get the right
-        // answer (UNI_8BIT is "no").
-        let Some(tab) = self.shell.tabs.iter().find(|t| t.id as isize == id) else {
-            return -1;
-        };
-        match &tab.encoding {
-            codepp_core::Encoding::Utf8 => codepp_plugin_host::UNI_COOKIE,
-            codepp_core::Encoding::Utf8Bom => codepp_plugin_host::UNI_UTF8,
-            codepp_core::Encoding::Utf16LeBom => codepp_plugin_host::UNI_UTF16LE,
-            codepp_core::Encoding::Utf16BeBom => codepp_plugin_host::UNI_UTF16BE,
-            codepp_core::Encoding::Utf16Le => codepp_plugin_host::UNI_UTF16LE_NO_BOM,
-            codepp_core::Encoding::Utf16Be => codepp_plugin_host::UNI_UTF16BE_NO_BOM,
-            codepp_core::Encoding::Other(_) => codepp_plugin_host::UNI_8BIT,
-        }
+        self.shell
+            .plugin_buffer(id)
+            .map_or(-1, |(_, encoding, _)| plugin_unimode(encoding))
     }
 
     fn buffer_format(&self, id: isize) -> i32 {
-        // Map Code++'s internal `Eol` to N++'s `EolType`. A buffer whose
-        // file ends its lines in more than one way (`Eol::Mixed`, which
-        // Notepad++ does not have) answers its first ending, the format
-        // Notepad++ 8.9.8.1 gives such a file (measured with a probe
-        // plugin) and the ending Enter inserts there.
-        let Some(tab) = self.shell.tabs.iter().find(|t| t.id as isize == id) else {
-            return -1;
-        };
-        match tab.eol.ending() {
-            codepp_core::Ending::CrLf => codepp_plugin_host::WIN_FORMAT,
-            codepp_core::Ending::Cr => codepp_plugin_host::MAC_FORMAT,
-            codepp_core::Ending::Lf => codepp_plugin_host::UNIX_FORMAT,
-        }
+        self.shell
+            .plugin_buffer(id)
+            .map_or(-1, |(_, _, eol)| plugin_eol_format(eol))
     }
 
     fn reload_buffer_id(&mut self, id: isize, with_alert: bool) -> bool {
@@ -11159,11 +11263,11 @@ impl<U: UiPlatform> HostServices for HostBridge<'_, U> {
     }
 
     fn encode_sci(&mut self, view: i32) -> i32 {
-        // Single-view through Phase 4: only view 0 has an active
-        // buffer. View 1 (secondary) is reserved for split-view
-        // (Phase 5); it has no active buffer today, so a plugin
-        // asking for it gets -1 — matching N++'s "view has no
-        // buffer" return value.
+        // Only view 0 has a Scintilla view to convert. The second view
+        // is always hidden, and its `new 1` has no Scintilla view behind
+        // it, so a plugin asking for it gets -1, N++'s "view has no
+        // buffer" return value, where Notepad++ converts its hidden
+        // view's buffer.
         if view != 0 {
             return -1;
         }
@@ -11262,9 +11366,8 @@ impl<U: UiPlatform> HostServices for HostBridge<'_, U> {
     }
 
     fn current_view(&self) -> i32 {
-        // Single-view through Phase 4. Phase 5 split-view will
-        // return 0 / 1 based on which view has focus.
-        0
+        // Code++ shows one view; its second is always hidden.
+        codepp_plugin_host::dispatch::MAIN_VIEW
     }
 
     fn plugin_home_dir(&self) -> Option<PathBuf> {
@@ -11591,24 +11694,25 @@ impl<U: UiPlatform> HostServices for HostBridge<'_, U> {
     }
 
     fn buffer_position(&self, id: isize) -> Option<(i32, i32)> {
-        // Single-view through Phase 4: every known buffer lives in
-        // the primary view (0). Untitled tabs *are* addressable here
-        // — the position lookup just
-        // wants a tab index, so the lack of an on-disk path doesn't
-        // exclude the tab.
+        // Every tab is in the main view (0), untitled ones included: the
+        // position lookup wants a tab index, so the lack of an on-disk
+        // path doesn't exclude the tab. The hidden second view's buffer is
+        // the first, and only, in view 1.
+        if is_second_view_buffer(id) {
+            return Some((1, 0));
+        }
         let idx = self.shell.tabs.iter().position(|t| t.id as isize == id)?;
         Some((0, idx as i32))
     }
 
     fn buffer_id_at(&self, view: i32, pos: i32) -> isize {
-        // Single-view: only view 0 has buffers. Out-of-range index
-        // (negative or beyond the open count) returns 0 — N++'s
-        // documented "no buffer" sentinel.
-        if view != 0 || pos < 0 {
+        // The buffer at `pos` in `view`'s list (`view_buffer_ids`). An
+        // out-of-range index (negative or beyond the open count) returns
+        // 0 — N++'s documented "no buffer" sentinel.
+        let Ok(pos) = usize::try_from(pos) else {
             return 0;
-        }
-        let pos = pos as usize;
-        self.shell.tabs.get(pos).map_or(0, |t| t.id as isize)
+        };
+        self.view_buffer_ids(view).get(pos).copied().unwrap_or(0)
     }
 
     fn save_current_as(&mut self, path: PathBuf, as_copy: bool) -> bool {
@@ -14284,9 +14388,10 @@ mod tests {
 
     /// The open-file messages count and name every tab through the
     /// shell's bridge and the real dispatcher, an untitled one included,
-    /// in the order `NPPM_GETBUFFERIDFROMPOS` numbers them, as Notepad++
-    /// counts and names its buffers. Until Phase 5 untitled tabs were
-    /// left out.
+    /// in the order `NPPM_GETBUFFERIDFROMPOS` numbers them, and the hidden
+    /// second view's own `new 1` after them, as Notepad++ counts and names
+    /// its buffers. Until Phase 5 untitled tabs were left out, and Code++
+    /// had no second-view buffer.
     #[test]
     fn the_open_file_messages_count_and_name_every_tab() {
         use codepp_plugin_host::dispatch::{
@@ -14305,9 +14410,9 @@ mod tests {
         assert_eq!(shell.tabs.len(), 2);
 
         for (selector, count) in [
-            (codepp_plugin_host::ALL_OPEN_FILES, 2),
+            (codepp_plugin_host::ALL_OPEN_FILES, 3),
             (codepp_plugin_host::PRIMARY_VIEW, 2),
-            (codepp_plugin_host::SECOND_VIEW, 0),
+            (codepp_plugin_host::SECOND_VIEW, 1),
         ] {
             let r = unsafe {
                 shell.dispatch_plugin_message(
@@ -14321,7 +14426,7 @@ mod tests {
             assert_eq!(r, Some(count), "selector {selector}");
         }
 
-        let mut bufs = vec![vec![0xFFFFu16; MAX_PATH_TCHARS]; 3];
+        let mut bufs = vec![vec![0xFFFFu16; MAX_PATH_TCHARS]; 4];
         let mut slots: Vec<*mut u16> = bufs.iter_mut().map(Vec::as_mut_ptr).collect();
         let r = unsafe {
             shell.dispatch_plugin_message(
@@ -14329,17 +14434,22 @@ mod tests {
                 HostHandles::null(),
                 NPPM_GETOPENFILENAMES,
                 slots.as_mut_ptr() as usize,
-                3,
+                4,
             )
         };
-        assert_eq!(r, Some(2));
+        assert_eq!(r, Some(3));
         let text = |buf: &[u16]| {
             let n = buf.iter().position(|&u| u == 0).unwrap();
             String::from_utf16(&buf[..n]).unwrap()
         };
         assert_eq!(text(&bufs[0]), untitled);
         assert_eq!(text(&bufs[1]), file.to_str().unwrap());
-        assert_eq!(bufs[2][0], 0xFFFF, "a third slot is left alone");
+        assert_eq!(
+            text(&bufs[2]),
+            SECOND_VIEW_BUFFER_NAME,
+            "the second view's last"
+        );
+        assert_eq!(bufs[3][0], 0xFFFF, "a fourth slot is left alone");
 
         // The second name is the buffer at position 1.
         let at_one = unsafe {
@@ -14352,6 +14462,190 @@ mod tests {
             )
         };
         assert_eq!(at_one, Some(shell.tabs[1].id as isize));
+    }
+
+    /// Notepad++'s hidden second view keeps an empty `new 1` of its own,
+    /// and every message that names a buffer by id or by position answers
+    /// for it as for any other, through the shell's bridge and the real
+    /// dispatcher (measured against 8.9.8.1): position 0 of view 1, at
+    /// `0x40000000` from either priority view, named `new 1`, with a new
+    /// buffer's language, encoding and line ending. The view is hidden, so
+    /// `NPPM_GETCURRENTDOCINDEX` answers -1 for it, and a reload of its
+    /// untitled buffer is refused. Until Phase 5 Code++ had no such
+    /// buffer.
+    #[test]
+    fn the_hidden_second_view_holds_a_new_1_of_its_own() {
+        use codepp_plugin_host::dispatch::{
+            MAIN_VIEW, MAX_PATH_TCHARS, NPPM_GETBUFFERENCODING, NPPM_GETBUFFERFORMAT,
+            NPPM_GETBUFFERIDFROMPOS, NPPM_GETBUFFERLANGTYPE, NPPM_GETCURRENTDOCINDEX,
+            NPPM_GETFULLPATHFROMBUFFERID, NPPM_GETOPENFILENAMESSECOND, NPPM_GETPOSFROMBUFFERID,
+            NPPM_RELOADBUFFERID, SUB_VIEW,
+        };
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+        shell.new_untitled(&mut ui);
+        shell.new_untitled(&mut ui);
+        let mut send = |shell: &mut Shell, msg: u32, w: usize, l: isize| {
+            // SAFETY: integer arguments, or a pointer into a buffer that
+            // outlives the call.
+            unsafe { shell.dispatch_plugin_message(&mut ui, HostHandles::null(), msg, w, l) }
+        };
+
+        let id = send(&mut shell, NPPM_GETBUFFERIDFROMPOS, 0, SUB_VIEW as isize);
+        assert_eq!(id, Some(SECOND_VIEW_BUFFER_ID as isize));
+        let id = SECOND_VIEW_BUFFER_ID as usize;
+        assert_eq!(
+            send(&mut shell, NPPM_GETBUFFERIDFROMPOS, 1, SUB_VIEW as isize),
+            Some(0)
+        );
+        for priority in [MAIN_VIEW, SUB_VIEW] {
+            assert_eq!(
+                send(&mut shell, NPPM_GETPOSFROMBUFFERID, id, priority as isize),
+                Some(0x4000_0000),
+                "priority view {priority}"
+            );
+        }
+
+        // Named `new 1`, though the first tab is `new 1` too: untitled
+        // numbering counts the tabs only.
+        assert_eq!(tab_display_name(&shell.tabs[0]), "new 1");
+        assert_eq!(
+            send(&mut shell, NPPM_GETFULLPATHFROMBUFFERID, id, 0),
+            Some(5)
+        );
+        let mut name = vec![0u16; 16];
+        let r = send(
+            &mut shell,
+            NPPM_GETFULLPATHFROMBUFFERID,
+            id,
+            name.as_mut_ptr() as isize,
+        );
+        assert_eq!(r, Some(5));
+        assert_eq!(String::from_utf16(&name[..5]).unwrap(), "new 1");
+        let mut slot = vec![0xFFFFu16; MAX_PATH_TCHARS];
+        let mut slots = [slot.as_mut_ptr()];
+        let r = send(
+            &mut shell,
+            NPPM_GETOPENFILENAMESSECOND,
+            slots.as_mut_ptr() as usize,
+            1,
+        );
+        assert_eq!(r, Some(1));
+        assert_eq!(String::from_utf16(&slot[..6]).unwrap(), "new 1\0");
+
+        // A new buffer's language, encoding and line ending.
+        assert_eq!(send(&mut shell, NPPM_GETBUFFERLANGTYPE, id, 0), Some(0));
+        assert_eq!(
+            send(&mut shell, NPPM_GETBUFFERENCODING, id, 0),
+            Some(codepp_plugin_host::UNI_COOKIE as isize)
+        );
+        assert_eq!(
+            send(&mut shell, NPPM_GETBUFFERFORMAT, id, 0),
+            Some(plugin_eol_format(NEW_DOCUMENT_EOL) as isize)
+        );
+        assert_eq!(send(&mut shell, NPPM_RELOADBUFFERID, id, 0), Some(0));
+
+        // The view is hidden: no index in it, whichever wParam.
+        for w in [0, 1] {
+            assert_eq!(
+                send(&mut shell, NPPM_GETCURRENTDOCINDEX, w, SUB_VIEW as isize),
+                Some(-1)
+            );
+            assert_eq!(
+                send(&mut shell, NPPM_GETCURRENTDOCINDEX, w, MAIN_VIEW as isize),
+                Some(1)
+            );
+        }
+    }
+
+    /// The setters change the hidden second view's `new 1`, as Notepad++'s
+    /// do (measured against 8.9.8.1), under the rules a tab's language
+    /// follows, and tell nobody: no notification, nothing re-lexed or
+    /// converted, and no tab touched.
+    #[test]
+    fn the_hidden_second_views_buffer_takes_the_setters_and_tells_nobody() {
+        use codepp_plugin_host::dispatch::{
+            L_USER, NPPM_GETBUFFERENCODING, NPPM_GETBUFFERFORMAT, NPPM_GETBUFFERLANGTYPE,
+            NPPM_SETBUFFERENCODING, NPPM_SETBUFFERFORMAT, NPPM_SETBUFFERLANGTYPE,
+        };
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+        shell.new_untitled(&mut ui);
+        shell.new_untitled(&mut ui);
+        let _ = shell.take_notifications();
+        let tabs_before: Vec<(i32, LangType, Encoding, Eol)> = shell
+            .tabs
+            .iter()
+            .map(|t| (t.id, t.lang, t.encoding.clone(), t.eol))
+            .collect();
+        let (lang_calls, converted) = (ui.apply_lang_calls.len(), ui.converted_docs.len());
+        let mut send = |shell: &mut Shell, msg: u32, w: usize, l: isize| {
+            // SAFETY: integer arguments only; no pointer is passed.
+            unsafe { shell.dispatch_plugin_message(&mut ui, HostHandles::null(), msg, w, l) }
+        };
+        let id = SECOND_VIEW_BUFFER_ID as usize;
+
+        let cpp = codepp_core::lang::L_CPP.as_npp_id() as isize;
+        assert_eq!(send(&mut shell, NPPM_SETBUFFERLANGTYPE, id, cpp), Some(1));
+        assert_eq!(send(&mut shell, NPPM_GETBUFFERLANGTYPE, id, 0), Some(cpp));
+        assert_eq!(
+            send(&mut shell, NPPM_SETBUFFERLANGTYPE, id, cpp),
+            Some(1),
+            "a set to the language it has"
+        );
+        assert_eq!(
+            send(&mut shell, NPPM_SETBUFFERLANGTYPE, id, L_USER as isize),
+            Some(0)
+        );
+        assert_eq!(send(&mut shell, NPPM_SETBUFFERLANGTYPE, id, 1024), Some(0));
+        assert_eq!(send(&mut shell, NPPM_SETBUFFERLANGTYPE, id, -1), Some(0));
+        assert_eq!(send(&mut shell, NPPM_GETBUFFERLANGTYPE, id, 0), Some(cpp));
+        let unix = codepp_plugin_host::UNIX_FORMAT as isize;
+        assert_eq!(send(&mut shell, NPPM_SETBUFFERFORMAT, id, unix), Some(1));
+        assert_eq!(send(&mut shell, NPPM_GETBUFFERFORMAT, id, 0), Some(unix));
+        let utf8_bom = codepp_plugin_host::UNI_UTF8 as isize;
+        assert_eq!(
+            send(&mut shell, NPPM_SETBUFFERENCODING, id, utf8_bom),
+            Some(1)
+        );
+        assert_eq!(
+            send(&mut shell, NPPM_GETBUFFERENCODING, id, 0),
+            Some(utf8_bom)
+        );
+
+        assert!(shell.take_notifications().is_empty());
+        assert_eq!(ui.converted_docs.len(), converted);
+        assert_eq!(ui.apply_lang_calls.len(), lang_calls);
+        let tabs_after: Vec<(i32, LangType, Encoding, Eol)> = shell
+            .tabs
+            .iter()
+            .map(|t| (t.id, t.lang, t.encoding.clone(), t.eol))
+            .collect();
+        assert_eq!(tabs_after, tabs_before);
+    }
+
+    /// Tab ids stop short of the hidden second view's buffer's: a tab
+    /// given it would answer plugins as that buffer.
+    #[test]
+    fn no_tab_is_given_the_second_view_buffers_id() {
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        shell.next_buffer_id = SECOND_VIEW_BUFFER_ID - 1;
+        assert_eq!(shell.allocate_buffer_id(), SECOND_VIEW_BUFFER_ID - 1);
+        let next =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| shell.allocate_buffer_id()));
+        // The allocator's own refusal, not an overflow of the counter
+        // past it, which a debug build would also panic on. The limit is
+        // the one the allocator always had.
+        let payload = next.expect_err("handed out the second view buffer's id");
+        let message = payload
+            .downcast_ref::<String>()
+            .map(String::as_str)
+            .or_else(|| payload.downcast_ref::<&str>().copied())
+            .unwrap_or_default();
+        assert!(message.contains("exhausted"), "{message}");
     }
 
     /// The cursor messages reach the UI through the shell's bridge and
@@ -15710,9 +16004,10 @@ mod tests {
     #[cfg(target_os = "windows")]
     #[test]
     fn plugin_dispatch_encode_sci_secondary_view_returns_minus_one() {
-        // Single-view Code++ has no secondary view, so view == 1
-        // always reports -1 ("view has no active buffer") even
-        // when the primary view has an active tab.
+        // Code++'s second view is always hidden, with no Scintilla
+        // view behind its `new 1`, so view == 1 always reports -1
+        // ("view has no active buffer") even when the primary view
+        // has an active tab.
         let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
         let mut shell = Shell::new(wake).unwrap();
         let mut ui = FakeUi::default();
@@ -21226,8 +21521,10 @@ mod tests {
     }
 
     /// `NPPM_ACTIVATEDOC` switches through the same rule: a real move is
-    /// announced once, a repeat of it is not, and a position or view
-    /// with no tab is refused without touching anything.
+    /// announced once, and a repeat of it is not. A position with no tab
+    /// changes nothing, and the hidden second view, or a view that is
+    /// neither, takes the position in the main view, as Notepad++ 8.9.8.1
+    /// does (measured): TRUE throughout.
     #[test]
     fn activate_doc_switches_and_announces_a_real_change_once() {
         const NPPM_ACTIVATEDOC: u32 = (0x0400 + 1000) + 28;
@@ -21259,10 +21556,17 @@ mod tests {
         assert_eq!(activate(&mut shell, 0, 2), Some(1), "already in front");
         assert!(shell.take_notifications().is_empty());
 
-        assert_eq!(activate(&mut shell, 0, 3), Some(0), "no such position");
-        assert_eq!(activate(&mut shell, 1, 0), Some(0), "no secondary view");
+        assert_eq!(activate(&mut shell, 0, 3), Some(1), "no such position");
+        assert_eq!(activate(&mut shell, 0, -1), Some(1), "no such position");
         assert_eq!(shell.active_tab, Some(2));
         assert!(shell.take_notifications().is_empty());
+
+        for (view, pos) in [(1, 0), (7, 1)] {
+            assert_eq!(activate(&mut shell, view, pos), Some(1), "view {view}");
+            assert_eq!(shell.active_tab, Some(pos as usize), "view {view}");
+            let queued = shell.take_notifications();
+            assert_eq!(queued.len(), 1, "view {view}: {queued:?}");
+        }
     }
 
     /// `NPPM_RELOADBUFFERID` with the alert flag asks first: the
