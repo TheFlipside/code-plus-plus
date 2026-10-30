@@ -555,22 +555,24 @@ typedef struct toolbarIcons_ {
 #define NPPM_GETENABLETHEMETEXTUREFUNC    (NPPMSG + 45)  /* deprecated upstream */
 
 /* v1: the per-user plugin config dir. The contract of the four
- *     directory messages, as measured against Notepad++ 8.9.8.1:
+ *     directory messages, as measured against Notepad++ 8.9.8.1
+ *     except where noted:
  *     wParam: capacity in TCHARs, the NUL included.
  *     lParam: TCHAR* OUT, or NULL to ask for the directory's length.
  *     A NULL lParam returns the length in TCHARs, the NUL not counted,
  *     whatever wParam says: allocate that plus one and call again.
  *     A write returns 1 here (NPPM_GETPLUGINHOMEPATH,
  *     NPPM_GETSETTINGSCLOUDPATH and NPPM_GETNPPSETTINGSDIRPATH return
- *     the length) if the directory fits with its NUL, and 0 if it
- *     does not, a capacity equal to the length included. Code++ also
- *     leaves an empty string then, where Notepad++ writes nothing.
- *     Code++ takes a capacity as at most MAX_PATH, and returns 0
- *     from the probe and the write alike for a directory of
- *     MAX_PATH TCHARs or more, or one that is not valid Unicode,
- *     rather than cut it short; 0 and nothing written for a
- *     negative lParam. Until Phase 5 Code++ returned 0 for a NULL
- *     lParam. */
+ *     the length) if the directory fits with its NUL, whatever its
+ *     length (read from Notepad++'s source), and 0 with nothing
+ *     written if it does not, a capacity equal to the length
+ *     included. Code++ returns 0 from the probe
+ *     and the write alike for a directory that is not valid
+ *     Unicode, rather than approximate it; 0 and nothing written
+ *     for a negative lParam. Until Phase 5 Code++ returned 0 for a
+ *     NULL lParam, took a capacity as at most MAX_PATH, refused a
+ *     directory of MAX_PATH TCHARs or more, and left an empty
+ *     string when it refused a write. */
 #define NPPM_GETPLUGINSCONFIGDIR          (NPPMSG + 46)
 /* v3: forward an inter-plugin message to a named target.
  *     wParam: TCHAR* target plugin name (the value the target's
@@ -647,10 +649,20 @@ typedef struct CommunicationInfo_ {
  *     lParam: TCHAR* OUT, or NULL to ask the length.
  *     Returns the length in TCHARs, the NUL not counted, from the
  *     write and from the NULL-lParam probe alike: allocate that plus
- *     one. The path ends at its first NUL. -1, and nothing written,
- *     for a path of MAX_PATH TCHARs or more or one that is not valid
- *     Unicode, which is refused rather than cut short, for an unknown
- *     buffer id, and for a negative lParam. */
+ *     one. The path ends at its first NUL.
+ *     Send the write straight after the probe of the same buffer, from
+ *     the same code, with no other NPPM message in between: the host
+ *     then writes up to the probe's answer plus one. Sent any other
+ *     way, it takes the buffer to be MAX_PATH TCHARs, the size a
+ *     plugin written for Notepad++ often passes without asking, since
+ *     Notepad++ opens no file whose path is 259 TCHARs or more (read
+ *     from its source); a path that does not fit is refused. Code++
+ *     opens such files. So a plugin that probes, then sends another
+ *     NPPM message, then writes, is refused a long path.
+ *     -1, and nothing written, for a path that does not fit, for one
+ *     that is not valid Unicode, for an unknown buffer id, and for a
+ *     negative lParam. Until Phase 5 Code++ refused a path of
+ *     MAX_PATH TCHARs or more from the probe and the write alike. */
 #define NPPM_GETFULLPATHFROMBUFFERID      (NPPMSG + 58)
 /* v1: buffer id of the tab at the requested view-relative position.
  *     wParam: tab position (0-based index into the view's tab list).
@@ -967,11 +979,13 @@ typedef struct NppDarkModeColors_ {
 #define RUNCOMMAND_USER                   (WM_USER + 3000)
 /* v3: the active buffer's path, in five parts. One contract for
  *     all five:
- *     wParam: capacity in TCHARs, the terminating NUL included.
- *             0 means MAX_PATH (Notepad++ takes 0 as "large enough"
- *             and writes without a bound; Code++ bounds it), and so
- *             does any larger capacity: Code++ never writes more
- *             than MAX_PATH TCHARs.
+ *     wParam: capacity in TCHARs, the terminating NUL included,
+ *             taken as stated: a path of any length reaches a
+ *             buffer that holds it. 0 means MAX_PATH (Notepad++
+ *             takes 0 as "large enough" and writes without a bound,
+ *             but opens no file whose path is 259 TCHARs or more;
+ *             Code++ opens such files, and bounds 0). Until Phase 5
+ *             Code++ took any capacity as at most MAX_PATH.
  *     lParam: TCHAR* OUT.
  *     Returns TRUE and writes the answer if it fits; FALSE and
  *     writes nothing if it does not, for a NULL lParam, or for a

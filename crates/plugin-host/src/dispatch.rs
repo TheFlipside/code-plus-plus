@@ -29,6 +29,7 @@
 //! `#[repr(C)]` types), so it is unconditional since Phase 5.
 
 use std::borrow::Cow;
+use std::cell::Cell;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::PathBuf;
 
@@ -258,11 +259,12 @@ pub const LINENUMWIDTH_CONSTANT: i32 = 1;
 /// against 8.9.8.1):
 ///
 /// * wparam: the buffer's capacity in `TCHAR`s, its terminating NUL
-///   included. 0 means `MAX_PATH`: Notepad++ takes 0 as "large
-///   enough" for plugins that predate the capacity, which passed a
-///   `MAX_PATH` buffer, and writes without a bound. Code++ bounds it,
-///   and takes a larger capacity as `MAX_PATH` too (see
-///   `path_capacity`).
+///   included, taken as stated, as Notepad++ takes it. 0 means
+///   `MAX_PATH`: Notepad++ takes 0 as "large enough" for plugins that
+///   predate the capacity, which passed a `MAX_PATH` buffer, and never
+///   holds a path long enough to overrun one, since it opens no file
+///   whose path is 259 units or more. Code++ opens such files, so it
+///   bounds 0 at `MAX_PATH` (see `path_capacity`).
 /// * lparam: `TCHAR*` OUT.
 /// * Returns TRUE and writes the answer, NUL-terminated, if it fits;
 ///   FALSE and writes nothing if it does not, for a NULL lparam, or
@@ -506,13 +508,16 @@ pub fn pack_npp_version(major: u16, minor: u16, add_zero_padding: bool) -> isize
     ((u32::from(major) << 16) | minor) as isize
 }
 
-/// `MAX_PATH` in TCHARs — Win32's documented cap for path-shaped
-/// out-buffers passed to NPPM messages. Plugins that opt into
-/// `NPPM_ALLOCATESUPPORTED` (Phase 4+) get the unbounded variant; v1
-/// caps every wide-string write at this length, NUL-terminated. The
-/// limit closes the class of "plugin passed a small buffer, host
-/// scribbles past it" bug — undefined behaviour we cannot detect from
-/// the call site since the buffer size isn't carried in the message.
+/// `MAX_PATH` in TCHARs — Win32's documented size for path-shaped
+/// out-buffers passed to NPPM messages. A message that carries no
+/// buffer size bounds its wide-string write at this length, the NUL
+/// included: a slot of `NPPM_GETOPENFILENAMES` or
+/// `NPPM_GETSESSIONFILES`, a path message's capacity of 0, and
+/// `NPPM_GETFULLPATHFROMBUFFERID` written without its probe. Notepad++
+/// opens no file whose path is 259 units or more, so a plugin written
+/// for it with a buffer of this size is never overrun there, and the
+/// bound keeps it so here, where such files open. A message that says
+/// how large the plugin's buffer is writes up to that size instead.
 pub const MAX_PATH_TCHARS: usize = 260;
 
 /// Cap on the file count a single `NPPM_SAVESESSION` call accepts.
@@ -1798,11 +1803,11 @@ pub trait HostServices {
 /// Several NPPM_* messages carry an out-pointer in `lparam` (e.g.
 /// `NPPM_GETPLUGINSCONFIGDIR` writes a wide string). The dispatcher
 /// trusts the plugin's pointer to be non-null and to point at a
-/// buffer of at least [`MAX_PATH_TCHARS`] units, which is the
-/// documented contract from the public ABI. A buggy plugin that
-/// passes a smaller buffer or NULL invokes UB on its own behalf —
-/// same as Notepad++. We bound writes at `MAX_PATH_TCHARS` to keep
-/// the host's blast radius constant.
+/// buffer of the size the message's contract gives it: the capacity
+/// the plugin states, the probe's answer plus one, or
+/// [`MAX_PATH_TCHARS`] units where the message carries no size. A
+/// buggy plugin that passes a smaller buffer or NULL invokes UB on its
+/// own behalf — same as Notepad++.
 ///
 /// The function intentionally has many lines: it's the single
 /// dispatch chokepoint for the entire NPPM message family
@@ -1834,6 +1839,13 @@ pub unsafe fn dispatch_nppm<S: HostServices>(
     if !in_nppm && !in_runcmd && !in_codepp {
         return None;
     }
+    // The last NPPM_GETFULLPATHFROMBUFFERID probe on this thread holds
+    // for this message only. The next message finds the probe this one
+    // leaves when it ends, which is none unless this one is a probe, so a
+    // probe sent from plugin code this message runs (a target's
+    // messageProc under NPPM_MSGTOPLUGIN, say) does not outlive it.
+    let full_path_probe = FULL_PATH_PROBE.take();
+    let mut next_probe = NextProbe(None);
 
     Some(match msg {
         NPPM_GETCURRENTSCINTILLA => {
@@ -2365,33 +2377,58 @@ pub unsafe fn dispatch_nppm<S: HostServices>(
             if lparam < 0 {
                 return Some(-1);
             }
-            let Some(name) = services.buffer_path_name(wparam as isize) else {
+            let id = wparam as isize;
+            let Some(name) = services.buffer_path_name(id) else {
                 return Some(-1);
             };
-            let path =
-                full_path_answer(&name).filter(|p| p.encode_utf16().count() < MAX_PATH_TCHARS);
-            let Some(path) = path else {
-                // A path of `MAX_PATH` units or more, or one that is not
-                // valid Unicode, is refused rather than cut or written
-                // lossily, as the path messages refuse one: a plugin that
-                // skips the probe and passes a `MAX_PATH` buffer, as many
-                // do, must not be overrun, and a cut path names another
-                // file. Nothing is written, not even an empty string: this
-                // message's buffer is sized from the probe, and a plugin
-                // that allocates the probe's -1 plus one has room for
-                // nothing.
+            let Some(path) = full_path_answer(&name) else {
+                // A path that is not valid Unicode is refused rather than
+                // written lossily, which would name another file.
                 return Some(-1);
             };
-            if lparam != 0 {
-                // SAFETY: the plugin promises a wide buffer of the
-                // probe's answer plus one, or of `MAX_PATH`; the path and
-                // its NUL, under `MAX_PATH`, fit either. A path renamed
-                // between the probe and the write can be longer than the
-                // probe said, which Notepad++ does not guard against
-                // either; the write still stays within `MAX_PATH`.
-                unsafe { write_wide_if_fits(lparam as *mut u16, MAX_PATH_TCHARS, &path) };
+            // A string's length in UTF-16 units is at most its length in
+            // bytes, which fits an `isize`.
+            let len = path.encode_utf16().count();
+            if lparam == 0 {
+                next_probe.0 = Some(FullPathProbe {
+                    id,
+                    len,
+                    caller: crate::calling_plugin(),
+                });
+                return Some(len as isize);
             }
-            path.encode_utf16().count() as isize
+            // The plugin's buffer, which the message does not size: what
+            // the probe told it to allocate, if the probe of this buffer
+            // was the message before this one and the host took both for
+            // the same plugin's, and otherwise `MAX_PATH`, the buffer a
+            // plugin that skips the probe passes. Notepad++
+            // writes without a bound, but never holds a path that
+            // overruns `MAX_PATH`, since it opens no file whose path is
+            // 259 units or more; Code++ opens such files, and writes one
+            // only to a plugin that asked how long it is. Everything else
+            // is refused with -1 and nothing written, not even an empty
+            // string, since a buffer sized from a probe that answered
+            // another length may have room for less.
+            let cap = match full_path_probe {
+                Some(probe) if probe.id == id && probe.caller == crate::calling_plugin() => {
+                    probe.len + 1
+                }
+                _ => MAX_PATH_TCHARS,
+            };
+            // SAFETY: the plugin promises a wide buffer of the probe's
+            // answer plus one, or of `MAX_PATH` when it did not just ask;
+            // nothing is written past `cap`, which is that size.
+            if !unsafe { write_wide_if_fits(lparam as *mut u16, cap, &path) } {
+                // `debug`: a plugin that skips the probe meets this on every
+                // call for a long path.
+                tracing::debug!(
+                    len,
+                    cap,
+                    "NPPM_GETFULLPATHFROMBUFFERID: path refused, longer than the plugin's buffer",
+                );
+                return Some(-1);
+            }
+            len as isize
         }
 
         NPPM_GETCURRENTBUFFERID => services.current_buffer_id(),
@@ -3308,9 +3345,11 @@ pub unsafe fn dispatch_nppm<S: HostServices>(
         // RUNCOMMAND_USER family: the active buffer's path, in five
         // parts. Notepad++'s contract, measured: TRUE and the answer if
         // it fits the plugin's buffer, NUL included; FALSE and nothing
-        // written if not. Notepad++ takes a capacity of 0 as "large
-        // enough" and writes without a bound; 0 here is `MAX_PATH`, the
-        // buffer the plugins that pass 0 were written for.
+        // written if not. A capacity is taken as stated, so a path of
+        // any length reaches a buffer that holds it. Notepad++ takes a
+        // capacity of 0 as "large enough" and writes without a bound;
+        // 0 here is `MAX_PATH`, the buffer the plugins that pass 0 were
+        // written for, which no path Notepad++ holds overruns.
         NPPM_GETFULLCURRENTPATH
         | NPPM_GETCURRENTDIRECTORY
         | NPPM_GETFILENAME
@@ -3330,8 +3369,7 @@ pub unsafe fn dispatch_nppm<S: HostServices>(
             };
             // SAFETY: the plugin promises lparam points to a wide
             // buffer of `wparam` TCHARs, or of `MAX_PATH` when it
-            // passes 0; nothing is written past the smaller of the
-            // two.
+            // passes 0; nothing is written past that.
             let cap = path_capacity(wparam);
             isize::from(unsafe { write_wide_if_fits(lparam as *mut u16, cap, &answer) })
         }
@@ -3377,7 +3415,9 @@ pub unsafe fn dispatch_nppm<S: HostServices>(
         // two as well. Until Phase 5 they cut a path too long for the
         // buffer short and answered TRUE, so a plugin was handed a
         // different directory as if it were the right one, and they
-        // refused a capacity of 0.
+        // refused a capacity of 0. Notepad++ reads its own path into a
+        // `MAX_PATH` buffer, which cuts a longer one short (read from
+        // its source); Code++ answers it whole to a buffer that holds it.
         NPPM_GETNPPDIRECTORY | NPPM_GETNPPFULLFILEPATH => {
             if lparam <= 0 {
                 return Some(0);
@@ -3696,17 +3736,61 @@ fn lang_label_cut(name: &str) -> &str {
 }
 
 /// The capacity the `RUNCOMMAND_USER` path messages write within, from
-/// the plugin's `wparam`: `MAX_PATH` for 0, as above, and never more
-/// than `MAX_PATH` whatever the plugin says. A plugin that passes a byte
-/// count for a `MAX_PATH` buffer is then refused a long path rather
-/// than overrun; the cost is that a path of `MAX_PATH` units or more is
-/// refused even to a plugin whose buffer would hold it. Bug
-/// containment, not a boundary (DESIGN.md §6.5).
+/// the plugin's `wparam`: `MAX_PATH` for 0, as above, and otherwise the
+/// capacity as the plugin states it, as Notepad++ takes it. A path of
+/// any length reaches a buffer that holds it. A plugin that states a
+/// byte count for a `MAX_PATH` buffer is overrun by a path longer than
+/// its buffer, which no file Notepad++ opens has; that is the plugin's
+/// bug (DESIGN.md §6.5).
 fn path_capacity(wparam: usize) -> usize {
     if wparam == 0 {
         MAX_PATH_TCHARS
     } else {
-        wparam.min(MAX_PATH_TCHARS)
+        wparam
+    }
+}
+
+/// The answer of an `NPPM_GETFULLPATHFROMBUFFERID` probe, a NULL
+/// lParam: the buffer it named, the length it answered, the NUL not
+/// counted, and the plugin the host took the probe for
+/// ([`crate::calling_plugin`]).
+#[derive(Clone, Copy)]
+struct FullPathProbe {
+    id: isize,
+    len: usize,
+    caller: Option<usize>,
+}
+
+std::thread_local! {
+    /// The last [`NPPM_GETFULLPATHFROMBUFFERID`] probe on this thread,
+    /// for the message after it alone: [`dispatch_nppm`] takes it as
+    /// every NPPM message arrives, and leaves one only when that message
+    /// is a probe. A write of the same buffer straight after its probe,
+    /// taken for the same plugin's, writes up to the length the probe
+    /// answered, the buffer the plugin was told to allocate; any other
+    /// write, `MAX_PATH`. Per thread, since a probe on one thread says
+    /// nothing about a buffer passed on another.
+    ///
+    /// The host cannot tell who sent a message it does not see, so a
+    /// probe still reaches past what the host does between messages: a
+    /// `SCI_*` message, a command posted to the main window. The caller
+    /// keeps another plugin's code from taking it there whenever the host
+    /// knows whose code is running: off Windows for the first 128 plugins
+    /// found, whose every message comes by a route that names its plugin,
+    /// and on Windows while the host is calling into a plugin.
+    static FULL_PATH_PROBE: Cell<Option<FullPathProbe>> = const { Cell::new(None) };
+}
+
+/// The probe [`dispatch_nppm`] leaves for the next message, set as the
+/// message ends however it ends: none, unless the message is an
+/// `NPPM_GETFULLPATHFROMBUFFERID` probe. Setting it on the way out, rather
+/// than when the probe is answered, overwrites whatever a probe sent from
+/// plugin code the message ran left behind.
+struct NextProbe(Option<FullPathProbe>);
+
+impl Drop for NextProbe {
+    fn drop(&mut self) {
+        FULL_PATH_PROBE.set(self.0);
     }
 }
 
@@ -3755,24 +3839,18 @@ enum DirWritten {
 /// - A NULL `lparam` asks for the directory's length in TCHARs, the NUL
 ///   not counted, for the plugin to allocate that plus one.
 /// - Otherwise the directory is written if it fits `wparam` TCHARs with
-///   its NUL, and answered with `written`. A capacity equal to the
-///   length is too small, and answers 0. So an empty directory, the
-///   unset cloud path, answers 0 whether it was written or not, as in
-///   Notepad++, under [`DirWritten::Length`].
+///   its NUL, whatever its length, and answered with `written`. A
+///   capacity equal to the length is too small, and answers 0, with
+///   nothing written. So an empty directory, the unset cloud path,
+///   answers 0 whether it was written or not, as in Notepad++, under
+///   [`DirWritten::Length`].
 ///
 /// Where Code++ differs, deliberately:
 ///
-/// - A directory of `MAX_PATH` TCHARs or more, or one that is not valid
-///   Unicode, is refused from the probe and the write alike, with 0,
-///   rather than cut short or approximated, either of which would name
-///   another directory. So no write exceeds `MAX_PATH` units, as for the
-///   path messages, and a plugin that passes a byte count for a
-///   `MAX_PATH` buffer is not overrun. A missing directory (`None`) is
-///   refused the same way.
-/// - A refused write leaves an empty string, as [`write_path_slot`]
-///   does, so a plugin that ignores the 0 reads nothing stale from a
-///   buffer it may never have initialised. Notepad++ writes nothing,
-///   which a plugin that checks the answer cannot tell apart.
+/// - A directory that is not valid Unicode is refused from the probe
+///   and the write alike, with 0 and nothing written, rather than
+///   approximated, which would name another directory. A missing
+///   directory (`None`) is refused the same way.
 /// - A negative `lparam`, a kernel-range pointer, answers 0 and nothing
 ///   is written through it.
 ///
@@ -3793,29 +3871,25 @@ unsafe fn answer_dir(
     // answered at all.
     let answer = dir
         .and_then(std::path::Path::to_str)
-        .map(|d| (d, d.encode_utf16().count()))
-        .filter(|&(_, len)| len < MAX_PATH_TCHARS);
+        .map(|d| (d, d.encode_utf16().count()));
+    // A string's length in UTF-16 units is at most its length in bytes,
+    // which fits an `isize`.
     let len = answer.map_or(0, |(_, len)| len);
     if lparam == 0 {
-        // A length below `MAX_PATH` fits an `isize`.
         return len as isize;
     }
-    let dst = lparam as *mut u16;
-    let cap = wparam.min(MAX_PATH_TCHARS);
-    // SAFETY: `dst` holds `wparam` units, and `cap` is no more.
-    if answer.is_some_and(|(d, _)| unsafe { write_wide_if_fits(dst, cap, d) }) {
+    // SAFETY: `lparam` holds `wparam` units, the plugin promises.
+    if answer.is_some_and(|(d, _)| unsafe { write_wide_if_fits(lparam as *mut u16, wparam, d) }) {
         return match written {
             DirWritten::True => 1,
             DirWritten::Length => len as isize,
         };
     }
     tracing::warn!(
-        cap,
+        len,
+        cap = wparam,
         "directory refused: it does not fit the plugin's buffer, is not valid Unicode, or is unknown",
     );
-    // SAFETY: the empty string's NUL is one unit, which a `cap` of at
-    // least one holds; a `cap` of 0 writes nothing.
-    unsafe { write_wide_if_fits(dst, cap, "") };
     0
 }
 
@@ -3836,7 +3910,14 @@ unsafe fn write_path_slot(dst: *mut u16, path: &std::path::Path) {
 /// them: the whole text, or an empty string for text that does not fit
 /// or for none, a path that is not valid Unicode, where a cut or
 /// approximated path would name another file. The slot is written either
-/// way, so a plugin reads no stale text from it.
+/// way, since the message's answer tells the plugin it was filled, and so
+/// it reads no stale text from it.
+///
+/// These messages say nothing of a slot's size, so `MAX_PATH` it stays,
+/// the size their contract gives a slot. Every path Notepad++ has open
+/// fits one, since it opens no file whose path is 259 units or more; a
+/// longer path, which Code++ does open and a session file may name, is
+/// left out here rather than written past the slot.
 ///
 /// # Safety
 ///
@@ -3977,6 +4058,13 @@ mod tests {
         /// Defaults to 0 (the "target plugin not found" sentinel),
         /// matching the upstream contract.
         forward_plugin_return: isize,
+        /// Run inside `forward_plugin_message`, as the target plugin's
+        /// `messageProc` runs inside `NPPM_MSGTOPLUGIN`, with the mock to
+        /// send messages of its own through.
+        forward_hook: Option<fn(&mut MockServices)>,
+        /// What `forward_hook` reports back, for a test to check once the
+        /// outer message has returned.
+        hook_answer: Option<(Option<isize>, bool)>,
         /// Editor default fg/bg colours for the editor-color
         /// queries. `0x00BBGGRR` (Win32 / Scintilla `COLORREF`).
         editor_default_fg_color: i32,
@@ -4490,6 +4578,9 @@ mod tests {
             self.record(format!(
                 "forward_plugin_message[name={target_name},msg={internal_msg},info=0x{info_ptr:x}]"
             ));
+            if let Some(hook) = self.forward_hook {
+                hook(self);
+            }
             self.forward_plugin_return
         }
         fn editor_default_fg_color(&self) -> i32 {
@@ -5055,35 +5146,259 @@ mod tests {
         assert_eq!(wide_answer(&buf), "new 1");
     }
 
+    /// Write buffer `id`'s full path into `buf` through
+    /// `NPPM_GETFULLPATHFROMBUFFERID`.
+    fn full_path_into(s: &mut MockServices, id: usize, buf: &mut [u16]) -> Option<isize> {
+        unsafe {
+            dispatch_nppm(
+                s,
+                NPPM_GETFULLPATHFROMBUFFERID,
+                id,
+                buf.as_mut_ptr() as isize,
+            )
+        }
+    }
+
     #[test]
-    fn get_full_path_refuses_a_path_it_cannot_write_whole() {
-        // MAX_PATH units or more, or not valid Unicode: -1 from the
-        // probe and the write, where the path used to be cut or written
-        // lossily. Nothing is written: a plugin that sizes its buffer
-        // from the probe's -1 has room for nothing.
-        for path in [
-            PathBuf::from("z".repeat(MAX_PATH_TCHARS)),
-            non_unicode_path(),
-        ] {
+    fn get_full_path_refuses_a_path_that_is_not_unicode() {
+        // -1 from the probe and the write, where the path used to be
+        // written lossily, naming another file. Nothing is written: a
+        // plugin that sizes its buffer from the probe's -1 has room for
+        // nothing.
+        let mut s = MockServices {
+            buffer_paths: vec![(7, non_unicode_path())],
+            ..Default::default()
+        };
+        let r = unsafe { dispatch_nppm(&mut s, NPPM_GETFULLPATHFROMBUFFERID, 7, 0) };
+        assert_eq!(r, Some(-1));
+        let mut buf = vec![0xFFFFu16; MAX_PATH_TCHARS + 1];
+        assert_eq!(full_path_into(&mut s, 7, &mut buf), Some(-1));
+        assert!(buf.iter().all(|&u| u == 0xFFFF));
+    }
+
+    #[test]
+    fn get_full_path_writes_a_long_path_to_a_plugin_that_asked_its_length() {
+        // Notepad++ opens no file whose path is 259 units or more, so a
+        // plugin written for it may pass a `MAX_PATH` buffer without
+        // asking. Code++ opens such files, and writes one only straight
+        // after the probe that told the plugin how long it is. Until
+        // Phase 5 it was refused with -1 from the probe and the write.
+        for units in [MAX_PATH_TCHARS, 1000] {
+            let long = "z".repeat(units);
             let mut s = MockServices {
-                buffer_paths: vec![(7, path.clone())],
+                buffer_paths: vec![(7, PathBuf::from(&long))],
                 ..Default::default()
             };
-            let mut buf = vec![0xFFFFu16; MAX_PATH_TCHARS + 1];
-            let r = unsafe { dispatch_nppm(&mut s, NPPM_GETFULLPATHFROMBUFFERID, 7, 0) };
-            assert_eq!(r, Some(-1), "{path:?}");
-            let r = unsafe {
-                dispatch_nppm(
-                    &mut s,
-                    NPPM_GETFULLPATHFROMBUFFERID,
-                    7,
-                    buf.as_mut_ptr() as isize,
-                )
-            };
-            assert_eq!(r, Some(-1), "{path:?}");
-            assert!(buf.iter().all(|&u| u == 0xFFFF), "{path:?}");
+            let probe = unsafe { dispatch_nppm(&mut s, NPPM_GETFULLPATHFROMBUFFERID, 7, 0) };
+            assert_eq!(probe, Some(units as isize), "{units}: the probe");
+            // The buffer the probe says to allocate, one unit of sentinel
+            // past it.
+            let mut buf = vec![0xFFFFu16; units + 2];
+            assert_eq!(full_path_into(&mut s, 7, &mut buf), probe, "{units}");
+            assert_eq!(wide_answer(&buf), long, "{units}");
+            assert_eq!(buf[units + 1], 0xFFFF, "{units}: nothing past the buffer");
+
+            // Without the probe, refused, whatever the buffer: the
+            // plugin may have a `MAX_PATH` one. The probe held for the
+            // one write after it.
+            let mut buf = vec![0xFFFFu16; 2 * units];
+            assert_eq!(full_path_into(&mut s, 7, &mut buf), Some(-1), "{units}");
+            assert!(buf.iter().all(|&u| u == 0xFFFF), "{units}: nothing written");
         }
-        // One unit shorter fits.
+    }
+
+    #[test]
+    fn a_full_path_probe_holds_for_the_next_message_on_its_buffer_alone() {
+        let long = "z".repeat(MAX_PATH_TCHARS);
+        let mut s = MockServices {
+            buffer_paths: vec![(7, PathBuf::from(&long)), (8, PathBuf::from(&long))],
+            ..Default::default()
+        };
+        let probe = |s: &mut MockServices, id: usize| unsafe {
+            dispatch_nppm(s, NPPM_GETFULLPATHFROMBUFFERID, id, 0)
+        };
+        let mut buf = vec![0xFFFFu16; 2 * MAX_PATH_TCHARS];
+        // A probe of another buffer says nothing of this one's.
+        probe(&mut s, 8);
+        assert_eq!(full_path_into(&mut s, 7, &mut buf), Some(-1));
+        // Nor does a probe with another message after it, of any kind.
+        probe(&mut s, 7);
+        unsafe { dispatch_nppm(&mut s, NPPM_GETCURRENTBUFFERID, 0, 0) };
+        assert_eq!(full_path_into(&mut s, 7, &mut buf), Some(-1));
+        // Nor one on another thread.
+        probe(&mut s, 7);
+        std::thread::scope(|scope| {
+            scope.spawn(|| {
+                let mut s = MockServices {
+                    buffer_paths: vec![(7, PathBuf::from(&long))],
+                    ..Default::default()
+                };
+                let mut buf = vec![0xFFFFu16; 2 * MAX_PATH_TCHARS];
+                assert_eq!(full_path_into(&mut s, 7, &mut buf), Some(-1));
+            });
+        });
+        assert!(buf.iter().all(|&u| u == 0xFFFF), "nothing written");
+        // The probe on this thread still holds for its own write.
+        assert_eq!(
+            full_path_into(&mut s, 7, &mut buf),
+            Some(MAX_PATH_TCHARS as isize)
+        );
+        assert_eq!(wide_answer(&buf), long);
+    }
+
+    #[test]
+    fn a_full_path_probe_holds_for_the_plugin_it_was_taken_for_alone() {
+        // Another plugin's code can run between a plugin's probe and its
+        // write without a message of the host's own in between, a command
+        // posted to the main window, say. Its write does not take the
+        // probe when the host knows whose code is running.
+        use crate::caller::CallingPlugin;
+        let long = "z".repeat(MAX_PATH_TCHARS);
+        let mut s = MockServices {
+            buffer_paths: vec![(7, PathBuf::from(&long))],
+            ..Default::default()
+        };
+        let mut buf = vec![0xFFFFu16; 2 * MAX_PATH_TCHARS];
+        let probe_as = |s: &mut MockServices, plugin: Option<usize>| {
+            let _mark = plugin.map(CallingPlugin::enter);
+            unsafe { dispatch_nppm(s, NPPM_GETFULLPATHFROMBUFFERID, 7, 0) }
+        };
+        for (probed_by, written_by) in [(Some(0), Some(1)), (Some(0), None), (None, Some(1))] {
+            probe_as(&mut s, probed_by);
+            let _mark = written_by.map(CallingPlugin::enter);
+            assert_eq!(
+                full_path_into(&mut s, 7, &mut buf),
+                Some(-1),
+                "probed by {probed_by:?}, written by {written_by:?}"
+            );
+        }
+        assert!(buf.iter().all(|&u| u == 0xFFFF), "nothing written");
+        // The plugin that probed gets it.
+        probe_as(&mut s, Some(0));
+        let _mark = CallingPlugin::enter(0);
+        assert_eq!(
+            full_path_into(&mut s, 7, &mut buf),
+            Some(MAX_PATH_TCHARS as isize)
+        );
+        assert_eq!(wide_answer(&buf), long);
+    }
+
+    #[test]
+    fn a_probe_sent_from_plugin_code_a_message_runs_ends_with_that_message() {
+        // A plugin sends NPPM_MSGTOPLUGIN; the target's messageProc, which
+        // runs inside it, probes buffer 7. The probe does not outlive the
+        // outer message: the outer plugin's next message, a write of
+        // buffer 7 into a `MAX_PATH` buffer, is refused, not overrun.
+        use crate::ffi::CommunicationInfo;
+        let long = "z".repeat(1000);
+        let mut s = MockServices {
+            buffer_paths: vec![(7, PathBuf::from(&long))],
+            forward_plugin_return: 1,
+            forward_hook: Some(|s| {
+                let r = unsafe { dispatch_nppm(s, NPPM_GETFULLPATHFROMBUFFERID, 7, 0) };
+                assert_eq!(r, Some(1000), "the target's probe");
+            }),
+            ..Default::default()
+        };
+        let target = make_wide("Target");
+        let mut src = make_wide("Source");
+        let info = CommunicationInfo {
+            internal_msg: 1,
+            src_module_name: src.as_mut_ptr(),
+            info: core::ptr::null_mut(),
+        };
+        let r = unsafe {
+            dispatch_nppm(
+                &mut s,
+                NPPM_MSGTOPLUGIN,
+                target.as_ptr() as usize,
+                &raw const info as isize,
+            )
+        };
+        assert_eq!(r, Some(1));
+        assert!(s
+            .calls()
+            .iter()
+            .any(|c| c.starts_with("forward_plugin_message")));
+        // Room past `MAX_PATH` for the whole path, so a host that took the
+        // probe shows it by writing here rather than past the buffer.
+        let mut buf = vec![0xFFFFu16; 2 * 1000];
+        assert_eq!(full_path_into(&mut s, 7, &mut buf), Some(-1));
+        assert!(buf.iter().all(|&u| u == 0xFFFF), "nothing written");
+    }
+
+    #[test]
+    fn a_probe_is_not_handed_to_a_write_sent_from_plugin_code_the_next_message_runs() {
+        // A plugin probes buffer 7, then sends NPPM_MSGTOPLUGIN; the
+        // target's messageProc, which runs inside it, writes buffer 7 into
+        // a buffer of its own. The probe ended with the message after it,
+        // the NPPM_MSGTOPLUGIN, so the target's write is refused, not
+        // handed the outer plugin's length.
+        use crate::ffi::CommunicationInfo;
+        let long = "z".repeat(1000);
+        let mut s = MockServices {
+            buffer_paths: vec![(7, PathBuf::from(&long))],
+            forward_plugin_return: 1,
+            forward_hook: Some(|s| {
+                // Room past `MAX_PATH` for the whole path, so a host that
+                // handed over the probe shows it by writing here.
+                let mut buf = vec![0xFFFFu16; 2 * 1000];
+                let r = full_path_into(s, 7, &mut buf);
+                s.hook_answer = Some((r, buf.iter().all(|&u| u == 0xFFFF)));
+            }),
+            ..Default::default()
+        };
+        let probe = unsafe { dispatch_nppm(&mut s, NPPM_GETFULLPATHFROMBUFFERID, 7, 0) };
+        assert_eq!(probe, Some(1000));
+        let target = make_wide("Target");
+        let mut src = make_wide("Source");
+        let info = CommunicationInfo {
+            internal_msg: 1,
+            src_module_name: src.as_mut_ptr(),
+            info: core::ptr::null_mut(),
+        };
+        let r = unsafe {
+            dispatch_nppm(
+                &mut s,
+                NPPM_MSGTOPLUGIN,
+                target.as_ptr() as usize,
+                &raw const info as isize,
+            )
+        };
+        assert_eq!(r, Some(1));
+        assert_eq!(
+            s.hook_answer,
+            Some((Some(-1), true)),
+            "the target's write: refused, nothing written"
+        );
+    }
+
+    #[test]
+    fn a_path_that_grew_since_its_probe_is_refused() {
+        // The plugin allocated what the probe told it to: a path renamed
+        // in between to a longer one does not fit that, short or long,
+        // where until Phase 5 a short one was written up to `MAX_PATH`.
+        let mut s = MockServices {
+            buffer_paths: vec![(7, PathBuf::from("D:/a.txt"))],
+            ..Default::default()
+        };
+        let probe = unsafe { dispatch_nppm(&mut s, NPPM_GETFULLPATHFROMBUFFERID, 7, 0) };
+        assert_eq!(probe, Some(8));
+        s.buffer_paths = vec![(7, PathBuf::from("D:/ab.txt"))];
+        let mut buf = vec![0xFFFFu16; MAX_PATH_TCHARS];
+        assert_eq!(full_path_into(&mut s, 7, &mut buf), Some(-1));
+        assert!(buf.iter().all(|&u| u == 0xFFFF));
+        // One that shrank still fits.
+        unsafe { dispatch_nppm(&mut s, NPPM_GETFULLPATHFROMBUFFERID, 7, 0) };
+        s.buffer_paths = vec![(7, PathBuf::from("D:/b"))];
+        assert_eq!(full_path_into(&mut s, 7, &mut buf), Some(4));
+        assert_eq!(wide_answer(&buf), "D:/b");
+    }
+
+    #[test]
+    fn get_full_path_writes_up_to_max_path_without_a_probe() {
+        // A plugin that skips the probe gets a path one unit shorter
+        // than `MAX_PATH` whole, its NUL in the last unit.
         let fits = "z".repeat(MAX_PATH_TCHARS - 1);
         let mut s = MockServices {
             buffer_paths: vec![(7, PathBuf::from(&fits))],
@@ -5250,9 +5565,8 @@ mod tests {
     fn a_directory_message_with_no_capacity_writes_nothing() {
         // A plugin passes `wparam == 0` with a buffer: a broken caller,
         // or a probe that forgot to pass NULL. Notepad++ answers 0 and
-        // writes nothing, and so does Code++, not even the empty string
-        // a refusal otherwise leaves, since there is no room for one.
-        // The unset cloud path, whose length is 0 too, included.
+        // writes nothing, and so does Code++, as for any refusal. The
+        // unset cloud path, whose length is 0 too, included.
         for (msg, _) in DIR_MESSAGES {
             let mut s = dirs_all(Path::new("E:/codepp/plugins/config"));
             s.settings_cloud_dir = None;
@@ -5343,8 +5657,9 @@ mod tests {
             let mut buf = vec![0xFFFFu16; MAX_PATH_TCHARS];
             let r = unsafe { dispatch_nppm(&mut s, msg, len, buf.as_mut_ptr() as isize) };
             assert_eq!(r, Some(0), "{msg}");
-            assert_eq!(buf[0], 0, "{msg}: an empty string, not a cut one");
-            assert!(buf[1..].iter().all(|&u| u == 0xFFFF), "{msg}");
+            // Nothing written, as Notepad++ writes nothing, where until
+            // Phase 5 Code++ left an empty string.
+            assert!(buf.iter().all(|&u| u == 0xFFFF), "{msg}: nothing written");
             let r = unsafe { dispatch_nppm(&mut s, msg, len + 1, buf.as_mut_ptr() as isize) };
             let expected = if answers_length { len as isize } else { 1 };
             assert_eq!(r, Some(expected), "{msg}");
@@ -5360,8 +5675,7 @@ mod tests {
             let r =
                 unsafe { dispatch_nppm(&mut s, msg, MAX_PATH_TCHARS, buf.as_mut_ptr() as isize) };
             assert_eq!(r, Some(0), "{msg}");
-            assert_eq!(buf[0], 0, "{msg}: an empty string, not a lossy one");
-            assert!(buf[1..].iter().all(|&u| u == 0xFFFF), "{msg}");
+            assert!(buf.iter().all(|&u| u == 0xFFFF), "{msg}: nothing written");
         }
     }
 
@@ -5414,49 +5728,38 @@ mod tests {
     }
 
     #[test]
-    fn a_directory_message_refuses_a_directory_of_max_path_or_more() {
-        // One unit short of `MAX_PATH` is answered and written whole;
-        // `MAX_PATH` itself is refused from the probe and the write,
-        // where Notepad++ would answer it and write it into a buffer
-        // as large as the plugin says it has.
-        let fits = PathBuf::from("d".repeat(MAX_PATH_TCHARS - 1));
-        let long = PathBuf::from("d".repeat(MAX_PATH_TCHARS));
-        for (msg, answers_length) in DIR_MESSAGES {
-            let mut s = dirs_all(&fits);
-            let r = unsafe { dispatch_nppm(&mut s, msg, 0, 0) };
-            assert_eq!(r, Some(MAX_PATH_TCHARS as isize - 1), "{msg}");
-            let mut buf = vec![0xFFFFu16; MAX_PATH_TCHARS + 1];
-            let r = unsafe { dispatch_nppm(&mut s, msg, usize::MAX, buf.as_mut_ptr() as isize) };
-            let expected = if answers_length {
-                MAX_PATH_TCHARS as isize - 1
-            } else {
-                1
-            };
-            assert_eq!(
-                r,
-                Some(expected),
-                "{msg}: a huge capacity is taken as MAX_PATH"
-            );
-            assert_eq!(wide_answer(&buf), fits.to_str().unwrap(), "{msg}");
-            assert_eq!(buf[MAX_PATH_TCHARS], 0xFFFF, "{msg}");
-
-            let mut s = dirs_all(&long);
-            let r = unsafe { dispatch_nppm(&mut s, msg, 0, 0) };
-            assert_eq!(r, Some(0), "{msg}: the probe");
-            let mut buf = vec![0xFFFFu16; 2 * MAX_PATH_TCHARS];
-            let r = unsafe {
-                dispatch_nppm(&mut s, msg, 2 * MAX_PATH_TCHARS, buf.as_mut_ptr() as isize)
-            };
-            assert_eq!(r, Some(0), "{msg}: the write");
-            assert_eq!(buf[0], 0, "{msg}");
-            assert!(buf[1..].iter().all(|&u| u == 0xFFFF), "{msg}");
+    fn a_directory_message_writes_a_directory_of_any_length_to_a_buffer_that_holds_it() {
+        // As Notepad++ does: the probe answers the length, and the write
+        // goes to a buffer as large as the plugin says it has, past
+        // `MAX_PATH` too. Until Phase 5 a directory of `MAX_PATH` units
+        // or more was refused from the probe and the write.
+        for units in [MAX_PATH_TCHARS - 1, MAX_PATH_TCHARS, 1000] {
+            let dir = PathBuf::from("d".repeat(units));
+            for (msg, answers_length) in DIR_MESSAGES {
+                let mut s = dirs_all(&dir);
+                let r = unsafe { dispatch_nppm(&mut s, msg, 0, 0) };
+                assert_eq!(r, Some(units as isize), "{msg} {units}: the probe");
+                let expected = if answers_length { units as isize } else { 1 };
+                for cap in [units + 1, usize::MAX] {
+                    let mut buf = vec![0xFFFFu16; units + 2];
+                    let r = unsafe { dispatch_nppm(&mut s, msg, cap, buf.as_mut_ptr() as isize) };
+                    assert_eq!(r, Some(expected), "{msg} {units}, capacity {cap}");
+                    assert_eq!(wide_answer(&buf), dir.to_str().unwrap(), "{msg} {units}");
+                    assert_eq!(buf[units + 1], 0xFFFF, "{msg} {units}: nothing past it");
+                }
+                // One unit short of that, refused, with nothing written.
+                let mut buf = vec![0xFFFFu16; units + 2];
+                let r = unsafe { dispatch_nppm(&mut s, msg, units, buf.as_mut_ptr() as isize) };
+                assert_eq!(r, Some(0), "{msg} {units}");
+                assert!(buf.iter().all(|&u| u == 0xFFFF), "{msg} {units}");
+            }
         }
     }
 
     #[test]
     fn a_missing_directory_answers_zero() {
         // An unresolvable plugins or settings directory answers 0 from
-        // the probe and the write, the write leaving an empty string.
+        // the probe and the write, the write writing nothing.
         for msg in [NPPM_GETPLUGINHOMEPATH, NPPM_GETNPPSETTINGSDIRPATH] {
             let mut s = MockServices::default();
             assert_eq!(
@@ -5468,7 +5771,7 @@ mod tests {
             let r =
                 unsafe { dispatch_nppm(&mut s, msg, MAX_PATH_TCHARS, buf.as_mut_ptr() as isize) };
             assert_eq!(r, Some(0), "{msg}");
-            assert_eq!(buf[0], 0, "{msg}");
+            assert!(buf.iter().all(|&u| u == 0xFFFF), "{msg}: nothing written");
         }
     }
 
@@ -6722,23 +7025,30 @@ mod tests {
     }
 
     #[test]
-    fn npp_directory_writes_within_max_path_whatever_the_plugin_says() {
+    fn npp_directory_writes_a_path_of_any_length_to_a_buffer_that_holds_it() {
         let mut s = MockServices::default();
         for msg in [NPPM_GETNPPDIRECTORY, NPPM_GETNPPFULLFILEPATH] {
             for wparam in [0, MAX_PATH_TCHARS, 4 * MAX_PATH_TCHARS] {
-                // The longest answer that fits MAX_PATH with its NUL...
+                // The longest answer that fits MAX_PATH with its NUL is
+                // written to every buffer...
                 s.program_dir = Some(program_path_of(MAX_PATH_TCHARS - 1));
                 s.program_path = s.program_dir.clone();
                 let (r, buf) = send_path_message(&mut s, msg, wparam);
                 assert_eq!(r, Some(1), "wparam {wparam}");
                 assert_eq!(buf[MAX_PATH_TCHARS - 1], 0);
-                // ...and one unit more, refused even to a buffer said to
-                // be larger.
+                // ...and one unit more only to a buffer said to hold it:
+                // 0 is `MAX_PATH`. Until Phase 5 it was refused to any.
                 s.program_dir = Some(program_path_of(MAX_PATH_TCHARS));
                 s.program_path = s.program_dir.clone();
                 let (r, buf) = send_path_message(&mut s, msg, wparam);
-                assert_eq!(r, Some(0), "wparam {wparam}");
-                assert!(buf.iter().all(|&u| u == 0xFFFF));
+                if wparam > MAX_PATH_TCHARS {
+                    assert_eq!(r, Some(1), "wparam {wparam}");
+                    assert_eq!(buf[MAX_PATH_TCHARS], 0);
+                    assert_eq!(buf[MAX_PATH_TCHARS + 1], 0xFFFF, "nothing past the NUL");
+                } else {
+                    assert_eq!(r, Some(0), "wparam {wparam}");
+                    assert!(buf.iter().all(|&u| u == 0xFFFF));
+                }
             }
         }
     }
@@ -7026,7 +7336,7 @@ mod tests {
 
     #[test]
     fn a_capacity_past_max_path_is_the_plugins_to_state() {
-        // Unlike the path messages, a capacity over `MAX_PATH` is taken
+        // As for the path messages, a capacity over `MAX_PATH` is taken
         // as given: the answer is at most 2047 units.
         let mut s = MockServices {
             cursor_answer: "a".repeat(2047),
@@ -7119,8 +7429,10 @@ mod tests {
 
     #[test]
     fn path_messages_take_a_zero_capacity_as_max_path() {
-        // Notepad++ writes without a bound for a capacity of 0; Code++
-        // takes it as MAX_PATH, so a longer path is refused.
+        // Notepad++ writes without a bound for a capacity of 0, and holds
+        // no path long enough to overrun the `MAX_PATH` buffer such a
+        // plugin passes; Code++ takes 0 as MAX_PATH, so a longer path is
+        // refused.
         let fits = format!("D:/{}", "a".repeat(MAX_PATH_TCHARS - 4));
         let mut s = MockServices {
             current_buffer: 7,
@@ -7129,14 +7441,41 @@ mod tests {
         };
         let (r, buf) = send_path_message(&mut s, NPPM_GETFULLCURRENTPATH, 0);
         assert_eq!((r, wide_answer(&buf)), (Some(1), fits.clone()));
-        s.buffer_paths = vec![(7, PathBuf::from(format!("{fits}b")))];
-        for wparam in [0, 4 * MAX_PATH_TCHARS] {
-            // Refused for 0, and for a buffer said to be larger too:
-            // the write never goes past MAX_PATH.
-            let (r, buf) = send_path_message(&mut s, NPPM_GETFULLCURRENTPATH, wparam);
+        let long = format!("{fits}b");
+        s.buffer_paths = vec![(7, PathBuf::from(&long))];
+        let (r, buf) = send_path_message(&mut s, NPPM_GETFULLCURRENTPATH, 0);
+        assert_eq!(r, Some(0));
+        assert!(buf.iter().all(|&u| u == 0xFFFF));
+    }
+
+    #[test]
+    fn path_messages_write_a_path_of_any_length_to_a_buffer_that_holds_it() {
+        // A stated capacity is taken as stated, as Notepad++ takes it.
+        // Until Phase 5 Code++ took any capacity as at most `MAX_PATH`,
+        // so a path of that length or more was refused to every plugin.
+        let dir = format!("D:/{}", "d".repeat(1000));
+        let full = format!("{dir}/notes.txt");
+        assert!(full.encode_utf16().count() > MAX_PATH_TCHARS);
+        let mut s = MockServices {
+            current_buffer: 7,
+            buffer_paths: vec![(7, PathBuf::from(&full))],
+            ..Default::default()
+        };
+        for (msg, answer) in [
+            (NPPM_GETFULLCURRENTPATH, full.as_str()),
+            (NPPM_GETCURRENTDIRECTORY, dir.as_str()),
+        ] {
+            let len = answer.encode_utf16().count();
+            let (r, buf) = send_path_message(&mut s, msg, len + 1);
+            assert_eq!((r, wide_answer(&buf)), (Some(1), answer.to_string()));
+            assert_eq!(buf[len + 1], 0xFFFF, "nothing past the capacity");
+            let (r, buf) = send_path_message(&mut s, msg, len);
             assert_eq!(r, Some(0));
-            assert!(buf.iter().all(|&u| u == 0xFFFF));
+            assert!(buf.iter().all(|&u| u == 0xFFFF), "nothing written");
         }
+        // The parts that are short fit a `MAX_PATH` buffer as before.
+        let (r, buf) = send_path_message(&mut s, NPPM_GETFILENAME, 0);
+        assert_eq!((r, wide_answer(&buf)), (Some(1), "notes.txt".to_string()));
     }
 
     #[test]

@@ -15503,6 +15503,69 @@ mod tests {
 
     #[cfg(target_os = "windows")]
     #[test]
+    fn a_file_whose_path_is_past_max_path_reaches_a_plugin_that_asks_its_length() {
+        // Notepad++ opens no file whose path is 259 units or more; Code++
+        // does, and answers its path whole to a plugin that asks the
+        // length first, and to no other.
+        use codepp_plugin_host::dispatch::{
+            MAX_PATH_TCHARS, NPPM_GETFULLCURRENTPATH, NPPM_GETFULLPATHFROMBUFFERID,
+        };
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+
+        let root = tempfile::tempdir().unwrap();
+        let dir = root.path().join("d".repeat(120)).join("e".repeat(120));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("long-path-note.txt");
+        std::fs::write(&path, "x").unwrap();
+        let want: Vec<u16> = path.to_str().unwrap().encode_utf16().collect();
+        assert!(want.len() > MAX_PATH_TCHARS, "{} units", want.len());
+        shell.open_file(path.clone());
+        drain_until(
+            &mut shell,
+            &mut ui,
+            |u, _| !u.set_text_calls.is_empty(),
+            Duration::from_secs(2),
+        );
+        assert_eq!(shell.active().and_then(|t| t.path.clone()), Some(path));
+        let id = shell.active().expect("active tab").id as usize;
+
+        let mut ask = |msg: u32, wparam: usize, buf: Option<&mut [u16]>| {
+            let lparam = buf.map_or(0, |b| b.as_mut_ptr() as isize);
+            // SAFETY: `lparam` is NULL or a live buffer that outlives the
+            // call, sized as each call below states.
+            unsafe {
+                shell.dispatch_plugin_message(&mut ui, HostHandles::null(), msg, wparam, lparam)
+            }
+        };
+        // The probe, then a buffer of its answer plus one.
+        let probe = ask(NPPM_GETFULLPATHFROMBUFFERID, id, None);
+        assert_eq!(probe, Some(want.len() as isize));
+        let mut buf = vec![0xFFFFu16; want.len() + 2];
+        assert_eq!(ask(NPPM_GETFULLPATHFROMBUFFERID, id, Some(&mut buf)), probe);
+        assert_eq!(&buf[..want.len()], &want[..]);
+        assert_eq!(buf[want.len()], 0);
+        assert_eq!(buf[want.len() + 1], 0xFFFF, "nothing past the buffer");
+        // Without the probe, a `MAX_PATH` buffer is all the host assumes.
+        let mut buf = vec![0xFFFFu16; MAX_PATH_TCHARS];
+        assert_eq!(
+            ask(NPPM_GETFULLPATHFROMBUFFERID, id, Some(&mut buf)),
+            Some(-1)
+        );
+        assert!(buf.iter().all(|&u| u == 0xFFFF), "nothing written");
+        // A path message takes the capacity the plugin states.
+        let mut buf = vec![0xFFFFu16; want.len() + 1];
+        assert_eq!(
+            ask(NPPM_GETFULLCURRENTPATH, want.len() + 1, Some(&mut buf)),
+            Some(1)
+        );
+        assert_eq!(&buf[..want.len()], &want[..]);
+        assert_eq!(buf[want.len()], 0);
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
     fn plugin_dispatch_get_buffer_format_answers_a_mixed_files_first_ending() {
         // `Eol::Mixed` is unique to Code++ — N++'s ABI has no
         // equivalent. A plugin is told the file's first ending, the

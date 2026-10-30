@@ -384,10 +384,10 @@ pub const NPPN_TBMODIFICATION: u32 = NPPN_FIRST + 2;
 /// still open, so [`buffer_path`] resolves it.
 pub const NPPN_FILEBEFORECLOSE: u32 = NPPN_FIRST + 3;
 
-/// Upper bound on the wide buffer [`buffer_path`] offers the host.
-/// Matches the `MAX_PATH_TCHARS` the host caps its write at, so the
-/// host can never write past what is allocated here.
-const PATH_BUFFER_UNITS: usize = 260;
+/// The longest path [`buffer_path`] allocates for, in UTF-16 units:
+/// Windows' longest, `\\?\` paths included. A host that answers more is
+/// refused rather than handed a buffer that large.
+const MAX_PATH_UNITS: usize = 32_767;
 
 /// `SCI_GETSELTEXT` — copy the selection (and, in Scintilla 5,
 /// return the byte length without the trailing NUL).
@@ -634,9 +634,11 @@ fn eol_bytes(mode: isize) -> &'static [u8] {
 /// Resolve buffer `id` (as carried in an `NPPN_*` notification's
 /// `nmhdr.idFrom`) to its full path name via
 /// `NPPM_GETFULLPATHFROMBUFFERID`: its file, or for an untitled buffer
-/// its name (`new 1`), as Notepad++ answers. `None` when the host does
-/// not know the id, will not write the path whole, or `setInfo` hasn't
-/// run yet.
+/// its name (`new 1`), as Notepad++ answers. Asked as the message's
+/// contract says: the length first, then the path into a buffer of that
+/// plus one, which is how a path longer than `MAX_PATH` is answered.
+/// `None` when the host does not know the id, will not write the path
+/// whole, or `setInfo` hasn't run yet.
 ///
 /// The interesting caller is a `beNotified` handler: Notepad++
 /// delivers `NPPN_FILEBEFORECLOSE` while the buffer is still open,
@@ -649,10 +651,17 @@ pub fn buffer_path(id: usize) -> Option<String> {
     if npp.is_null() {
         return None;
     }
-    let mut buf = [0u16; PATH_BUFFER_UNITS];
-    // SAFETY: `buf` is a live, writable wide buffer of the size the
-    // message's contract requires (MAX_PATH), and the host caps its
-    // write at that size; `id` is passed by value.
+    // SAFETY: a NULL lParam asks only for the length; nothing is
+    // written. `id` is passed by value.
+    let len = unsafe { SendMessageW(npp, NPPM_GETFULLPATHFROMBUFFERID, id, 0) };
+    let len = usize::try_from(len)
+        .ok()
+        .filter(|&len| (1..=MAX_PATH_UNITS).contains(&len))?;
+    let mut buf = vec![0u16; len + 1];
+    // SAFETY: `buf` is a live, writable wide buffer of the probe's
+    // answer plus one, the size the message's contract requires, sent
+    // straight after the probe, as the host requires to write a path
+    // longer than `MAX_PATH`.
     let written = unsafe {
         SendMessageW(
             npp,

@@ -46,14 +46,20 @@ const NPPM_GETCURRENTSCINTILLA: u32 = NPPMSG + 4;
 const NPPM_SETSTATUSBAR: u32 = NPPMSG + 24;
 /// `NPPM_GETFULLPATHFROMBUFFERID(id, *wchar)` — writes the path and
 /// returns its length in units, the NUL not counted, from the write and
-/// the probe alike, or -1 for an unknown id.
+/// the probe alike, or -1 for an unknown id. The host writes a path of
+/// `MAX_PATH` units or more only straight after its probe.
 const NPPM_GETFULLPATHFROMBUFFERID: u32 = NPPMSG + 58;
 /// `SCI_INSERTTEXT(pos, *utf8)`.
 const SCI_INSERTTEXT: u32 = 2003;
 
-/// The buffer id the mock host "knows", and the path it answers with.
+/// The buffer id the mock host "knows".
 const CLOSING_ID: usize = 7;
-const CLOSING_PATH: &str = "/tmp/closing.txt";
+
+/// The path the mock host answers for [`CLOSING_ID`]: longer than
+/// `MAX_PATH`, so the plugin gets it only by asking its length first.
+fn closing_path() -> String {
+    format!("/tmp/{}/closing.txt", "d".repeat(300))
+}
 
 // Sentinels the mock recognises. Their *addresses* are the handles the
 // plugin sees in `NppData` and routes messages back to.
@@ -73,6 +79,14 @@ static RECORDED: Mutex<Recorded> = Mutex::new(Recorded {
     path_queried_for: None,
     status: None,
 });
+
+thread_local! {
+    /// The length the last message to the host answered, if it was an
+    /// `NPPM_GETFULLPATHFROMBUFFERID` probe of [`CLOSING_ID`]. Per
+    /// thread, as in the host, so the other test's messages, sent from
+    /// its own thread, cannot take it.
+    static PATH_PROBED: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
+}
 
 struct Recorded {
     got_getcurrentscintilla: bool,
@@ -114,6 +128,10 @@ fn sci_ptr() -> *mut c_void {
 /// of any `SCI_INSERTTEXT` sent to the Scintilla sentinel.
 extern "C" fn mock_dispatch(hwnd: *mut c_void, msg: u32, wparam: usize, lparam: isize) -> isize {
     if std::ptr::eq(hwnd, npp_ptr()) {
+        // As in the host, a probe holds for the message after it alone.
+        // Stricter than the host, which ends a probe only with a message in
+        // its NPPM ranges: that can only refuse a write the host would allow.
+        let probed = PATH_PROBED.take();
         if msg == NPPM_GETCURRENTSCINTILLA {
             // Write the active view index (0 = main) through the plugin's
             // `int*` out-pointer, exactly as `dispatch_nppm` does.
@@ -130,20 +148,23 @@ extern "C" fn mock_dispatch(hwnd: *mut c_void, msg: u32, wparam: usize, lparam: 
             if wparam != CLOSING_ID {
                 return -1;
             }
+            let wide: Vec<u16> = closing_path().encode_utf16().chain(Some(0)).collect();
+            let len = wide.len() - 1;
             if lparam == 0 {
-                return CLOSING_PATH.encode_utf16().count().cast_signed();
+                PATH_PROBED.set(Some(len));
+                return len.cast_signed();
             }
-            let wide: Vec<u16> = CLOSING_PATH.encode_utf16().chain(Some(0)).collect();
-            assert!(
-                wide.len() <= 260,
-                "the mock must respect the MAX_PATH contract"
-            );
-            // SAFETY: the plugin passed a MAX_PATH-unit wide buffer, per
-            // the message's contract; the path is far shorter (asserted).
+            // As the host does: a path this long only to the plugin that
+            // just asked its length, and so allocated that plus one.
+            if probed != Some(len) {
+                return -1;
+            }
+            // SAFETY: the plugin passed a wide buffer of the probe's
+            // answer plus one, per the message's contract.
             unsafe {
                 std::ptr::copy_nonoverlapping(wide.as_ptr(), lparam as *mut u16, wide.len());
             }
-            return (wide.len() - 1).cast_signed();
+            return len.cast_signed();
         }
         if msg == NPPM_SETSTATUSBAR && lparam != 0 {
             // SAFETY: `NPPM_SETSTATUSBAR`'s lparam is a NUL-terminated
@@ -316,8 +337,8 @@ fn example_hello_resolves_the_closing_path_from_inside_file_before_close() {
         "the plugin should resolve the closing buffer's path from inside beNotified"
     );
     assert_eq!(
-        status.as_deref(),
-        Some("Closing: /tmp/closing.txt"),
+        status,
+        Some(format!("Closing: {}", closing_path())),
         "the plugin should report the resolved path on the status bar"
     );
 }
