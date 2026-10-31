@@ -386,8 +386,9 @@ pub const NPPN_FILEBEFORECLOSE: u32 = NPPN_FIRST + 3;
 
 /// The longest path [`buffer_path`] allocates for, in UTF-16 units:
 /// Windows' longest, `\\?\` paths included. A host that answers more is
-/// refused rather than handed a buffer that large.
-const MAX_PATH_UNITS: usize = 32_767;
+/// refused rather than handed a buffer that large. The host reads no
+/// longer a path from a plugin, so the two are one constant.
+const MAX_PATH_UNITS: usize = codepp_plugin_host::dispatch::MAX_PLUGIN_PATH_UNITS;
 
 /// `SCI_GETSELTEXT` — copy the selection (and, in Scintilla 5,
 /// return the byte length without the trailing NUL).

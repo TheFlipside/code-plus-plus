@@ -41,6 +41,17 @@
  * Both bases are stable across the entire Notepad++ plugin ecosystem;
  * Code++ matches them so existing binary plugins resolve our messages
  * to the same numbers they were compiled against.
+ *
+ * Paths a plugin passes: every message that takes a path or a name to
+ * match whole (NPPM_DOOPEN, NPPM_SAVECURRENTFILEAS, NPPM_SAVEFILE,
+ * NPPM_RELOADFILE, NPPM_SWITCHTOFILE, the session messages, and
+ * NPPM_LAUNCHFINDINFILESDLG) reads it up to 32,767 TCHARs, the NUL not
+ * counted: Windows' longest path. A longer one, one that is not valid
+ * UTF-16, an empty one and a kernel-range pointer are refused, and the
+ * message acts on nothing. Notepad++ opens no file whose path is 259
+ * TCHARs or more; Code++ does, so a plugin may pass one back. Until
+ * Phase 5 these messages read a path only up to MAX_PATH and acted on
+ * what they had read, a path cut short that named another file.
  */
 #define NPPMSG     (WM_USER + 1000)
 
@@ -377,10 +388,11 @@ typedef struct sessionInfo_ {
 /* Open the Find in Files dialog with optional pre-fill.
  * wParam: TCHAR* directory (or NULL to leave the field unchanged).
  * lParam: TCHAR* filters   (or NULL to leave the field unchanged).
- * An empty non-NULL string is treated identically to NULL — the
- * dispatcher folds the bad-surrogate path of `wide_ptr_to_string`
- * into the same "use current value" semantics so a single corrupt
- * arg can't trash a good prefill on the other arg. */
+ * Each is read whole, as a path is (see the note at NPPMSG). An
+ * empty string, and one that cannot be read whole, is treated as
+ * NULL, so a single corrupt arg can't trash a good prefill on the
+ * other arg, and a field is never filled with a cut directory or
+ * filter. */
 #define NPPM_LAUNCHFINDINFILESDLG         (NPPMSG + 29)
 
 /* Docking / docked-dialog API (DM = "Docking Manager") -------------
@@ -476,7 +488,12 @@ typedef struct sessionInfo_ {
 
 /* File operations -------------------------------------------------- */
 
-/* v1: reload the current buffer from disk. */
+/* v1: reload a buffer from disk.
+ *     wParam: TRUE to ask the user before discarding unsaved edits.
+ *     lParam: TCHAR* the file's path, or NULL for the current buffer.
+ *     A path that cannot be read whole (see the note at NPPMSG)
+ *     answers FALSE and reloads nothing; until Phase 5 it reloaded
+ *     the current buffer instead. */
 #define NPPM_RELOADFILE                   (NPPMSG + 36)
 /* v1: bring an open buffer to the front by its full path name.
  *     lParam: TCHAR* the name NPPM_GETFULLPATHFROMBUFFERID answers for
@@ -489,8 +506,9 @@ typedef struct sessionInfo_ {
  *     hidden second view's "new 1" is in no shown view, so it is never
  *     switched to. As Notepad++ 8.9.8.1 does, measured; until Phase 5
  *     Code++ opened a name it did not find as a file.
- *     A name of MAX_PATH (260) TCHARs or more, the NUL not counted,
- *     answers FALSE. */
+ *     The name is read whole, as a path is (see the note at
+ *     NPPMSG), so a buffer whose path is longer than MAX_PATH is
+ *     found too. */
 #define NPPM_SWITCHTOFILE                 (NPPMSG + 37)
 /* v1: save the active buffer. Returns TRUE if the file was written,
  *     FALSE if the save was refused or failed: an untitled buffer, a

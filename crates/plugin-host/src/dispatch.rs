@@ -532,6 +532,15 @@ pub fn pack_npp_version(major: u16, minor: u16, add_zero_padding: bool) -> isize
 /// how large the plugin's buffer is writes up to that size instead.
 pub const MAX_PATH_TCHARS: usize = 260;
 
+/// The longest path the dispatcher reads from a plugin, in UTF-16 units
+/// with the NUL not counted: Windows' longest, `\\?\` paths included. A
+/// path message reads its path whole up to this and refuses a longer
+/// one, never cutting it: a path cut short names another file. Notepad++
+/// opens no file whose path is 259 units or more; Code++ does, so a
+/// plugin may hand one back. The plugin SDK allocates for no longer a
+/// path either.
+pub const MAX_PLUGIN_PATH_UNITS: usize = 32_767;
+
 /// Cap on the file count a single `NPPM_SAVESESSION` call accepts.
 /// A malformed plugin claiming `nb_file = i32::MAX` would otherwise
 /// force the host into a multi-gigabyte allocation; this cap turns
@@ -2176,21 +2185,21 @@ pub unsafe fn dispatch_nppm<S: HostServices>(
             // Passed through rather than assumed: a silent request is
             // no licence to discard unsaved work, and only the user's
             // answer to the alert is. lParam: optional TCHAR* path.
-            // NULL = current buffer.
+            // NULL = current buffer. A path that cannot be read whole —
+            // a kernel-range pointer, the empty string, one the reader
+            // refuses — answers FALSE and reloads nothing; until Phase 5
+            // it reloaded the current buffer instead, and a path past
+            // MAX_PATH_TCHARS units was cut short.
             let with_alert = wparam != 0;
             let path = if lparam == 0 {
                 None
             } else {
                 // SAFETY: plugin promises lparam is a valid wide path
                 // it owns for the duration of this call.
-                let decoded = unsafe { wide_ptr_to_string(lparam as *const u16) };
-                if decoded.is_empty() {
-                    // Bad surrogates → empty; treat as "no path
-                    // supplied" rather than reloading the empty path.
-                    None
-                } else {
-                    Some(PathBuf::from(decoded))
-                }
+                let Some(path) = (unsafe { plugin_path(lparam) }) else {
+                    return Some(0);
+                };
+                Some(path)
             };
             services.reload_file(path, with_alert);
             1
@@ -2206,14 +2215,14 @@ pub unsafe fn dispatch_nppm<S: HostServices>(
             // find, so SWITCHTOFILE("new 1") tried to open a file called
             // `new 1`. See `buffer_named` for how a name matches.
             //
-            // NULL, a kernel-range pointer and a name that does not decode
+            // NULL, a kernel-range pointer and a name that cannot be read
             // whole answer FALSE without a lookup. Notepad++ does not guard
             // a NULL name (read from its source, not measured).
             if lparam <= 0 {
                 return Some(0);
             }
             // SAFETY: the plugin promises a NUL-terminated wide string; the
-            // read stops at the NUL and at `MAX_PATH_TCHARS` units.
+            // read stops at the NUL and after `MAX_PLUGIN_PATH_UNITS` units.
             let Some(name) = (unsafe { decode_whole_wide_ptr(lparam as *const u16) }) else {
                 return Some(0);
             };
@@ -2622,17 +2631,15 @@ pub unsafe fn dispatch_nppm<S: HostServices>(
         }
 
         NPPM_DOOPEN => {
-            if lparam == 0 {
-                0
-            } else {
-                // SAFETY: plugin promises lparam is a valid wide path.
-                let decoded = unsafe { wide_ptr_to_string(lparam as *const u16) };
-                if decoded.is_empty() {
-                    return Some(0);
-                }
-                services.open_file(PathBuf::from(decoded));
-                1
-            }
+            // lparam: TCHAR* the path to open, read whole: NULL, a
+            // kernel-range pointer, the empty string and a path that cannot
+            // be read whole answer FALSE and open nothing (`plugin_path`).
+            // SAFETY: plugin promises lparam is a valid wide path.
+            let Some(path) = (unsafe { plugin_path(lparam) }) else {
+                return Some(0);
+            };
+            services.open_file(path);
+            1
         }
 
         NPPM_SAVECURRENTFILEAS => {
@@ -2641,20 +2648,17 @@ pub unsafe fn dispatch_nppm<S: HostServices>(
             // rename the active tab to the new path.
             // lparam: TCHAR* target path.
             //
-            // Empty wide / bad surrogates rejected the same way
-            // NPPM_DOOPEN rejects them: a substituted U+FFFD on a
-            // path-typed payload could route the write to a
-            // different file than the plugin intended.
-            if lparam == 0 {
-                return Some(0);
-            }
+            // Read whole and refused as NPPM_DOOPEN refuses it
+            // (`plugin_path`): a path cut short, or one with a
+            // substituted U+FFFD, would route the write to a different
+            // file than the plugin intended. Until Phase 5 a path past
+            // MAX_PATH_TCHARS units was cut, and written to.
             let as_copy = wparam != 0;
             // SAFETY: plugin promises lparam is a valid wide path.
-            let decoded = unsafe { wide_ptr_to_string(lparam as *const u16) };
-            if decoded.is_empty() {
+            let Some(path) = (unsafe { plugin_path(lparam) }) else {
                 return Some(0);
-            }
-            isize::from(services.save_current_as(PathBuf::from(decoded), as_copy))
+            };
+            isize::from(services.save_current_as(path, as_copy))
         }
 
         NPPM_LOADSESSION => {
@@ -2664,15 +2668,13 @@ pub unsafe fn dispatch_nppm<S: HostServices>(
             // The session schema is Code++'s `core::session::Session`
             // (not Notepad++'s session.xml format). A session file
             // written by N++ won't load until cross-tool schema
-            // support lands as Phase 5 polish.
-            if lparam == 0 {
+            // support lands as Phase 5 polish. The path is read whole
+            // (`plugin_path`).
+            // SAFETY: plugin promises lparam is a valid wide path.
+            let Some(path) = (unsafe { plugin_path(lparam) }) else {
                 return Some(0);
-            }
-            let decoded = unsafe { wide_ptr_to_string(lparam as *const u16) };
-            if decoded.is_empty() {
-                return Some(0);
-            }
-            isize::from(services.load_session(PathBuf::from(decoded)))
+            };
+            isize::from(services.load_session(path))
         }
 
         NPPM_SAVECURRENTSESSION => {
@@ -2680,15 +2682,12 @@ pub unsafe fn dispatch_nppm<S: HostServices>(
             // lparam: TCHAR* destination path. Code++ writes its own
             // session schema; foreign-tool readers (N++) will not
             // pick the file up until cross-tool schema support
-            // lands.
-            if lparam == 0 {
+            // lands. The path is read whole (`plugin_path`).
+            // SAFETY: plugin promises lparam is a valid wide path.
+            let Some(path) = (unsafe { plugin_path(lparam) }) else {
                 return Some(0);
-            }
-            let decoded = unsafe { wide_ptr_to_string(lparam as *const u16) };
-            if decoded.is_empty() {
-                return Some(0);
-            }
-            isize::from(services.save_current_session(PathBuf::from(decoded)))
+            };
+            isize::from(services.save_current_session(path))
         }
 
         NPPM_GETNBSESSIONFILES => {
@@ -2697,16 +2696,14 @@ pub unsafe fn dispatch_nppm<S: HostServices>(
             // Returns the number of titled files in the session, or
             // 0 on read / parse failure (or for an empty session).
             // Untitled tabs are not counted — the message contract
-            // is "files," and untitled has no on-disk file.
-            if lparam == 0 {
+            // is "files," and untitled has no on-disk file. The path is
+            // read whole (`plugin_path`).
+            // SAFETY: plugin promises lparam is a valid wide path.
+            let Some(path) = (unsafe { plugin_path(lparam) }) else {
                 return Some(0);
-            }
-            let decoded = unsafe { wide_ptr_to_string(lparam as *const u16) };
-            if decoded.is_empty() {
-                return Some(0);
-            }
+            };
             services
-                .read_session_file_paths(PathBuf::from(decoded))
+                .read_session_file_paths(path)
                 .map_or(0, |v| v.len() as isize)
         }
 
@@ -2731,14 +2728,15 @@ pub unsafe fn dispatch_nppm<S: HostServices>(
             // explicitly (`NPPM_GETSESSIONFILES_BOUNDED` or the
             // like). Documented as a known limitation rather than
             // worked around.
-            if lparam <= 0 || (wparam as isize) <= 0 {
+            if (wparam as isize) <= 0 {
                 return Some(0);
             }
-            let decoded = unsafe { wide_ptr_to_string(lparam as *const u16) };
-            if decoded.is_empty() {
+            // The session file's path is read whole (`plugin_path`).
+            // SAFETY: plugin promises lparam is a valid wide path.
+            let Some(session) = (unsafe { plugin_path(lparam) }) else {
                 return Some(0);
-            }
-            let Some(mut paths) = services.read_session_file_paths(PathBuf::from(decoded)) else {
+            };
+            let Some(mut paths) = services.read_session_file_paths(session) else {
                 return Some(0);
             };
             // Defence-in-depth: cap the number of slots we write
@@ -2782,8 +2780,9 @@ pub unsafe fn dispatch_nppm<S: HostServices>(
             // Returns: lParam (the session path pointer) on
             // success, 0 on bad arguments or write failure — that's
             // the upstream contract (`saveSession()` returns the
-            // input pointer so plugins can chain the call).
-            if lparam == 0 {
+            // input pointer so plugins can chain the call). NULL and a
+            // kernel-range pointer answer 0 without reading the struct.
+            if lparam <= 0 {
                 return Some(0);
             }
             let info = lparam as *const crate::ffi::SessionInfo;
@@ -2803,13 +2802,18 @@ pub unsafe fn dispatch_nppm<S: HostServices>(
                     core::ptr::read_unaligned(core::ptr::addr_of!((*info).files)),
                 )
             };
-            if session_path_ptr.is_null() || nb_file < 0 {
+            if nb_file < 0 {
                 return Some(0);
             }
-            let path_str = unsafe { wide_ptr_to_string(session_path_ptr) };
-            if path_str.is_empty() {
+            // Every path in the struct is read whole (`plugin_path`): the
+            // session file's, refused with FALSE, and each file's, a file
+            // whose path cannot be read whole left out of the session
+            // rather than recorded as another file. Until Phase 5 a path
+            // past MAX_PATH_TCHARS units was cut.
+            // SAFETY: plugin promises a valid wide path.
+            let Some(session_path) = (unsafe { plugin_path(session_path_ptr as isize) }) else {
                 return Some(0);
-            }
+            };
             let count = nb_file as usize;
             // Bound the per-call allocation. A malformed plugin
             // claiming `nb_file = i32::MAX` would otherwise force
@@ -2833,10 +2837,10 @@ pub unsafe fn dispatch_nppm<S: HostServices>(
             // `count == 0` the loop body never runs, so a null
             // pointer is harmless — accept it as a degenerate
             // "save an empty session" call.
-            if count > 0 && files_ptr.is_null() {
+            if count > 0 && (files_ptr as isize) <= 0 {
                 tracing::warn!(
                     nb_file = nb_file,
-                    "NPPM_SAVESESSION: nb_file > 0 but files pointer is NULL",
+                    "NPPM_SAVESESSION: nb_file > 0 but the files pointer is NULL or kernel-range",
                 );
                 return Some(0);
             }
@@ -2848,15 +2852,14 @@ pub unsafe fn dispatch_nppm<S: HostServices>(
             // host-side iteration).
             for i in 0..count {
                 let p = unsafe { core::ptr::read_unaligned(files_ptr.add(i)) };
-                if p.is_null() {
-                    continue;
-                }
-                let s = unsafe { wide_ptr_to_string(p) };
-                if !s.is_empty() {
-                    files.push(PathBuf::from(s));
+                // SAFETY: plugin promises each entry is NULL or a valid
+                // wide path; `plugin_path` refuses NULL and kernel-range
+                // entries before reading.
+                if let Some(file) = unsafe { plugin_path(p as isize) } {
+                    files.push(file);
                 }
             }
-            if services.save_session_with_files(PathBuf::from(path_str), files) {
+            if services.save_session_with_files(session_path, files) {
                 // Mirror N++: return lParam unchanged on success so
                 // the plugin can chain the call.
                 lparam
@@ -2869,35 +2872,19 @@ pub unsafe fn dispatch_nppm<S: HostServices>(
             // wparam: directory (TCHAR*) — optional pre-fill.
             // lparam: filters (TCHAR*) — optional pre-fill.
             // Either / both NULL means "open the dialog with
-            // whatever the controls already hold". Empty wide
-            // strings are treated as NULL — `wide_ptr_to_string`
-            // returns "" on a bad-surrogate decode, and we don't
-            // want a single bad UTF-16 unit to trash a good
-            // pre-fill on the other arg.
+            // whatever the controls already hold". So does an empty
+            // string, a kernel-range pointer, and a string that cannot
+            // be read whole: each is read whole (`plugin_string`), so a
+            // field is filled with what the plugin passed or left as it
+            // is, never with a cut directory or filter, and one bad
+            // argument does not trash a good pre-fill on the other.
             //
-            // Both pointers are read by SAFETY contract from the
-            // plugin: each must be either NULL or a valid wide
-            // null-terminated buffer.
-            let directory = if wparam == 0 {
-                None
-            } else {
-                let s = unsafe { wide_ptr_to_string(wparam as *const u16) };
-                if s.is_empty() {
-                    None
-                } else {
-                    Some(PathBuf::from(s))
-                }
-            };
-            let filters = if lparam == 0 {
-                None
-            } else {
-                let s = unsafe { wide_ptr_to_string(lparam as *const u16) };
-                if s.is_empty() {
-                    None
-                } else {
-                    Some(s)
-                }
-            };
+            // SAFETY: plugin promises each pointer is NULL or a valid
+            // wide null-terminated buffer; `plugin_path` and
+            // `plugin_string` refuse NULL and kernel-range pointers
+            // before reading.
+            let directory = unsafe { plugin_path(wparam as isize) };
+            let filters = unsafe { plugin_string(lparam) };
             services.launch_find_in_files_dialog(directory, filters);
             1
         }
@@ -3297,16 +3284,13 @@ pub unsafe fn dispatch_nppm<S: HostServices>(
 
         NPPM_SAVEFILE => {
             // wparam: unused. lparam: TCHAR* path of buffer to
-            // save. Returns 1 on success, 0 on bad args / unknown
-            // path / write failure.
-            if lparam == 0 {
+            // save, read whole (`plugin_path`). Returns 1 on success, 0
+            // on bad args / unknown path / write failure.
+            // SAFETY: plugin promises lparam is a valid wide path.
+            let Some(path) = (unsafe { plugin_path(lparam) }) else {
                 return Some(0);
-            }
-            let decoded = unsafe { wide_ptr_to_string(lparam as *const u16) };
-            if decoded.is_empty() {
-                return Some(0);
-            }
-            isize::from(services.save_file(PathBuf::from(decoded)))
+            };
+            isize::from(services.save_file(path))
         }
 
         NPPM_DISABLEAUTOUPDATE => {
@@ -3706,25 +3690,103 @@ unsafe fn wide_ptr_to_string(p: *const u16) -> String {
 /// # Safety
 ///
 /// As for [`wide_ptr_to_string`].
-unsafe fn decode_wide_ptr(mut p: *const u16) -> Option<String> {
+unsafe fn decode_wide_ptr(p: *const u16) -> Option<String> {
     if p.is_null() {
         return Some(String::new());
     }
-    let mut units = Vec::with_capacity(64);
-    let mut count = 0usize;
-    // SAFETY: bounded by MAX_PATH_TCHARS; null-terminator stops the loop.
-    unsafe {
-        while count < MAX_PATH_TCHARS {
-            let c = *p;
-            if c == 0 {
-                break;
-            }
-            units.push(c);
-            p = p.add(1);
-            count += 1;
-        }
+    // SAFETY: the caller's contract; the read stops at the first NUL and
+    // after MAX_PATH_TCHARS units, keeping those units when it finds none.
+    let units = match unsafe { wide_units(p, MAX_PATH_TCHARS - 1) } {
+        Ok(units) | Err(units) => units,
+    };
+    strict_utf16(&units)
+}
+
+/// The NUL-terminated wide string a plugin passed at `p`, read whole: up
+/// to [`MAX_PLUGIN_PATH_UNITS`] units, the NUL not counted, so a path as
+/// long as any Windows takes is read in full. `None` for NULL, for a
+/// string with no NUL within that bound, and for one [`strict_utf16`]
+/// refuses to decode. For a value acted on whole, a path above all: the
+/// reader [`wide_ptr_to_string`] uses stops at `MAX_PATH_TCHARS` units and
+/// hands back what it read, and a path cut short names another file,
+/// which `NPPM_SAVECURRENTFILEAS` would have written to. Until Phase 5
+/// every path message read its path that way.
+///
+/// # Safety
+///
+/// `p` must be NULL, or valid to read up to and including its first NUL
+/// or for `MAX_PLUGIN_PATH_UNITS + 1` units, whichever comes first.
+unsafe fn decode_whole_wide_ptr(p: *const u16) -> Option<String> {
+    if p.is_null() {
+        return None;
     }
-    let s = String::from_utf16_lossy(&units);
+    // SAFETY: the caller's contract; the read stops at the first NUL and
+    // after MAX_PLUGIN_PATH_UNITS + 1 units.
+    let Ok(units) = (unsafe { wide_units(p, MAX_PLUGIN_PATH_UNITS) }) else {
+        tracing::debug!(
+            max = MAX_PLUGIN_PATH_UNITS,
+            "plugin-supplied wide string has no NUL within the bound; rejecting",
+        );
+        return None;
+    };
+    strict_utf16(&units)
+}
+
+/// The string a message's pointer argument names, read whole
+/// ([`decode_whole_wide_ptr`]). `None` for NULL, a kernel-range pointer,
+/// an empty string, and a string the reader refuses. A negative pointer
+/// is a kernel-range one in a 64-bit process, which every such guard in
+/// the dispatcher assumes.
+///
+/// # Safety
+///
+/// As for [`decode_whole_wide_ptr`], for a positive `raw`.
+unsafe fn plugin_string(raw: isize) -> Option<String> {
+    if raw <= 0 {
+        return None;
+    }
+    // SAFETY: the caller's contract, for the positive `raw` this is.
+    unsafe { decode_whole_wide_ptr(raw as *const u16) }.filter(|s| !s.is_empty())
+}
+
+/// The path a path message's pointer argument names: [`plugin_string`],
+/// as a path. A path message answers FALSE for each `None` and acts on
+/// nothing.
+///
+/// # Safety
+///
+/// As for [`plugin_string`].
+unsafe fn plugin_path(raw: isize) -> Option<PathBuf> {
+    // SAFETY: the caller's contract, which is `plugin_string`'s.
+    unsafe { plugin_string(raw) }.map(PathBuf::from)
+}
+
+/// The units of the NUL-terminated wide string at `p`, the NUL not
+/// included, reading at most `max_len + 1` of them: `Ok` when the NUL is
+/// among them, and `Err` with all `max_len + 1` when it is not.
+///
+/// # Safety
+///
+/// `p` must be valid to read up to and including its first NUL or for
+/// `max_len + 1` units, whichever comes first.
+unsafe fn wide_units(p: *const u16, max_len: usize) -> Result<Vec<u16>, Vec<u16>> {
+    let mut units = Vec::with_capacity(64);
+    for i in 0..=max_len {
+        // SAFETY: the caller's contract: `i` is at most `max_len`, and no
+        // unit is read past the first NUL.
+        let c = unsafe { *p.add(i) };
+        if c == 0 {
+            return Ok(units);
+        }
+        units.push(c);
+    }
+    Err(units)
+}
+
+/// `units` as a `String`, or `None` if they hold an unpaired surrogate,
+/// or a U+FFFD, which the decode cannot tell from one.
+fn strict_utf16(units: &[u16]) -> Option<String> {
+    let s = String::from_utf16_lossy(units);
     if s.contains('\u{FFFD}') {
         // Reject rather than mangle: a path with a substituted
         // U+FFFD might resolve to a different file than the plugin
@@ -3737,36 +3799,6 @@ unsafe fn decode_wide_ptr(mut p: *const u16) -> Option<String> {
         return None;
     }
     Some(s)
-}
-
-/// [`decode_wide_ptr`], answering `None` too for a string with no NUL in
-/// its first [`MAX_PATH_TCHARS`] units, that is one of `MAX_PATH_TCHARS`
-/// characters or more, the NUL not counted, where `decode_wide_ptr`
-/// answers those units. For a name compared whole: a cut one could match
-/// another buffer whose name is its first `MAX_PATH_TCHARS` units.
-///
-/// The string is read twice, once to find the NUL and once to decode it.
-/// Each read stops at the first NUL and before `MAX_PATH_TCHARS` units, so
-/// a plugin thread that changes the string in between can make it decode
-/// as something else, or not at all, but never makes either read go
-/// further.
-///
-/// # Safety
-///
-/// `p` must be NULL, or valid to read up to and including its first NUL
-/// or for `MAX_PATH_TCHARS` units, whichever comes first.
-unsafe fn decode_whole_wide_ptr(p: *const u16) -> Option<String> {
-    // SAFETY: the caller's contract; the scan stops at the first NUL and
-    // before MAX_PATH_TCHARS units, and `decode_wide_ptr` reads no further.
-    let ends = p.is_null() || (0..MAX_PATH_TCHARS).any(|i| unsafe { *p.add(i) } == 0);
-    if !ends {
-        tracing::debug!(
-            max = MAX_PATH_TCHARS,
-            "plugin-supplied wide string has no NUL within the bound; rejecting",
-        );
-        return None;
-    }
-    unsafe { decode_wide_ptr(p) }
 }
 
 /// The command id `NPPM_MENUCOMMAND` uses for the `index`-th User
@@ -4181,9 +4213,11 @@ mod tests {
         /// What `settings_dir` answers.
         settings_dir: Option<PathBuf>,
         /// What `read_session_file_paths` answers for any file when
-        /// set, for paths the semicolon list below cannot carry: the
-        /// session file's name is decoded to at most `MAX_PATH` units.
+        /// set, for paths the semicolon list below cannot carry: a slot
+        /// takes at most `MAX_PATH` units.
         session_paths: Option<Vec<PathBuf>>,
+        /// Every session file `read_session_file_paths` was asked for.
+        session_reads: RefCell<Vec<PathBuf>>,
         /// Reported zoom level for `CODEPPM_GETZOOMLEVEL`. Real
         /// Scintilla zoom range is approximately `[-10, 20]`;
         /// tests pin specific values.
@@ -4632,6 +4666,7 @@ mod tests {
             true
         }
         fn read_session_file_paths(&self, path: PathBuf) -> Option<Vec<PathBuf>> {
+            self.session_reads.borrow_mut().push(path.clone());
             if let Some(paths) = &self.session_paths {
                 return Some(paths.clone());
             }
@@ -5121,11 +5156,10 @@ mod tests {
     #[test]
     fn fif_launch_bad_surrogate_dir_falls_back_to_none() {
         // Lone high surrogate followed by NUL: not a valid UTF-16
-        // sequence. `wide_ptr_to_string` rejects this with an empty
-        // string rather than substituting U+FFFD; the dispatcher
-        // arm folds the empty result to `None` so a bad surrogate
-        // in `wparam` doesn't trash a good `lparam` prefill (and
-        // vice versa).
+        // sequence. The reader refuses it rather than substituting
+        // U+FFFD, and the dispatcher arm reads the refusal as `None`,
+        // so a bad surrogate in `wparam` doesn't trash a good `lparam`
+        // prefill (and vice versa).
         let bad: [u16; 2] = [0xD800, 0x0000];
         let filters = make_wide("*.txt");
         let mut s = MockServices::default();
@@ -6057,21 +6091,34 @@ mod tests {
             unsafe { dispatch_nppm(&mut s, NPPM_SWITCHTOFILE, 0, bad.as_ptr() as isize) },
             Some(0)
         );
-        // A name with no NUL within MAX_PATH_TCHARS units is not cut to
-        // match a buffer named by its first MAX_PATH_TCHARS units.
+        // A name read whole is not cut to match a buffer named by its
+        // first MAX_PATH_TCHARS units, as the reader the other messages
+        // used until Phase 5 would have cut it.
         let cut = "z".repeat(MAX_PATH_TCHARS);
         s.buffer_paths.push((2, PathBuf::from(&cut)));
         s.view_ids[0].push(2);
         assert_eq!(switch_to(&mut s, &format!("{cut}.bak")), 0);
         assert!(s.calls().is_empty(), "{:?}", s.calls());
-        // A name one unit shorter ends in time: read whole, it is looked
-        // up, finding nothing until a buffer has that name.
-        assert_eq!(switch_to(&mut s, &"z".repeat(MAX_PATH_TCHARS - 1)), 0);
+        // ...and so finds a buffer whose path is that long, which Code++
+        // opens and Notepad++ does not.
         s.buffer_paths
-            .push((3, PathBuf::from("z".repeat(MAX_PATH_TCHARS - 1))));
+            .push((3, PathBuf::from(format!("{cut}.bak"))));
         s.view_ids[0].push(3);
-        assert_eq!(switch_to(&mut s, &"z".repeat(MAX_PATH_TCHARS - 1)), 1);
+        assert_eq!(switch_to(&mut s, &format!("{cut}.bak")), 1);
         assert_eq!(s.calls(), vec!["activate[0,2]"]);
+        // A name with no NUL within MAX_PLUGIN_PATH_UNITS units is longer
+        // than any path, and is refused, not cut to match a buffer named
+        // by its first MAX_PLUGIN_PATH_UNITS units.
+        let longest = "y".repeat(MAX_PLUGIN_PATH_UNITS);
+        s.buffer_paths.push((4, PathBuf::from(&longest)));
+        s.view_ids[0].push(4);
+        let over = unterminated(MAX_PLUGIN_PATH_UNITS + 1, b'y');
+        assert_eq!(
+            unsafe { dispatch_nppm(&mut s, NPPM_SWITCHTOFILE, 0, over.as_ptr() as isize) },
+            Some(0)
+        );
+        assert_eq!(switch_to(&mut s, &longest), 1);
+        assert_eq!(s.calls(), vec!["activate[0,2]", "activate[0,3]"]);
     }
 
     #[test]
@@ -8062,6 +8109,224 @@ mod tests {
             s.calls(),
             vec!["save_session_with_files=D:/out.xml files=[D:/foo.txt]"]
         );
+    }
+
+    // --- Paths read whole ---
+
+    /// A path of `len` UTF-16 units: `D:/` and then `x`s.
+    fn long_path(len: usize) -> String {
+        format!("D:/{}", "x".repeat(len - 3))
+    }
+
+    /// `len` units of `unit` and then a NUL: with `len` past
+    /// `MAX_PLUGIN_PATH_UNITS`, a string longer than any path, whose NUL
+    /// the whole-path reader never reaches.
+    fn unterminated(len: usize, unit: u8) -> Vec<u16> {
+        let mut units = vec![u16::from(unit); len];
+        units.push(0);
+        units
+    }
+
+    /// The messages that take a path in lparam and act on it, with the
+    /// wparam each is sent with and the call each makes for `path`.
+    fn path_message_calls(path: &str) -> [(u32, usize, String); 6] {
+        [
+            (NPPM_DOOPEN, 0, format!("open={path}")),
+            (
+                NPPM_SAVECURRENTFILEAS,
+                1,
+                format!("save_as={path} copy=true"),
+            ),
+            (NPPM_SAVEFILE, 0, format!("save_file[{path}=true]")),
+            (NPPM_RELOADFILE, 0, format!("reload={path} silent")),
+            (NPPM_LOADSESSION, 0, format!("load_session={path}")),
+            (
+                NPPM_SAVECURRENTSESSION,
+                0,
+                format!("save_current_session={path}"),
+            ),
+        ]
+    }
+
+    /// Every path message reads its path whole: one past `MAX_PATH`, and
+    /// one as long as any Windows takes. Until Phase 5 each read it
+    /// through a reader that stopped at `MAX_PATH_TCHARS` units and handed
+    /// back what it had read, so `NPPM_SAVECURRENTFILEAS` would have
+    /// written the buffer to the file the cut named.
+    #[test]
+    fn path_messages_read_a_long_path_whole() {
+        for len in [MAX_PATH_TCHARS + 40, MAX_PLUGIN_PATH_UNITS] {
+            let path = long_path(len);
+            let wide = make_wide(&path);
+            let mut s = MockServices {
+                buffer_paths: vec![(7, PathBuf::from(&path))],
+                ..Default::default()
+            };
+            for (msg, w, call) in path_message_calls(&path) {
+                let r = unsafe { dispatch_nppm(&mut s, msg, w, wide.as_ptr() as isize) };
+                assert_eq!(r, Some(1), "message {msg}, {len} units");
+                assert_eq!(s.calls().last(), Some(&call), "message {msg}, {len} units");
+            }
+            for msg in [NPPM_GETNBSESSIONFILES, NPPM_GETSESSIONFILES] {
+                let mut slot = vec![0u16; MAX_PATH_TCHARS];
+                let slots = [slot.as_mut_ptr()];
+                let r = unsafe {
+                    dispatch_nppm(&mut s, msg, slots.as_ptr() as usize, wide.as_ptr() as isize)
+                };
+                assert_eq!(r, Some(1), "message {msg}, {len} units");
+            }
+            assert_eq!(
+                *s.session_reads.borrow(),
+                vec![PathBuf::from(&path); 2],
+                "{len} units"
+            );
+        }
+    }
+
+    /// A path that cannot be read whole is refused, by every path message,
+    /// and nothing is acted on: one longer than any path, one holding an
+    /// unpaired surrogate, the empty string, and a kernel-range pointer,
+    /// which is never read. Until Phase 5 the first was cut short and
+    /// acted on, the last read, and `NPPM_RELOADFILE` reloaded the current
+    /// buffer for every one but the first.
+    #[test]
+    fn path_messages_refuse_a_path_they_cannot_read_whole() {
+        let over = unterminated(MAX_PLUGIN_PATH_UNITS + 1, b'x');
+        let surrogate: Vec<u16> = vec![u16::from(b'D'), 0xD800, 0];
+        let empty: Vec<u16> = vec![0];
+        let inputs = [
+            ("too long", over.as_ptr() as isize),
+            ("an unpaired surrogate", surrogate.as_ptr() as isize),
+            ("empty", empty.as_ptr() as isize),
+            ("a kernel-range pointer", -8),
+        ];
+        let mut slot = vec![0u16; MAX_PATH_TCHARS];
+        let slots = [slot.as_mut_ptr()];
+        for (what, lparam) in inputs {
+            let mut s = MockServices::default();
+            for (msg, w, _) in path_message_calls("") {
+                let r = unsafe { dispatch_nppm(&mut s, msg, w, lparam) };
+                assert_eq!(r, Some(0), "message {msg}, {what}");
+            }
+            for msg in [NPPM_GETNBSESSIONFILES, NPPM_GETSESSIONFILES] {
+                let r = unsafe { dispatch_nppm(&mut s, msg, slots.as_ptr() as usize, lparam) };
+                assert_eq!(r, Some(0), "message {msg}, {what}");
+            }
+            assert!(s.calls().is_empty(), "{what}: {:?}", s.calls());
+            assert!(s.session_reads.borrow().is_empty(), "{what}");
+        }
+    }
+
+    /// `NPPM_SAVESESSION` reads every path in its struct whole: a long
+    /// session path and a long file path are taken whole, a file whose
+    /// path is longer than any path is left out of the session rather than
+    /// recorded as another file, and a session path longer than any path
+    /// refuses the save.
+    #[test]
+    fn save_session_reads_its_paths_whole() {
+        use crate::ffi::SessionInfo;
+        let session = long_path(MAX_PATH_TCHARS + 40);
+        let file = long_path(MAX_PATH_TCHARS + 10);
+        let mut session_wide = make_wide(&session);
+        let mut file_wide = make_wide(&file);
+        let mut over = unterminated(MAX_PLUGIN_PATH_UNITS + 1, b'x');
+        let mut files = [file_wide.as_mut_ptr(), over.as_mut_ptr()];
+        let mut info = SessionInfo {
+            session_file_path_name: session_wide.as_mut_ptr(),
+            nb_file: 2,
+            files: files.as_mut_ptr(),
+        };
+        let mut s = MockServices::default();
+        let r = unsafe { dispatch_nppm(&mut s, NPPM_SAVESESSION, 0, &raw const info as isize) };
+        assert_eq!(r, Some(&raw const info as isize));
+        assert_eq!(
+            s.calls(),
+            vec![format!("save_session_with_files={session} files=[{file}]")]
+        );
+
+        info.session_file_path_name = over.as_mut_ptr();
+        let mut s = MockServices::default();
+        let r = unsafe { dispatch_nppm(&mut s, NPPM_SAVESESSION, 0, &raw const info as isize) };
+        assert_eq!(r, Some(0));
+        // A kernel-range pointer to the struct, or to its array of
+        // files, is never read.
+        let r = unsafe { dispatch_nppm(&mut s, NPPM_SAVESESSION, 0, -8) };
+        assert_eq!(r, Some(0));
+        info.session_file_path_name = session_wide.as_mut_ptr();
+        info.files = (usize::MAX - 7) as *mut *mut u16;
+        let r = unsafe { dispatch_nppm(&mut s, NPPM_SAVESESSION, 0, &raw const info as isize) };
+        assert_eq!(r, Some(0));
+        assert!(s.calls().is_empty(), "{:?}", s.calls());
+    }
+
+    /// The Find in Files prefill reads its directory and filters whole: a
+    /// long directory or filter fills its field whole, and one that cannot
+    /// be read whole, or a kernel-range pointer, leaves the field as it is
+    /// rather than filling it with a cut directory or filter, without
+    /// costing the other field.
+    #[test]
+    fn fif_launch_reads_its_prefill_whole() {
+        let dir = long_path(MAX_PATH_TCHARS + 40);
+        let dir_wide = make_wide(&dir);
+        let filters = format!("*.rs {}", "x".repeat(MAX_PATH_TCHARS));
+        let filters_wide = make_wide(&filters);
+        let short = make_wide("*.rs");
+        let over = unterminated(MAX_PLUGIN_PATH_UNITS + 1, b'x');
+        let kernel = usize::MAX - 7; // -8 as an isize: a kernel-range pointer
+        let mut s = MockServices::default();
+        for (wparam, lparam, call) in [
+            (
+                dir_wide.as_ptr() as usize,
+                filters_wide.as_ptr() as usize,
+                format!("fif_launch[dir={dir},filters={filters}]"),
+            ),
+            (
+                over.as_ptr() as usize,
+                short.as_ptr() as usize,
+                "fif_launch[dir=<none>,filters=*.rs]".to_string(),
+            ),
+            (
+                kernel,
+                short.as_ptr() as usize,
+                "fif_launch[dir=<none>,filters=*.rs]".to_string(),
+            ),
+            (
+                dir_wide.as_ptr() as usize,
+                over.as_ptr() as usize,
+                format!("fif_launch[dir={dir},filters=<none>]"),
+            ),
+            (
+                dir_wide.as_ptr() as usize,
+                kernel,
+                format!("fif_launch[dir={dir},filters=<none>]"),
+            ),
+        ] {
+            let r = unsafe {
+                dispatch_nppm(&mut s, NPPM_LAUNCHFINDINFILESDLG, wparam, lparam as isize)
+            };
+            assert_eq!(r, Some(1));
+            assert_eq!(s.calls().last(), Some(&call));
+        }
+    }
+
+    /// The reader the other strings a plugin passes still go through —
+    /// status-bar text, a plugin's or a panel's name — stops at
+    /// `MAX_PATH_TCHARS` units and keeps what it read, as it always has;
+    /// the whole-path reader reads to the NUL and refuses a string with
+    /// none within `MAX_PLUGIN_PATH_UNITS + 1` units.
+    #[test]
+    fn the_two_readers_keep_their_bounds() {
+        let long = unterminated(MAX_PATH_TCHARS + 40, b'x');
+        let cut = unsafe { wide_ptr_to_string(long.as_ptr()) };
+        assert_eq!(cut, "x".repeat(MAX_PATH_TCHARS));
+        let whole = unsafe { decode_whole_wide_ptr(long.as_ptr()) };
+        assert_eq!(whole, Some("x".repeat(MAX_PATH_TCHARS + 40)));
+        let longest = unterminated(MAX_PLUGIN_PATH_UNITS, b'x');
+        let whole = unsafe { decode_whole_wide_ptr(longest.as_ptr()) };
+        assert_eq!(whole.map(|s| s.len()), Some(MAX_PLUGIN_PATH_UNITS));
+        let over = unterminated(MAX_PLUGIN_PATH_UNITS + 1, b'x');
+        assert_eq!(unsafe { decode_whole_wide_ptr(over.as_ptr()) }, None);
+        assert_eq!(unsafe { decode_whole_wide_ptr(core::ptr::null()) }, None);
     }
 
     // --- Code++ extension messages: CODEPPM_SETCLIPBOARD / EXPORTSAVEDIALOG ---

@@ -17409,6 +17409,53 @@ mod tests {
         land_next_load(&mut shell, &mut ui);
     }
 
+    /// A plugin's `NPPM_SAVECURRENTFILEAS` to a path longer than
+    /// `MAX_PATH` writes nothing at the path's first `MAX_PATH` units.
+    /// Until Phase 5 the dispatcher cut the path there and saved to the
+    /// cut, which on Linux and macOS, where such a path is ordinary, put
+    /// the buffer in another file. The path is read whole now, and written
+    /// where the platform lets Code++ write it, which on Windows it does
+    /// not yet (DESIGN.md §7.4).
+    #[test]
+    fn save_as_to_a_long_path_never_writes_to_its_cut() {
+        use codepp_plugin_host::dispatch::{MAX_PATH_TCHARS, NPPM_SAVECURRENTFILEAS};
+        let dir = tempfile::tempdir().unwrap();
+        let open = dir.path().join("a.txt");
+        std::fs::write(&open, "kept\n").unwrap();
+        // A folder 240 units long, so the target's first MAX_PATH_TCHARS
+        // units end inside its file name, in a folder that exists.
+        let base = dir.path().to_str().unwrap();
+        assert!(base.is_ascii() && base.len() < 200, "{base}");
+        let folder = Path::new(base).join(format!("d{}", "x".repeat(240 - base.len() - 2)));
+        assert_eq!(folder.to_str().unwrap().len(), 240);
+        std::fs::create_dir_all(&folder).unwrap();
+        let target = folder.join(format!("saveas-{}.txt", "s".repeat(50)));
+        let target = target.to_str().unwrap();
+        let cut = &target[..MAX_PATH_TCHARS];
+
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+        shell.open_file(open);
+        land_next_load(&mut shell, &mut ui);
+        let wide: Vec<u16> = target.encode_utf16().chain(std::iter::once(0)).collect();
+        // SAFETY: a NUL-terminated string that outlives the call.
+        let r = unsafe {
+            shell.dispatch_plugin_message(
+                &mut ui,
+                HostHandles::null(),
+                NPPM_SAVECURRENTFILEAS,
+                1,
+                wide.as_ptr() as isize,
+            )
+        };
+        assert!(!Path::new(cut).exists(), "a file was written at the cut");
+        if !cfg!(windows) {
+            assert_eq!(r, Some(1));
+            assert_eq!(std::fs::read_to_string(target).unwrap(), "kept\n");
+        }
+    }
+
     #[test]
     fn close_active_tab_with_no_tabs_returns_none() {
         let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;

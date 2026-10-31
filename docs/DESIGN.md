@@ -3408,12 +3408,70 @@ These are not blockers for the phase that surfaced them, but get addressed in Ph
   * **What stays.**
     * Notepad++ sends `NPPN_BUFFERACTIVATED` again for a switch to the buffer already in front (measured: `NEW 1` with `new 1` in front, and `b.txt` twice). Code++ announces only a real change, the rule every switch follows (`Shell::switch_to_tab`).
     * Of two shown buffers whose names match, Notepad++ takes the one it made first and Code++ the first in tab order. Only Code++ can hold one file in two tabs spelled in different case, through `NPPM_DOOPEN` or File → Open (the one-tab-per-file entry above records it), so only Code++ can meet the case.
-    * A name of 260 characters or more, the NUL not counted, answers FALSE, so a buffer whose path is that long cannot be switched to by name. Notepad++ opens no such file; Code++ does, and answers its path through `NPPM_GETFULLPATHFROMBUFFERID`.
+    * ~~A name of 260 characters or more, the NUL not counted, answers FALSE, so a buffer whose path is that long cannot be switched to by name. Notepad++ opens no such file; Code++ does, and answers its path through `NPPM_GETFULLPATHFROMBUFFERID`.~~ *(Since changed: the name is read whole, up to Windows' longest path, so such a buffer is found. See the entry "A path a plugin passed was cut at 260 units, and the cut acted on" below.)*
     * A name holding an unpaired surrogate or U+FFFD answers FALSE, and a buffer whose path is not valid Unicode is never matched, where Notepad++ would compare the units as they are.
     * A plugin that relied on `NPPM_SWITCHTOFILE` to open a file now gets FALSE and no file. That is Notepad++'s answer, and a plugin written for it uses `NPPM_DOOPEN`; it is a plugin-ABI answer moving toward Notepad++'s, which wants the maintainer's sign-off.
   * **Found on the way, not changed here.**
     * After the probe closed `new 1`, which it had brought to the front from `b.txt`, Notepad++ put `b.txt` back in front and Code++ the tab beside the closed one, `new 2`. Measured once, in this run; why Notepad++ chose `b.txt` was not read.
-    * `NPPM_DOOPEN`, `NPPM_SAVECURRENTFILEAS`, `NPPM_RELOADFILE` and `NPPM_LOADSESSION` read their path with the reader that stops at `MAX_PATH` units and hands back what it read, so a longer path is acted on cut short: `NPPM_SAVECURRENTFILEAS` would write the buffer to the file the cut names. Found by reading; not run.
+    * ~~`NPPM_DOOPEN`, `NPPM_SAVECURRENTFILEAS`, `NPPM_RELOADFILE` and `NPPM_LOADSESSION` read their path with the reader that stops at `MAX_PATH` units and hands back what it read, so a longer path is acted on cut short: `NPPM_SAVECURRENTFILEAS` would write the buffer to the file the cut names. Found by reading; not run.~~ *(Since fixed, for those and five more path messages: see the entry "A path a plugin passed was cut at 260 units, and the cut acted on" below.)*
+
+- **~~A path a plugin passed was cut at 260 units, and the cut acted on.~~ Landed (Phase 5): every path message reads its path whole, up to Windows' longest, and refuses a longer one.** The `NPPM_SWITCHTOFILE` entry above found it.
+  * **What happened.** The dispatcher read every string a plugin passed through one reader, which stopped at `MAX_PATH` units and handed back what it had read. That suits status-bar text. A path message then acted on the cut, a path that names another file:
+    * `NPPM_DOOPEN` opened it, and `NPPM_LOADSESSION`, `NPPM_GETNBSESSIONFILES` and `NPPM_GETSESSIONFILES` read it.
+    * `NPPM_SAVECURRENTFILEAS`, `NPPM_SAVEFILE`, `NPPM_SAVECURRENTSESSION` and `NPPM_SAVESESSION` wrote to it, `NPPM_SAVESESSION` also recording each cut file path in the session, and `NPPM_LAUNCHFINDINFILESDLG` filled the dialog with it.
+    * `NPPM_RELOADFILE` reloaded the *current* buffer for a path it could not decode, as if the plugin had passed NULL.
+    * All but `NPPM_GETSESSIONFILES` and `NPPM_SWITCHTOFILE` also read through a negative, kernel-range pointer, which faults; `NPPM_SAVESESSION` read its struct through one.
+  * **Measured** with a probe plugin built outside the tree, in a portable copy of the installed Notepad++ 8.9.8.1 and in Code++ before and after, against a folder 240 units long holding a 300-unit file, so the first 260 units of every path name a file in a folder that exists:
+
+    | The probe sends | Notepad++ 8.9.8.1 | Code++ before | Code++ after |
+    | --- | --- | --- | --- |
+    | `NPPM_DOOPEN` of the 300-unit file | 0, nothing opened | 1, tried to open the cut path: "Open failed" | 1, the file opens whole |
+    | `NPPM_SWITCHTOFILE` with its path | 0 | 0 | 1, switched |
+    | `NPPM_SAVECURRENTFILEAS` (copy) to a 302-unit path | 0, "Save failed" | 0, the write to the cut path failed | 0, the write to the whole path failed |
+    | `NPPM_SAVECURRENTSESSION` to a 303-unit path | nonzero, with an error dialog; nothing written | 0, the cut path failed | 0, the whole path failed |
+    | Files written in the folder | none | none | none |
+
+    On Windows the cut path is itself 260 units, which is past what the rename every save ends in takes (below), so the build before's writes to it failed rather than landing. On Linux and macOS a path of 260 units is ordinary, and the cut Save As writes the buffer into another file: a shell test does exactly that with the build before on Linux, and nothing with this one.
+  * **What ships.**
+    * A second reader, `decode_whole_wide_ptr`, reads a string to its NUL, up to `MAX_PLUGIN_PATH_UNITS` (32,767 units, Windows' longest path, `\\?\` paths included). It refuses a string with no NUL within that bound, and one that does not decode, rather than cutting it.
+    * `plugin_path` and `plugin_string` put it behind the checks every path message needs: NULL, a kernel-range pointer and the empty string are refused, and the message answers 0 and acts on nothing.
+    * Every reading of a path goes through them: the nine path messages above (two readings in `NPPM_SAVESESSION`, its session path and each file's), both of `NPPM_LAUNCHFINDINFILESDLG`'s prefills, and `NPPM_SWITCHTOFILE`'s name. So a buffer whose path is longer than `MAX_PATH` can be switched to by name, which the entry above left out.
+    * `NPPM_RELOADFILE` answers 0 and reloads nothing for a path it cannot read whole; NULL still means the current buffer.
+    * `NPPM_SAVESESSION` leaves out of the session a file whose path cannot be read whole, where it recorded the cut.
+    * The old reader keeps its bound, for status-bar text and the other strings that are not paths. The two readers share one bounded scan, `wide_units`, and one decode, `strict_utf16`.
+    * The plugin SDK's `buffer_path`, which allocates for at most Windows' longest path, takes its bound from the same constant.
+  * **Verified.**
+    * *Against Notepad++:* the probe, in the real Win32 app before and after this change, as in the table.
+    * *Tests:* five new dispatcher tests and one rewritten.
+      * Every path message reads a path of 300 units, and one of 32,767, whole.
+      * Every one refuses a path with no NUL in its first 32,768 units, an unpaired surrogate, the empty string and a kernel-range pointer, acting on nothing; for `NPPM_RELOADFILE` that means no reload of the current buffer either.
+      * `NPPM_SAVESESSION` reads its session path and each file path whole, leaving out a file it cannot, and reads neither its struct nor its array of files through a kernel-range pointer.
+      * The Find in Files prefill reads both fields whole and leaves a field it cannot read as it is.
+      * The two readers keep their bounds.
+      * `NPPM_SWITCHTOFILE` finds a 264-unit name, does not take it for the buffer named by its first 260 units, and refuses one with no NUL in its first 32,768.
+
+      One new shell test: `NPPM_SAVECURRENTFILEAS` to a 302-unit path writes nothing at its first 260 units, and on Linux and macOS writes the file whole.
+    * *Mutations:* twenty-three, each killed by the dispatcher's tests.
+      * Eight broke the reader: its bound at `MAX_PATH`; one unit short; the cut kept; a kernel-range pointer read; the empty string taken; the old reader reading one unit more; the scan reading one unit fewer; U+FFFD accepted.
+      * Thirteen put one reading at a time back on the old cutting reader: `NPPM_RELOADFILE` as it was, cutting the path and reloading the current buffer for one it refused; the seven other messages whose lParam is a path (`NPPM_DOOPEN`, `NPPM_SAVECURRENTFILEAS`, `NPPM_SAVEFILE`, `NPPM_LOADSESSION`, `NPPM_SAVECURRENTSESSION`, `NPPM_GETNBSESSIONFILES`, `NPPM_GETSESSIONFILES`); `NPPM_SAVESESSION`'s session path and its file paths, separately; the two prefills; and `NPPM_SWITCHTOFILE`.
+      * Two removed the kernel-range guards on `NPPM_SAVESESSION`'s struct pointer and on its array of files.
+      * Two of the twenty-three survived the first run, the old reader's own bound and the filters prefill. Each has a test now. Five are killed by the test process crashing, reading a kernel-range pointer: the reader's own guard, the two `NPPM_SAVESESSION` guards, and, in a full run, the `NPPM_GETSESSIONFILES` arm, which run on its own fails an assertion first. The mutation script lives outside the tree.
+    * *On Linux,* in WSL: the shell test against the commit before, with only the test added, fails ("a file was written at the cut"), and against this change passes; the plugin host's tests pass there too.
+    * *Everything else:* fmt; clippy pedantic `-D warnings` on Windows, and for macOS and Linux as type checks; rustdoc `-D warnings`; the workspace suite on Windows under a scratch `APPDATA`, 1,951 passed.
+  * **What stays.**
+    * **Code++ cannot write a file whose path is longer than `MAX_PATH` on Windows.** Every save (Ctrl+S, Save As, a plugin's save, a session file) writes a temporary file and renames it into place with tempfile. That rename refuses such a path unless it is a verbatim one (`\\?\`), and only the recovery-backup writer makes its path verbatim. Measured: Code++ opens the 300-unit file, and `NPPM_SAVECURRENTFILE` of it answers 0, "The system cannot find the path specified". This is older than this change: a file opened from the command line, a drop or a session hits it too. It is the next thing to fix.
+    * Notepad++ refuses to open a path of 259 units or more; Code++ opens it, from a plugin as from its own UI, as the entry on writing paths of any length to a plugin decided.
+    * The strings that are not paths keep the cutting reader: status-bar text, the target of `NPPM_MSGTOPLUGIN`, a panel's name in the docking messages, and `CODEPPM_EXPORTSAVEDIALOG`'s suggested name, which the user sees in the dialog before saving. A lookup by a name of 260 units or more could match a name equal to its cut; no plugin or panel name that long is known.
+  * **What the pre-commit gate found.** A code review, which passed, and a security audit, which came back secure with one Low. Addressed:
+    * *Counts* (the review): the entry had four new tests for five and a mutation breakdown that did not add up; both are stated as they are now.
+    * *SAFETY comments* (the review): the unsafe calls in `plugin_string`, `plugin_path`, the prefill arm and `NPPM_SAVESESSION`'s file loop each carry their own.
+    * *A stale reference* (the review): `decode_whole_wide_ptr`'s doc named `decode_wide_ptr` as what refuses to decode, where it is `strict_utf16`.
+    * *The array of files* (the audit, informational, older than this change): `NPPM_SAVESESSION` checked its array pointer only for NULL, and read through a kernel-range one. It refuses that now, as every other pointer in these messages is refused, with a test.
+    * *Recorded rather than changed:*
+      * The audit's Low: a hostile plugin can make one `NPPM_SAVESESSION` read up to 1,024 strings of 32,768 units, about 64 MiB, and hold their paths at once, where the cutting reader stopped at about 0.5 MiB. Bounded, freed on return, and nothing a plugin running in the process could not do itself (§6.5).
+      * Every negative-pointer guard in the dispatcher assumes a 64-bit process, where a negative pointer is a kernel one; in a 32-bit process that is large-address aware, a valid pointer at or above 2 GiB would be refused. The guards this change adds on pointers read from `SessionInfo` and the prefill's wParam follow that rule; `plugin_string` says so.
+      * `NPPM_RELOADFILE` now answers 0, where it answered 1, for a path it cannot read whole, and no longer reloads the current buffer for one. A plugin-ABI answer moving toward Notepad++'s, which answers FALSE when it reloads nothing; it wants the maintainer's sign-off.
+  * **Found on the way, not changed here.** `NPPM_RELOADFILE` differs from Notepad++ 8.9.8.1 beyond the reading, as read from its handler. Notepad++ looks the buffer up by name, as `NPPM_SWITCHTOFILE` does, and answers FALSE for NULL and for a name no shown buffer has. Code++ reloads the current buffer for NULL, compares the path exactly, and opens a path no tab holds (`Shell::request_reload`'s fall-through). Aligning it would reuse `buffer_named`.
 
 ### 7.5 Phase 5 cross-platform parity checklist
 
