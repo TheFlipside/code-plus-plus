@@ -66,7 +66,8 @@ Do this once before the first real tag, and after any change to the workflow or 
 
 ## 4. When a run fails
 
-- **`prepare` refuses the tag.** The log says why: the tag does not match `Cargo.toml`, its commit is not on `main`, or a release token is missing. Delete the tag (`git push origin :refs/tags/<tag>`, `git tag -d <tag>`), fix the cause, and tag again.
+- **The push of the tag is rejected with "Tag … is protected".** No run starts. Your account is not on the allowlist of the `v*` tag rule (§5.4). Add your account to the allowlist, under the repository's Settings → Tags, and push the tag again.
+- **`prepare` refuses the tag.** The log says why: the tag does not match `Cargo.toml`, its commit is not on `main`, or a release token is missing. Delete the tag (`git push origin :refs/tags/<tag>`, `git tag -d <tag>`), fix the cause, and tag again. Nothing was published under it, so deleting it is safe.
 - **A build fails.** Nothing has been published. Fix it on `main` and tag the fixed commit with the next pre-release number. A tag that was pushed is better left alone than moved.
 - **`publish` fails halfway.** Run the job again. It finds the release it already made and replaces the files of the same name; it does not touch a title or description that exists.
 - **"GitHub mirror: tag … is not at …"** The job waited ten minutes for the tag to arrive on GitHub. The Forgejo release is already published. Sync the push mirror (repository Settings → Mirror settings → Synchronize now), then run the job again.
@@ -108,9 +109,10 @@ The workflow adds the Rust targets itself (`rustup target add`), the second macO
 
 ### 5.4 Who can release, and what runs beside it
 
-Two settings on the Forgejo side, which the workflow cannot make for itself:
+Three settings on the Forgejo side, which the workflow cannot make for itself:
 
-- **Protect the `v*` tags** (repository Settings → Tags). Anyone who can push a tag can start a release, and the workflow that runs is the one in the tagged commit. A protected tag pattern limits that to the people named, and stops a published tag from being moved: a moved tag and a second run would replace a published release's files.
+- **Protect the `v*` tags** (repository Settings → Tags), and put every account that cuts releases on the rule's allowlist, your own included. Anyone who can push a tag can start a release, and the workflow that runs is the one in the tagged commit. A protected tag pattern limits that to the accounts on its allowlist. A rule with an empty allowlist lets nobody create a matching tag, the repository's owner included: the push is rejected with "Tag … is protected". The rule does not hold the accounts on the list back: one of them can still move or delete a published tag, and a moved tag and a second run would replace a published release's files. So list only the accounts that cut releases, and leave a pushed tag where it is (§4).
+- **Protect `main`** (repository Settings → Branches), once anyone else has write access. A release is tagged on `main`, and the workflow that runs is the one in the tagged commit, so whoever can push to `main` decides what a release builds and what `publish` runs with the release tokens. The tag rule is only as strong as this one.
 - **Do not let pull requests from outside contributors run CI unapproved.** CI builds a pull request on the same persistent `linux` runner that runs `publish`, and a build runs the pull request's build scripts. Code running there while a release is being published could read the release tokens out of the publishing process, or leave a changed `gh`, `python3` or `cargo-about` behind for the next release. If outside pull requests are to build without approval, give `publish` a runner of its own first.
 
 ---
