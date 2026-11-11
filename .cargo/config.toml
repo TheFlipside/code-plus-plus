@@ -1,0 +1,24 @@
+# Workspace-wide Cargo configuration.
+
+# Link the C and C++ runtimes statically on Windows (CLAUDE.md: "Static
+# linking only"; DESIGN.md §9.1).
+#
+# Without this, `codepp.exe` and the plugin DLLs import VCRUNTIME140.dll,
+# VCRUNTIME140_1.dll and MSVCP140.dll, which Windows does not ship: they
+# come with the Visual C++ Redistributable. A machine that has Visual
+# Studio has them, so a developer never notices, and a tester's machine
+# without the redistributable refuses to start the app at all.
+#
+# The `cc` crate reads the same target feature and compiles the vendored
+# Scintilla and Lexilla with `/MT` to match.
+#
+# Each plugin DLL gets a C runtime of its own this way, and with it a
+# `malloc` heap of its own. Nothing allocated by one module's C runtime
+# may be freed by another's; the plugin ABI passes no such memory.
+#
+# Setting `RUSTFLAGS` in the environment replaces these flags rather than
+# adding to them. The release workflow's packaging step checks the built
+# files' imports, so a release cannot ship with the runtime DLLs imported
+# again (`.forgejo/scripts/package-windows.ps1`).
+[target.'cfg(all(windows, target_env = "msvc"))']
+rustflags = ["-C", "target-feature=+crt-static"]

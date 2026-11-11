@@ -77,6 +77,7 @@ The canonical repository is hosted on Forgejo at <https://git.fiedler.live/tux/c
 
 - **[DESIGN.md](docs/DESIGN.md)** — full architecture, dependency graph, crate responsibilities, plugin ABI, performance budgets, and the phase plan. Read this if you want to understand any decision in the codebase.
 - **[DEVELOPMENT.md](docs/DEVELOPMENT.md)** — platform-by-platform setup for Windows, Linux, and macOS, plus common development tasks and troubleshooting.
+- **[RELEASING.md](docs/RELEASING.md)** — how a release is made: push a version tag, and the release workflow builds, packages and publishes it.
 - **[CLAUDE.md](CLAUDE.md)** — operational rules and project conventions used by the AI development assistant.
 
 ---

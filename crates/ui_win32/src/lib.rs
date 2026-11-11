@@ -12713,7 +12713,7 @@ fn show_about_dialog(main_hwnd: HWND) {
             home_url: HSTRING::from("https://code-plus-plus.org/"),
             title_text: HSTRING::from(format!(
                 "Code++ v{}    ({})",
-                env!("CARGO_PKG_VERSION"),
+                codepp_core::VERSION,
                 ABOUT_ARCH,
             )),
             license_text: HSTRING::from(ABOUT_LICENSE_BODY),

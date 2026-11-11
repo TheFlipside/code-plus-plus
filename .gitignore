@@ -24,6 +24,12 @@ Cargo.lock.bak
 /C\357\200\272*
 /*UsersMaxAppDataLocalTemp*
 
+# What the release workflow writes, for when its steps are run by hand
+# from the repo root (docs/RELEASING.md).
+/THIRD_PARTY_CRATES.md
+/release-notices/
+/dist-release/
+
 # IDE
 .vscode/
 .idea/

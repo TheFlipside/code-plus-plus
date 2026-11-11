@@ -10,3 +10,7 @@ tools/** linguist-vendored
 # default CRLF checkout, the Windows CI runner's included, once failed
 # tests that passed on an LF working copy.
 *.rs text eol=lf
+
+# Shell scripts are LF in every checkout too: bash reads a CRLF line
+# ending as part of the command.
+*.sh text eol=lf

@@ -3859,15 +3859,39 @@ If a future feature breaks any of these, it must either be feature-gated (off by
 
 ### 9.1 Build
 
-- `cargo build -p codepp-app` produces `code++.exe` (Windows) / `code++` (Linux/macOS).
+- `cargo build -p codepp-app` produces `codepp.exe` (Windows) / `codepp` (Linux/macOS).
 - All native code (Scintilla, Lexilla) is statically linked. The binary depends only on system libraries (`user32`/`kernel32` on Windows, `libgtk-3` on Linux, `Cocoa.framework` on macOS).
+- On Windows the C and C++ runtimes are linked statically too (`.cargo/config.toml`, `+crt-static`), into the executable and into each plugin DLL. Until the first release was prepared they were not: `codepp.exe` imported `VCRUNTIME140.dll`, `VCRUNTIME140_1.dll` and `MSVCP140.dll`, which come with the Visual C++ Redistributable and not with Windows, so the app would not have started on a machine without it. A developer's machine has them from Visual Studio, which is why nothing showed it. Setting `RUSTFLAGS` in the environment replaces the configured flags, so the release packaging checks the built files' imports (§9.2).
 - Release profile: `lto = "thin"`, `codegen-units = 1`, `panic = "abort"`, `strip = "symbols"` (debug symbols extracted to a side file for crash decoding).
 
 ### 9.2 Distribution
 
-- Windows: a single `.exe` plus a `plugins/` folder. Optional MSI installer in a later phase.
-- Linux: tarball + AppImage. `.deb`/`.rpm` later.
-- macOS: `.app` bundle with code signing in a later phase.
+- Windows: a zip with `codepp.exe` and the three preinstalled plugin DLLs beside it. Optional MSI installer in a later phase.
+- Linux: a tarball with `codepp` and the plugin libraries. AppImage, `.deb`/`.rpm` later.
+- macOS: `Code++.app` in a zip, one per architecture, with an ad-hoc signature. Signing with a certificate and notarization in a later phase.
+
+The plugins sit beside the executable in each, where `stage_bundled_plugins` finds them on first start (§7.4); `example-hello`, the SDK sample, is not shipped. Every archive carries `LICENSE` (`LICENSE.txt` in the Windows zip), `THIRD_PARTY_LICENSES.md` and `THIRD_PARTY_CRATES.md`, the bundled crates' notices, which `cargo about` generates during the release.
+
+**A release is made by pushing a tag** `v<version>` or `v<version>-<pre-release>`, where `<version>` is the workspace version in `Cargo.toml`. `.forgejo/workflows/release.yml` then builds on the three runners, packages, and publishes the archives with a `SHA256SUMS` on Forgejo and on the GitHub mirror; a tag with a pre-release part is published as a pre-release. `docs/RELEASING.md` is the procedure. Decisions worth knowing:
+
+- **A tester build needs no version bump.** `v0.1.0-alpha.1`, `-alpha.2` and so on are all tags against `Cargo.toml`'s `0.1.0`. The workflow gives the build the tag's version in `CODEPP_RELEASE_VERSION`, and `codepp_core::VERSION`, which the three About dialogs show, prefers it to `CARGO_PKG_VERSION`. Bumping the workspace version means editing thirteen lines of `Cargo.toml`; a pre-release every few days should not need that, and a tester's report should still name the build.
+- **The build jobs hold no secrets.** They upload their archive as an artifact. The two release tokens reach the Linux runner only: one step of `prepare` checks that they are set, before anything is built, and `publish` uses them. `publish` runs nothing a build produced; it hashes and uploads the archives, which must be exactly the four expected names and regular files.
+- **All four archives or no release.** `publish` needs every build, and checks for the four files by name.
+- **The GitHub release waits for the mirror.** The tag reaches GitHub through Forgejo's push mirror. `publish` waits until GitHub has the tag at the commit that was built, since `gh release create` for a tag GitHub lacks creates the tag itself, on the default branch's newest commit.
+- **The packaging checks what the build cannot.** On Windows, that no shipped file imports a C runtime DLL (§9.1). On macOS, that each binary is the architecture its archive is named for.
+- **A manual run publishes nothing.** Started from the Actions page, the workflow builds and packages and stops, which is how to try a change to it. That holds for a manual run started on a `v` tag too: only the push of a tag publishes. The first version decided from the ref alone, so such a run would have published; the code review found it.
+- **A release is tagged on `main`.** `prepare` refuses a pushed tag whose commit `main` does not contain, so a release is never built from a commit CI has not seen on `main`. A manual run may rehearse any branch.
+
+What the workflow cannot decide is who may start it and what else runs beside it, which the security audit raised and `docs/RELEASING.md` §5 records as setup: protect `v*` tags, so that a published tag cannot be moved and only maintainers can create one; and keep pull requests from outside contributors from running CI without approval, because CI's jobs run a pull request's build scripts on the same persistent Linux runner that holds the release tokens while `publish` runs.
+
+**How far this is verified.** The workflow has not run on the runners yet; it was written on Windows, and what could be run there was:
+
+- *Windows:* the release build, the packaging script and its refusals, and the packaged zip itself, extracted into an empty folder and started under a fresh profile. Its About dialog reads `Code++ v0.1.0-alpha.1 (64-bit)`, the three plugins are staged, none is loaded, and no Visual C++ runtime DLL is mapped. Before the static CRT, the packaging script refuses the same build, naming the ten runtime DLLs it imports.
+- *Linux,* in WSL: the release build, the packaging script and its refusals, and the packaged tarball, extracted and started under Xvfb with a fresh profile, where it stages the three plugins.
+- *macOS:* the packaging script's own logic only, on Linux with stand-ins for `lipo`, `codesign`, `plutil` and `ditto`: the bundle's layout, an `Info.plist` that parses, and the refusals. The real tools, the cross-compiled Intel build and the bundle on a Mac are untested.
+- *Publishing:* the Forgejo script against a mock of the release API on localhost: create, upload byte for byte, a second run that replaces the files and keeps the notes, and its failures (a wrong token, a redirect, an answer that is not JSON). The `gh` commands were not run. The one GitHub call the mirror wait makes was tried against the mirror with an existing tag, which is how its first form, `commits/tags/<tag>`, was found to be refused with HTTP 422 where `commits/refs/tags/<tag>` answers with the commit.
+
+A manual run of the workflow is the next check, before the first tag (`docs/RELEASING.md` §3).
 
 ### 9.3 CI
 
@@ -3882,6 +3906,7 @@ If a future feature breaks any of these, it must either be feature-gated (off by
   - `actions/cache` is **not used.** Persistent on-disk `target/` and `~/.cargo` provide the natural caching; the cache action's `restore-keys` prefix fallback is a cross-PR poisoning vector.
   - `cargo-deny` is installed via `cargo install --locked cargo-deny`, not via `EmbarkStudios/cargo-deny-action`. Removes the dependency on the Forgejo instance's external-action proxy and one more SHA to track.
 - **Phase boundary:** tag the commit (`phase-0-complete`, `phase-1-complete`, ...) only after CI is green on all three runners and the phase demo is recorded.
+- **Releases** are a second workflow, `.forgejo/workflows/release.yml`, started by a `v*` tag (§9.2). It keeps the hardening above, with one addition: `actions/upload-artifact` and `actions/download-artifact`, each pinned to a commit SHA, carry the archives from the build jobs to the publishing one.
 
 ---
 

@@ -5,7 +5,7 @@ Code++ itself is distributed under the [MIT License](LICENSE). It bundles or lin
 This file has two parts:
 
 1. **Manually maintained** — components that are not Cargo dependencies (vendored C/C++ source, system libraries linked dynamically). These notices are kept here by hand and must be updated when a vendored component is bumped or replaced.
-2. **Auto-generated at release time** — Cargo dependencies. The release tooling regenerates the bundled-crates section from `cargo about` (config in `about.toml`, added when the workspace is set up). Do not hand-edit that section; edit `about.toml` and rerun the generator instead.
+2. **Generated at release time** — Cargo dependencies. Their notices are not kept in this file: the release workflow writes them to `THIRD_PARTY_CRATES.md` with `cargo about` (config in `about.toml`, template in `about.hbs`) and puts that file beside this one in every release archive. See §3.
 
 ---
 
@@ -70,9 +70,9 @@ Lexilla is vendored under `crates/scintilla-sys/vendor/lexilla/` and statically 
 License: HPND.
 Upstream: <https://www.scintilla.org/Lexilla.html>
 
-### 1.3 GTK 4 (Linux only, dynamically linked)
+### 1.3 GTK 3 (Linux only, dynamically linked)
 
-GTK 4 and its companion libraries (GLib, Pango, Cairo, GDK-Pixbuf, Graphene) are linked **dynamically** at runtime against the system installation. They are not bundled with Code++.
+GTK 3 and its companion libraries (GLib, Pango, Cairo, GDK-Pixbuf, ATK) are linked **dynamically** at runtime against the system installation. They are not bundled with Code++.
 
 License: LGPL-2.1-or-later (GTK and GLib); various permissive and LGPL terms for companions.
 Upstream: <https://www.gtk.org/>
@@ -98,12 +98,13 @@ Notepad++ itself is licensed under the GNU General Public License v2 or later. C
 
 ---
 
-## 3. Auto-Generated Cargo Dependency Notices
+## 3. Cargo Dependency Notices
 
-This section is generated at release time from the lockfile by `cargo about`. It is empty until the workspace and its dependencies are populated (Phase 0 onward).
+The Rust crates compiled into Code++ and its bundled plugins carry their own licenses. Their notices are in `THIRD_PARTY_CRATES.md`, which sits beside this file in every release archive. It is not checked in: the release workflow generates it from the lockfile with `cargo about`, for every platform Code++ is released for, so it always describes the crates in the release it ships with (`docs/RELEASING.md`). To produce it from a source checkout:
 
-`deny.toml` at the repo root enforces that every Cargo dependency uses a license from the allowlist (MIT, Apache-2.0, Apache-2.0 WITH LLVM-exception, BSD-2-Clause, BSD-3-Clause, ISC, Zlib, 0BSD, CC0-1.0, Unicode-DFS-2016, Unicode-3.0). A dependency outside this set fails CI and must be removed or replaced before merge.
+```sh
+cargo install --locked cargo-about --version 0.9.3 --features cli
+cargo about generate --fail --locked --workspace --output-file THIRD_PARTY_CRATES.md about.hbs
+```
 
-<!-- BEGIN AUTO-GENERATED CRATE LICENSES -->
-<!-- (populated by `cargo about generate` at release time) -->
-<!-- END AUTO-GENERATED CRATE LICENSES -->
+`deny.toml` at the repo root enforces that every Cargo dependency uses a license from the allowlist (MIT, Apache-2.0, Apache-2.0 WITH LLVM-exception, BSD-2-Clause, BSD-3-Clause, ISC, Zlib, 0BSD, CC0-1.0, Unicode-DFS-2016, Unicode-3.0). A dependency outside this set fails CI and must be removed or replaced before merge. `about.toml` accepts the same set, so a release cannot be generated with a license outside it either.

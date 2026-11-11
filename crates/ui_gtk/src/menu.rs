@@ -3441,7 +3441,7 @@ fn on_about() {
     let parent = with_state(|st| st.window.clone());
     let dialog = gtk::AboutDialog::new();
     dialog.set_program_name("Code++");
-    dialog.set_version(Some(env!("CARGO_PKG_VERSION")));
+    dialog.set_version(Some(codepp_core::VERSION));
     dialog.set_comments(Some(
         "A fast, cross-platform code and text editor built on Scintilla.",
     ));

@@ -1981,7 +1981,7 @@ fn show_about(mtm: MainThreadMarker) {
         NSAttributedString::alloc(),
         &NSString::from_str(&credits),
     );
-    let version = NSString::from_str(env!("CARGO_PKG_VERSION"));
+    let version = NSString::from_str(codepp_core::VERSION);
     let arch = NSString::from_str(ABOUT_ARCH);
     let name = NSString::from_str("Code++");
 

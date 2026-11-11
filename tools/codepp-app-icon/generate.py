@@ -7,6 +7,10 @@ Outputs (next to the source PNG):
                           the `code++.exe` binary by `crates/app/build.rs`
                           and used as the title-bar / Alt+Tab / taskbar /
                           Task Manager icon at runtime.
+  - `assets/code++.icns`  macOS icon. The release workflow copies it
+                          into `Code++.app` as the bundle's icon
+                          (`.forgejo/scripts/package-unix.sh`); Finder,
+                          the Dock and the app switcher show it.
 
 The source `code++.png` is wider than it is tall (the chameleon mascot
 on a transparent background). Windows expects square icons — squishing
@@ -15,9 +19,9 @@ letterboxing it onto a square transparent canvas preserves the shape
 at the cost of a small vertical gap above and below at every output
 size. Letterboxing is the right trade.
 
-Future Phase 5 work will add Linux PNG renditions (16/24/32/48/64/128/256
-written into `assets/icons-app/`) and a macOS `.icns`. The same source
-PNG drives all three; only the wrapping changes.
+Future work will add Linux PNG renditions (16/24/32/48/64/128/256
+written into `assets/icons-app/`). The same source PNG drives all three;
+only the wrapping changes.
 
 One-time setup (icon-author machine only — the build does not call this
 script):
@@ -62,6 +66,11 @@ ICO_SIZES: list[tuple[int, int]] = [
 ]
 
 
+# An `.icns` holds 16 to 512 points at 1x and 2x, so its largest image
+# is 1024 pixels. Pillow's encoder scales this one down for the rest.
+ICNS_MASTER_PX = 1024
+
+
 def to_square_canvas(img: Image.Image) -> Image.Image:
     """Pad `img` (any aspect ratio) onto a transparent square canvas
     sized to the larger edge, with the image centred. RGBA in / out;
@@ -81,6 +90,7 @@ def main() -> int:
     repo_root = here.parent.parent
     src_png = repo_root / "assets" / "code++.png"
     out_ico = repo_root / "assets" / "code++.ico"
+    out_icns = repo_root / "assets" / "code++.icns"
 
     if not src_png.exists():
         raise SystemExit(f"missing source: {src_png}")
@@ -96,6 +106,11 @@ def main() -> int:
 
     sizes_str = ", ".join(f"{w}x{h}" for (w, h) in ICO_SIZES)
     print(f"wrote {out_ico} ({sizes_str})")
+
+    # Pillow writes `.icns` on every platform, so this needs no Mac.
+    master = square.resize((ICNS_MASTER_PX, ICNS_MASTER_PX), Image.LANCZOS)
+    master.save(out_icns, format="ICNS")
+    print(f"wrote {out_icns} (up to {ICNS_MASTER_PX}x{ICNS_MASTER_PX})")
     return 0
 
 

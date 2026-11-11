@@ -48,6 +48,40 @@ pub use view_position::{
     kept_folds, ViewPosition, MAX_FOLD_LINE, MAX_KEPT_FOLDS, MAX_SESSION_FOLDS,
 };
 
+/// The version this build shows the user, in the About dialogs.
+///
+/// It is the workspace version from `Cargo.toml`, unless the build was
+/// given `CODEPP_RELEASE_VERSION`. The release workflow sets that to the
+/// version of the tag it builds (`.forgejo/workflows/release.yml`), so a
+/// pre-release tagged `v0.1.0-alpha.2` says `0.1.0-alpha.2` where
+/// `Cargo.toml` says `0.1.0`, and a tester's report names the build it
+/// is about. An empty value counts as unset.
+pub const VERSION: &str = release_version(option_env!("CODEPP_RELEASE_VERSION"));
+
+/// [`VERSION`]'s rule, taking what the build was given.
+const fn release_version(given: Option<&'static str>) -> &'static str {
+    match given {
+        Some(version) if !version.is_empty() => version,
+        _ => env!("CARGO_PKG_VERSION"),
+    }
+}
+
+#[cfg(test)]
+mod version_tests {
+    use super::release_version;
+
+    #[test]
+    fn a_release_build_shows_the_version_it_was_given() {
+        assert_eq!(release_version(Some("0.1.0-alpha.2")), "0.1.0-alpha.2");
+    }
+
+    #[test]
+    fn any_other_build_shows_the_workspace_version() {
+        assert_eq!(release_version(None), env!("CARGO_PKG_VERSION"));
+        assert_eq!(release_version(Some("")), env!("CARGO_PKG_VERSION"));
+    }
+}
+
 /// A workspace-wide source lint, not a unit test.
 ///
 /// It lives in `core` because `core` is the crate every other one
