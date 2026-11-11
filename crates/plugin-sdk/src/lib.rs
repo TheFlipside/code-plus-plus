@@ -889,7 +889,13 @@ mod eol_tests {
                 .unwrap_or_else(|| panic!("{define} not in Scintilla.h"));
             assert_eq!(eol_bytes(mode), bytes, "{define}");
         }
-        assert!(SCINTILLA_H.contains(&format!("#define SCI_GETEOLMODE {SCI_GETEOLMODE}\n")));
+        // A whole line, so that 2030 is not taken for the start of a
+        // longer number, and through `lines`, which reads the header
+        // the same whether it was checked out with LF or CRLF: the
+        // submodule's files are outside this repository's
+        // `.gitattributes`.
+        let define = format!("#define SCI_GETEOLMODE {SCI_GETEOLMODE}");
+        assert!(SCINTILLA_H.lines().any(|l| l == define), "{define}");
         // A mode Scintilla does not have is the Windows default.
         assert_eq!(eol_bytes(7), b"\r\n");
     }
