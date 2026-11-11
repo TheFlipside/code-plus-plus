@@ -944,6 +944,17 @@ fn worker_main(
     }
 }
 
+/// What [`atomic_write`]'s temporary file's name starts with.
+const TEMP_PREFIX: &str = ".codepp-fif-";
+
+/// What [`atomic_write`]'s temporary file's name ends with.
+const TEMP_SUFFIX: &str = ".tmp";
+
+// The room `atomic_write` asks `long_path` for covers that name.
+const _: () = assert!(
+    TEMP_PREFIX.len() + crate::TEMP_RANDOM_CHARS + TEMP_SUFFIX.len() <= crate::TEMP_FILE_ROOM
+);
+
 /// Atomic file write: emit to a temp file in the same directory,
 /// then rename over the target. Avoids truncating the original on a
 /// crash mid-write. The temp file gets an unpredictable name from
@@ -959,6 +970,12 @@ fn atomic_write(
     perms: &std::fs::Permissions,
 ) -> std::io::Result<()> {
     use std::io::Write;
+    // tempfile's rename hands both paths to Windows as they are, which
+    // refuses one of `MAX_PATH` units or more unless it is verbatim, and a
+    // file deep in a searched tree is often that long. Same as
+    // `replace_file` in the crate root.
+    let long = codepp_platform::long_path(target, crate::TEMP_FILE_ROOM);
+    let target = &*long;
     let parent = target.parent().ok_or_else(|| {
         std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
@@ -1004,8 +1021,9 @@ fn atomic_write(
     // validated this file, so it is the mode of the thing actually
     // read, not of whatever the name resolves to now.
     let mut tmp = tempfile::Builder::new()
-        .prefix(".codepp-fif-")
-        .suffix(".tmp")
+        .prefix(TEMP_PREFIX)
+        .suffix(TEMP_SUFFIX)
+        .rand_bytes(crate::TEMP_RANDOM_CHARS)
         .permissions(perms.clone())
         .tempfile_in(parent)?;
     tmp.write_all(bytes)?;
@@ -1763,6 +1781,28 @@ mod tests {
             found,
             vec!["bottom.txt".to_string(), "top.txt".to_string()],
             "the walker must reach the deepest file and still resume the root level"
+        );
+    }
+
+    /// A replacement reaches a file whose path is longer than `MAX_PATH`.
+    /// Files deep in a searched tree often are, and on Windows tempfile's
+    /// rename refused every one of them, since it hands the path to Windows
+    /// as written.
+    #[test]
+    fn a_replacement_reaches_a_file_past_max_path() {
+        let dir = tempdir().unwrap();
+        let folder = dir.path().join("d".repeat(120)).join("e".repeat(120));
+        fs::create_dir_all(&folder).unwrap();
+        let target = folder.join("matched.txt");
+        assert!(target.as_os_str().len() > 260);
+        fs::write(&target, "needle\n").unwrap();
+        let perms = fs::metadata(&target).unwrap().permissions();
+        atomic_write(&target, b"replaced\n", &perms).unwrap();
+        assert_eq!(fs::read_to_string(&target).unwrap(), "replaced\n");
+        assert_eq!(
+            fs::read_dir(&folder).unwrap().count(),
+            1,
+            "a temp file left"
         );
     }
 

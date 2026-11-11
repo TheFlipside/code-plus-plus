@@ -1,4 +1,5 @@
-//! Opening a file to read only when its path names a regular file.
+//! Opening a file to read only when its path names a regular file, and
+//! handing Windows a path it takes whatever its length.
 //!
 //! Reading a named pipe waits for something to write to it, and reading a
 //! device such as `/dev/zero` never ends. A thread that opened one of those
@@ -8,7 +9,11 @@
 //! [`open_regular_file`] refuses them before anything is read, and its open
 //! does not wait for a writer, as a plain open of a named pipe does. It can
 //! still wait on a filesystem that does not answer, as any open can.
+//!
+//! [`long_path`] is for code that passes a path to Windows' file calls
+//! itself rather than through `std`, as tempfile's rename does.
 
+use std::borrow::Cow;
 use std::fs::File;
 use std::io;
 use std::path::Path;
@@ -131,10 +136,95 @@ fn is_disk_file(_: &File) -> bool {
     true
 }
 
+/// The longest absolute path, in UTF-16 units, that [`long_path`] hands
+/// back as it was written. Windows' file calls refuse a path of `MAX_PATH`
+/// (260) units or more, its NUL included, unless it is verbatim (`\\?\`),
+/// and `CreateDirectoryW` keeps 12 of those for an 8.3 name. `std` makes a
+/// path verbatim before each call of its own once its absolute form, with
+/// the NUL, reaches 248 units (its `LEGACY_MAX_PATH`), so the longest it
+/// passes as written is 246.
+#[cfg(windows)]
+const PLAIN_PATH_MAX_UNITS: usize = 246;
+
+/// `path` in a form Windows' file calls take whatever its length, with
+/// room for `room` more units on it: `path` as it is while its absolute
+/// form, with the room, is at most [`PLAIN_PATH_MAX_UNITS`] long, and
+/// otherwise absolute and verbatim (`\\?\C:\…`, `\\?\UNC\server\share\…`),
+/// which they take up to 32,767 units long.
+///
+/// `std` makes the same change before each call of its own; this is for
+/// code that calls Windows itself. tempfile's rename is the case in point:
+/// it passes the paths of the temporary file and its target to
+/// `SetFileAttributesW` and `MoveFileExW` as they are, so a write through
+/// it to a longer path fails with "the system cannot find the path
+/// specified". A caller that writes a temporary file beside `path` gives
+/// the length of that file's name as `room`, so that whenever either path
+/// is too long both are in the verbatim form.
+///
+/// A path short enough, with the room, is handed back unchanged, so it
+/// reaches Windows as it always did and an error names it as it was
+/// written. One within `room` of the limit turns verbatim too, though
+/// Windows would have taken it as written; that changes nothing but the
+/// form an error names it in. A longer one goes through
+/// `GetFullPathNameW` (`std::path::absolute`), as `std` does: `.` and `..`
+/// are resolved, `/` becomes `\`, and a name's trailing dots and spaces are
+/// dropped, as Windows does to a path that is not verbatim. A path already
+/// verbatim, and one `std` cannot make absolute, are handed back as they
+/// are.
+///
+/// Off Windows `path` itself: nothing there limits a path this way.
+#[cfg(windows)]
+#[must_use]
+pub fn long_path(path: &Path, room: usize) -> Cow<'_, Path> {
+    use std::ffi::OsString;
+    use std::os::windows::ffi::{OsStrExt, OsStringExt};
+    let Ok(absolute) = std::path::absolute(path) else {
+        return Cow::Borrowed(path);
+    };
+    let units: Vec<u16> = absolute.as_os_str().encode_wide().collect();
+    if units.len().saturating_add(room) <= PLAIN_PATH_MAX_UNITS {
+        return Cow::Borrowed(path);
+    }
+    match verbatim(&units) {
+        Some(verbatim) => Cow::Owned(OsString::from_wide(&verbatim).into()),
+        None => Cow::Owned(absolute),
+    }
+}
+
+/// `path` itself: only Windows limits a path's length this way.
+#[cfg(not(windows))]
+#[must_use]
+pub fn long_path(path: &Path, _room: usize) -> Cow<'_, Path> {
+    Cow::Borrowed(path)
+}
+
+/// `absolute`, a path as `GetFullPathNameW` hands it back, in verbatim
+/// form: `C:\…` as `\\?\C:\…`, `\\server\share\…` as
+/// `\\?\UNC\server\share\…`, and a device path `\\.\…` as `\\?\…`, the
+/// prefixes `std` gives them. `None` for a path already verbatim (`\\?\`
+/// or `\??\`) and for any other form, which is left as it is.
+#[cfg(any(windows, test))]
+fn verbatim(absolute: &[u16]) -> Option<Vec<u16>> {
+    const SEP: u16 = 0x5C; // '\'
+    const COLON: u16 = 0x3A; // ':'
+    const DOT: u16 = 0x2E; // '.'
+    const QUERY: u16 = 0x3F; // '?'
+    let (prefix, rest): (&str, &[u16]) = match absolute {
+        [_, COLON, SEP, ..] => (r"\\?\", absolute),
+        [SEP, SEP, DOT, SEP, rest @ ..] => (r"\\?\", rest),
+        // `\\?\` and `\??\`.
+        [SEP, SEP | QUERY, QUERY, SEP, ..] => return None,
+        [SEP, SEP, rest @ ..] => (r"\\?\UNC\", rest),
+        _ => return None,
+    };
+    Some(prefix.encode_utf16().chain(rest.iter().copied()).collect())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::io::Read;
+    use std::path::PathBuf;
 
     #[test]
     fn a_regular_file_opens_and_reads() {
@@ -350,5 +440,141 @@ mod tests {
     #[test]
     fn the_null_device_is_not_handed_back() {
         assert!(!matches!(open_regular_file(Path::new("NUL")), Ok(Some(_))));
+    }
+
+    fn wide(s: &str) -> Vec<u16> {
+        s.encode_utf16().collect()
+    }
+
+    /// Each absolute form gets the prefix `std` gives it, and a verbatim
+    /// path, or one of no form `verbatim` knows, is left alone.
+    #[test]
+    fn each_absolute_form_gets_its_verbatim_prefix() {
+        let cases = [
+            (r"C:\a\b.txt", Some(r"\\?\C:\a\b.txt")),
+            (r"\\server\share\a.txt", Some(r"\\?\UNC\server\share\a.txt")),
+            (r"\\.\C:\a.txt", Some(r"\\?\C:\a.txt")),
+            (r"\\?\C:\a.txt", None),
+            (r"\??\C:\a.txt", None),
+            (r"\\?\UNC\server\share\a.txt", None),
+            (r"a\b.txt", None),
+            ("", None),
+        ];
+        for (absolute, want) in cases {
+            assert_eq!(verbatim(&wide(absolute)), want.map(wide), "{absolute}");
+        }
+    }
+
+    /// Off Windows a path of any length is handed back as it is.
+    #[cfg(not(windows))]
+    #[test]
+    fn off_windows_a_long_path_is_left_alone() {
+        let path = PathBuf::from(format!("/{}/{}", "d".repeat(200), "e".repeat(200)));
+        assert!(matches!(long_path(&path, 64), Cow::Borrowed(p) if p == path));
+    }
+
+    /// `C:\` and `n` more units.
+    #[cfg(windows)]
+    fn drive_path(n: usize) -> PathBuf {
+        PathBuf::from(format!(r"C:\{}", "a".repeat(n)))
+    }
+
+    /// A path at most [`PLAIN_PATH_MAX_UNITS`] long, with the room, is handed
+    /// back as it is; one unit more, and it is verbatim. `C:\…` names no
+    /// file here: `GetFullPathNameW` only rewrites the string.
+    #[cfg(windows)]
+    #[test]
+    fn a_path_turns_verbatim_one_unit_past_the_plain_limit() {
+        let at = drive_path(PLAIN_PATH_MAX_UNITS - 3);
+        assert!(matches!(long_path(&at, 0), Cow::Borrowed(p) if p == at));
+        let past = drive_path(PLAIN_PATH_MAX_UNITS - 2);
+        let mut want = std::ffi::OsString::from(r"\\?\");
+        want.push(past.as_os_str());
+        assert_eq!(long_path(&past, 0).as_os_str(), want);
+        // The room counts as the path's own length does.
+        let short = drive_path(PLAIN_PATH_MAX_UNITS - 3 - 30);
+        assert!(matches!(long_path(&short, 30), Cow::Borrowed(_)));
+        assert!(long_path(&short, 31)
+            .as_os_str()
+            .to_string_lossy()
+            .starts_with(r"\\?\C:\"));
+    }
+
+    /// A short relative path is handed back as written, not made absolute.
+    /// What is measured is its absolute form, which starts at the working
+    /// folder, so under a checkout deep enough to push that past the limit
+    /// the path does turn verbatim, and the test says so and checks nothing.
+    #[cfg(windows)]
+    #[test]
+    fn a_short_relative_path_is_left_as_written() {
+        let path = Path::new(r"some\relative.txt");
+        let cwd = std::env::current_dir().unwrap();
+        // Bytes, never fewer than UTF-16 units: 150 leaves room for the
+        // name and the 32 units asked for under `PLAIN_PATH_MAX_UNITS`.
+        if cwd.as_os_str().len() > 150 {
+            eprintln!("skipped: the working folder is too deep: {}", cwd.display());
+            return;
+        }
+        assert!(matches!(long_path(path, 32), Cow::Borrowed(p) if p == path));
+    }
+
+    /// A long path is normalised as Windows normalises one that is not
+    /// verbatim, so the verbatim form names what the plain one did: `/`
+    /// becomes `\`, `.` and `..` are resolved, a name's trailing dots and
+    /// spaces go, and a share's path takes the `UNC` prefix.
+    #[cfg(windows)]
+    #[test]
+    fn a_long_path_is_normalised_before_it_turns_verbatim() {
+        let long = "a".repeat(300);
+        let cases = [
+            (format!("C:/{long}/b.txt"), format!(r"\\?\C:\{long}\b.txt")),
+            (
+                format!(r"C:\{long}\x\..\.\b.txt"),
+                format!(r"\\?\C:\{long}\b.txt"),
+            ),
+            (
+                format!(r"C:\{long}\b.txt. ."),
+                format!(r"\\?\C:\{long}\b.txt"),
+            ),
+            (
+                format!(r"\\server\share\{long}\b.txt"),
+                format!(r"\\?\UNC\server\share\{long}\b.txt"),
+            ),
+            (
+                format!(r"\\?\C:\{long}\b.txt"),
+                format!(r"\\?\C:\{long}\b.txt"),
+            ),
+        ];
+        for (path, want) in cases {
+            assert_eq!(long_path(Path::new(&path), 0).as_os_str(), &*want, "{path}");
+        }
+    }
+
+    /// What `long_path` is for: tempfile's rename refuses a path past
+    /// `MAX_PATH` as written, and takes the form `long_path` gives it. The
+    /// first half is the bug; if a tempfile release stops passing paths to
+    /// Windows as they are, it fails and says so.
+    #[cfg(windows)]
+    #[test]
+    fn tempfile_renames_into_a_long_path_only_in_the_long_form() {
+        use std::io::Write;
+        let root = tempfile::tempdir().unwrap();
+        let dir = root.path().join("d".repeat(120)).join("e".repeat(120));
+        std::fs::create_dir_all(&dir).unwrap();
+        let target = dir.join("file.txt");
+        assert!(target.as_os_str().len() > 260);
+
+        let tmp = tempfile::Builder::new().tempfile_in(&dir).unwrap();
+        let refused = tmp.persist(&target).expect_err("a plain long path renamed");
+        assert_eq!(refused.error.raw_os_error(), Some(3), "{}", refused.error);
+        drop(refused);
+        assert!(!target.exists());
+
+        let long = long_path(&target, 32);
+        let dir = long.parent().unwrap();
+        let mut tmp = tempfile::Builder::new().tempfile_in(dir).unwrap();
+        tmp.write_all(b"text").unwrap();
+        tmp.persist(&*long).unwrap();
+        assert_eq!(std::fs::read(&target).unwrap(), b"text");
     }
 }

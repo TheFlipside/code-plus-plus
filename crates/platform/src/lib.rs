@@ -20,7 +20,7 @@ pub use config::{
     shortcuts_xml_path, styles_xml_path, user_define_langs_dir,
 };
 pub use dynlib::{has_plugin_extension, DynLib, PLUGIN_EXTENSION};
-pub use fs::{not_a_regular_file, open_regular_file};
+pub use fs::{long_path, not_a_regular_file, open_regular_file};
 pub use host_env::{program_dir, program_path, windows_version_npp};
 pub use plugin_stage::{stage_bundled_plugins, BUNDLED_PLUGINS};
 pub use watch::{FileChange, FileWatcher};

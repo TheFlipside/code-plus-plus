@@ -205,6 +205,10 @@ answers 0 and acts on nothing. That is `NPPM_DOOPEN`,
 two prefills. Notepad++ 8.9.8.1 opens no file whose path is 259 units
 or more, and opened or wrote nothing for any such path a probe plugin
 passed it (measured); Code++ opens such files, so a plugin may hand one back.
+The saves among these messages write to such a path, on Windows too;
+until Phase 5 every save there to a path of `MAX_PATH` units or more
+failed with "the system cannot find the path specified", since the
+rename that ends it passed the path to Windows as written.
 Until Phase 5 these messages read a path only up to `MAX_PATH` units
 and acted on what they had read, a path cut short that named another
 file, and most read a kernel-range pointer (DESIGN.md §7.4).

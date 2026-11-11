@@ -4565,8 +4565,6 @@ impl Shell {
         ui: &mut U,
         new_path: PathBuf,
     ) -> Result<(), ShellError> {
-        use std::io::Write;
-
         // Refuse while a load is still in flight for this tab. The
         // view is not bound to it yet — `open_file` sets `active_tab`
         // immediately but defers the bind until the loader finishes —
@@ -4605,9 +4603,6 @@ impl Shell {
         let bytes = codepp_core::encoding::encode(&text, &encoding)
             .map_err(|e| ShellError::Encoding(e.to_string()))?;
 
-        let parent = new_path.parent().filter(|p| !p.as_os_str().is_empty());
-        let parent_dir = parent.unwrap_or_else(|| std::path::Path::new("."));
-
         // Stop watching the old location before the new write — so a
         // mid-save external-change event for the old path doesn't
         // generate a spurious reload prompt for a buffer that's
@@ -4618,21 +4613,8 @@ impl Shell {
             .as_ref()
             .is_some_and(|p| self.file_watcher.unwatch(p).is_ok());
 
-        let write_result = (|| -> Result<(), ShellError> {
-            let mut tmp = tempfile::Builder::new()
-                .prefix(".codepp-save-")
-                .suffix(".tmp")
-                .tempfile_in(parent_dir)
-                .map_err(|e| ShellError::Io(e.to_string()))?;
-            tmp.write_all(&bytes)
-                .map_err(|e| ShellError::Io(e.to_string()))?;
-            tmp.as_file_mut()
-                .sync_all()
-                .map_err(|e| ShellError::Io(e.to_string()))?;
-            tmp.persist(&new_path)
-                .map_err(|e| ShellError::Io(e.error.to_string()))?;
-            Ok(())
-        })();
+        let write_result = replace_file(&new_path, ".codepp-save-", &bytes)
+            .map_err(|e| ShellError::Io(e.to_string()));
 
         match &write_result {
             Ok(()) => {
@@ -4747,8 +4729,6 @@ impl Shell {
         ui: &mut U,
         path: &Path,
     ) -> Result<(), ShellError> {
-        use std::io::Write;
-
         // Refuse while a load is still in flight for this tab. The
         // view is not bound to it yet — `open_file` sets `active_tab`
         // immediately but defers the bind until the loader finishes —
@@ -4769,21 +4749,8 @@ impl Shell {
         let bytes = codepp_core::encoding::encode(&text, &encoding)
             .map_err(|e| ShellError::Encoding(e.to_string()))?;
 
-        let parent = path.parent().filter(|p| !p.as_os_str().is_empty());
-        let parent_dir = parent.unwrap_or_else(|| Path::new("."));
-
-        let mut tmp = tempfile::Builder::new()
-            .prefix(".codepp-savecopy-")
-            .suffix(".tmp")
-            .tempfile_in(parent_dir)
+        replace_file(path, ".codepp-savecopy-", &bytes)
             .map_err(|e| ShellError::Io(e.to_string()))?;
-        tmp.write_all(&bytes)
-            .map_err(|e| ShellError::Io(e.to_string()))?;
-        tmp.as_file_mut()
-            .sync_all()
-            .map_err(|e| ShellError::Io(e.to_string()))?;
-        tmp.persist(path)
-            .map_err(|e| ShellError::Io(e.error.to_string()))?;
         // Debounce fence — see save_current_to_disk. If `path`
         // happens to be a file we already have open in another
         // tab (NPPM_SAVEFILEAS can point anywhere), the atomic
@@ -6909,8 +6876,6 @@ impl Shell {
     /// Phase 3+ may switch to inode/serial-number tracking instead of
     /// unwatch/rewatch.
     pub fn save_current_to_disk<U: UiPlatform>(&mut self, ui: &mut U) -> Result<(), ShellError> {
-        use std::io::Write;
-
         // Snapshot what we need from the active tab so we can release
         // its borrow before calling the watcher and the I/O helpers
         // (which take their own &mut self). `buffer_id` is captured
@@ -6964,26 +6929,10 @@ impl Shell {
         let bytes = codepp_core::encoding::encode(&text, &encoding)
             .map_err(|e| ShellError::Encoding(e.to_string()))?;
 
-        let parent = path.parent().filter(|p| !p.as_os_str().is_empty());
-        let parent_dir = parent.unwrap_or_else(|| std::path::Path::new("."));
-
         let was_watching = self.file_watcher.unwatch(&path).is_ok();
 
-        let write_result = (|| -> Result<(), ShellError> {
-            let mut tmp = tempfile::Builder::new()
-                .prefix(".codepp-save-")
-                .suffix(".tmp")
-                .tempfile_in(parent_dir)
-                .map_err(|e| ShellError::Io(e.to_string()))?;
-            tmp.write_all(&bytes)
-                .map_err(|e| ShellError::Io(e.to_string()))?;
-            tmp.as_file_mut()
-                .sync_all()
-                .map_err(|e| ShellError::Io(e.to_string()))?;
-            tmp.persist(&path)
-                .map_err(|e| ShellError::Io(e.error.to_string()))?;
-            Ok(())
-        })();
+        let write_result =
+            replace_file(&path, ".codepp-save-", &bytes).map_err(|e| ShellError::Io(e.to_string()));
 
         // Re-watch regardless of save success so we keep tracking the
         // file. A failed save leaves the existing watch handle invalid
@@ -8137,7 +8086,10 @@ impl Shell {
                 sub_view: Some(NppView::default()),
             },
         };
-        doc.save_to_xml(path)
+        // `save_to_xml` renames a temporary file over `path` with
+        // tempfile, as `replace_file` does, so a long path goes to it in
+        // the form Windows takes at any length.
+        doc.save_to_xml(&codepp_platform::long_path(path, TEMP_FILE_ROOM))
     }
 
     /// File → Load Session: parse a Notepad++-shape session XML at `path`
@@ -9982,6 +9934,11 @@ fn sanitize_basename_for_backup(path: &Path) -> String {
 /// and the 255 UTF-16 units on Windows, which are never more than its bytes.
 const MAX_BACKUP_DISPLAY_BYTES: usize = 200;
 
+/// Longest name [`backup_name`] makes, in bytes: the display portion, then
+/// `~` and a `u32` suffix, then `@` and the timestamp.
+const MAX_BACKUP_NAME_BYTES: usize =
+    MAX_BACKUP_DISPLAY_BYTES + "~4294967295".len() + "@YYYY-MM-DD_HHMMSS".len();
+
 /// Parse a backup filename's `@YYYY-MM-DD_HHMMSS` suffix into a
 /// UNIX timestamp (seconds since epoch). Returns `None` if the
 /// filename doesn't contain `@` or the suffix doesn't match the
@@ -10137,6 +10094,50 @@ fn write_disabled_plugins_list(filenames: &[String]) -> std::io::Result<()> {
     tmp.write_all(body.as_bytes())?;
     tmp.as_file_mut().sync_all()?;
     tmp.persist(&path).map_err(|e| e.error)?;
+    Ok(())
+}
+
+/// Room, in UTF-16 units, for the name of a temporary file Code++ writes
+/// beside a file it replaces: tempfile's prefix, its 6 random characters
+/// and its suffix. The longest today, `.codepp-savecopy-XXXXXX.tmp` and
+/// `codepp_core`'s `.npp-session-XXXXXX.xml.tmp`, take 27. Given to
+/// [`codepp_platform::long_path`] with the file's path, so that whenever
+/// the file or the temporary file beside it is too long for Windows as
+/// written, both are in the verbatim form.
+const TEMP_FILE_ROOM: usize = 32;
+
+/// tempfile's random part of a temporary file's name, its default.
+const TEMP_RANDOM_CHARS: usize = 6;
+
+/// Write `bytes` to `path` through a temporary file beside it, named
+/// `prefix` and random characters, synced to disk and then renamed over
+/// `path`: a crash leaves `path` holding what it held or all of `bytes`,
+/// never part of them, and a failed write leaves no temporary file behind.
+///
+/// tempfile's rename hands both paths to Windows as they are, and Windows
+/// refuses one of `MAX_PATH` units or more unless it is verbatim, so on
+/// Windows a path too long for that goes to tempfile in the verbatim form
+/// ([`codepp_platform::long_path`]). Before, every save to such a path
+/// failed with "the system cannot find the path specified". `long_path`
+/// hands back as written an absolute path of at most 246 units, so one of
+/// at most 246 less [`TEMP_FILE_ROOM`], 214, is passed as it is, as it
+/// always was; a longer one goes verbatim, though Windows took some of
+/// those as written, which changes only the form a tempfile error names it
+/// in.
+fn replace_file(path: &Path, prefix: &str, bytes: &[u8]) -> std::io::Result<()> {
+    use std::io::Write;
+    const SUFFIX: &str = ".tmp";
+    debug_assert!(prefix.len() + TEMP_RANDOM_CHARS + SUFFIX.len() <= TEMP_FILE_ROOM);
+    let path = codepp_platform::long_path(path, TEMP_FILE_ROOM);
+    let parent = path.parent().filter(|p| !p.as_os_str().is_empty());
+    let mut tmp = tempfile::Builder::new()
+        .prefix(prefix)
+        .suffix(SUFFIX)
+        .rand_bytes(TEMP_RANDOM_CHARS)
+        .tempfile_in(parent.unwrap_or_else(|| Path::new(".")))?;
+    tmp.write_all(bytes)?;
+    tmp.as_file_mut().sync_all()?;
+    tmp.persist(&*path).map_err(|e| e.error)?;
     Ok(())
 }
 
@@ -10417,15 +10418,14 @@ fn write_backup_file_with(
     use std::io::Write;
     std::fs::create_dir_all(dir)?;
     // tempfile renames with the Win32 calls themselves, which refuse a
-    // path longer than `MAX_PATH` unless it is a verbatim one (`\\?\`),
-    // and a backup name can take 229 of those 260 characters. A
-    // canonical path on Windows is verbatim.
-    // A folder whose canonical path cannot be had (some network
-    // filesystems) is used as it is, which still works under `MAX_PATH`.
-    #[cfg(windows)]
-    let canonical = std::fs::canonicalize(dir).unwrap_or_else(|_| dir.to_path_buf());
-    #[cfg(windows)]
-    let dir = canonical.as_path();
+    // path of `MAX_PATH` units or more unless it is a verbatim one
+    // (`\\?\`), and a backup name can take 229 of those 260 units
+    // (`MAX_BACKUP_NAME_BYTES`, never fewer bytes than units). With room
+    // for a separator and the longest name, the folder is verbatim
+    // whenever a backup in it could be too long, as `replace_file` does
+    // for a file and its temporary file.
+    let long = codepp_platform::long_path(dir, 1 + MAX_BACKUP_NAME_BYTES);
+    let dir = &*long;
     let mut tmp = tempfile::Builder::new()
         .prefix(".backup-")
         .suffix(".tmp")
@@ -10613,12 +10613,17 @@ fn prune_unreferenced_backups(dir: &Path, keep: &HashSet<&str>) {
 /// * `Encoding(s)` — surfaces `codepp_core::encoding::encode`
 ///   errors. Describes byte-level encoding failures (e.g. "char
 ///   '⠿' not representable in windows-1252"); no paths.
-/// * `Io(s)` — surfaces `std::io::Error` and `tempfile::Error`
-///   `to_string()`. The `std::io::Error` form does **not** include
+/// * `Io(s)` — surfaces `std::io::Error` and tempfile's errors'
+///   `to_string()`. A plain `std::io::Error` does **not** include
 ///   the path; it's the OS-level error string ("permission
 ///   denied", "no such file"). `tempfile::PersistError.error` is
-///   similarly path-free. The path lives separately in our own
-///   error context (e.g. `format!("buffer {id}: {e}")` in Save All).
+///   similarly path-free. tempfile's errors from making and writing
+///   the temporary file do name a path (`… at path "…"`): the folder
+///   the user is saving into, or the temporary file in it. For a path
+///   too long for Windows as written that is the verbatim form
+///   (`\\?\C:\…`) `replace_file` hands tempfile. The user's own path
+///   lives separately in our own error context (e.g.
+///   `format!("buffer {id}: {e}")` in Save All).
 /// * `Session(s)` — surfaces `quick-xml` parse/write errors over
 ///   `session.xml`. May include the canonical session-file path
 ///   (`%APPDATA%\Code++\session.xml`), which is an
@@ -11884,7 +11889,9 @@ fn write_session_files(path: &Path, files: &[PathBuf]) -> bool {
             })
             .collect(),
     };
-    match session.save_to_xml(path) {
+    // A long path in the form tempfile's rename needs, as for
+    // `save_npp_session`.
+    match session.save_to_xml(&codepp_platform::long_path(path, TEMP_FILE_ROOM)) {
         Ok(()) => true,
         Err(e) => {
             tracing::warn!(error = ?e, path = ?path,
@@ -17410,12 +17417,11 @@ mod tests {
     }
 
     /// A plugin's `NPPM_SAVECURRENTFILEAS` to a path longer than
-    /// `MAX_PATH` writes nothing at the path's first `MAX_PATH` units.
-    /// Until Phase 5 the dispatcher cut the path there and saved to the
-    /// cut, which on Linux and macOS, where such a path is ordinary, put
-    /// the buffer in another file. The path is read whole now, and written
-    /// where the platform lets Code++ write it, which on Windows it does
-    /// not yet (DESIGN.md §7.4).
+    /// `MAX_PATH` writes the buffer there, and nothing at the path's first
+    /// `MAX_PATH` units. Until Phase 5 the dispatcher cut the path there
+    /// and saved to the cut, which on Linux and macOS, where such a path is
+    /// ordinary, put the buffer in another file; and on Windows no save
+    /// reached a path that long at all (`replace_file`).
     #[test]
     fn save_as_to_a_long_path_never_writes_to_its_cut() {
         use codepp_plugin_host::dispatch::{MAX_PATH_TCHARS, NPPM_SAVECURRENTFILEAS};
@@ -17450,10 +17456,160 @@ mod tests {
             )
         };
         assert!(!Path::new(cut).exists(), "a file was written at the cut");
-        if !cfg!(windows) {
-            assert_eq!(r, Some(1));
-            assert_eq!(std::fs::read_to_string(target).unwrap(), "kept\n");
-        }
+        assert_eq!(r, Some(1));
+        assert_eq!(std::fs::read_to_string(target).unwrap(), "kept\n");
+    }
+
+    /// A folder whose files' paths run past `MAX_PATH` (260 units), made
+    /// in `root`: two names of 120 units under it.
+    fn folder_past_max_path(root: &Path) -> PathBuf {
+        let folder = root.join("d".repeat(120)).join("e".repeat(120));
+        std::fs::create_dir_all(&folder).unwrap();
+        folder
+    }
+
+    /// The names in `folder`, sorted.
+    fn names_in(folder: &Path) -> Vec<String> {
+        let mut names: Vec<String> = std::fs::read_dir(folder)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        names
+    }
+
+    /// Ctrl+S on a file whose path is longer than `MAX_PATH` writes it in
+    /// place and leaves no temporary file beside it. On Windows every save
+    /// to such a path used to fail with "the system cannot find the path
+    /// specified", though Code++ opens the file: tempfile's rename hands
+    /// the path to Windows as written.
+    #[test]
+    fn ctrl_s_saves_a_file_whose_path_is_past_max_path() {
+        let root = tempfile::tempdir().unwrap();
+        let folder = folder_past_max_path(root.path());
+        let path = folder.join("long-path-note.txt");
+        assert!(path.as_os_str().len() > 260, "{}", path.display());
+        std::fs::write(&path, "before\n").unwrap();
+
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+        shell.open_file(path.clone());
+        land_next_load(&mut shell, &mut ui);
+        ui.buffer_text = "after\n".to_string();
+        shell.save_current_to_disk(&mut ui).unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "after\n");
+        assert_eq!(names_in(&folder), ["long-path-note.txt"]);
+    }
+
+    /// Save As and Save a Copy reach a path longer than `MAX_PATH`, and the
+    /// tab keeps the path as it was given, not the form Windows was handed.
+    #[test]
+    fn save_as_and_a_copy_reach_a_path_past_max_path() {
+        let root = tempfile::tempdir().unwrap();
+        let folder = folder_past_max_path(root.path());
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+        shell.new_untitled(&mut ui);
+        ui.buffer_text = "typed\n".to_string();
+
+        let saved = folder.join("saved-as.txt");
+        shell.save_buffer_as(&mut ui, saved.clone()).unwrap();
+        assert_eq!(std::fs::read_to_string(&saved).unwrap(), "typed\n");
+        assert_eq!(shell.active().and_then(|t| t.path.clone()), Some(saved));
+
+        let copy = folder.join("a-copy.txt");
+        shell.save_active_as_copy(&mut ui, &copy).unwrap();
+        assert_eq!(std::fs::read_to_string(&copy).unwrap(), "typed\n");
+        assert_eq!(names_in(&folder), ["a-copy.txt", "saved-as.txt"]);
+    }
+
+    /// File → Save Session, and a plugin's `NPPM_SAVECURRENTSESSION`, write
+    /// a session file whose path is longer than `MAX_PATH`.
+    #[test]
+    fn session_files_save_to_a_path_past_max_path() {
+        use codepp_plugin_host::dispatch::NPPM_SAVECURRENTSESSION;
+        let root = tempfile::tempdir().unwrap();
+        let folder = folder_past_max_path(root.path());
+        let open = root.path().join("a.txt");
+        std::fs::write(&open, "a\n").unwrap();
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+        shell.open_file(open.clone());
+        land_next_load(&mut shell, &mut ui);
+
+        let npp = folder.join("npp-session.xml");
+        shell.save_npp_session(&mut ui, &npp).unwrap();
+        let doc =
+            codepp_core::npp_session::NppSessionDoc::read_from(std::fs::File::open(&npp).unwrap())
+                .unwrap();
+        assert_eq!(doc.session.main_view.files[0].filename, open);
+
+        let plugin = folder.join("plugin-session.xml");
+        let wide: Vec<u16> = plugin
+            .to_str()
+            .unwrap()
+            .encode_utf16()
+            .chain(std::iter::once(0))
+            .collect();
+        // SAFETY: a NUL-terminated string that outlives the call.
+        let r = unsafe {
+            shell.dispatch_plugin_message(
+                &mut ui,
+                HostHandles::null(),
+                NPPM_SAVECURRENTSESSION,
+                0,
+                wide.as_ptr() as isize,
+            )
+        };
+        assert_ne!(r, Some(0));
+        let tabs = read_session_file(&plugin).unwrap().tabs;
+        assert_eq!(tabs[0].path.as_deref(), Some(open.as_path()));
+        assert_eq!(names_in(&folder), ["npp-session.xml", "plugin-session.xml"]);
+    }
+
+    /// A file whose own path Windows takes as written, but not the
+    /// temporary file's beside it, saves: the temporary file's name is
+    /// longer than `a`, and the room `replace_file` keeps for it turns both
+    /// paths verbatim.
+    #[test]
+    fn a_file_with_a_temporary_file_too_long_beside_it_saves() {
+        let units = |p: &Path| p.to_str().unwrap().encode_utf16().count();
+        let root = tempfile::tempdir().unwrap();
+        let base = units(root.path());
+        assert!(base < 200, "{}", root.path().display());
+        // `<base>\fff…f\a`, 246 units: the longest path `long_path` hands
+        // back as written. Its temporary file's path is 22 units longer.
+        let folder = root.path().join("f".repeat(243 - base));
+        std::fs::create_dir_all(&folder).unwrap();
+        let path = folder.join("a");
+        assert_eq!(units(&path), 246);
+        replace_file(&path, ".codepp-save-", b"x").unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), b"x");
+        assert_eq!(names_in(&folder), ["a"]);
+    }
+
+    /// A path short enough for Windows as written reaches tempfile as it
+    /// was written, so a save to it behaves, and fails, as it always did:
+    /// a failure names the folder as the user knows it.
+    #[test]
+    fn a_short_path_reaches_the_rename_as_written() {
+        let root = tempfile::tempdir().unwrap();
+        let missing = root.path().join("no-such-folder").join("a.txt");
+        // Short means 246 units with the temporary file's room, the most
+        // `long_path` hands back as written. Bytes are never fewer than
+        // units, so this errs towards refusing a temp folder that is too deep.
+        assert!(
+            missing.as_os_str().len() + TEMP_FILE_ROOM <= 246,
+            "this test needs a shorter temp folder: {}",
+            root.path().display()
+        );
+        let err = replace_file(&missing, ".codepp-save-", b"x").unwrap_err();
+        let text = err.to_string();
+        assert!(!text.contains(r"\\?\"), "{text}");
+        assert!(text.contains("no-such-folder"), "{text}");
     }
 
     #[test]
