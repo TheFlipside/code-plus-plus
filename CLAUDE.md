@@ -23,6 +23,7 @@ crates/shell/        → glue + UiPlatform trait; owns Session and EditorHandles
 crates/ui_win32/     → Win32 UI; ui_gtk and ui_cocoa added in Phase 5
 crates/app/          → thin binary; selects UI backend via cargo features
 plugins/             → in-tree sample plugin + N++-compat headers
+packaging/           → installer sources: the Windows .wxs, the Linux .desktop entry
 tools/               → plugin compat harness, perf scripts
 ```
 

@@ -1,0 +1,187 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  The Windows installer, built by .forgejo/scripts/package-windows.ps1
+  with WiX 5 (`wix build`), the version that script names.
+
+  The script passes four variables:
+
+    ProductName     "Code++", or "Code++ <version>" for a pre-release, so
+                    that the list of installed apps says which build a
+                    tester has
+    ProductVersion  the x.y.z of the version: Windows Installer takes
+                    numbers only
+    FullVersion     the whole version, pre-release part included
+    Icon            the path of assets/code++.ico
+
+  and two bind paths: the folder holding the files to install, which is
+  the folder the zip is made from, and one holding License.rtf.
+
+  What it installs: the files, into Program Files\Code++; a Start Menu
+  entry; `codepp` as a name Win+R and `start` find (App Paths); and
+  Code++ in Explorer's "Open with" menu for the text file types listed
+  below. It makes Code++ the default for none of them. Nothing here
+  touches the user's settings in %APPDATA%\Code++, which an uninstall
+  therefore leaves.
+-->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
+     xmlns:ui="http://wixtoolset.org/schemas/v4/wxs/ui">
+  <!--
+    UpgradeCode names Code++ to Windows Installer across every version.
+    It must never change: a package with another one installs beside
+    the old version instead of replacing it.
+  -->
+  <Package Name="$(var.ProductName)"
+           Manufacturer="Max Fiedler and Code++ contributors"
+           Version="$(var.ProductVersion)"
+           UpgradeCode="11BFFDAD-3F99-4F32-B46F-86339C95D976"
+           Scope="perMachine"
+           Language="1033"
+           InstallerVersion="500"
+           Compressed="yes">
+    <SummaryInformation Description="Code++ $(var.FullVersion) installer"
+                        Comments="Code++ $(var.FullVersion), a text and source code editor." />
+
+    <!--
+      Installing replaces whatever Code++ is there. Same-version
+      upgrades are allowed because every pre-release of one version has
+      the same x.y.z: 0.1.0-alpha.2 must be able to replace
+      0.1.0-alpha.1. An older x.y.z over a newer one is refused.
+    -->
+    <MajorUpgrade AllowSameVersionUpgrades="yes"
+                  DowngradeErrorMessage="A newer version of Code++ is already installed. Uninstall it first to install this one." />
+    <MediaTemplate EmbedCab="yes" />
+
+    <!--
+      Write every file, whatever is in the folder. By default Windows
+      Installer keeps an existing file whose version is not older than
+      the one it brings, and the plugin DLLs say 0.1.0.0 in every
+      pre-release of 0.1.0. Replacing an installed Code++ is not
+      affected, since that removes the old files first; but installed
+      over a folder the zip was once extracted into, the default left
+      the old plugin DLLs beside the new executable (measured). `a` in
+      place of the default's `o` is what changes it.
+    -->
+    <Property Id="REINSTALLMODE" Value="amus" />
+
+    <Icon Id="CodeppIcon.ico" SourceFile="$(var.Icon)" />
+    <Property Id="ARPPRODUCTICON" Value="CodeppIcon.ico" />
+    <Property Id="ARPURLINFOABOUT" Value="https://git.fiedler.live/tux/code-plus-plus" />
+    <Property Id="ARPHELPLINK" Value="https://git.fiedler.live/tux/code-plus-plus/issues" />
+    <Property Id="ARPCOMMENTS" Value="Code++ $(var.FullVersion)" />
+
+    <!--
+      One page, the licence, and then the installation. No page asks
+      for the folder: nothing here remembers a folder the user chose,
+      so the next version's installer would put Code++ back into the
+      default one. INSTALLFOLDER can still be given on msiexec's
+      command line, and must then be given again for each upgrade.
+    -->
+    <ui:WixUI Id="WixUI_Minimal" />
+    <WixVariable Id="WixUILicenseRtf" Value="License.rtf" />
+
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="INSTALLFOLDER" Name="Code++" />
+    </StandardDirectory>
+
+    <!--
+      The Start Menu entry is a plain shortcut to the file, not an
+      advertised one: an advertised shortcut has Windows Installer check
+      the installation at every start, before the editor's own first
+      instruction runs. Windows Installer's validation asks that a
+      component holding such a shortcut be keyed on a value under
+      HKEY_CURRENT_USER (ICE43 and ICE57 are errors without), which is
+      all the registry value is for. Nothing reads it. It is written
+      for the account that installs, so when another account removes
+      Code++ it stays behind in the first one's registry.
+    -->
+    <StandardDirectory Id="ProgramMenuFolder">
+      <Component Id="StartMenuShortcut">
+        <Shortcut Id="StartMenuShortcut"
+                  Name="Code++"
+                  Description="Edit text and source code"
+                  Target="[#CodeppExe]"
+                  WorkingDirectory="INSTALLFOLDER" />
+        <RegistryValue Root="HKCU"
+                       Key="Software\Code++\Installer"
+                       Name="StartMenuShortcut"
+                       Type="integer"
+                       Value="1"
+                       KeyPath="yes" />
+      </Component>
+    </StandardDirectory>
+
+    <Feature Id="Main" Title="Code++" Level="1">
+      <ComponentGroupRef Id="AppFiles" />
+      <ComponentRef Id="StartMenuShortcut" />
+    </Feature>
+
+    <!--
+      The plugin DLLs sit beside the executable, where
+      `codepp_platform::stage_bundled_plugins` looks for them on first
+      start. One file per component, as Windows Installer's component
+      rules ask.
+    -->
+    <ComponentGroup Id="AppFiles" Directory="INSTALLFOLDER">
+      <Component Id="CodeppExe">
+        <File Id="CodeppExe" Source="codepp.exe" KeyPath="yes" />
+
+        <!--
+          HKMU is HKEY_LOCAL_MACHINE for an installation for the whole
+          machine, which is what this package makes.
+        -->
+        <RegistryValue Root="HKMU"
+                       Key="Software\Microsoft\Windows\CurrentVersion\App Paths\codepp.exe"
+                       Type="string"
+                       Value="[#CodeppExe]" />
+
+        <!--
+          "Open with". Three parts, none of which makes Code++ the
+          default for anything:
+
+          - `Applications\codepp.exe` gives the entry its name. Without
+            it Explorer would show the executable's file name.
+          - `Codepp.Document` is the handler: how to open a file with
+            Code++. It has no name or icon of its own, so a type the
+            user later makes Code++ the default for keeps its own.
+          - Naming that handler under a type's `OpenWithProgids` is
+            what puts Code++ into the type's "Open with" menu.
+        -->
+        <RegistryKey Root="HKMU" Key="Software\Classes\Applications\codepp.exe">
+          <RegistryValue Name="FriendlyAppName" Type="string" Value="Code++" />
+          <RegistryValue Key="shell\open\command" Type="string" Value="&quot;[#CodeppExe]&quot; &quot;%1&quot;" />
+        </RegistryKey>
+        <RegistryValue Root="HKMU"
+                       Key="Software\Classes\Codepp.Document\shell\open\command"
+                       Type="string"
+                       Value="&quot;[#CodeppExe]&quot; &quot;%1&quot;" />
+        <?foreach Extension in txt;log;md;ini;cfg;conf;csv;xml;json;yaml;yml;toml;html;htm;css;js;ts;c;h;cpp;hpp;cs;java;rs;go;py;rb;php;lua;sql;sh;bat;cmd;ps1?>
+        <RegistryValue Root="HKMU"
+                       Key="Software\Classes\.$(var.Extension)\OpenWithProgids"
+                       Name="Codepp.Document"
+                       Type="string"
+                       Value="" />
+        <?endforeach?>
+      </Component>
+
+      <Component Id="PluginMimeTools">
+        <File Source="cppmimetools.dll" KeyPath="yes" />
+      </Component>
+      <Component Id="PluginConverter">
+        <File Source="cppconverter.dll" KeyPath="yes" />
+      </Component>
+      <Component Id="PluginExport">
+        <File Source="cppexport.dll" KeyPath="yes" />
+      </Component>
+
+      <Component Id="Licence">
+        <File Source="LICENSE.txt" KeyPath="yes" />
+      </Component>
+      <Component Id="ThirdPartyLicences">
+        <File Source="THIRD_PARTY_LICENSES.md" KeyPath="yes" />
+      </Component>
+      <Component Id="ThirdPartyCrates">
+        <File Source="THIRD_PARTY_CRATES.md" KeyPath="yes" />
+      </Component>
+    </ComponentGroup>
+  </Package>
+</Wix>

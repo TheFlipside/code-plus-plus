@@ -14,3 +14,7 @@ tools/** linguist-vendored
 # Shell scripts are LF in every checkout too: bash reads a CRLF line
 # ending as part of the command.
 *.sh text eol=lf
+
+# A desktop entry is read by line: a CRLF ending would be part of each
+# value.
+*.desktop text eol=lf

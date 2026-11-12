@@ -188,6 +188,13 @@ pub fn run(initial_path: Option<PathBuf>, perf: Perf) -> Result<(), GtkUiError> 
     shell.set_panel_signer(Box::new(move |message| panel_signer.sign(message)));
 
     // --- Widgets ---------------------------------------------------
+    // The icon every window of the process shows in its title bar, the
+    // taskbar and the window switcher, by its name in the icon theme.
+    // The .deb installs it under that name (`package-unix.sh`), which is
+    // also the `Icon` of its applications-menu entry. Run from the
+    // tarball or a build tree, where no icon of that name is installed,
+    // the windows keep the desktop's default one.
+    gtk::Window::set_default_icon_name("codepp");
     let window = gtk::Window::new(gtk::WindowType::Toplevel);
     window.set_title("Code++");
     window.set_default_size(DEFAULT_WIDTH, DEFAULT_HEIGHT);

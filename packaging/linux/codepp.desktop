@@ -1,0 +1,26 @@
+# The applications-menu entry the .deb installs as
+# /usr/share/applications/codepp.desktop
+# (.forgejo/scripts/package-unix.sh).
+#
+# `Icon` and `StartupWMClass` are both the binary's name: the icons are
+# installed into the hicolor theme as `codepp`, and GTK names a window's
+# class after the program, which is how a desktop matches a running
+# Code++ window to this entry. `%f`, one file, because `codepp` takes
+# one path. `MimeType` lists text/plain and nothing narrower: the source
+# and markup types a desktop knows are subclasses of it, so Code++ is
+# offered in "Open With" for those too, without claiming to be the
+# default for anything.
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=Code++
+GenericName=Text Editor
+Comment=Edit text and source code
+Exec=codepp %f
+Icon=codepp
+Terminal=false
+StartupNotify=true
+StartupWMClass=codepp
+Categories=Utility;TextEditor;
+MimeType=text/plain;
+Keywords=text;editor;code;source;notepad;

@@ -11,6 +11,13 @@ Outputs (next to the source PNG):
                           into `Code++.app` as the bundle's icon
                           (`.forgejo/scripts/package-unix.sh`); Finder,
                           the Dock and the app switcher show it.
+  - `assets/icons-app/codepp-<size>.png`
+                          Linux icons, one per size in `LINUX_SIZES`. The
+                          release workflow installs them into the `.deb`
+                          as `/usr/share/icons/hicolor/<size>x<size>/apps/
+                          codepp.png` (`.forgejo/scripts/package-unix.sh`),
+                          where the applications menu and the GTK window
+                          find them by the name `codepp`.
 
 The source `code++.png` is wider than it is tall (the chameleon mascot
 on a transparent background). Windows expects square icons — squishing
@@ -19,9 +26,7 @@ letterboxing it onto a square transparent canvas preserves the shape
 at the cost of a small vertical gap above and below at every output
 size. Letterboxing is the right trade.
 
-Future work will add Linux PNG renditions (16/24/32/48/64/128/256
-written into `assets/icons-app/`). The same source PNG drives all three;
-only the wrapping changes.
+The same source PNG drives all three; only the wrapping changes.
 
 One-time setup (icon-author machine only — the build does not call this
 script):
@@ -71,6 +76,13 @@ ICO_SIZES: list[tuple[int, int]] = [
 ICNS_MASTER_PX = 1024
 
 
+# The sizes of the hicolor icon theme a desktop asks for: menus and
+# title bars take 16 to 48, docks and task switchers 64 to 256, and 512
+# covers a HiDPI launcher grid. There is no vector source, so there is no
+# `scalable` entry.
+LINUX_SIZES: list[int] = [16, 24, 32, 48, 64, 128, 256, 512]
+
+
 def to_square_canvas(img: Image.Image) -> Image.Image:
     """Pad `img` (any aspect ratio) onto a transparent square canvas
     sized to the larger edge, with the image centred. RGBA in / out;
@@ -111,6 +123,17 @@ def main() -> int:
     master = square.resize((ICNS_MASTER_PX, ICNS_MASTER_PX), Image.LANCZOS)
     master.save(out_icns, format="ICNS")
     print(f"wrote {out_icns} (up to {ICNS_MASTER_PX}x{ICNS_MASTER_PX})")
+
+    # One PNG per size, each scaled from the full-size square rather
+    # than from the next size up, so no size inherits another's blur.
+    out_linux = repo_root / "assets" / "icons-app"
+    out_linux.mkdir(exist_ok=True)
+    for size in LINUX_SIZES:
+        square.resize((size, size), Image.LANCZOS).save(
+            out_linux / f"codepp-{size}.png", format="PNG", optimize=True
+        )
+    sizes_str = ", ".join(str(size) for size in LINUX_SIZES)
+    print(f"wrote {out_linux} ({sizes_str})")
     return 0
 
 

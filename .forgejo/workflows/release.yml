@@ -10,9 +10,13 @@ name: Release
 # pre-release. docs/RELEASING.md has the whole procedure, the secrets
 # this needs and what each runner must have installed.
 #
+# Each platform gets an archive to unpack and a package to install: a
+# zip and an .msi for Windows, a tarball and a .deb for Linux, a zip and
+# a .dmg for each macOS architecture.
+#
 # A manual run ("Run workflow") builds and packages everything and
-# publishes nothing: the archives stay on the run as artifacts. Use it
-# to try the pipeline without creating a tag or a release.
+# publishes nothing: the files stay on the run as artifacts. Use it to
+# try the pipeline without creating a tag or a release.
 on:
   push:
     tags:
@@ -36,10 +40,14 @@ env:
 #     the tag up with `git ls-remote https://github.com/actions/<name>.git
 #     'refs/tags/v3*'` and change the SHA and the comment together.
 #   - No `actions/cache`: the runners keep `target/` and `~/.cargo`.
+#   - The tools a run fetches are pinned: cargo-about by the
+#     `--version` below, and WiX, which builds the Windows installer, by
+#     the version and the SHA-256 of its two package files in
+#     package-windows.ps1, which uses no cached copy of either.
 #   - The build jobs get no secrets. The two release tokens reach the
 #     Linux runner only: one step of `prepare` checks that they are
 #     set, and `publish` uses them. `publish` runs nothing a build
-#     produced; it only hashes and uploads the archives.
+#     produced; it only hashes and uploads the files.
 #   - Nothing from the tag reaches a shell as text. `prepare` checks the
 #     tag against a strict pattern and hands the version on; steps read
 #     it from the environment.
@@ -47,7 +55,7 @@ env:
 jobs:
   # Decides the version, refuses a tag that does not match Cargo.toml,
   # and writes the licence notices of the bundled crates, which every
-  # archive carries.
+  # archive and package carries.
   prepare:
     name: prepare
     runs-on: linux
@@ -159,6 +167,9 @@ jobs:
           CODEPP_RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
         run: cargo build --release --locked --target x86_64-pc-windows-msvc -p codepp-app -p codepp-cppmimetools -p codepp-cppconverter -p codepp-cppexport
 
+      # The zip and the .msi. The installer is built with WiX, which the
+      # script fetches from nuget.org and checks against the hashes it
+      # holds; the runner needs .NET to run it (docs/RELEASING.md).
       - name: Package
         shell: powershell
         env:
@@ -167,7 +178,7 @@ jobs:
           powershell -NoProfile -ExecutionPolicy Bypass -File .forgejo/scripts/package-windows.ps1 -Target x86_64-pc-windows-msvc -Label windows-x64 -Notices release-notices/THIRD_PARTY_CRATES.md -OutDir dist-release
           exit $LASTEXITCODE
 
-      - name: Upload the archive (pinned to actions/upload-artifact v3.2.1)
+      - name: Upload the zip and the installer (pinned to actions/upload-artifact v3.2.1)
         uses: https://github.com/actions/upload-artifact@ff15f0306b3f739f7b6fd43fb5d26cd321bd4de5
         with:
           name: windows-x64
@@ -198,12 +209,13 @@ jobs:
           CODEPP_RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
         run: cargo build --release --locked --target x86_64-unknown-linux-gnu -p codepp-app -p codepp-cppmimetools -p codepp-cppconverter -p codepp-cppexport
 
+      # The tarball and the .deb.
       - name: Package
         env:
           CODEPP_RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
         run: bash .forgejo/scripts/package-unix.sh x86_64-unknown-linux-gnu linux-amd64 release-notices/THIRD_PARTY_CRATES.md dist-release
 
-      - name: Upload the archive (pinned to actions/upload-artifact v3.2.1)
+      - name: Upload the tarball and the package (pinned to actions/upload-artifact v3.2.1)
         uses: https://github.com/actions/upload-artifact@ff15f0306b3f739f7b6fd43fb5d26cd321bd4de5
         with:
           name: linux-amd64
@@ -246,14 +258,15 @@ jobs:
           CODEPP_RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
         run: cargo build --release --locked --target ${{ matrix.target }} -p codepp-app -p codepp-cppmimetools -p codepp-cppconverter -p codepp-cppexport
 
+      # The zip and the .dmg.
       - name: Package
         env:
           CODEPP_RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
         run: bash .forgejo/scripts/package-unix.sh ${{ matrix.target }} ${{ matrix.label }} release-notices/THIRD_PARTY_CRATES.md dist-release/${{ matrix.label }}
 
       # A folder per architecture, so that the two jobs cannot pick up
-      # each other's archive if the runner gives them one work directory.
-      - name: Upload the archive (pinned to actions/upload-artifact v3.2.1)
+      # each other's files if the runner gives them one work directory.
+      - name: Upload the zip and the disk image (pinned to actions/upload-artifact v3.2.1)
         uses: https://github.com/actions/upload-artifact@ff15f0306b3f739f7b6fd43fb5d26cd321bd4de5
         with:
           name: ${{ matrix.label }}
@@ -261,8 +274,8 @@ jobs:
           if-no-files-found: error
 
   # Publishes to Forgejo and then to the GitHub mirror. Runs for a tag
-  # only, and only when every build succeeded: a release has all four
-  # archives or does not exist. Both halves can be run again for the
+  # only, and only when every build succeeded: a release has all eight
+  # files or does not exist. Both halves can be run again for the
   # same tag; each then replaces the files of the release it finds.
   publish:
     name: publish
@@ -281,49 +294,53 @@ jobs:
           submodules: false
           fetch-depth: 0
 
-      - name: Download the Windows archive (pinned to actions/download-artifact v3.0.2)
+      - name: Download the Windows files (pinned to actions/download-artifact v3.0.2)
         uses: https://github.com/actions/download-artifact@9bc31d5ccc31df68ecc42ccf4149144866c47d8a
         with:
           name: windows-x64
           path: release-files
 
-      - name: Download the Linux archive (pinned to actions/download-artifact v3.0.2)
+      - name: Download the Linux files (pinned to actions/download-artifact v3.0.2)
         uses: https://github.com/actions/download-artifact@9bc31d5ccc31df68ecc42ccf4149144866c47d8a
         with:
           name: linux-amd64
           path: release-files
 
-      - name: Download the macOS arm64 archive (pinned to actions/download-artifact v3.0.2)
+      - name: Download the macOS arm64 files (pinned to actions/download-artifact v3.0.2)
         uses: https://github.com/actions/download-artifact@9bc31d5ccc31df68ecc42ccf4149144866c47d8a
         with:
           name: macos-arm64
           path: release-files
 
-      - name: Download the macOS x64 archive (pinned to actions/download-artifact v3.0.2)
+      - name: Download the macOS x64 files (pinned to actions/download-artifact v3.0.2)
         uses: https://github.com/actions/download-artifact@9bc31d5ccc31df68ecc42ccf4149144866c47d8a
         with:
           name: macos-x64
           path: release-files
 
-      # Exactly the four archives, by name: the notes name them, and a
+      # Exactly the eight files, by name: the notes name them, and a
       # release missing one should not go out.
-      - name: Check the archives and write SHA256SUMS
+      - name: Check the files and write SHA256SUMS
         run: |
           set -euo pipefail
           cd release-files
           for name in \
             "codepp-windows-x64-$VERSION.zip" \
+            "codepp-windows-x64-$VERSION.msi" \
             "codepp-linux-amd64-$VERSION.tar.gz" \
+            "codepp-linux-amd64-$VERSION.deb" \
             "codepp-macos-arm64-$VERSION.zip" \
-            "codepp-macos-x64-$VERSION.zip"; do
-            [ -s "$name" ] || { echo "::error::missing archive: $name" >&2; exit 1; }
+            "codepp-macos-arm64-$VERSION.dmg" \
+            "codepp-macos-x64-$VERSION.zip" \
+            "codepp-macos-x64-$VERSION.dmg"; do
+            [ -s "$name" ] || { echo "::error::missing file: $name" >&2; exit 1; }
           done
           # Regular files only. A link among the artifacts would be
           # hashed and uploaded as whatever it points at on this runner.
           other=$(find . -mindepth 1 ! -type f)
           [ -z "$other" ] || { echo "::error::not a regular file: $other" >&2; exit 1; }
           count=$(find . -type f | wc -l)
-          [ "$count" -eq 4 ] || { echo "::error::expected 4 files, found $count" >&2; ls -la; exit 1; }
+          [ "$count" -eq 8 ] || { echo "::error::expected 8 files, found $count" >&2; ls -la; exit 1; }
           # The shell expands `*` before it creates SHA256SUMS, so the
           # file does not list itself.
           sha256sum -- * > SHA256SUMS

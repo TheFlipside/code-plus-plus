@@ -6,9 +6,10 @@
 # e.g.  release-notes.sh v0.1.0-alpha.2 0.1.0-alpha.2 true
 #
 # The same text goes on the Forgejo release and the GitHub one. It says
-# which file is for which platform, how to start an unsigned build on
-# each, and what changed since the release before: the commit subjects
-# back to the nearest earlier `v` tag. A first release lists no changes.
+# which files are for which platform, how to install or start an
+# unsigned build on each, and what changed since the release before: the
+# commit subjects back to the nearest earlier `v` tag. A first release
+# lists no changes.
 #
 # Needs the repository's full history and tags (`fetch-depth: 0`).
 
@@ -32,24 +33,24 @@ fi
 cat <<EOF
 ## Downloads
 
-| Platform | File |
-| --- | --- |
-| Windows 10 and 11, 64-bit | \`codepp-windows-x64-$version.zip\` |
-| Linux, x86-64, GTK 3 | \`codepp-linux-amd64-$version.tar.gz\` |
-| macOS, Apple Silicon | \`codepp-macos-arm64-$version.zip\` |
-| macOS, Intel | \`codepp-macos-x64-$version.zip\` |
+| Platform | To install | To unpack and run |
+| --- | --- | --- |
+| Windows 10 and 11, 64-bit | \`codepp-windows-x64-$version.msi\` | \`codepp-windows-x64-$version.zip\` |
+| Linux, x86-64, GTK 3 | \`codepp-linux-amd64-$version.deb\` (Debian, Ubuntu) | \`codepp-linux-amd64-$version.tar.gz\` |
+| macOS, Apple Silicon | \`codepp-macos-arm64-$version.dmg\` | \`codepp-macos-arm64-$version.zip\` |
+| macOS, Intel | \`codepp-macos-x64-$version.dmg\` | \`codepp-macos-x64-$version.zip\` |
 
-\`SHA256SUMS\` holds each file's checksum.
+Each pair holds the same build. \`SHA256SUMS\` holds each file's checksum.
 
-## Running it
+## Installing it
 
 None of the builds is code-signed yet, so each system asks before the first start.
 
-- **Windows:** extract the zip anywhere and run \`codepp.exe\`. If SmartScreen says "Windows protected your PC", choose "More info", then "Run anyway".
-- **Linux:** extract the archive and run \`./codepp\` from its folder. GTK 3 must be installed (\`libgtk-3-0\` on Debian and Ubuntu, \`gtk3\` on Fedora and Arch).
-- **macOS:** unzip and move \`Code++.app\` to Applications. On the first start macOS refuses to open it: open System Settings → Privacy & Security and choose "Open Anyway", or run \`xattr -dr com.apple.quarantine /Applications/Code++.app\` once.
+- **Windows:** run the \`.msi\`. It installs Code++ into Program Files and adds it to the Start Menu and to "Open with" for text files; a later version's installer replaces it, and Settings → Apps removes it. If SmartScreen says "Windows protected your PC", choose "More info", then "Run anyway". Without administrator rights, \`msiexec /i codepp-windows-x64-$version.msi MSIINSTALLPERUSER=1 ALLUSERS=2\` installs it for your account only. Or extract the zip anywhere and run \`codepp.exe\`.
+- **Linux:** on Debian and Ubuntu, \`sudo apt install ./codepp-linux-amd64-$version.deb\` installs Code++ with the libraries it needs and adds it to the applications menu; \`sudo apt remove codepp\` removes it. If apt refuses the package, the system is older than the one it was built on. Elsewhere, extract the \`.tar.gz\` and run \`./codepp\` from its folder; GTK 3 must be installed (\`gtk3\` on Fedora and Arch).
+- **macOS:** open the \`.dmg\` and drag Code++ to Applications, or unzip and move \`Code++.app\` there. On the first start macOS refuses to open it: open System Settings → Privacy & Security and choose "Open Anyway", or run \`xattr -dr com.apple.quarantine /Applications/Code++.app\` once.
 
-The three bundled plugins are installed into your Code++ settings folder on first start. About shows the version, $version; please name it when you report a problem.
+Your settings are kept apart from the program on every system, so installing a newer build or removing Code++ leaves them. The three bundled plugins are installed into your Code++ settings folder on first start. About shows the version, $version; please name it when you report a problem.
 EOF
 
 # The nearest other `v` tag at or before the commit being released, if

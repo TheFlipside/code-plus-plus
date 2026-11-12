@@ -823,6 +823,40 @@ dump it as code points, since a bidi override is invisible in a
 console. This is how the `show_error_dialog` sanitization was checked
 against a pre-change build (DESIGN.md §7.4).
 
+### Build the installers locally
+
+The release workflow's packaging scripts run on a developer machine too, against a release build of the same target. They need the bundled crates' notices, which the workflow generates with `cargo about`; any non-empty file stands in for a local try. `docs/RELEASING.md` §1 says what each package holds.
+
+Windows, for the zip and the `.msi`. The installer is built with WiX, which runs on .NET, so `dotnet` must be on PATH (`winget install Microsoft.DotNet.SDK.10`). The script downloads the WiX version it names from nuget.org at each run, checks it against the hashes it holds, and installs nothing:
+
+```powershell
+$env:CODEPP_RELEASE_VERSION = '0.1.0-dev.local'
+cargo build --release --locked --target x86_64-pc-windows-msvc -p codepp-app -p codepp-cppmimetools -p codepp-cppconverter -p codepp-cppexport
+Set-Content notices.md 'stand-in'
+powershell -NoProfile -ExecutionPolicy Bypass -File .forgejo\scripts\package-windows.ps1 -Target x86_64-pc-windows-msvc -Label windows-x64 -Notices notices.md -OutDir dist-local
+```
+
+To try the installer without administrator rights, install it for your account alone, and remove it the same way:
+
+```powershell
+msiexec /i dist-local\codepp-windows-x64-0.1.0-dev.local.msi MSIINSTALLPERUSER=1 ALLUSERS=2
+msiexec /x dist-local\codepp-windows-x64-0.1.0-dev.local.msi
+```
+
+After a change to `packaging/windows/codepp.wxs`, run Windows Installer's own checks on the result. They come with WiX, which the packaging script does not leave behind, so install it once as a tool, at the version the script names (`dotnet tool install --global wix --version 5.0.2`), and then `wix msi validate <file>.msi`. Four warnings are expected (ICE40, ICE57, ICE61, ICE69; DESIGN.md §9.2 says why each); an error is not.
+
+Linux, for the tarball and the `.deb`, on Debian or Ubuntu (`dpkg-deb` and `dpkg-shlibdeps` come with `build-essential`):
+
+```sh
+export CODEPP_RELEASE_VERSION=0.1.0-dev.local
+cargo build --release --locked --target x86_64-unknown-linux-gnu -p codepp-app -p codepp-cppmimetools -p codepp-cppconverter -p codepp-cppexport
+echo stand-in > notices.md
+bash .forgejo/scripts/package-unix.sh x86_64-unknown-linux-gnu linux-amd64 notices.md dist-local
+apt-get -s install ./dist-local/codepp-linux-amd64-0.1.0-dev.local.deb   # what installing it would do, without root
+```
+
+macOS is the same script with `aarch64-apple-darwin macos-arm64` (or `x86_64-apple-darwin macos-x64`), and writes the zip and the `.dmg`.
+
 ### Run a single phase's demo
 
 Each phase in DESIGN.md §7.2 has a Demo column. The current phase's demo is always reachable via:
