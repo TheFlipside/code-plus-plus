@@ -64,6 +64,7 @@ pub fn init(verbose: bool) -> bool {
             // so it is suppressed at the narrowest possible scope.
             #[allow(clippy::unnecessary_debug_formatting)]
             {
+                crate::console::attach();
                 eprintln!("Code++: ignoring {LOG_ENV}={raw:?}: not valid UTF-8.");
             }
             None
@@ -76,6 +77,11 @@ pub fn init(verbose: bool) -> bool {
         // so every call site stays a no-op.
         (None, false) => return false,
     };
+
+    // A sink was asked for, and it writes to stderr. On Windows the
+    // process has no console of its own, so join the terminal it was
+    // started from, before the `is_terminal` check below reads stderr.
+    crate::console::attach();
 
     let filter = match EnvFilter::try_new(&directives) {
         Ok(f) => f,

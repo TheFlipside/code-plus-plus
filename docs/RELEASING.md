@@ -123,6 +123,7 @@ Three settings on the Forgejo side, which the workflow cannot make for itself:
 - **The lockfile.** Every build is `--locked`.
 - **The licences.** `cargo about generate --fail` stops on a crate whose licence is not in `about.toml`'s `accepted` list, which is `deny.toml`'s allowlist, or whose licence it cannot read.
 - **Static linking on Windows.** `.cargo/config.toml` links the C and C++ runtimes statically, so that the app starts on a machine without the Visual C++ Redistributable. `.forgejo/scripts/package-windows.ps1` reads the imports of `codepp.exe` and of each plugin DLL and refuses to package one that names a runtime DLL.
+- **The Windows subsystem.** `codepp.exe` is linked for the GUI subsystem, so that starting it from Explorer opens no console window beside the editor (DESIGN.md §9.1). `.forgejo/scripts/package-windows.ps1` reads the subsystem field of the executable's header and refuses to package a console-subsystem one.
 - **The macOS architecture.** `.forgejo/scripts/package-unix.sh` checks each binary with `lipo` before it is named for an architecture.
 - **The set of files.** `publish` requires exactly the four archives, by name, each a regular file.
 - **The mirror's tag**, as §5.2 describes.

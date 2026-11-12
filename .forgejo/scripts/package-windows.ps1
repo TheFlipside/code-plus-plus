@@ -76,6 +76,24 @@ foreach ($binary in $binaries) {
     }
 }
 
+# `codepp.exe` is linked for the GUI subsystem (crates/app/src/main.rs).
+# Linked for the console subsystem it still builds and still runs, and a
+# start from a terminal shows nothing wrong; started from Explorer it
+# opens a console window beside the editor, as the first alpha did. So
+# look: the optional header's Subsystem field is 2 for a GUI program and
+# 3 for a console one.
+$exe = [System.IO.File]::ReadAllBytes((Resolve-Path -LiteralPath $binaries[0]))
+$pe = [System.BitConverter]::ToInt32($exe, 0x3C)
+if ($pe -lt 0 -or $pe + 94 -gt $exe.Length -or [System.BitConverter]::ToUInt32($exe, $pe) -ne 0x4550) {
+    throw "$($binaries[0]) is not a PE file"
+}
+# The PE signature (4 bytes) and the COFF header (20) come before the
+# optional header, whose Subsystem is at offset 68.
+$subsystem = [System.BitConverter]::ToUInt16($exe, $pe + 4 + 20 + 68)
+if ($subsystem -ne 2) {
+    throw "$($binaries[0]) is linked for subsystem $subsystem, not the GUI subsystem (2); started from Explorer it would open a console window (crates/app/src/main.rs)"
+}
+
 $work = Join-Path ([System.IO.Path]::GetTempPath()) ("codepp-package-" + [System.Guid]::NewGuid().ToString('N'))
 $stage = Join-Path $work $name
 New-Item -ItemType Directory -Force -Path $stage | Out-Null

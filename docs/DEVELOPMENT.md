@@ -742,6 +742,18 @@ The sink is **off** unless asked for, so the ~230 `tracing::` call sites
 cost nothing in a normal run (DESIGN.md §5.5). Before this existed there
 was no subscriber at all and every one of them was silently discarded.
 
+On Windows `codepp.exe` is a GUI-subsystem program, so it has no console
+of its own (DESIGN.md §9.1). A run that asked for output with one of the
+lines above joins the console of the terminal it was started from;
+output redirected to a file or a pipe goes there instead, as usual. Two
+things differ from a console program. `cmd` and PowerShell do not wait
+for it, so `codepp --help` prints after the prompt has come back: pipe
+it (`codepp --help | more`) or use `start /wait codepp --help` to wait.
+And a plain `codepp file.txt` joins nothing, so it prints nothing to the
+terminal, and Ctrl+C there or closing the terminal does not end it; with
+`--verbose`, `--perf` or `CODEPP_LOG` both do. A panic joins the
+terminal to print its message, in a plain run too.
+
 `CODEPP_LOG` *overrides* `--verbose` rather than adding to it, so
 combining a narrow filter with `--perf` silently drops the
 measurements — name the target explicitly if you want both:

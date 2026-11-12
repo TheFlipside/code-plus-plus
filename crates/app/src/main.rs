@@ -18,12 +18,22 @@
 //! (macOS, until the Cocoa work lands) still builds and exits with a
 //! clear message rather than failing to link.
 
+// On Windows, link for the GUI subsystem. A program linked for the
+// console subsystem, the default, is given a console window of its own
+// whenever it is started from Explorer, the Start menu or a shortcut,
+// and that window stays beside the editor until the editor closes.
+// What this costs, and how `--help` and the log still reach a terminal,
+// is in `console.rs`. Debug builds take it too, so that `cargo run`
+// starts the program a release ships.
+#![cfg_attr(windows, windows_subsystem = "windows")]
+
 // `ExitCode` is used by every arm. Paths are spelled inline where
 // needed rather than imported, so a backend-less target (macOS until
 // the Cocoa arm lands) does not warn on an unused import.
 use std::process::ExitCode;
 
 mod args;
+mod console;
 mod logging;
 
 /// Parse arguments and install the log sink, or report and exit.
@@ -32,6 +42,7 @@ mod logging;
 /// behave the same everywhere rather than only where a UI is linked.
 /// `Err(code)` means "we are done, exit with this".
 fn startup() -> Result<args::Args, ExitCode> {
+    console::attach_on_panic();
     // Skip argv[0].
     match args::parse(std::env::args_os().skip(1)) {
         args::Parsed::Run(parsed) => {
@@ -43,16 +54,19 @@ fn startup() -> Result<args::Args, ExitCode> {
                 // `tracing`, so with no subscriber they are recorded
                 // and then discarded. Silence would otherwise read as
                 // "measured, nothing to report".
+                console::attach();
                 eprintln!("Code++: --perf was requested but no log sink could be installed;");
                 eprintln!("Code++: the measurements will be taken and then discarded.");
             }
             Ok(*parsed)
         }
         args::Parsed::Exit(text) => {
+            console::attach();
             print!("{text}");
             Err(ExitCode::SUCCESS)
         }
         args::Parsed::Fail(text) => {
+            console::attach();
             eprintln!("Code++: {text}");
             Err(ExitCode::FAILURE)
         }
@@ -78,6 +92,9 @@ fn finish<E: std::fmt::Display>(result: Result<(), E>) -> ExitCode {
     match result {
         Ok(()) => ExitCode::SUCCESS,
         Err(err) => {
+            // The run is over, so joining the terminal now ties
+            // nothing to it that should outlive it.
+            console::attach();
             eprintln!("Code++: fatal error: {err}");
             ExitCode::FAILURE
         }
@@ -139,6 +156,7 @@ fn main() -> ExitCode {
     // Every platform Code++ targets has a backend now, so reaching this
     // means the backend feature was switched off explicitly — e.g.
     // `--no-default-features` without naming one.
+    console::attach();
     eprintln!(
         "Code++ has no UI backend for this platform/feature combination. \
          Build with one of --features win32 / gtk / cocoa, matching the \
