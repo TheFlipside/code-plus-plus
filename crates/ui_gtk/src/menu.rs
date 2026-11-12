@@ -861,19 +861,16 @@ fn build_file_menu_lower(menu: &gtk::Menu, accel: &gtk::AccelGroup) {
         crate::at_callback_boundary("menu:file:show", (), || rebuild_recent_region(menu));
     });
 
-    // Exit stays at the bottom; Alt+F4 is the conventional close accelerator
-    // and is shown as its hint (the window manager typically also maps it to
-    // the window's delete path, which asks to quit the same way). Through
-    // `request_quit`, never `quit` itself: a click made inside a plugin's own
-    // main loop must wait for that loop, as a close does.
-    let exit = gtk::MenuItem::with_mnemonic("E_xit");
-    exit.add_accelerator(
-        "activate",
-        accel,
-        *key::F4,
-        gtk::gdk::ModifierType::MOD1_MASK,
-        gtk::AccelFlags::VISIBLE,
-    );
+    // Exit stays at the bottom, with two accelerators, both in its hint as
+    // on Win32: Ctrl+Q, and Alt+F4, the conventional close key (the window
+    // manager typically also maps it to the window's delete path, which asks
+    // to quit the same way). Through `request_quit`, never `quit` itself: a
+    // click or key made inside a plugin's own main loop must wait for that
+    // loop, as a close does.
+    let exit = hinted_menu_item("E_xit", "Ctrl+Q / Alt+F4");
+    for (keyval, mods) in [(key::q, ctrl), (key::F4, gtk::gdk::ModifierType::MOD1_MASK)] {
+        exit.add_accelerator("activate", accel, *keyval, mods, gtk::AccelFlags::empty());
+    }
     exit.connect_activate(|_| {
         crate::at_callback_boundary("menu:exit:activate", (), crate::request_quit);
     });
@@ -1841,14 +1838,6 @@ mod begin_end_select_step_tests {
 /// standard `GtkAccelLabel` hint would otherwise render on top of the
 /// custom label. The secondary accelerator relies on Scintilla's own
 /// keymap and needs no menu-level binding.
-///
-/// The child is a plain `GtkBox` rather than a `GtkAccelLabel`: the
-/// left `GtkLabel` handles the mnemonic (`set_use_underline` +
-/// `set_mnemonic_widget` back onto the item, mirroring what
-/// `MenuItem::with_mnemonic` sets up internally), and the right
-/// `GtkLabel` carries the free-form hint text with the `accelerator`
-/// CSS class so it picks up the same styling the sibling items get
-/// from `GtkAccelLabel`.
 fn append_dual_accel_edit_item(
     menu: &gtk::Menu,
     accel: &gtk::AccelGroup,
@@ -1857,6 +1846,33 @@ fn append_dual_accel_edit_item(
     primary: (gtk::gdk::keys::Key, gtk::gdk::ModifierType),
     action: fn(),
 ) {
+    let item = hinted_menu_item(mnemonic, hint);
+    item.connect_activate(move |_| {
+        crate::at_callback_boundary("menu:append_dual_accel_edit_item:activate", (), action);
+    });
+    item.add_accelerator(
+        "activate",
+        accel,
+        *primary.0,
+        primary.1,
+        gtk::AccelFlags::empty(),
+    );
+    menu.append(&item);
+}
+
+/// A menu item whose right-aligned shortcut hint is the text given, for
+/// an item that names two accelerators: `GtkAccelLabel` shows one. The
+/// caller binds the keys with `AccelFlags::empty()`, so that no second
+/// hint is drawn, and connects `activate`.
+///
+/// The child is a plain `GtkBox` rather than a `GtkAccelLabel`: the
+/// left `GtkLabel` handles the mnemonic (`set_use_underline` +
+/// `set_mnemonic_widget` back onto the item, mirroring what
+/// `MenuItem::with_mnemonic` sets up internally), and the right
+/// `GtkLabel` carries the free-form hint text with the `accelerator`
+/// CSS class so it picks up the same styling the sibling items get
+/// from `GtkAccelLabel`.
+fn hinted_menu_item(mnemonic: &str, hint: &str) -> gtk::MenuItem {
     let item = gtk::MenuItem::new();
     let hbox = gtk::Box::new(gtk::Orientation::Horizontal, 24);
     let name = gtk::Label::new(None);
@@ -1870,17 +1886,7 @@ fn append_dual_accel_edit_item(
     hbox.pack_start(&name, true, true, 0);
     hbox.pack_end(&hint_label, false, false, 0);
     item.add(&hbox);
-    item.connect_activate(move |_| {
-        crate::at_callback_boundary("menu:append_dual_accel_edit_item:activate", (), action);
-    });
-    item.add_accelerator(
-        "activate",
-        accel,
-        *primary.0,
-        primary.1,
-        gtk::AccelFlags::empty(),
-    );
-    menu.append(&item);
+    item
 }
 
 fn build_search_menu(bar: &gtk::MenuBar, accel: &gtk::AccelGroup) {

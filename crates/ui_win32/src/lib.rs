@@ -231,7 +231,7 @@ use windows::Win32::UI::Controls::{
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     EnableWindow, GetKeyState, ReleaseCapture, SetCapture, SetFocus, TrackMouseEvent, TME_LEAVE,
     TRACKMOUSEEVENT, VK_0, VK_B, VK_CONTROL, VK_F, VK_F1, VK_F2, VK_F3, VK_G, VK_H, VK_MENU, VK_N,
-    VK_O, VK_OEM_MINUS, VK_OEM_PLUS, VK_P, VK_R, VK_S, VK_T, VK_W,
+    VK_O, VK_OEM_MINUS, VK_OEM_PLUS, VK_P, VK_Q, VK_R, VK_S, VK_T, VK_W,
 };
 use windows::Win32::UI::Shell::{
     AssocQueryStringW, DefSubclassProc, DragAcceptFiles, DragFinish, DragQueryFileW,
@@ -6154,15 +6154,16 @@ fn build_main_menu() -> windows::core::Result<BuiltMenuBar> {
             w!("Print &Now"),
         )?;
         AppendMenuW(file_menu, MF_SEPARATOR, 0, PCWSTR::null())?;
-        // Alt+F4 hint is display-only — Windows intercepts Alt+F4 at
-        // `DefWindowProc` (WM_SYSCOMMAND / SC_CLOSE), so no accelerator
-        // table entry is needed; the `\t` separator right-aligns the hint
-        // the same way `&Undo\tCtrl+Z` does above.
+        // Two bindings, both shown, as Undo shows its two. Ctrl+Q is in
+        // the accelerator table (`build_default_accel_table`). Alt+F4
+        // needs no entry there: Windows turns it into
+        // WM_SYSCOMMAND / SC_CLOSE at `DefWindowProc`, which ends in the
+        // same `request_quit`.
         AppendMenuW(
             file_menu,
             MF_STRING,
             ID_FILE_EXIT as usize,
-            w!("E&xit\tAlt+F4"),
+            w!("E&xit\tCtrl+Q / Alt+F4"),
         )?;
         AppendMenuW(bar, MF_POPUP, file_menu.0 as usize, w!("&File"))?;
 
@@ -17511,6 +17512,17 @@ fn build_default_accel_table() -> Vec<ACCEL> {
             key: VK_W.0,
             cmd: ID_FILE_CLOSE_ALL,
         },
+        // Ctrl+Q → Exit, the same command as File → Exit and the
+        // window's close, so it goes through `request_quit` like
+        // them. ⌘Q is the macOS counterpart, which AppKit supplies.
+        // Scintilla's default keymap does not bind Q. A modifier must match
+        // exactly, so AltGr+Q (Ctrl+Alt+Q, `@` on a German layout)
+        // does not fire this.
+        ACCEL {
+            fVirt: ctrl,
+            key: VK_Q.0,
+            cmd: ID_FILE_EXIT,
+        },
         // Search
         ACCEL {
             fVirt: ctrl,
@@ -18930,7 +18942,7 @@ pub fn run(initial_path: Option<PathBuf>, perf: codepp_core::perf::Perf) -> Resu
         // The table covers only the commands Scintilla doesn't
         // already bind natively:
         //   - File: New (Ctrl+N), Open (Ctrl+O), Save (Ctrl+S),
-        //     Save As (Ctrl+Shift+S), Close (Ctrl+W).
+        //     Save As (Ctrl+Shift+S), Close (Ctrl+W), Exit (Ctrl+Q).
         //   - Search: Find / Replace / Find-in-Files / Goto Line.
         //   - View: Zoom In / Zoom Out / Restore Zoom.
         //
@@ -23642,7 +23654,7 @@ fn quit_waiting() -> bool {
 const QUIT_WAITING_TITLE: &str = " — closing once the task in progress finishes";
 
 /// Ask to quit — what the window's close (the caption's ✕, the taskbar's
-/// Close window, Alt+F4) and File → Exit do.
+/// Close window, Alt+F4) and File → Exit, by its menu item or Ctrl+Q, do.
 ///
 /// The quit never runs here. It runs from Code++'s own top-level message
 /// loop in `run`, which checks for a request every time round, before
@@ -29234,6 +29246,62 @@ mod plugin_accel_tests {
             assert_eq!(sk.is_alt != 0, alt);
             assert_eq!(sk.is_shift != 0, shift);
             assert_eq!(sk.key, key);
+        }
+    }
+
+    /// Ctrl+Q runs File → Exit: the default table binds Q once, with
+    /// Ctrl alone, so `AltGr`+Q (Ctrl+Alt+Q) is not it; and the menu row
+    /// names the chord beside Alt+F4.
+    #[test]
+    fn ctrl_q_is_bound_to_file_exit() {
+        use super::{
+            build_default_accel_table, build_main_menu, DestroyMenu, ID_FILE_EXIT, MF_BYCOMMAND,
+            VK_Q,
+        };
+        use windows::Win32::UI::WindowsAndMessaging::GetMenuStringW;
+
+        let table = build_default_accel_table();
+        let on_q: Vec<&ACCEL> = table.iter().filter(|a| a.key == VK_Q.0).collect();
+        assert_eq!(on_q.len(), 1, "Q is bound once");
+        assert_eq!(on_q[0].cmd, ID_FILE_EXIT);
+        let sk = decode_accel_to_shortcut_key(on_q[0]);
+        assert_eq!((sk.is_ctrl, sk.is_alt, sk.is_shift), (1, 0, 0));
+
+        let menus = build_main_menu().expect("the menu builds");
+        let mut buf = [0u16; 64];
+        // SAFETY: the bar was just built and is destroyed below; `buf`
+        // outlives the call. `MF_BYCOMMAND` searches the submenus.
+        let len = unsafe {
+            let len = GetMenuStringW(
+                menus.bar,
+                u32::from(ID_FILE_EXIT),
+                Some(&mut buf),
+                MF_BYCOMMAND,
+            );
+            let _ = DestroyMenu(menus.bar);
+            len
+        };
+        assert!(len > 0, "File → Exit is in the menu");
+        assert_eq!(
+            String::from_utf16_lossy(&buf[..usize::try_from(len).unwrap_or(0)]),
+            "E&xit\tCtrl+Q / Alt+F4"
+        );
+    }
+
+    /// No chord is in the default table twice. `TranslateAcceleratorW`
+    /// takes the first entry that matches, so a second one for the same
+    /// chord would never fire.
+    #[test]
+    fn no_chord_is_in_the_default_accel_table_twice() {
+        let table = super::build_default_accel_table();
+        let mut seen = std::collections::HashSet::new();
+        for a in &table {
+            assert!(
+                seen.insert((a.fVirt.0, a.key)),
+                "the chord (fVirt {:#x}, key {:#x}) is bound twice",
+                a.fVirt.0,
+                a.key
+            );
         }
     }
 

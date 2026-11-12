@@ -3594,6 +3594,28 @@ mod quit_guard {
             menu.contains("(), crate::request_quit);"),
             "File → Exit must ask to quit at its callback boundary"
         );
+        // Ctrl+Q has no handler of its own: it is an accelerator of the
+        // Exit item, so it asks the way the item does.
+        let exit = menu
+            .split_once("let exit = hinted_menu_item(")
+            .and_then(|(_, rest)| rest.split_once("menu.append(&exit);"))
+            .map(|(item, _)| item)
+            .expect("the Exit item is built, then appended");
+        assert_eq!(
+            (
+                menu.matches("key::q").count(),
+                exit.matches("(key::q, ctrl)").count(),
+                exit.matches("exit.add_accelerator(").count(),
+            ),
+            (1, 1, 1),
+            "Ctrl+Q must be bound once, as an accelerator of the Exit item"
+        );
+        // The item's hint names both keys as text, so both are bound, and
+        // neither draws a hint of its own.
+        assert!(
+            exit.contains("key::F4") && exit.contains("gtk::AccelFlags::empty()"),
+            "the Exit item must bind Alt+F4 too, both keys without a visible hint"
+        );
     }
 
     /// `request_quit`'s order: a second request does nothing; then the
