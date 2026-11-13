@@ -26,4 +26,7 @@ doc-valid-idents = [
     "ObjC",
     "QuartzCore",
     "ScintillaView",
+    # The Windows updater library (DESIGN.md §11), a product name like
+    # the ones above.
+    "WinSparkle",
 ]

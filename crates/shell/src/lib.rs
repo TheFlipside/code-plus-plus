@@ -2124,6 +2124,13 @@ pub struct Shell {
     /// side effects like clearing the recent-files list when
     /// the user disables the feature.
     pub preferences: Preferences,
+    /// Whether this copy of Code++ can update itself (DESIGN.md §11):
+    /// it was installed by something an updater can replace, and the
+    /// updater library is there. `false` until a backend has established
+    /// it, which it may only do after its first paint, and for good on a
+    /// copy that cannot (Linux, the Windows zip). See
+    /// [`Self::can_self_update`].
+    self_update: bool,
     /// Rolling list of full paths for files the user has closed
     /// (LRU). Two caps apply: the hard user-facing cap
     /// `preferences.recent_files_history.max_entries` (0..=30)
@@ -2776,6 +2783,7 @@ impl Shell {
             last_search: None,
             find_history: load_find_history(),
             preferences,
+            self_update: false,
             recent_files,
             fif_orchestrator,
             fif_rx: fif_rx_outer,
@@ -2815,6 +2823,21 @@ impl Shell {
         styles.clamp();
         self.styles = styles;
         save_styles(&self.styles);
+    }
+
+    /// Whether this copy of Code++ can update itself. While it cannot,
+    /// "?" → "Update Code++" and the Preferences dialog's "Auto-updater"
+    /// field are greyed, and no check for a new version runs.
+    #[must_use]
+    pub fn can_self_update(&self) -> bool {
+        self.self_update
+    }
+
+    /// Record whether this copy of Code++ can update itself. A backend
+    /// calls this once it has found out, after its first paint
+    /// (DESIGN.md §11.2 allows nothing of the updater earlier).
+    pub fn set_can_self_update(&mut self, can: bool) {
+        self.self_update = can;
     }
 
     /// Persist a new [`Preferences`] snapshot. Replaces

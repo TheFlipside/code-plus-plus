@@ -9130,9 +9130,13 @@ fn handle_open_recent_at(hwnd: HWND, index: usize) {
 /// actions (e.g. clearing the recent-files list when the user
 /// disables the feature).
 fn handle_preferences_menu(hwnd: HWND) {
-    let current = unsafe { state_from_hwnd(hwnd).map(|s| s.shell.preferences.clone()) };
-    let Some(current) = current else { return };
-    let updated = preferences::show_preferences_dialog(hwnd, current);
+    let current = unsafe {
+        state_from_hwnd(hwnd).map(|s| (s.shell.preferences.clone(), s.shell.can_self_update()))
+    };
+    let Some((current, can_self_update)) = current else {
+        return;
+    };
+    let updated = preferences::show_preferences_dialog(hwnd, current, can_self_update);
     if let Some(new) = updated {
         unsafe {
             if let Some(state) = state_from_hwnd(hwnd) {

@@ -5,17 +5,19 @@
 //! N++'s Preferences box: left-side category listbox + right-side
 //! per-category panel + bottom Close button.
 //!
-//! Two categories today: **Recent Files History**, and **Security**,
+//! Three categories today: **Recent Files History**; **Security**,
 //! which Notepad++ does not have — it holds the switch for the check
-//! on plugin panels' startup commands (`codepp_core::dock::CommandSeal`).
-//! Every other N++ Preferences pane (General, Toolbar, Tab Bar,
-//! Editing 1/2, Dark Mode, Margins/Border/Edge, New Document, Default
-//! Directory, File Association, Language, Indentation, Highlighting,
-//! Print, Searching, Backup, Auto-Completion, Multi-Instance & Date,
-//! Delimiter, Performance, Cloud & Link, Search Engine, MISC.) is a
-//! future commit — each adds a listbox row, a page of controls, and
-//! an entry in [`PrefsState::pages`], which the listbox selection
-//! switches between.
+//! on plugin panels' startup commands (`codepp_core::dock::CommandSeal`);
+//! and **MISC.**, which holds the "Auto-updater" drop-down
+//! (DESIGN.md §11.5). Every other N++ Preferences pane (General,
+//! Toolbar, Tab Bar, Editing 1/2, Dark Mode, Margins/Border/Edge, New
+//! Document, Default Directory, File Association, Language,
+//! Indentation, Highlighting, Print, Searching, Backup,
+//! Auto-Completion, Multi-Instance & Date, Delimiter, Performance,
+//! Cloud & Link, Search Engine, and the rest of MISC.) is a future
+//! commit — each adds a listbox row, a page of controls, and an entry
+//! in [`PrefsState::pages`], which the listbox selection switches
+//! between.
 //!
 //! **Return value.** [`show_preferences_dialog`] returns
 //! `Some(Preferences)` when the user closed via the Close button
@@ -33,19 +35,20 @@ use windows::Win32::Graphics::Gdi::{
     GetStockObject, GetSysColor, SetBkColor, COLOR_3DFACE, DEFAULT_GUI_FONT, HDC, HFONT,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
-use windows::Win32::UI::Input::KeyboardAndMouse::SetFocus;
+use windows::Win32::UI::Input::KeyboardAndMouse::{EnableWindow, SetFocus};
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, EndDialog, GetWindowLongPtrW, GetWindowTextW, SendMessageW, SetWindowLongPtrW,
     ShowWindow, BM_GETCHECK, BM_SETCHECK, BN_CLICKED, BS_AUTOCHECKBOX, BS_AUTORADIOBUTTON,
-    BS_DEFPUSHBUTTON, GWLP_USERDATA, HMENU, IDCANCEL, LBN_SELCHANGE, LBS_HASSTRINGS, LBS_NOTIFY,
-    LB_ADDSTRING, LB_GETCURSEL, LB_SETCURSEL, SW_HIDE, SW_SHOW, WINDOW_EX_STYLE, WINDOW_STYLE,
-    WM_COMMAND, WM_CTLCOLORBTN, WM_CTLCOLORSTATIC, WM_INITDIALOG, WM_NCDESTROY, WM_SETFONT,
-    WM_SETTEXT, WS_BORDER, WS_CHILD, WS_EX_CONTROLPARENT, WS_GROUP, WS_TABSTOP, WS_VISIBLE,
-    WS_VSCROLL,
+    BS_DEFPUSHBUTTON, CBS_DROPDOWNLIST, CB_ADDSTRING, CB_GETCURSEL, CB_SETCURSEL, GWLP_USERDATA,
+    HMENU, IDCANCEL, LBN_SELCHANGE, LBS_HASSTRINGS, LBS_NOTIFY, LB_ADDSTRING, LB_GETCURSEL,
+    LB_SETCURSEL, SW_HIDE, SW_SHOW, WINDOW_EX_STYLE, WINDOW_STYLE, WM_COMMAND, WM_CTLCOLORBTN,
+    WM_CTLCOLORSTATIC, WM_INITDIALOG, WM_NCDESTROY, WM_SETFONT, WM_SETTEXT, WS_BORDER, WS_CHILD,
+    WS_EX_CONTROLPARENT, WS_GROUP, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
 };
 
 use codepp_core::preferences::{
-    Preferences, RecentFileDisplayMode, CUSTOM_MAX_LENGTH_LIMIT, MAX_ENTRIES_LIMIT,
+    Preferences, RecentFileDisplayMode, AUTO_UPDATER_CHOICES, AUTO_UPDATER_HELP,
+    AUTO_UPDATER_UNAVAILABLE, CUSTOM_MAX_LENGTH_LIMIT, MAX_ENTRIES_LIMIT,
 };
 
 use crate::{dialog_face_brush, dlgtemplate, SS_CENTERIMAGE, SS_ETCHEDFRAME};
@@ -69,10 +72,11 @@ const IDC_PREFS_RADIO_CUSTOM_LEN: u16 = 906;
 const IDC_PREFS_CUSTOM_LEN_EDIT: u16 = 907;
 const IDC_PREFS_CLOSE: u16 = 908;
 const IDC_PREFS_VERIFY_PANEL_COMMANDS: u16 = 909;
+const IDC_PREFS_AUTO_UPDATER: u16 = 910;
 
 /// The category list's rows, in order. A row's index is its page's
 /// index in [`PrefsState::pages`].
-const CATEGORIES: [&str; 2] = ["Recent Files History", "Security"];
+const CATEGORIES: [&str; 3] = ["Recent Files History", "Security", "MISC."];
 
 /// The Security page's checkbox label: what the switch does, in the
 /// fewest words that still say it.
@@ -117,11 +121,17 @@ struct PrefsState {
     hwnd_custom_len_edit: HWND,
     hwnd_close: HWND,
     hwnd_verify_panel_commands: HWND,
+    /// The MISC. page's "Auto-updater" drop-down.
+    hwnd_auto_updater: HWND,
+    /// Whether this copy of Code++ can update itself
+    /// (`Shell::can_self_update`). While it cannot, the drop-down is
+    /// greyed: it shows the stored choice and cannot change it.
+    can_self_update: bool,
     /// Every control of each category's page, indexed like
     /// [`CATEGORIES`]. Only the selected page's are shown; the dialog
     /// manager skips hidden controls when tabbing, so the others are
     /// out of the way entirely.
-    pages: [Vec<HWND>; 2],
+    pages: [Vec<HWND>; 3],
 }
 
 /// Show the Preferences dialog modally. On close returns the
@@ -135,7 +145,11 @@ struct PrefsState {
 /// other close path — Close button, Esc, or System Menu → Close —
 /// returns `Some(prefs)` with whatever values the controls held at
 /// close time.
-pub fn show_preferences_dialog(main_hwnd: HWND, current: Preferences) -> Option<Preferences> {
+pub fn show_preferences_dialog(
+    main_hwnd: HWND,
+    current: Preferences,
+    can_self_update: bool,
+) -> Option<Preferences> {
     unsafe {
         let instance = GetModuleHandleW(None).ok()?;
 
@@ -155,7 +169,9 @@ pub fn show_preferences_dialog(main_hwnd: HWND, current: Preferences) -> Option<
             hwnd_custom_len_edit: HWND(std::ptr::null_mut()),
             hwnd_close: HWND(std::ptr::null_mut()),
             hwnd_verify_panel_commands: HWND(std::ptr::null_mut()),
-            pages: [Vec::new(), Vec::new()],
+            hwnd_auto_updater: HWND(std::ptr::null_mut()),
+            can_self_update,
+            pages: [Vec::new(), Vec::new(), Vec::new()],
         });
         let state_ptr = Box::into_raw(state);
 
@@ -312,6 +328,10 @@ unsafe extern "system" fn prefs_dlg_proc(
 /// constant out.
 const EN_KILLFOCUS: u16 = 0x0200;
 
+/// `CBN_SELCHANGE`: a combo box's selection changed. Spelled out for the
+/// reason [`EN_KILLFOCUS`] is.
+const CBN_SELCHANGE: u16 = 1;
+
 /// Handle a `WM_COMMAND` after normalising the effective id.
 /// Runs on the UI thread; safe to mutate the `PrefsState` behind
 /// `GWLP_USERDATA` — no other message can be dispatched
@@ -342,6 +362,11 @@ unsafe fn handle_command(hwnd: HWND, effective: u16, notify: u16) {
             }
             IDC_PREFS_CATEGORY_LIST if u32::from(notify) == LBN_SELCHANGE => {
                 show_selected_page(hwnd);
+            }
+            // `CBN_SELCHANGE` has `LBN_SELCHANGE`'s value, which is how
+            // it gets past the dialog procedure's filter.
+            IDC_PREFS_AUTO_UPDATER if notify == CBN_SELCHANGE => {
+                sync_state_from_controls(hwnd);
             }
             // Edit-control values are re-read on close and on
             // kill-focus. Both paths funnel through
@@ -401,6 +426,16 @@ unsafe fn sync_state_from_controls(hwnd: HWND) {
         cfg.clamp();
 
         state.prefs.security.verify_panel_commands = is_checked(state.hwnd_verify_panel_commands);
+
+        // `CB_ERR` (-1), nothing selected, is no row, and changes
+        // nothing. Nor does a drop-down that was never created: a
+        // message to no window answers 0, which is the "Disable" row.
+        if !state.hwnd_auto_updater.0.is_null() {
+            let row = SendMessageW(state.hwnd_auto_updater, CB_GETCURSEL, None, None).0;
+            if let Ok(row) = usize::try_from(row) {
+                state.prefs.misc.set_auto_updater_row(row);
+            }
+        }
     }
 }
 
@@ -800,6 +835,93 @@ unsafe fn populate_controls(hwnd: HWND) {
         set_font(verify_help, font);
         state.pages[1] = vec![group_security, group_security_title, verify, verify_help];
 
+        // MISC. page, created hidden like the Security page.
+        const MISC_H: i32 = GROUP_TOP_H + 36;
+        let group_misc = create_child(
+            hwnd,
+            windows::core::w!("STATIC"),
+            None,
+            WS_CHILD | WINDOW_STYLE(SS_ETCHEDFRAME),
+            PANEL_X,
+            PANEL_Y,
+            420,
+            MISC_H,
+            0,
+        );
+        set_font(group_misc, font);
+        let group_misc_title = create_child(
+            hwnd,
+            windows::core::w!("STATIC"),
+            Some(" Updates "),
+            WS_CHILD | WINDOW_STYLE(SS_CENTERIMAGE),
+            PANEL_X + 12,
+            PANEL_Y - CAPTION_TEXT_H / 2,
+            64,
+            CAPTION_TEXT_H,
+            0,
+        );
+        set_font(group_misc_title, font);
+        let lbl_updater = create_child(
+            hwnd,
+            windows::core::w!("STATIC"),
+            Some("Auto-updater:"),
+            WS_CHILD,
+            PANEL_X + 16,
+            PANEL_Y + 28,
+            100,
+            18,
+            0,
+        );
+        set_font(lbl_updater, font);
+        // A drop-down list's window height is that of its list when
+        // dropped, so it is given room for its rows.
+        let updater = create_child(
+            hwnd,
+            windows::core::w!("COMBOBOX"),
+            None,
+            WS_CHILD | WS_TABSTOP | WS_VSCROLL | WINDOW_STYLE(CBS_DROPDOWNLIST as u32),
+            PANEL_X + 120,
+            PANEL_Y + 24,
+            140,
+            120,
+            IDC_PREFS_AUTO_UPDATER,
+        );
+        state.hwnd_auto_updater = updater;
+        set_font(updater, font);
+        for (label, _) in AUTO_UPDATER_CHOICES {
+            add_combo_string(updater, label);
+        }
+        SendMessageW(
+            updater,
+            CB_SETCURSEL,
+            Some(WPARAM(state.prefs.misc.auto_updater_row())),
+            None,
+        );
+        let _ = EnableWindow(updater, state.can_self_update);
+        let updater_help = create_child(
+            hwnd,
+            windows::core::w!("STATIC"),
+            Some(if state.can_self_update {
+                AUTO_UPDATER_HELP
+            } else {
+                AUTO_UPDATER_UNAVAILABLE
+            }),
+            WS_CHILD,
+            PANEL_X + 16,
+            PANEL_Y + 58,
+            388,
+            MISC_H - 66,
+            0,
+        );
+        set_font(updater_help, font);
+        state.pages[2] = vec![
+            group_misc,
+            group_misc_title,
+            lbl_updater,
+            updater,
+            updater_help,
+        ];
+
         // 4. Bottom-centred Close button.
         const CLOSE_W: i32 = 96;
         const CLOSE_H: i32 = 28;
@@ -883,6 +1005,18 @@ unsafe fn set_edit_text(edit: HWND, text: &str) {
     unsafe {
         let wide: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
         SendMessageW(edit, WM_SETTEXT, None, Some(LPARAM(wide.as_ptr() as isize)));
+    }
+}
+
+unsafe fn add_combo_string(combo: HWND, text: &str) {
+    unsafe {
+        let wide: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
+        SendMessageW(
+            combo,
+            CB_ADDSTRING,
+            None,
+            Some(LPARAM(wide.as_ptr() as isize)),
+        );
     }
 }
 

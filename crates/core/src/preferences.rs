@@ -9,7 +9,8 @@
 //! the schema can never lock the user out of the app.
 //!
 //! **Scope note.** Only the sections that back live UI are
-//! populated: [`RecentFilesHistoryConfig`] and [`SecurityConfig`].
+//! populated: [`RecentFilesHistoryConfig`], [`SecurityConfig`] and
+//! [`MiscConfig`].
 //! Other Preferences panes land one by one and each adds a new
 //! field with a `#[serde(default)]` attribute so downgrading a
 //! config from a future version keeps working.
@@ -29,6 +30,9 @@
 //!   <security>
 //!     <verify-panel-commands>true</verify-panel-commands>
 //!   </security>
+//!   <misc>
+//!     <auto-updater>true</auto-updater>
+//!   </misc>
 //! </preferences>
 //! ```
 
@@ -50,6 +54,73 @@ pub struct Preferences {
     /// guard on, which is the point of defaulting it on.
     #[serde(default)]
     pub security: SecurityConfig,
+    /// Preferences → MISC. panel. A `config.xml` written before it
+    /// existed gets the defaults: the auto-updater enabled.
+    #[serde(default)]
+    pub misc: MiscConfig,
+}
+
+/// The Preferences → MISC. panel's persisted controls.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MiscConfig {
+    /// The panel's "Auto-updater" field: "Enable" or "Disable"
+    /// (DESIGN.md §11.5).
+    ///
+    /// Enabled, Code++ checks for a new version at most once a day, after
+    /// its first paint and off the UI thread, and shows a window only
+    /// when there is one; see [`crate::update::check_is_due`]. Disabled,
+    /// it loads no updater library and makes no request unless the user
+    /// asks from the "?" menu, which works either way. On a copy that
+    /// cannot update itself (Linux, the Windows zip) the field changes
+    /// nothing.
+    #[serde(rename = "auto-updater", default = "defaults::auto_updater")]
+    pub auto_updater: bool,
+}
+
+/// The rows of the "Auto-updater" drop-down, in order: each row's label
+/// and the [`MiscConfig::auto_updater`] it stands for. Every backend
+/// builds its control from this, so the three cannot drift on a label
+/// or the order.
+pub const AUTO_UPDATER_CHOICES: [(&str, bool); 2] = [("Disable", false), ("Enable", true)];
+
+/// What the "Auto-updater" field means, shown beside it.
+pub const AUTO_UPDATER_HELP: &str = "\
+Enabled, Code++ looks for a new version at most once a day, in the \
+background, and asks before it downloads or installs anything. \
+Disabled, it looks only when you choose \"Update Code++\" in the \"?\" \
+menu, which works either way.";
+
+/// Shown in place of [`AUTO_UPDATER_HELP`] by a copy of Code++ that
+/// cannot update itself, whose field is greyed.
+pub const AUTO_UPDATER_UNAVAILABLE: &str = "This copy of Code++ does not update itself.";
+
+impl MiscConfig {
+    /// The row of [`AUTO_UPDATER_CHOICES`] that stands for this
+    /// configuration.
+    #[must_use]
+    pub fn auto_updater_row(&self) -> usize {
+        AUTO_UPDATER_CHOICES
+            .iter()
+            .position(|&(_, enabled)| enabled == self.auto_updater)
+            .unwrap_or(0)
+    }
+
+    /// Take the choice of row `row` of [`AUTO_UPDATER_CHOICES`]. A row
+    /// the table does not have, as a drop-down with nothing selected
+    /// reports, changes nothing.
+    pub fn set_auto_updater_row(&mut self, row: usize) {
+        if let Some(&(_, enabled)) = AUTO_UPDATER_CHOICES.get(row) {
+            self.auto_updater = enabled;
+        }
+    }
+}
+
+impl Default for MiscConfig {
+    fn default() -> Self {
+        Self {
+            auto_updater: defaults::auto_updater(),
+        }
+    }
 }
 
 /// The Preferences → Security panel's persisted controls.
@@ -252,6 +323,9 @@ mod defaults {
     pub(super) fn verify_panel_commands() -> bool {
         true
     }
+    pub(super) fn auto_updater() -> bool {
+        true
+    }
 }
 
 /// Errors from reading or writing `config.xml`. Mirrors the
@@ -355,6 +429,37 @@ mod tests {
             p.security.verify_panel_commands,
             "the startup-command guard is on out of the box"
         );
+        assert!(
+            p.misc.auto_updater,
+            "the auto-updater is enabled by default"
+        );
+    }
+
+    /// A `config.xml` from before the MISC. pane existed, or one whose
+    /// pane lacks the field, reads with the auto-updater enabled, and an
+    /// explicit "Disable" is kept.
+    #[test]
+    fn a_config_without_the_misc_pane_has_the_auto_updater_enabled() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("config.xml");
+        for xml in [
+            "<?xml version=\"1.0\"?><preferences><security/></preferences>",
+            "<?xml version=\"1.0\"?><preferences><misc/></preferences>",
+            "<?xml version=\"1.0\"?><preferences></preferences>",
+        ] {
+            std::fs::write(&path, xml).expect("write");
+            let p = Preferences::load(&path).expect("load");
+            assert!(p.misc.auto_updater, "{xml}");
+        }
+        std::fs::write(
+            &path,
+            "<?xml version=\"1.0\"?><preferences><misc><auto-updater>false</auto-updater></misc></preferences>",
+        )
+        .expect("write");
+        assert!(
+            !Preferences::load(&path).expect("load").misc.auto_updater,
+            "an explicit Disable is kept"
+        );
     }
 
     /// A `config.xml` from before the Security pane existed — no
@@ -385,6 +490,33 @@ mod tests {
                 .verify_panel_commands,
             "an explicit off is kept"
         );
+    }
+
+    /// Each row of the drop-down stands for its own choice, both ways,
+    /// and a row the table lacks changes nothing.
+    #[test]
+    fn the_auto_updater_rows_map_both_ways() {
+        assert_eq!(
+            AUTO_UPDATER_CHOICES,
+            [("Disable", false), ("Enable", true)],
+            "the labels and their order are the maintainer's"
+        );
+        for (row, &(_, enabled)) in AUTO_UPDATER_CHOICES.iter().enumerate() {
+            let mut m = MiscConfig {
+                auto_updater: !enabled,
+            };
+            m.set_auto_updater_row(row);
+            assert_eq!(m.auto_updater, enabled);
+            assert_eq!(m.auto_updater_row(), row);
+        }
+        for enabled in [false, true] {
+            let mut m = MiscConfig {
+                auto_updater: enabled,
+            };
+            m.set_auto_updater_row(AUTO_UPDATER_CHOICES.len());
+            m.set_auto_updater_row(usize::MAX);
+            assert_eq!(m.auto_updater, enabled);
+        }
     }
 
     #[test]
@@ -466,6 +598,9 @@ mod tests {
             },
             security: SecurityConfig {
                 verify_panel_commands: false,
+            },
+            misc: MiscConfig {
+                auto_updater: false,
             },
         };
         p.save(&path).expect("save");
