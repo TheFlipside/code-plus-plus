@@ -115,7 +115,7 @@ FEED_VERSION = re.compile(r"<sparkle:version>([^<]*)</sparkle:version>")
 
 def _failed(what: str, status: int, body: bytes) -> PublishError:
     """Describe a request the server answered with an unexpected status."""
-    return PublishError(f"{what} failed: HTTP {status}\n{shared.shown(body)}")
+    return PublishError(f"{what} failed: HTTP {status}: {shared.shown(body)}")
 
 
 class FeedRepo(Forgejo):
@@ -198,28 +198,12 @@ def _numbers(version: str) -> Optional[Tuple[int, ...]]:
 
 def _installer(path: Path, version: str) -> bytes:
     """Read the installer, which must be the release's, and return it."""
-    expected = f"codepp-windows-x64-{version}.msi"
-    if path.name != expected:
-        what = f"the installer must be {expected}"
-        raise PublishError(f"{what}, not {path.name}")
-    try:
-        if path.is_symlink() or not path.is_file():
-            raise PublishError(f"{path} is not a regular file")
-        return path.read_bytes()
-    except OSError as error:
-        raise PublishError(str(error)) from error
+    return shared.release_file(path, f"codepp-windows-x64-{version}.msi")
 
 
 def download_url(base_url: str, repo: str, tag: str, name: str) -> str:
     """Return the address a release's file is downloaded from."""
-    parts = urllib.parse.urlsplit(base_url)
-    local = parts.hostname in shared.LOCAL_HOSTS
-    if parts.scheme != "https" and not (parts.scheme == "http" and local):
-        what = "FORGEJO_URL must be an https URL"
-        raise PublishError(f"{what}, not {base_url!r}")
-    owner, slash, project = repo.partition("/")
-    if not owner or not slash or not project or "/" in project:
-        raise PublishError(f"REPO must be owner/name, not {repo!r}")
+    owner, project = shared.repo_parts(base_url, repo)
     where = (owner, project, "releases", "download", tag, name)
     return _joined(base_url, where)
 
@@ -527,31 +511,28 @@ def check() -> str:
     return f"the {FEED_BRANCH} branch exists; the feed is {served}"
 
 
-def main(argv: List[str]) -> int:
-    """Run from the command line; return the exit status."""
-    try:
-        if argv[1:] == ["check"]:
-            print(check())
-        elif len(argv) == 4 and argv[1] == "sign":
-            signature = sign(Path(argv[2]), Path(argv[3]))
-            print(f"signed {Path(argv[2]).name}: {signature}")
-        elif len(argv) == 4 and argv[1] == "publish":
-            print(publish(Path(argv[2]), Path(argv[3])))
-        else:
-            print(__doc__, file=sys.stderr)
-            return 2
-    except PublishError as error:
-        print(f"::error::{error}", file=sys.stderr)
-        return 1
-    except Exception as error:  # pylint: disable=broad-exception-caught
-        # Anything unforeseen ends the step like any other failure, and
-        # says only what kind it was: a traceback would show source
-        # lines of a process that may be holding the key, and an
-        # exception's own text is not known to be free of it.
-        what = type(error).__name__
-        print(f"::error::update_feed.py failed: {what}", file=sys.stderr)
-        return 1
+def _run(argv: List[str]) -> int:
+    """Do what the command line asks; return the exit status."""
+    if argv[1:] == ["check"]:
+        print(check())
+    elif len(argv) == 4 and argv[1] == "sign":
+        signature = sign(Path(argv[2]), Path(argv[3]))
+        print(f"signed {Path(argv[2]).name}: {signature}")
+    elif len(argv) == 4 and argv[1] == "publish":
+        print(publish(Path(argv[2]), Path(argv[3])))
+    else:
+        print(__doc__, file=sys.stderr)
+        return 2
     return 0
+
+
+def main(argv: List[str]) -> int:
+    """Run from the command line; return the exit status.
+
+    Behind `guarded`, so that nothing ends in a traceback: this process
+    may be holding the key.
+    """
+    return shared.guarded("update_feed.py", lambda: _run(argv))
 
 
 if __name__ == "__main__":

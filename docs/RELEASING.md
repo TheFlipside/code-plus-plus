@@ -58,6 +58,7 @@ Built by `.forgejo/scripts/package-unix.sh` with `dpkg-deb`.
 
 - **Dependencies.** `dpkg-shlibdeps` works them out on the runner: the package of each library the binaries load, with the oldest version that has the symbols they use. So the package names and versions are those of the `linux` runner's distribution, and apt refuses the package on an older system, where the binary could not start, rather than installing it.
 - **The version.** A release's package has the release's version. A rehearsal build's (§3) has a hyphen in it, and dpkg orders versions by its own rules, under which `0.2.0-dev.2f20913` would be newer than `0.2.0`. Such a package's version therefore has a tilde where the build's has its first hyphen, `0.2.0~dev.2f20913`, which sorts before `0.2.0`. The file keeps the build's version in its name, like the other seven.
+- **The apt repository.** `publish` also uploads the package to the apt repository Forgejo keeps for the repository's owner (`.forgejo/scripts/publish_deb.py`; DESIGN.md §11.9), distribution `stable`, component `main`. Whoever has added that repository, as the README describes, gets the version from `apt upgrade`. A package installed from the release page does not add the repository.
 - **No scripts.** The package runs nothing at install or removal. The menu and the icon cache are refreshed by the triggers of the packages that own them.
 - **The window icon.** Code++ asks GTK for the icon named `codepp`, so its windows show it once the package has installed it. Run from the tarball, they show the desktop's default icon.
 
@@ -122,6 +123,9 @@ Do this once before the first real tag, and after any change to the workflow or 
 - **A build's Package step fails for a missing tool.** `dotnet is not on PATH` on Windows, `dpkg-shlibdeps is not installed` on Linux: the runner lacks what §5.3 lists. Install it and run the job again.
 - **`publish` fails at "Sign the Windows installer".** Nothing has been published. The `UPDATE_SIGNING_KEY` secret is missing, is not a key, or is not the private half of the public key in the workflow; the log says which, and never shows the key. Set the secret (§5.1) and run the job again. If the runner's `openssl` is older than version 3, the log says that instead (§5.3).
 - **`publish` fails at "Publish the Windows update feed".** Both releases are out, and installed copies have not been told. The log says why: the release's installer could not be downloaded as it was signed, the branch is missing or the token may not push to it (§5.5), or the feed there already offers a newer version. Fix the cause and run the job again.
+- **`publish` fails at "Publish the Debian package".** Both releases are out; the apt repository and the Windows feed have not been told. The log gives the registry's answer: 401 or 403 means `PACKAGES_TOKEN` is wrong or may not write the owner's packages (§5.1). Fix it and run the job again.
+- **"… is not the release's package: the registry holds another file under this version".** The same step, after the upload: the registry already had this version, and what it serves is not the release's `.deb`. Either the builds were run again after an earlier `publish` had uploaded the first, or something else was uploaded under the version, or what answered was not the registry's file at all, a proxy's or a login page say; opening the address the log names shows which. Nothing was changed there. The clean way out is a new patch version, since a released version is never rebuilt (DESIGN.md §11.6). The other is to delete that version on the owner's Packages page and run the job again; a system that already installed the first file keeps it, since the version is the same.
+- **A warning "not compared" at that step.** The registry took the package, or had it, and the script could not read it back to compare. The release stands. Look at the package on the owner's Packages page; if this happens at every release, the address the script reads back from is not where this Forgejo serves a package's file (DESIGN.md §11.11).
 - **`publish` fails halfway.** Run the job again. It finds the release it already made and replaces the files of the same name; it does not touch a title or description that exists.
 - **"GitHub mirror: tag … is not at …"** The job waited ten minutes for the tag to arrive on GitHub. The Forgejo release is already published. Sync the push mirror (repository Settings → Mirror settings → Synchronize now), then run the job again.
 
@@ -133,19 +137,22 @@ To withdraw a release, delete it on both pages and then delete the tag.
 
 ### 5.1 Secrets
 
-Three secrets, under the repository's (or the owning account's) Settings → Actions → Secrets. `prepare` fails before anything is built if either token is missing.
+Four secrets, under the repository's (or the owning account's) Settings → Actions → Secrets. `prepare` fails before anything is built if one of the three tokens is missing.
 
 | Secret | What it is | Needs |
 | --- | --- | --- |
 | `RELEASE_TOKEN` | a Forgejo access token | `write:repository` |
 | `GH_RELEASE_TOKEN` | a GitHub token for `TheFlipside/code-plus-plus` | a fine-grained token for that one repository with Contents, read and write |
+| `PACKAGES_TOKEN` | a Forgejo access token of the repository's owner, for the apt repository | `write:package` and nothing else, if the token's scopes can be set so |
 | `UPDATE_SIGNING_KEY` | the private half of the key updates are signed with | the one line of the key file `winsparkle-tool generate-key` wrote: 32 bytes in base64 |
 
 A classic GitHub token with `public_repo` works too, but it can write to every public repository of the account, so prefer the fine-grained one.
 
-`prepare` only checks that the two tokens are set. The `publish` job uses them, on the `linux` runner; the build jobs never see them. `RELEASE_TOKEN` also commits the update feed to the `appcast` branch (§5.5).
+`prepare` only checks that the three tokens are set. The `publish` job uses them, on the `linux` runner; the build jobs never see them. `RELEASE_TOKEN` also commits the update feed to the `appcast` branch (§5.5).
 
-`UPDATE_SIGNING_KEY` is worth more than both tokens (DESIGN.md §11.7). A token that leaks is revoked; this key cannot be. Every installed copy accepts what it signs, and a copy learns of a new key only through an update signed with the old one.
+`PACKAGES_TOKEN` is a token of its own because of what it can do: `apt` installs what the registry holds, as root, on every system that has added the repository (DESIGN.md §11.9). Give it no scope but packages. If it belongs to another account than the repository's owner, set that account's name as `PACKAGES_USER` in the workflow step's `env`.
+
+`UPDATE_SIGNING_KEY` is worth more than the two release tokens (DESIGN.md §11.7). A token that leaks is revoked; this key cannot be. Every installed copy accepts what it signs, and a copy learns of a new key only through an update signed with the old one.
 
 - It reaches one step of `publish` and nothing else, `prepare` included, so a missing key stops a release only once the builds are done, though before anything is published.
 - Keep a copy offline, encrypted. Without the key no further update can be offered to the copies already installed.
@@ -207,6 +214,13 @@ Whoever can push to the branch decides what installed copies are offered. They c
 
 CI does not run for the branch: it builds pushes to `main` and pull requests into it. The push mirror carries the branch to GitHub; no installed copy asks GitHub.
 
+### 5.6 The apt repository
+
+Nothing has to be created: Forgejo makes the owner's Debian registry, and the key it signs the index with, on first use. Two things are done once by hand:
+
+- **After the first release, link the package to the repository**: on the owner's Packages page open `codepp`, and under its settings choose this repository. It then shows on the repository's page.
+- **Check the fingerprint in the README.** It is `342F 315B C347 A13C 5333  05FA 1E15 E729 5E09 D071`, as the instance served it on 13 November 2026. `curl -fsSL https://git.fiedler.live/api/packages/tux/debian/repository.key | gpg --show-keys --with-fingerprint` shows the current one. If the instance ever makes a new key, the README has to follow.
+
 ---
 
 ## 6. What the workflow checks
@@ -224,6 +238,7 @@ CI does not run for the branch: it builds pushes to `main` and pull requests int
 - **The version, again.** Both packaging scripts check the version they are given before using it, as `release-version.sh` did before them, since they can also be run by hand.
 - **The disk image.** `hdiutil verify`, after up to three attempts at creating it.
 - **The set of files.** `publish` requires exactly the eight files, by name, each a regular file.
+- **The Debian package's upload.** `publish_deb.py` uploads only the release's own `.deb`, by name, and takes only the registry's 201, or its 409 for a version that is already there, for done. It then reads the package back from the registry without a token and fails if the bytes are not the release's; if it cannot read it back at all, it warns and passes.
 - **The update key.** `update_feed.py sign` requires the public key derived from `UPDATE_SIGNING_KEY` to be the one the builds carry, and the signature it makes to verify against that key, before anything is published.
 - **The update feed.** `update_feed.py check`, in `prepare`, requires the `appcast` branch to exist and the address the builds are given to be where the feed is published. `update_feed.py publish` downloads the installer from the address the feed names and requires it to be the file that was signed, and refuses to replace a feed that offers a newer version.
 - **The mirror's tag**, as §5.2 describes.
@@ -233,7 +248,8 @@ CI does not run for the branch: it builds pushes to `main` and pull requests int
 ## 7. Not done yet
 
 - **Code signing.** No build is signed with a certificate, and neither is an installer. A certificate is also the first thing "Edit with Code++" would take to show in Windows 11's short context menu (DESIGN.md §7.4, the entry on "Edit with Code++"); the maintainer has put that off to a later time. Windows shows SmartScreen's prompt, and its administrator prompt names the `.msi` as from an unknown publisher; macOS refuses the first start until the user allows it. The release description tells testers how. The macOS bundle has an ad-hoc signature only, which Apple Silicon requires of every binary; the disk image itself is not signed.
-- **More packages.** No `.rpm`, AppImage or Flatpak, and no package repository to add to apt yet.
+- **More packages.** No `.rpm`, AppImage or Flatpak.
+- **The apt repository's first real run.** The upload has run against a stand-in for the registry only, and `apt` has not installed from it yet (DESIGN.md §11.11).
 - **More of the updater.** Only a Code++ the `.msi` installed for one account updates itself (§1.4). An installation for the whole machine, macOS and the `.deb` do not yet (DESIGN.md §11).
 - **The feed's first real run.** Signing and the commit to the `appcast` branch have run against a stand-in for the server only, and a manual run (§3) rehearses neither.
 - **More of the installers.** The Windows installer has WiX's stock pictures and English text only, offers no choice of folder or of what to set up, and does not check the Windows version: on Windows 8.1 or older it would install a program that cannot start. The `.deb` has no manual page, changelog or AppStream metadata, so a software centre shows it without a description page, and `lintian` would say so; it has not been run on it. The disk image has no background picture or arranged icons.

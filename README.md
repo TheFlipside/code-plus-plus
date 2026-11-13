@@ -56,6 +56,38 @@ The thesis: **performance is an architectural property, not a tuning result.** Y
 
 ---
 
+## Installing
+
+Releases are on the [releases page](https://git.fiedler.live/tux/code-plus-plus/releases): an installer and an archive for Windows, Linux and macOS each. The release's description says how to install each one.
+
+On Debian and Ubuntu, Code++ can also come from the project's apt repository, so that `apt upgrade` brings later versions. Add it once (the third command needs `gnupg`):
+
+```sh
+sudo install -d /etc/apt/keyrings
+sudo curl -fsSL https://git.fiedler.live/api/packages/tux/debian/repository.key -o /etc/apt/keyrings/codepp.asc
+gpg --show-keys --with-fingerprint /etc/apt/keyrings/codepp.asc
+```
+
+The last command shows what apt will trust for this repository. Go on only if it lists exactly one key, and that key's fingerprint is
+
+```text
+342F 315B C347 A13C 5333  05FA 1E15 E729 5E09 D071
+```
+
+and then:
+
+```sh
+echo "deb [signed-by=/etc/apt/keyrings/codepp.asc] https://git.fiedler.live/api/packages/tux/debian stable main" | sudo tee /etc/apt/sources.list.d/codepp.list
+sudo apt update
+sudo apt install codepp
+```
+
+The repository is the one Forgejo keeps for the account that hosts Code++, so apt will take from it whatever that account publishes there, not Code++ alone.
+
+Code++ never adds this repository by itself: a `.deb` downloaded from the releases page installs that one version and nothing more.
+
+---
+
 ## Getting Started
 
 For setup instructions on Windows, Linux, and macOS, see [DEVELOPMENT.md](docs/DEVELOPMENT.md).

@@ -23,8 +23,8 @@ on:
       - "v*"
   workflow_dispatch:
 
-# The release is written with the two tokens in `secrets`, not with the
-# run's own token, which therefore needs nothing beyond reading.
+# The release is written with the three tokens in `secrets`, not with
+# the run's own token, which therefore needs nothing beyond reading.
 permissions:
   contents: read
 
@@ -54,7 +54,7 @@ env:
 #     `--version` below, and WiX, which builds the Windows installer, by
 #     the version and the SHA-256 of its two package files in
 #     package-windows.ps1, which uses no cached copy of either.
-#   - The build jobs get no secrets. The two release tokens reach the
+#   - The build jobs get no secrets. The three tokens reach the
 #     Linux runner only: `prepare` checks that they are set and that
 #     the update feed has a branch to go to, and `publish` uses them.
 #     `publish` runs nothing a build produced; it only hashes, signs
@@ -119,9 +119,14 @@ jobs:
         env:
           RELEASE_TOKEN: ${{ secrets.RELEASE_TOKEN }}
           GH_RELEASE_TOKEN: ${{ secrets.GH_RELEASE_TOKEN }}
+          PACKAGES_TOKEN: ${{ secrets.PACKAGES_TOKEN }}
         run: |
           set -euo pipefail
           missing=0
+          if [ -z "${PACKAGES_TOKEN:-}" ]; then
+            echo "::error::the PACKAGES_TOKEN secret is not set (docs/RELEASING.md)" >&2
+            missing=1
+          fi
           if [ -z "${RELEASE_TOKEN:-}" ]; then
             echo "::error::the RELEASE_TOKEN secret is not set (docs/RELEASING.md)" >&2
             missing=1
@@ -304,8 +309,9 @@ jobs:
           if-no-files-found: error
 
   # Signs the Windows installer, publishes to Forgejo and then to the
-  # GitHub mirror, and last of all publishes the feed that offers the
-  # release to installed copies. Runs for a tag only, and only when
+  # GitHub mirror, puts the Debian package into the apt repository, and
+  # last of all publishes the feed that offers the release to installed
+  # copies. Runs for a tag only, and only when
   # every build succeeded: a release has all eight files or does not
   # exist. Every part can be run again for the same tag: each release
   # has its files replaced, and the feed is left alone when it already
@@ -453,6 +459,17 @@ jobs:
             gh release create "$TAG" --title "$RELEASE_NAME" \
               --notes-file release-notes.md release-files/*
           fi
+
+      # The apt repository Forgejo keeps for the owner (docs/DESIGN.md
+      # §11.9): whoever has added it gets this version from `apt
+      # upgrade`. A version is published there once; a second run finds
+      # the package and leaves it. Either way the package is then read
+      # back, and one that is not the release's fails the step. With a
+      # token of its own, which can write packages and nothing else.
+      - name: Publish the Debian package to the package registry
+        env:
+          PACKAGES_TOKEN: ${{ secrets.PACKAGES_TOKEN }}
+        run: python3 .forgejo/scripts/publish_deb.py "release-files/codepp-linux-amd64-$VERSION.deb"
 
       # Last, once both releases are out: from this commit on, installed
       # copies are offered the release. The script first downloads the

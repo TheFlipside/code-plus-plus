@@ -37,7 +37,7 @@ import urllib.parse
 import urllib.request
 import uuid
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 TIMEOUT_SECONDS = 300
 ERROR_BODY_CHARS = 2000
@@ -110,7 +110,7 @@ class Forgejo:
         """Make one request that must answer `expected`; return its body."""
         status, body = self._send(method, path, **kwargs)
         if status != expected:
-            raise PublishError(f"{what} failed: HTTP {status}\n{shown(body)}")
+            raise PublishError(f"{what} failed: HTTP {status}: {shown(body)}")
         return body
 
     def release_for_tag(self, tag: str) -> Optional[Dict[str, Any]]:
@@ -121,7 +121,7 @@ class Forgejo:
             return None
         if status != 200:
             what = f"looking up the release for {tag}"
-            raise PublishError(f"{what} failed: HTTP {status}\n{shown(body)}")
+            raise PublishError(f"{what} failed: HTTP {status}: {shown(body)}")
         return json_object(body)
 
     def create_release(
@@ -185,8 +185,17 @@ class Forgejo:
 
 
 def shown(body: bytes) -> str:
-    """A server's answer, cut short, for an error message."""
-    return body.decode("utf-8", errors="replace")[:ERROR_BODY_CHARS]
+    """A server's answer, cut short and on one line, for an error message.
+
+    On one line, and never at the start of one: the runner reads a line
+    of the log that begins with `::` as a command to itself, and the
+    answer is the server's text, not this script's.
+    """
+    text = body.decode("utf-8", errors="replace")[:ERROR_BODY_CHARS]
+    flat = " ".join(text.split())
+    # Nor does it get to restyle the log: an escape sequence or a
+    # character that reorders text is shown as a question mark.
+    return "".join(ch if ch.isprintable() else "?" for ch in flat)
 
 
 def json_object(body: bytes) -> Dict[str, Any]:
@@ -217,6 +226,54 @@ def env(name: str) -> str:
     if not value:
         raise PublishError(f"{name} is not set")
     return value
+
+
+def repo_parts(base_url: str, repo: str) -> Tuple[str, str]:
+    """Check FORGEJO_URL and REPO; return the repository's owner and name."""
+    parts = urllib.parse.urlsplit(base_url)
+    local = parts.hostname in LOCAL_HOSTS
+    if parts.scheme != "https" and not (parts.scheme == "http" and local):
+        what = "FORGEJO_URL must be an https URL"
+        raise PublishError(f"{what}, not {base_url!r}")
+    owner, slash, project = repo.partition("/")
+    if not owner or not slash or not project or "/" in project:
+        raise PublishError(f"REPO must be owner/name, not {repo!r}")
+    return owner, project
+
+
+def release_file(path: Path, expected: str) -> bytes:
+    """Read one of the release's files, which must be named `expected`.
+
+    It must be a regular file too: a link could name any file the
+    runner's account can read.
+    """
+    if path.name != expected:
+        raise PublishError(f"the file must be {expected}, not {path.name}")
+    try:
+        if path.is_symlink() or not path.is_file():
+            raise PublishError(f"{path} is not a regular file")
+        return path.read_bytes()
+    except OSError as error:
+        raise PublishError(str(error)) from error
+
+
+def guarded(script: str, step: Callable[[], int]) -> int:
+    """Run `step`; end any failure in one line and the exit status 1.
+
+    Anything unforeseen ends like any other failure, and says only what
+    kind it was: a traceback would show source lines of a process that
+    holds a token, or the update key, and an exception's own text is not
+    known to be free of either.
+    """
+    try:
+        return step()
+    except PublishError as error:
+        print(f"::error::{error}", file=sys.stderr)
+        return 1
+    except Exception as error:  # pylint: disable=broad-exception-caught
+        what = type(error).__name__
+        print(f"::error::{script} failed: {what}", file=sys.stderr)
+        return 1
 
 
 def publish(files_dir: Path, notes_file: Path) -> str:
@@ -253,18 +310,19 @@ def publish(files_dir: Path, notes_file: Path) -> str:
     return str(release.get("html_url", ""))
 
 
-def main(argv: List[str]) -> int:
-    """Run from the command line; return the exit status."""
+def _run(argv: List[str]) -> int:
+    """Do what the command line asks; return the exit status."""
     if len(argv) != 3:
         print(__doc__, file=sys.stderr)
         return 2
-    try:
-        url = publish(Path(argv[1]), Path(argv[2]))
-    except PublishError as error:
-        print(f"::error::{error}", file=sys.stderr)
-        return 1
+    url = publish(Path(argv[1]), Path(argv[2]))
     print(f"published {url}")
     return 0
+
+
+def main(argv: List[str]) -> int:
+    """Run from the command line; return the exit status."""
+    return guarded("publish_forgejo.py", lambda: _run(argv))
 
 
 if __name__ == "__main__":
