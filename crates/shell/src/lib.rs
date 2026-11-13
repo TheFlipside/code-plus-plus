@@ -2234,10 +2234,11 @@ pub struct Shell {
     kept_backups: HashSet<String>,
     /// Whether [`Self::on_disk_backups`] says what the `session.xml` on disk
     /// names: true once the startup restore has read it or a save has
-    /// written it. Without either (Win32 skips the restore when started
-    /// with a path, and a `session.xml` that cannot be read names nothing
-    /// anyone can tell), a failed save keeps every backup the folder held
-    /// before this run's saves ([`Self::keep_every_backup`]).
+    /// written it. Without either (a backend that starts without the
+    /// restore, as Win32 did when started with a path, and a `session.xml`
+    /// that cannot be read, which names nothing anyone can tell), a failed
+    /// save keeps every backup the folder held before this run's saves
+    /// ([`Self::keep_every_backup`]).
     on_disk_known: bool,
     /// Whether [`Self::keep_every_backup`] has run. It looks at the folder
     /// once: a later look would keep the backups this run's saves wrote
@@ -27727,7 +27728,7 @@ mod tests {
     }
 
     /// Save after save whose `session.xml` cannot be written, with no
-    /// session read at startup (Win32 started with a path): what the folder
+    /// session read at startup (as Win32 once started with a path): what the folder
     /// held before is kept, and of this run's backups only the newest.
     /// Before, each failed save kept its own set for the rest of the run.
     #[test]
@@ -29601,7 +29602,7 @@ mod tests {
         assert!(reads.claimed.is_empty(), "a failed read is not a claim");
     }
 
-    /// With no restore this run (Win32 started with a path) a failed
+    /// With no restore this run (as Win32 once started with a path) a failed
     /// `session.xml` write still keeps the backups the `session.xml` on disk
     /// names: nothing in memory says which they are.
     #[test]

@@ -95,6 +95,7 @@
 mod dialog_text;
 mod dlgtemplate;
 mod dock_panels;
+mod instance;
 mod preferences;
 mod print;
 mod print_preview;
@@ -264,11 +265,11 @@ use windows::Win32::UI::WindowsAndMessaging::{
     MIIM_STATE, MSG, PRF_CLIENT, PRF_ERASEBKGND, SHOW_WINDOW_CMD, SWP_FRAMECHANGED, SWP_NOMOVE,
     SWP_NOSIZE, SWP_NOZORDER, SW_HIDE, SW_SHOW, SW_SHOWMAXIMIZED, SW_SHOWNORMAL, TPM_BOTTOMALIGN,
     TPM_LEFTALIGN, TPM_RETURNCMD, TPM_RIGHTBUTTON, WINDOW_EX_STYLE, WINDOW_LONG_PTR_INDEX,
-    WINDOW_STYLE, WM_APP, WM_CAPTURECHANGED, WM_CHAR, WM_CLOSE, WM_COMMAND, WM_CTLCOLOREDIT,
-    WM_CTLCOLORLISTBOX, WM_CTLCOLORSTATIC, WM_DESTROY, WM_DRAWITEM, WM_DROPFILES, WM_ERASEBKGND,
-    WM_HSCROLL, WM_INITDIALOG, WM_INITMENUPOPUP, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE,
-    WM_MOUSEWHEEL, WM_NCCREATE, WM_NCDESTROY, WM_NOTIFY, WM_PAINT, WM_PRINTCLIENT, WM_QUIT,
-    WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SETCURSOR, WM_SETFOCUS, WM_SETFONT, WM_SETREDRAW,
+    WINDOW_STYLE, WM_APP, WM_CAPTURECHANGED, WM_CHAR, WM_CLOSE, WM_COMMAND, WM_COPYDATA,
+    WM_CTLCOLOREDIT, WM_CTLCOLORLISTBOX, WM_CTLCOLORSTATIC, WM_DESTROY, WM_DRAWITEM, WM_DROPFILES,
+    WM_ERASEBKGND, WM_HSCROLL, WM_INITDIALOG, WM_INITMENUPOPUP, WM_LBUTTONDOWN, WM_LBUTTONUP,
+    WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NCCREATE, WM_NCDESTROY, WM_NOTIFY, WM_PAINT, WM_PRINTCLIENT,
+    WM_QUIT, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SETCURSOR, WM_SETFOCUS, WM_SETFONT, WM_SETREDRAW,
     WM_SETTINGCHANGE, WM_SIZE, WM_TIMER, WNDCLASSEXW, WS_BORDER, WS_CAPTION, WS_CHILD,
     WS_CLIPCHILDREN, WS_EX_APPWINDOW, WS_EX_CLIENTEDGE, WS_EX_CONTROLPARENT, WS_EX_DLGMODALFRAME,
     WS_EX_LAYERED, WS_EX_STATICEDGE, WS_EX_TOOLWINDOW, WS_EX_WINDOWEDGE, WS_GROUP, WS_HSCROLL,
@@ -9232,8 +9233,9 @@ fn active_buffer_is_pristine(state: &WindowState) -> bool {
 }
 
 /// Open `path` on behalf of a *user gesture* — the single shell call
-/// behind File → Open, drag-and-drop, the recent-files region, and
-/// both Workspace-tree opens — measuring the editor first so the shell
+/// behind File → Open, drag-and-drop, the recent-files region, both
+/// Workspace-tree opens, and a file another start of Code++ hands over
+/// ([`instance`]) — measuring the editor first so the shell
 /// can consume an untouched `new 1` rather than open beside it.
 ///
 /// Returns the shell's [`OpenFileOutcome`] so the caller can rebind the
@@ -17615,11 +17617,41 @@ fn build_default_accel_table() -> Vec<ACCEL> {
 
 /// Run the Code++ Win32 event loop. Blocks until the user exits.
 ///
-/// `initial_path` (if `Some`) is queued for opening immediately after
-/// the window is shown — same code path as drag-and-drop and as
-/// session-restore. Used for Phase 2 demo verification and for
-/// `codepp.exe <path>` from the shell.
+/// `initial_path` (if `Some`) is the file `codepp.exe <path>` names:
+/// what Explorer's "Edit with Code++" and "Open with" start, and a
+/// terminal. When a Code++ is already running on this configuration
+/// folder it is handed to that one, and this call returns without
+/// opening a window ([`instance`]). Otherwise the last session is
+/// restored and the file opened beside it, in front.
+///
+/// # Errors
+///
+/// A failure to create the window or one of its controls, and a
+/// running Code++ that did not take the start.
 pub fn run(initial_path: Option<PathBuf>, perf: codepp_core::perf::Perf) -> Result<()> {
+    // Absolute before anything reads it: a running instance would read
+    // a relative path from its own working folder, and a tab is found
+    // again by its path as written (`Shell::tab_for_path`), so
+    // `notes.txt` and its full path would be two tabs on one file.
+    let initial_path = initial_path.map(|path| std::path::absolute(&path).unwrap_or(path));
+    // Before any window exists, and before anything that costs: a
+    // second start ends here.
+    match instance::start(initial_path.as_deref()) {
+        instance::Start::First => {}
+        instance::Start::Forwarded => return Ok(()),
+        instance::Start::Refused(why) => {
+            // Started from Explorer there is no terminal to say it in.
+            let text = HSTRING::from(why.as_str());
+            // SAFETY: both strings outlive the call; no owner window.
+            unsafe {
+                MessageBoxW(None, &text, w!("Code++"), MB_OK | MB_ICONWARNING);
+            }
+            return Err(windows::core::Error::new(
+                windows::Win32::Foundation::E_FAIL,
+                why,
+            ));
+        }
+    }
     let perf = std::rc::Rc::new(perf);
     unsafe {
         let instance = GetModuleHandleW(None)?;
@@ -17724,6 +17756,10 @@ pub fn run(initial_path: Option<PathBuf>, perf: codepp_core::perf::Perf) -> Resu
             Some(instance.into()),
             None,
         )?;
+        // From here a second start can find this window and hand its
+        // file over; what arrives before the message loop runs waits
+        // in the queue.
+        instance::mark_window(main_hwnd);
 
         // Status bar — auto-anchored to the bottom by the SB_RESIZE
         // pattern (parent WM_SIZE forwards to the status bar so it
@@ -18573,17 +18609,20 @@ pub fn run(initial_path: Option<PathBuf>, perf: codepp_core::perf::Perf) -> Resu
         });
 
         // Resolve the initial files:
-        //   1. Explicit CLI argument wins (manual override / test path).
-        //      Single file → single open.
-        //   2. Otherwise, restore *every* tab from session.xml in its
-        //      stored order, then override `active_tab` to the
-        //      session's recorded active index. Without the override
+        //   1. Restore *every* tab from session.xml in its stored
+        //      order, then override `active_tab` to the session's
+        //      recorded active index. Without the override
         //      `open_file` would always end with the last-pushed tab
         //      active, regardless of which one the user had focused
         //      before shutdown.
-        if let Some(path) = initial_path {
-            state.shell.open_file(path);
-        } else {
+        //   2. Then the file named on the command line, if any, so
+        //      that it ends up in front: what `ui_gtk` and `ui_cocoa`
+        //      do. Until "Edit with Code++" this backend opened that
+        //      file *instead of* the session, and its first save then
+        //      wrote a session of that one file and pruned the
+        //      backups of every buffer the last session had left
+        //      unsaved.
+        {
             // Load every restorable tab from session.xml and dispatch
             // per variant: saved files are queued for async open via
             // the loader (same path as user-initiated open); untitled
@@ -18692,6 +18731,21 @@ pub fn run(initial_path: Option<PathBuf>, perf: codepp_core::perf::Perf) -> Resu
                         "session.xml active index out of range; using last-restored tab",
                     );
                 }
+            }
+        }
+        // `codepp file.txt`. The plain `open_file`, as for the session:
+        // no `new 1` exists yet for the scratch-replacing open to
+        // consume (`ensure_one_tab` seeds it below, only when nothing
+        // was opened), and against a restored session its lone-tab
+        // gate declines anyway.
+        if let Some(path) = initial_path {
+            let outcome = state.shell.open_file(path);
+            if matches!(outcome, OpenFileOutcome::SwitchedToExisting(_)) {
+                // The session had the file open already: the shell
+                // moved the front to its tab and no load will arrive
+                // to bind the view to it.
+                let (shell, mut ui) = state.split();
+                shell.bind_active_view(&mut ui);
             }
         }
 
@@ -26154,6 +26208,16 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                 }
                 LRESULT(0)
             }
+            // Another start of Code++ on this configuration folder
+            // hands its file over (`instance`). The first arm only
+            // queues it, since a sent message is dispatched wherever
+            // this thread happens to be; the second, posted by the
+            // first, opens it.
+            WM_COPYDATA => instance::on_copydata(hwnd, lparam),
+            instance::WM_APP_FORWARDED => {
+                instance::on_forwarded(hwnd);
+                LRESULT(0)
+            }
             WM_DROPFILES => {
                 // Dragging files onto an untouched "new 1" replaces it
                 // rather than piling up alongside — the same rule File
@@ -27891,6 +27955,12 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                     save_session_now(hwnd);
                     return LRESULT(0);
                 }
+                if wparam.0 == instance::FORWARDED_TIMER_ID {
+                    // A file another start handed over is still
+                    // waiting for the window to be free to open it.
+                    instance::on_forwarded(hwnd);
+                    return LRESULT(0);
+                }
                 DefWindowProcW(hwnd, msg, wparam, lparam)
             }
             WM_ERASEBKGND => {
@@ -27948,6 +28018,10 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                 // reaching into a torn-down tree HWND is UB.
                 let _ = KillTimer(Some(hwnd), AUTOSAVE_TIMER_ID);
                 let _ = KillTimer(Some(hwnd), WORKSPACE_UNFOLD_TIMER_ID);
+                let _ = KillTimer(Some(hwnd), instance::FORWARDED_TIMER_ID);
+                // No later start is sent to this window: one made from
+                // now on waits for the instance lock, let go below.
+                instance::unmark_window();
                 // The window going is the quit begun, whoever destroyed
                 // it: `quit` raised this already, and a plugin calling
                 // `DestroyWindow` itself raises it here, so every quit
@@ -27996,6 +28070,17 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                         );
                     }
                 }
+
+                // The session is on disk, so the next Code++ may start:
+                // a start that was waiting for this one becomes the
+                // instance now and restores what was just saved. Not
+                // any earlier, or it would read the session from before
+                // this save; and not left to the end of the process,
+                // which still waits for a file read in flight to
+                // return. And whatever another start handed over that
+                // the quit kept from opening gets a Code++ of its own.
+                instance::release();
+                instance::restart_for_unopened();
 
                 // Free the toolbar's image list. The OS would
                 // reclaim it at process exit anyway, but explicit

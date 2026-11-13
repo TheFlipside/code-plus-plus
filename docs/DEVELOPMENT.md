@@ -754,6 +754,19 @@ terminal, and Ctrl+C there or closing the terminal does not end it; with
 `--verbose`, `--perf` or `CODEPP_LOG` both do. A panic joins the
 terminal to print its message, in a plain run too.
 
+On Windows one Code++ runs for each configuration folder: a second
+start hands its file to the first and exits (DESIGN.md §7.4, the entry
+on "Edit with Code++"). So a `codepp` started while a Code++ on the
+same folder is open, the installed one included, opens no window of its
+own. `cargo run -p codepp-app` then brings the other one to the front,
+`--perf` measures nothing, and with `--verbose` the one line logged
+says the start was handed over. To run a build beside the Code++ you
+work in, give it a configuration folder of its own, as every scripted
+run has: set `APPDATA` to a scratch folder for that process. The
+Code++ that runs holds `instance-<machine>-s<N>.lock` in its folder
+open, `N` being the Windows session's number. The file stays when
+Code++ has gone, and nothing is wrong with one that is left.
+
 `CODEPP_LOG` *overrides* `--verbose` rather than adding to it, so
 combining a narrow filter with `--perf` silently drops the
 measurements — name the target explicitly if you want both:

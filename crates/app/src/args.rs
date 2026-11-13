@@ -51,7 +51,9 @@ USAGE:
     codepp [OPTIONS] [FILE]
 
 ARGS:
-    <FILE>    File to open at startup.
+    <FILE>    File to open, beside the files of the last session. On
+              Windows, when Code++ is already running, the file opens
+              there as a new tab and this start exits.
 
 OPTIONS:
     -v, --verbose    Log diagnostics to stderr at `info` level.

@@ -269,6 +269,7 @@ $registryKeysAllowed = @(
     '\ASoftware\\Microsoft\\Windows\\CurrentVersion\\App Paths\\codepp\.exe\z',
     '\ASoftware\\Classes\\Applications\\codepp\.exe(\\shell\\open\\command)?\z',
     '\ASoftware\\Classes\\Codepp\.Document\\shell\\open\\command\z',
+    '\ASoftware\\Classes\\\*\\shell\\EditWithCodepp(\\command)?\z',
     '\ASoftware\\Classes\\\.[a-z0-9]+\\OpenWithProgids\z',
     '\ASoftware\\Code\+\+\\Installer\z')
 

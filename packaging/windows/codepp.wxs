@@ -17,11 +17,12 @@
   the folder the zip is made from, and one holding License.rtf.
 
   What it installs: the files, into Program Files\Code++; a Start Menu
-  entry; `codepp` as a name Win+R and `start` find (App Paths); and
-  Code++ in Explorer's "Open with" menu for the text file types listed
-  below. It makes Code++ the default for none of them. Nothing here
-  touches the user's settings in %APPDATA%\Code++, which an uninstall
-  therefore leaves.
+  entry; `codepp` as a name Win+R and `start` find (App Paths); "Edit
+  with Code++" in Explorer's context menu for every file; and Code++ in
+  Explorer's "Open with" menu for the text file types listed below. It
+  makes Code++ the default for none of them. Nothing here touches the
+  user's settings in %APPDATA%\Code++, which an uninstall therefore
+  leaves.
 -->
 <Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
      xmlns:ui="http://wixtoolset.org/schemas/v4/wxs/ui">
@@ -133,6 +134,32 @@
                        Key="Software\Microsoft\Windows\CurrentVersion\App Paths\codepp.exe"
                        Type="string"
                        Value="[#CodeppExe]" />
+
+        <!--
+          "Edit with Code++", in the context menu of every file: `*` is
+          the class every file belongs to, whatever its type and with
+          no type at all. A folder is not a file and does not get it.
+
+          A plain verb, so Explorer starts `codepp.exe` once for each
+          selected file. The first start becomes the window and each of
+          the others hands its file to it (crates/ui_win32/src/
+          instance.rs), as every start does when Code++ is running.
+          `MultiSelectModel` says the verb takes any number of files:
+          without it Explorer leaves the entry out of the menu once 16
+          files or more are selected (measured).
+
+          On Windows 11 this is the menu behind "Show more options",
+          which Shift+right-click opens directly. The short menu shown
+          first takes entries only from a signed app package, which
+          Code++ does not have (DESIGN.md §7.4, the entry on "Edit with
+          Code++").
+        -->
+        <RegistryKey Root="HKMU" Key="Software\Classes\*\shell\EditWithCodepp">
+          <RegistryValue Type="string" Value="Edit with Code++" />
+          <RegistryValue Name="Icon" Type="string" Value="[#CodeppExe]" />
+          <RegistryValue Name="MultiSelectModel" Type="string" Value="Player" />
+          <RegistryValue Key="command" Type="string" Value="&quot;[#CodeppExe]&quot; &quot;%1&quot;" />
+        </RegistryKey>
 
         <!--
           "Open with". Three parts, none of which makes Code++ the
