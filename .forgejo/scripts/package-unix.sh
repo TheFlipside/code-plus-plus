@@ -119,12 +119,14 @@ case "$target" in
 
     # The Debian package.
     #
-    # dpkg orders versions by its own rules, under which `0.1.0-alpha.2`
-    # is a later version than `0.1.0`: it reads the hyphen as the start
-    # of a package revision. A tilde sorts before everything, the end of
-    # the version included, so `0.1.0~alpha.2` comes before `0.1.0`, as
-    # a pre-release must for the release to upgrade it. A hyphen further
-    # on would be read as a revision again, so those become dots.
+    # A release's version is plain. A manual run's build has a part
+    # after it, `0.2.0-dev.2f20913`, and dpkg orders versions by its own
+    # rules, under which that is a later version than `0.2.0`: it reads
+    # the hyphen as the start of a package revision. A tilde sorts
+    # before everything, the end of the version included, so
+    # `0.2.0~dev.2f20913` comes before `0.2.0`, as such a build must for
+    # the release to upgrade it. A hyphen further on would be read as a
+    # revision again, so those become dots.
     upstream="${version%%-*}"
     if [ "$upstream" = "$version" ]; then
       deb_version="$version"
@@ -291,7 +293,7 @@ EOF
     copy_licences "$app/Contents/Resources"
 
     # CFBundleVersion takes numbers and dots only, so it gets the
-    # version without its pre-release part.
+    # version without the part a manual run's build has after x.y.z.
     cat > "$app/Contents/Info.plist" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">

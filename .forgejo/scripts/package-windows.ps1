@@ -346,8 +346,8 @@ $registryKeysAllowed = @(
     '\ASoftware\\Code\+\+\\Installer\z')
 
 # Windows Installer takes a version of numbers only, so the installer
-# gets the version without its pre-release part, and says the whole of
-# it in its name instead. Each of the three numbers has an upper bound.
+# gets the version without the part a manual run's build has after
+# x.y.z, and says the whole of it in its name instead. Each of the three numbers has an upper bound.
 $productVersion = ($version -split '-', 2)[0]
 if ($productVersion -notmatch '\A([0-9]{1,5})\.([0-9]{1,5})\.([0-9]{1,5})\z' -or
     [int]$Matches[1] -gt 255 -or [int]$Matches[2] -gt 255 -or [int]$Matches[3] -gt 65535) {

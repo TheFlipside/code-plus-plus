@@ -5,12 +5,14 @@
 
   The script passes four variables:
 
-    ProductName     "Code++", or "Code++ <version>" for a pre-release, so
-                    that the list of installed apps says which build a
-                    tester has
+    ProductName     "Code++", or "Code++ <version>" for a build whose
+                    version has a part after x.y.z, which a manual run
+                    of the release workflow makes, so that the list of
+                    installed apps says which build it is
     ProductVersion  the x.y.z of the version: Windows Installer takes
                     numbers only
-    FullVersion     the whole version, pre-release part included
+    FullVersion     the whole version, with the part a manual run's
+                    build has after x.y.z
     Icon            the path of assets/code++.ico
 
   and three bind paths: the folder holding the files to install, which
@@ -46,9 +48,10 @@
 
     <!--
       Installing replaces whatever Code++ is there. Same-version
-      upgrades are allowed because every pre-release of one version has
-      the same x.y.z: 0.1.0-alpha.2 must be able to replace
-      0.1.0-alpha.1. An older x.y.z over a newer one is refused.
+      upgrades are allowed because every build of one version has the
+      same x.y.z: a manual run's 0.2.0-dev.<commit> must be able to
+      replace another, and the release 0.2.0 either. An older x.y.z
+      over a newer one is refused.
     -->
     <MajorUpgrade AllowSameVersionUpgrades="yes"
                   DowngradeErrorMessage="A newer version of Code++ is already installed. Uninstall it first to install this one." />
@@ -58,7 +61,7 @@
       Write every file, whatever is in the folder. By default Windows
       Installer keeps an existing file whose version is not older than
       the one it brings, and the plugin DLLs say 0.1.0.0 in every
-      pre-release of 0.1.0. Replacing an installed Code++ is not
+      build of 0.1.0. Replacing an installed Code++ is not
       affected, since that removes the old files first; but installed
       over a folder the zip was once extracted into, the default left
       the old plugin DLLs beside the new executable (measured). `a` in

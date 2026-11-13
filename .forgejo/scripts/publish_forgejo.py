@@ -14,7 +14,6 @@ the token never appears on a command line:
     TAG           the tag the release is for; it must exist already
     TOKEN         an access token that may write to the repository
     RELEASE_NAME  the release's title
-    PRERELEASE    "true" to mark it a pre-release
 
 Running it again for the same tag is safe: the release is found rather
 than created, its title and description are left as they are (they may
@@ -126,15 +125,22 @@ class Forgejo:
         return _json_object(body)
 
     def create_release(
-        self, tag: str, name: str, notes: str, prerelease: bool
+        self,
+        tag: str,
+        name: str,
+        notes: str,
     ) -> Dict[str, Any]:
-        """Create the release for `tag`, which must exist, and return it."""
+        """Create the release for `tag`, which must exist, and return it.
+
+        Never as a pre-release: a release has a plain version, and the
+        workflow publishes no other (docs/DESIGN.md, section 11.6).
+        """
         payload = {
             "tag_name": tag,
             "name": name,
             "body": notes,
             "draft": False,
-            "prerelease": prerelease,
+            "prerelease": False,
         }
         body = self._expect(
             f"creating the release for {tag}",
@@ -230,8 +236,7 @@ def publish(files_dir: Path, notes_file: Path) -> str:
     if release is None:
         print(f"creating release {tag}")
         name = _env("RELEASE_NAME")
-        prerelease = os.environ.get("PRERELEASE") == "true"
-        release = forgejo.create_release(tag, name, notes, prerelease)
+        release = forgejo.create_release(tag, name, notes)
     else:
         print(f"release {tag} exists; replacing its files")
     release_id = release.get("id")

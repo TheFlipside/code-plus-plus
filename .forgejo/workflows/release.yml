@@ -2,13 +2,13 @@ name: Release
 
 # Builds and publishes a release when a version tag is pushed:
 #
-#     git tag v0.1.0-alpha.1
-#     git push origin v0.1.0-alpha.1
+#     git tag v0.2.0
+#     git push origin v0.2.0
 #
-# The tag must be `v` + the version in Cargo.toml, optionally followed
-# by `-<pre-release>`; a tag with a pre-release part is published as a
-# pre-release. docs/RELEASING.md has the whole procedure, the secrets
-# this needs and what each runner must have installed.
+# The tag must be `v` + the version in Cargo.toml, and nothing more: a
+# release has a plain version (docs/DESIGN.md §11.6).
+# docs/RELEASING.md has the whole procedure, the secrets this needs and
+# what each runner must have installed.
 #
 # Each platform gets an archive to unpack and a package to install: a
 # zip and an .msi for Windows, a tarball and a .deb for Linux, a zip and
@@ -48,9 +48,9 @@ env:
 #     Linux runner only: one step of `prepare` checks that they are
 #     set, and `publish` uses them. `publish` runs nothing a build
 #     produced; it only hashes and uploads the files.
-#   - Nothing from the tag reaches a shell as text. `prepare` checks the
-#     tag against a strict pattern and hands the version on; steps read
-#     it from the environment.
+#   - Nothing from the tag reaches a shell as text. `prepare` checks
+#     that the tag is exactly `v` + Cargo.toml's x.y.z and hands the
+#     version on; steps read it from the environment.
 
 jobs:
   # Decides the version, refuses a tag that does not match Cargo.toml,
@@ -61,7 +61,6 @@ jobs:
     runs-on: linux
     outputs:
       version: ${{ steps.version.outputs.version }}
-      prerelease: ${{ steps.version.outputs.prerelease }}
       publish: ${{ steps.version.outputs.publish }}
     steps:
       # The whole history, for the check below that the tag is on main.
@@ -287,7 +286,6 @@ jobs:
     env:
       TAG: ${{ github.ref_name }}
       VERSION: ${{ needs.prepare.outputs.version }}
-      PRERELEASE: ${{ needs.prepare.outputs.prerelease }}
     steps:
       # The whole history, for the list of changes in the notes.
       - name: Checkout (pinned to actions/checkout v4.3.1)
@@ -351,7 +349,7 @@ jobs:
       - name: Write the release notes
         run: |
           set -euo pipefail
-          bash .forgejo/scripts/release-notes.sh "$TAG" "$VERSION" "$PRERELEASE" > release-notes.md
+          bash .forgejo/scripts/release-notes.sh "$TAG" "$VERSION" > release-notes.md
           cat release-notes.md
 
       - name: Publish the Forgejo release
@@ -410,9 +408,6 @@ jobs:
             cat gh-error.txt >&2
             echo "::error::could not look up the GitHub release for $TAG" >&2
             exit 1
-          elif [ "$PRERELEASE" = true ]; then
-            gh release create "$TAG" --title "$RELEASE_NAME" \
-              --notes-file release-notes.md --prerelease release-files/*
           else
             gh release create "$TAG" --title "$RELEASE_NAME" \
               --notes-file release-notes.md release-files/*

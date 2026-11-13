@@ -54,10 +54,10 @@ pub use view_position::{
 ///
 /// It is the workspace version from `Cargo.toml`, unless the build was
 /// given `CODEPP_RELEASE_VERSION`. The release workflow sets that to the
-/// version of the tag it builds (`.forgejo/workflows/release.yml`), so a
-/// pre-release tagged `v0.1.0-alpha.2` says `0.1.0-alpha.2` where
-/// `Cargo.toml` says `0.1.0`, and a tester's report names the build it
-/// is about. An empty value counts as unset.
+/// version it builds (`.forgejo/workflows/release.yml`): for a release,
+/// `Cargo.toml`'s own; for a manual run on a branch, that version with
+/// `-dev.<commit>` after it, so that a report about such a build names
+/// the commit it was made from. An empty value counts as unset.
 pub const VERSION: &str = release_version(option_env!("CODEPP_RELEASE_VERSION"));
 
 /// [`VERSION`]'s rule, taking what the build was given.

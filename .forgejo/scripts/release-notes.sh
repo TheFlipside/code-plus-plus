@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Write a release's description, in Markdown, to stdout.
 #
-#   release-notes.sh <tag> <version> <prerelease>
+#   release-notes.sh <tag> <version>
 #
-# e.g.  release-notes.sh v0.1.0-alpha.2 0.1.0-alpha.2 true
+# e.g.  release-notes.sh v0.2.0 0.2.0
 #
 # The same text goes on the Forgejo release and the GitHub one. It says
 # which files are for which platform, how to install or start an
@@ -15,20 +15,12 @@
 
 set -euo pipefail
 
-[ "$#" -eq 3 ] || {
-  echo "usage: release-notes.sh <tag> <version> <prerelease>" >&2
+[ "$#" -eq 2 ] || {
+  echo "usage: release-notes.sh <tag> <version>" >&2
   exit 2
 }
 tag="$1"
 version="$2"
-prerelease="$3"
-
-if [ "$prerelease" = true ]; then
-  cat <<EOF
-This is a pre-release build of Code++ for testers. Expect rough edges, and keep copies of files you care about.
-
-EOF
-fi
 
 cat <<EOF
 ## Downloads
@@ -58,7 +50,8 @@ EOF
 # whether or not the checkout made a local tag for it.
 # This release's own tag is left out by name rather than by starting at
 # HEAD^, so that an earlier tag on the same commit still counts: v0.1.0
-# tagged on the commit that was v0.1.0-rc.2 has nothing new to list.
+# tagged on the commit that was v0.1.0-alpha.1, a tag from before
+# releases had plain versions only, has nothing new to list.
 previous=$(git describe --tags --abbrev=0 --match 'v[0-9]*' --exclude "$tag" HEAD 2>/dev/null || true)
 if [ -n "$previous" ]; then
   echo

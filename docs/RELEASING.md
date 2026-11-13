@@ -36,8 +36,8 @@ Built by `.forgejo/scripts/package-windows.ps1` from `packaging/windows/codepp.w
 - **Where.** `C:\Program Files\Code++`, for every account of the machine, so Windows asks for administrator rights once. The installer has one page, the licence, and an Install button. It does not ask for the folder, because nothing would remember the answer for the next version's installer. `INSTALLFOLDER=<folder>` on `msiexec`'s command line puts Code++ elsewhere, and must be given again at each upgrade. Whoever does that for the whole machine should choose a folder that only administrators can write to: the Start Menu entry, "Edit with Code++" and "Open with" of every account will start what is in it.
 - **What else.** A Start Menu entry. `codepp` as a name Win+R and `start` find. "Edit with Code++" in Explorer's context menu for every file, of any type or none, for one file or many. Code++ in Explorer's "Open with" menu for 34 text and source file types, which the `.wxs` lists; it becomes the default for none of them.
 - **Where "Edit with Code++" shows.** On Windows 10, in the context menu. On Windows 11, in the menu behind "Show more options", which Shift+right-click opens directly; the short menu Windows 11 shows first takes entries only from a signed app package, which Code++ does not have (DESIGN.md §7.4, the entry on "Edit with Code++"). The zip sets up none of this.
-- **Upgrades.** Installing a build replaces the one that is installed. Windows Installer versions are numbers only, so every pre-release of `0.1.0` is version `0.1.0` to it, and the installer lets a build replace another of the same `x.y.z`: `0.1.0-alpha.2` replaces `0.1.0-alpha.1`, and the other way round. So does a pre-release over the release it led to: `0.1.0-alpha.2` installed over `0.1.0` replaces it, without a word. It refuses to replace a newer `x.y.z` with an older one.
-- **The name.** A pre-release is listed among the installed apps as "Code++ 0.1.0-alpha.2", since its version column can only say 0.1.0. A release is listed as "Code++".
+- **Upgrades.** Installing a build replaces the one that is installed. Windows Installer versions are numbers only, so a rehearsal build `0.2.0-dev.2f20913` (§3) is version `0.2.0` to it, and the installer lets a build replace another of the same `x.y.z`: one rehearsal build replaces another, and either replaces the release `0.2.0` or is replaced by it, without a word. It refuses to replace a newer `x.y.z` with an older one.
+- **The name.** A rehearsal build is listed among the installed apps as "Code++ 0.2.0-dev.2f20913", since its version column can only say 0.2.0. A release is listed as "Code++".
 - **Removal.** Settings → Apps. It removes what the installer put there and leaves the user's settings in `%APPDATA%\Code++`.
 - **The updater's library.** The installer puts one file beside `codepp.exe` that the zip does not have: `WinSparkle.dll`, WinSparkle 0.9.4's own x64 build, with which an installed Code++ checks for updates (DESIGN.md §11). Code++ loads it only if its build was given a feed and a key, which no release build is yet, and only in an installation for one account (DESIGN.md §11.4); until then the file is installed and never used. `THIRD_PARTY_LICENSES.md` §1.4 has its notices and those of the libraries built into it.
 - **Without administrator rights.** `msiexec /i <file> MSIINSTALLPERUSER=1 ALLUSERS=2` installs for the current account alone, into `%LOCALAPPDATA%\Programs\Code++`, with the same Start Menu entry, "Edit with Code++" and "Open with" entries under that account. An installation of one kind does not see one of the other: installing for the machine does not replace a per-account installation.
@@ -57,7 +57,7 @@ Built by `.forgejo/scripts/package-unix.sh` with `dpkg-deb`.
 | `/usr/share/doc/codepp/` | `copyright` and the two third-party notices |
 
 - **Dependencies.** `dpkg-shlibdeps` works them out on the runner: the package of each library the binaries load, with the oldest version that has the symbols they use. So the package names and versions are those of the `linux` runner's distribution, and apt refuses the package on an older system, where the binary could not start, rather than installing it.
-- **The version.** dpkg orders versions by its own rules, under which `0.1.0-alpha.2` would be newer than `0.1.0`. The package's version therefore has a tilde where the tag has its first hyphen, `0.1.0~alpha.2`, which sorts before `0.1.0`. The file keeps the tag's version in its name, like the other seven.
+- **The version.** A release's package has the release's version. A rehearsal build's (§3) has a hyphen in it, and dpkg orders versions by its own rules, under which `0.2.0-dev.2f20913` would be newer than `0.2.0`. Such a package's version therefore has a tilde where the build's has its first hyphen, `0.2.0~dev.2f20913`, which sorts before `0.2.0`. The file keeps the build's version in its name, like the other seven.
 - **No scripts.** The package runs nothing at install or removal. The menu and the icon cache are refreshed by the triggers of the packages that own them.
 - **The window icon.** Code++ asks GTK for the icon named `codepp`, so its windows show it once the package has installed it. Run from the tarball, they show the desktop's default icon.
 
@@ -71,28 +71,24 @@ Built by `.forgejo/scripts/package-unix.sh` with `hdiutil`: the same signed `Cod
 
 1. **Pick a commit on `main` whose CI run is green.** The release workflow builds and packages; it does not run the tests again. It does check that `main` contains the tagged commit, and refuses a tag anywhere else.
 
-2. **Choose the tag.** It is `v` plus the version in `Cargo.toml` (`[workspace.package].version`), optionally followed by a pre-release part:
+2. **Set the version.** A release's version is the one in `Cargo.toml`, and every release has its own: `0.2.0`, then `0.2.1` or `0.3.0`. `Cargo.toml` says where: `[workspace.package].version` and the `version` of every internal crate under `[workspace.dependencies]`. Build once so that `Cargo.lock` follows, and commit the three together: the release builds with `--locked` and fails on a `Cargo.lock` that is behind.
 
-   | `Cargo.toml` | Tag | Published as |
+3. **Tag and push.** The tag is `v` plus that version, and nothing more:
+
+   | `Cargo.toml` | Tag | |
    | --- | --- | --- |
-   | `0.1.0` | `v0.1.0-alpha.1`, `v0.1.0-alpha.2`, `v0.1.0-rc.1` | pre-release |
-   | `0.1.0` | `v0.1.0` | release |
-   | `0.1.0` | `v0.2.0` | refused: bump `Cargo.toml` first |
-
-   Builds for testers are the pre-release tags. They need no change to `Cargo.toml`: tag the next `-alpha.N` on whichever commit should go out. The About dialog of each build shows the tag's version, not `Cargo.toml`'s, so a tester's report says which build it is about.
-
-   The pre-release part may hold letters, digits, hyphens and dots, as in semver. A `+build` suffix is refused, because the version goes into file names and URLs.
-
-3. **Tag and push.**
+   | `0.2.0` | `v0.2.0` | a release |
+   | `0.2.0` | `v0.2.1` | refused: bump `Cargo.toml` first |
+   | `0.2.0` | `v0.2.0-rc.1`, `v0.2.0-alpha.1` | refused: a release has a plain version |
 
    ```sh
-   git tag -a v0.1.0-alpha.1 -m "Code++ 0.1.0-alpha.1"
-   git push origin v0.1.0-alpha.1
+   git tag -a v0.2.0 -m "Code++ 0.2.0"
+   git push origin v0.2.0
    ```
 
-4. **Watch the run** under Actions → Release. When `publish` is done, both release pages hold the files. The description lists the downloads, how to start an unsigned build on each platform, and the commits since the previous `v` tag; edit it on either page if it needs more.
+   A version is plain because three things compare it: an installed Code++ deciding whether an update is newer, Windows Installer, and apt (DESIGN.md §11.6). A version that was released is never built again; a fix is the next patch version. A build for testers that is not a release is a manual run's (§3).
 
-After a release without a pre-release part, bump the version for the next one. `Cargo.toml` says where: `[workspace.package].version` and the `version` of every internal crate under `[workspace.dependencies]`. Build once so that `Cargo.lock` follows, and commit the three together: the release builds with `--locked` and fails on a `Cargo.lock` that is behind.
+4. **Watch the run** under Actions → Release. When `publish` is done, both release pages hold the files. The description lists the downloads, how to start an unsigned build on each platform, and the commits since the previous `v` tag; edit it on either page if it needs more.
 
 ---
 
@@ -110,7 +106,7 @@ Do this once before the first real tag, and after any change to the workflow or 
 
 - **The push of the tag is rejected with "Tag … is protected".** No run starts. Your account is not on the allowlist of the `v*` tag rule (§5.4). Add your account to the allowlist, under the repository's Settings → Tags, and push the tag again.
 - **`prepare` refuses the tag.** The log says why: the tag does not match `Cargo.toml`, its commit is not on `main`, or a release token is missing. Delete the tag (`git push origin :refs/tags/<tag>`, `git tag -d <tag>`), fix the cause, and tag again. Nothing was published under it, so deleting it is safe.
-- **A build fails.** Nothing has been published. Fix it on `main` and tag the fixed commit with the next pre-release number. A tag that was pushed is better left alone than moved.
+- **A build fails.** Nothing has been published. Fix it on `main`, delete the tag as above, and tag the fixed commit. Once a version has been published, its tag stays where it is: a fix is the next version.
 - **A build's Package step fails for a missing tool.** `dotnet is not on PATH` on Windows, `dpkg-shlibdeps is not installed` on Linux: the runner lacks what §5.3 lists. Install it and run the job again.
 - **`publish` fails halfway.** Run the job again. It finds the release it already made and replaces the files of the same name; it does not touch a title or description that exists.
 - **"GitHub mirror: tag … is not at …"** The job waited ten minutes for the tag to arrive on GitHub. The Forgejo release is already published. Sync the push mirror (repository Settings → Mirror settings → Synchronize now), then run the job again.
@@ -168,7 +164,7 @@ Three settings on the Forgejo side, which the workflow cannot make for itself:
 
 ## 6. What the workflow checks
 
-- **The tag.** `.forgejo/scripts/release-version.sh` holds it to `v<x.y.z>[-<pre-release>]` and to `Cargo.toml`'s version, and `prepare` requires its commit to be on `main`.
+- **The tag.** `.forgejo/scripts/release-version.sh` holds it to `v` and `Cargo.toml`'s version, with no pre-release part, and `prepare` requires its commit to be on `main`.
 - **The lockfile.** Every build is `--locked`.
 - **The licences.** `cargo about generate --fail` stops on a crate whose licence is not in `about.toml`'s `accepted` list, which is `deny.toml`'s allowlist, or whose licence it cannot read.
 - **Static linking on Windows.** `.cargo/config.toml` links the C and C++ runtimes statically, so that the app starts on a machine without the Visual C++ Redistributable. `.forgejo/scripts/package-windows.ps1` reads the imports of `codepp.exe` and of each plugin DLL and refuses to package one that names a runtime DLL.
