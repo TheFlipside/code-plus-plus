@@ -283,6 +283,7 @@ dependencies = [
  "codepp-plugin-host",
  "codepp-udl",
  "crossbeam-channel",
+ "ed25519-dalek",
  "libc",
  "tempfile",
  "tracing",

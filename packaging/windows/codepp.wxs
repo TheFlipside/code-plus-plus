@@ -136,6 +136,21 @@
                        Value="[#CodeppExe]" />
 
         <!--
+          The folder this package installed into, for the updater
+          (DESIGN.md §11.4). A running Code++ compares it with its own
+          folder to learn that Windows Installer put it there, and from
+          the root that holds it whether for the whole machine or for
+          one account, which an update has to stay. The key is one the
+          Start Menu shortcut's component also writes to, under the
+          account's root; this value is under the installation's.
+        -->
+        <RegistryValue Root="HKMU"
+                       Key="Software\Code++\Installer"
+                       Name="InstallFolder"
+                       Type="string"
+                       Value="[INSTALLFOLDER]" />
+
+        <!--
           "Edit with Code++", in the context menu of every file: `*` is
           the class every file belongs to, whatever its type and with
           no type at all. A folder is not a file and does not get it.

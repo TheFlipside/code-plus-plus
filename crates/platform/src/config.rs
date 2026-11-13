@@ -199,6 +199,15 @@ pub fn shortcuts_xml_path() -> Option<PathBuf> {
     config_dir().map(|d| d.join("shortcuts.xml"))
 }
 
+/// Path to `updater.xml` under [`config_dir`]: what the auto-updater
+/// remembers between runs (`codepp_core::UpdaterState`), apart from
+/// `config.xml` because the updater's library reads and writes it from
+/// threads of its own (DESIGN.md §11.3).
+#[must_use]
+pub fn updater_xml_path() -> Option<PathBuf> {
+    config_dir().map(|d| d.join("updater.xml"))
+}
+
 /// User Defined Language directory: `config_dir/userDefineLangs/`.
 /// Phase 4.6's UDL runtime scans this directory at startup and
 /// loads every `*.xml` file into `LANG_TABLE`'s dynamic-id

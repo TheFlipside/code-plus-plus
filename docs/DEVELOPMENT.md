@@ -513,6 +513,52 @@ update, without its windows reaching your screen, start the process on
 a desktop of its own (`CreateDesktopW`, then `STARTUPINFO.lpDesktop`):
 that is how the measurements in DESIGN.md §11.11 were taken.
 
+### Build a copy of Code++ that can update itself (Windows)
+
+An ordinary build has no updater: "?" → "Update Code++" stays greyed
+and nothing is ever checked. A copy can update itself only when all of
+this holds (DESIGN.md §11, `codepp_shell::updater`):
+
+- The build was given the feed's URL and the public key updates are
+  signed with, in its environment:
+
+  ```powershell
+  $env:CODEPP_UPDATE_FEED_URL = "https://…/win.xml"
+  $env:CODEPP_UPDATE_PUBLIC_KEY = "<base64 of the 32-byte Ed25519 public key>"
+  cargo build --release -p codepp-app
+  ```
+
+  Both are compiled in (`option_env!`), and cargo rebuilds when either
+  changes. The URL must be `https:`; `http://127.0.0.1:<port>/…` is
+  taken too, for a feed served on the same machine in a test.
+- The copy was installed by the `.msi`, which records its folder under
+  `Software\Code++\Installer` (`InstallFolder`), in `HKEY_LOCAL_MACHINE`
+  or `HKEY_CURRENT_USER` by the installation's kind.
+- The installation is for one account. One for the whole machine has
+  no updater yet (`codepp_platform::update_install::PER_MACHINE_UPDATES`,
+  DESIGN.md §11.4).
+- `WinSparkle.dll`, version 0.9.4, is beside `codepp.exe`.
+
+So a build tree never has one, whatever its environment. To try the
+whole path, package two versions with the variables set, install the
+older for your account (`MSIINSTALLPERUSER=1 ALLUSERS=2`, as under
+"Build the installers locally"), copy the DLL beside the installed
+`codepp.exe`, and serve a feed that offers the newer, signed with
+`winsparkle-tool sign`. Use a key made for the test
+(`winsparkle-tool generate-key`), never the project's. Run the installed
+copy with `APPDATA` and `TEMP` pointed at scratch folders, and with
+`CODEPP_LOG=codepp_shell=debug` to see what the updater's worker decides:
+why a copy has no updater is logged at `debug`.
+
+The feed fetch's TLS half has an opt-in test, since it leaves the
+machine:
+
+```powershell
+$env:CODEPP_FEED_TEST_URL = "https://<a URL that answers 200>"
+$env:CODEPP_FEED_TEST_BAD_TLS_URLS = "https://expired.badssl.com/ https://wrong.host.badssl.com/ https://self-signed.badssl.com/"
+cargo test -p codepp-platform --lib update_feed::tests::https -- --ignored
+```
+
 ### Add or change an `NPPM_*` / `NPPN_*` / docking constant or menu id
 
 Verify the number against Notepad++'s published headers, mechanically:

@@ -698,10 +698,14 @@ pub(crate) fn release() {
 /// nothing else would open the file: without this, a file handed over
 /// in the moment before a quit, or while a dialog kept the window
 /// busy until the quit, would vanish without a word.
-pub(crate) fn restart_for_unopened() {
+///
+/// Returns whether Code++ was started again at all. An update's
+/// installer is not started after that (`updater::stop_at_quit`): the
+/// new Code++ is running the executable it would have to replace.
+pub(crate) fn restart_for_unopened() -> bool {
     let unopened = take_unopened();
     if unopened.is_empty() {
-        return;
+        return false;
     }
     let exe = match std::env::current_exe() {
         Ok(exe) => exe,
@@ -711,9 +715,10 @@ pub(crate) fn restart_for_unopened() {
                 count = unopened.len(),
                 "handed-over files were not opened"
             );
-            return;
+            return false;
         }
     };
+    let mut started = false;
     for path in unopened {
         let mut command = std::process::Command::new(&exe);
         if let Some(path) = &path {
@@ -721,10 +726,14 @@ pub(crate) fn restart_for_unopened() {
             command.arg("--").arg(path);
         }
         match command.spawn() {
-            Ok(_) => tracing::info!(?path, "started Code++ again for a handed-over start"),
+            Ok(_) => {
+                started = true;
+                tracing::info!(?path, "started Code++ again for a handed-over start");
+            }
             Err(err) => tracing::warn!(?err, ?path, "a handed-over file was not opened"),
         }
     }
+    started
 }
 
 /// What was handed over and not opened, taken out of the queue: every

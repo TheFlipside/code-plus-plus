@@ -80,6 +80,57 @@ pub fn check_is_due(enabled: bool, last_check: Option<u64>, now: u64) -> bool {
     }
 }
 
+/// The three numbers of a version, `major.minor.patch`, or `None` for
+/// a text that is not one.
+///
+/// This is the part of a version Windows Installer compares when it
+/// decides whether one package replaces another, and the part a release
+/// is numbered by (DESIGN.md §11.6). The text is read up to its first
+/// `-` or `+`, so `0.1.0-alpha.2` is `[0, 1, 0]`, and must then be three
+/// or four fields of one to nine ASCII digits each, with nothing else: a
+/// fourth field, which Windows Installer allows and ignores, is ignored
+/// here too.
+#[must_use]
+pub fn version_triple(text: &str) -> Option<[u32; 3]> {
+    let numbers = text.split(['-', '+']).next()?;
+    let mut fields = numbers.split('.');
+    let mut triple = [0u32; 3];
+    for slot in &mut triple {
+        *slot = version_field(fields.next()?)?;
+    }
+    match (fields.next(), fields.next()) {
+        (None, _) => Some(triple),
+        (Some(fourth), None) => version_field(fourth).map(|_| triple),
+        (Some(_), Some(_)) => None,
+    }
+}
+
+/// One field of a version: one to nine ASCII digits, which always fit a
+/// `u32`. `str::parse` alone would take a leading `+`.
+fn version_field(field: &str) -> Option<u32> {
+    if field.is_empty() || field.len() > 9 || !field.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    field.parse().ok()
+}
+
+/// Whether `candidate` is a newer version than `running`, by their
+/// [`version_triple`]s. False when either is not a version.
+///
+/// This is the check the updater makes on a package before it runs it
+/// (DESIGN.md §11.4): a signature has no expiry and names no version, so
+/// whoever controls a feed could otherwise offer any release that was
+/// ever signed, an old one with a known fault included. A pre-release
+/// suffix is not compared: `0.2.0` is not newer than `0.2.0-rc.1`, since
+/// a released version is never built twice (§11.6).
+#[must_use]
+pub fn is_newer(candidate: &str, running: &str) -> bool {
+    match (version_triple(candidate), version_triple(running)) {
+        (Some(candidate), Some(running)) => candidate > running,
+        _ => false,
+    }
+}
+
 /// What the updater remembers between runs: the contents of
 /// `updater.xml`.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -294,6 +345,62 @@ mod tests {
         assert!(!check_is_due(true, Some(NOW - (DAY - 1)), NOW));
         assert!(check_is_due(true, Some(NOW - DAY), NOW));
         assert!(check_is_due(true, Some(NOW - 30 * DAY), NOW));
+    }
+
+    #[test]
+    fn a_version_is_three_numbers_and_an_ignored_fourth() {
+        assert_eq!(version_triple("0.2.1"), Some([0, 2, 1]));
+        assert_eq!(version_triple("10.20.65535"), Some([10, 20, 65535]));
+        assert_eq!(version_triple("1.2.3.4"), Some([1, 2, 3]));
+        assert_eq!(version_triple("0.1.0-alpha.2"), Some([0, 1, 0]));
+        assert_eq!(version_triple("0.1.0+build.7"), Some([0, 1, 0]));
+        assert_eq!(version_triple("999999999.0.0"), Some([999_999_999, 0, 0]));
+        for not_a_version in [
+            "",
+            "1",
+            "1.2",
+            "1.2.",
+            ".1.2",
+            "1..2",
+            "1.2.3.",
+            "1.2.3.4.5",
+            "1.2.x",
+            "1.2.3.x",
+            "1.2.+3",
+            "1.2. 3",
+            " 1.2.3",
+            "1.2.3 ",
+            "v1.2.3",
+            "1.2.-3",
+            "-1.2.3",
+            "1.2.３",
+            "1.2.1000000000",
+            "1,2,3",
+        ] {
+            assert_eq!(version_triple(not_a_version), None, "{not_a_version:?}");
+        }
+    }
+
+    #[test]
+    fn newer_is_decided_by_the_three_numbers() {
+        assert!(is_newer("0.2.1", "0.2.0"));
+        assert!(is_newer("0.3.0", "0.2.9"));
+        assert!(is_newer("1.0.0", "0.99.99"));
+        assert!(is_newer("0.10.0", "0.9.0"), "compared as numbers, not text");
+        assert!(is_newer("0.2.0", "0.1.0-alpha.2"));
+        // The same version is not newer, with or without a suffix, and
+        // neither is an older one.
+        assert!(!is_newer("0.2.0", "0.2.0"));
+        assert!(!is_newer("0.2.0", "0.2.0-rc.1"));
+        assert!(
+            !is_newer("0.2.0.9", "0.2.0"),
+            "the fourth field is not compared"
+        );
+        assert!(!is_newer("0.1.9", "0.2.0"));
+        // Something that is not a version is never newer, on either side.
+        assert!(!is_newer("", "0.2.0"));
+        assert!(!is_newer("newest", "0.2.0"));
+        assert!(!is_newer("0.3.0", "unknown"));
     }
 
     #[test]

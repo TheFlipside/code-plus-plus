@@ -87,6 +87,8 @@ use codepp_plugin_host::{
 };
 
 pub mod fif;
+#[cfg(target_os = "windows")]
+pub mod updater;
 pub use codepp_core::ViewPosition;
 pub use codepp_editor::CursorText;
 pub use fif::{FifError, FifEvent, FifJobId, FifRequest, FifStats, OpenBufferOutcome};
@@ -2131,6 +2133,18 @@ pub struct Shell {
     /// copy that cannot (Linux, the Windows zip). See
     /// [`Self::can_self_update`].
     self_update: bool,
+    /// The wake closure [`Self::new`] was given, kept for the updater's
+    /// worker, which is started later than the other producers.
+    #[cfg(target_os = "windows")]
+    wake: Arc<dyn Fn() + Send + Sync>,
+    /// The updater's worker, once [`Self::start_updater`] has started
+    /// it, which is after the first paint.
+    #[cfg(target_os = "windows")]
+    updater: Option<updater::Updater>,
+    /// A downloaded update that has been verified and waits for the
+    /// quit: the UI takes it as it exits and starts the installer.
+    #[cfg(target_os = "windows")]
+    ready_update: Option<updater::ReadyInstall>,
     /// Rolling list of full paths for files the user has closed
     /// (LRU). Two caps apply: the hard user-facing cap
     /// `preferences.recent_files_history.max_entries` (0..=30)
@@ -2699,6 +2713,8 @@ impl Shell {
         // existing Loader API.
         let (loader, load_rx_inner, loader_shutdown) =
             Loader::spawn(codepp_platform::open_regular_file);
+        #[cfg(target_os = "windows")]
+        let updater_wake = Arc::clone(&wake);
         let (load_tx_outer, load_rx_outer) = unbounded::<LoadResult>();
         spawn_forwarder(load_rx_inner, load_tx_outer, wake.clone(), "load-forwarder");
 
@@ -2784,6 +2800,12 @@ impl Shell {
             find_history: load_find_history(),
             preferences,
             self_update: false,
+            #[cfg(target_os = "windows")]
+            wake: updater_wake,
+            #[cfg(target_os = "windows")]
+            updater: None,
+            #[cfg(target_os = "windows")]
+            ready_update: None,
             recent_files,
             fif_orchestrator,
             fif_rx: fif_rx_outer,
@@ -2840,6 +2862,95 @@ impl Shell {
         self.self_update = can;
     }
 
+    /// Start the updater's worker thread, once. It finds out whether
+    /// this copy can update itself, which [`Self::drain`] then records
+    /// for [`Self::can_self_update`], and checks for a new version when
+    /// one is due (DESIGN.md §11.3).
+    ///
+    /// The backend calls this after its first paint and not before:
+    /// nothing of the updater is on the way to the first frame (§11.2).
+    /// The call itself only starts a thread.
+    #[cfg(target_os = "windows")]
+    pub fn start_updater(&mut self) {
+        if self.updater.is_none() {
+            self.updater = Some(updater::Updater::start(
+                self.preferences.misc.auto_updater,
+                Arc::clone(&self.wake),
+            ));
+        }
+    }
+
+    /// Whether [`Self::start_updater`] has been called.
+    #[cfg(target_os = "windows")]
+    #[must_use]
+    pub fn updater_started(&self) -> bool {
+        self.updater.is_some()
+    }
+
+    /// Check for a new version now, with the updater's own window: what
+    /// "?" → "Update Code++" does. It runs whatever the Auto-updater
+    /// preference says, and does nothing on a copy that cannot update
+    /// itself.
+    #[cfg(target_os = "windows")]
+    pub fn check_for_updates(&self) {
+        if !self.self_update {
+            return;
+        }
+        if let Some(updater) = &self.updater {
+            updater.check_now();
+        }
+    }
+
+    /// Whether a verified update is waiting for the quit. The backend
+    /// asks after a drain, and quits when it is.
+    #[cfg(target_os = "windows")]
+    #[must_use]
+    pub fn update_is_ready(&self) -> bool {
+        self.ready_update.is_some()
+    }
+
+    /// Take the verified update, to start its installer as the last
+    /// thing before the process exits.
+    #[cfg(target_os = "windows")]
+    pub fn take_ready_update(&mut self) -> Option<updater::ReadyInstall> {
+        self.ready_update.take()
+    }
+
+    /// Stop the updater's library, as the application quits. Waits a
+    /// moment for its threads to end, and no longer. An update the
+    /// worker verified since the last drain is kept for
+    /// [`Self::take_ready_update`]: once the quit has begun nothing
+    /// drains any more, and the update would otherwise be dropped
+    /// without a word.
+    #[cfg(target_os = "windows")]
+    pub fn shut_down_updater(&mut self) {
+        if let Some(updater) = self.updater.take() {
+            if let Some(ready) = updater.shut_down() {
+                self.ready_update = Some(ready);
+            }
+        }
+    }
+
+    /// Take what the updater's worker reported since the last drain.
+    #[cfg(target_os = "windows")]
+    fn drain_updater(&mut self, pending: &mut Vec<PendingDialog>) {
+        let Some(updater) = &self.updater else {
+            return;
+        };
+        while let Some(event) = updater.poll() {
+            match event {
+                updater::UpdaterEvent::Availability(can) => self.self_update = can,
+                updater::UpdaterEvent::InstallReady(ready) => self.ready_update = Some(ready),
+                // The text is Code++'s own but for a version a package
+                // states and what Windows says of an error.
+                updater::UpdaterEvent::Failed(why) => pending.push(PendingDialog::Error {
+                    title: "Update Code++".to_owned(),
+                    message: sanitize_str_for_display(&why),
+                }),
+            }
+        }
+    }
+
     /// Persist a new [`Preferences`] snapshot. Replaces
     /// `self.preferences` in memory and writes back to
     /// `config.xml`. When the user newly disables the
@@ -2853,6 +2964,10 @@ impl Shell {
         let was_enabled = self.preferences.recent_files_history.enabled;
         self.preferences = prefs;
         save_preferences(&self.preferences);
+        #[cfg(target_os = "windows")]
+        if let Some(updater) = &self.updater {
+            updater.set_enabled(self.preferences.misc.auto_updater);
+        }
         if was_enabled && !self.preferences.recent_files_history.enabled {
             self.recent_files.clear();
             save_recent_files(&self.recent_files);
@@ -5303,6 +5418,8 @@ impl Shell {
         // `Vec::append` on an empty source is already a no-op
         // — no extra branch needed for the common case.
         pending.append(&mut self.deferred_dialogs);
+        #[cfg(target_os = "windows")]
+        self.drain_updater(&mut pending);
         pending
     }
 

@@ -9,9 +9,15 @@ pub mod config;
 pub mod dynlib;
 pub mod fs;
 pub mod host_env;
+#[cfg(target_os = "windows")]
+pub mod msi_package;
 #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
 pub mod panel_key;
 pub mod plugin_stage;
+#[cfg(target_os = "windows")]
+pub mod update_feed;
+#[cfg(target_os = "windows")]
+pub mod update_install;
 #[cfg(target_os = "windows")]
 pub mod update_signature;
 pub mod watch;
@@ -21,7 +27,7 @@ pub mod winsparkle;
 pub use config::{
     backups_dir, config_dir, config_xml_path, disabled_plugins_path, find_history_xml_path,
     panel_key_path, plugins_config_dir, plugins_dir, recent_files_xml_path, session_xml_path,
-    shortcuts_xml_path, styles_xml_path, user_define_langs_dir,
+    shortcuts_xml_path, styles_xml_path, updater_xml_path, user_define_langs_dir,
 };
 pub use dynlib::{has_plugin_extension, DynLib, PLUGIN_EXTENSION};
 pub use fs::{long_path, not_a_regular_file, open_regular_file};

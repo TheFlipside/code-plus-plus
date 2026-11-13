@@ -101,6 +101,7 @@ mod print;
 mod print_preview;
 mod toolbar;
 mod udl_editor;
+mod updater;
 
 // UDL container-lexer painting was lifted to `codepp_editor::udl_paint`
 // (Phase 5) so the GTK/Cocoa backends share one copy — the same move the
@@ -6464,13 +6465,15 @@ fn build_main_menu() -> windows::core::Result<BuiltMenuBar> {
         AppendMenuW(bar, MF_POPUP, window_menu.0 as usize, w!("&Window"))?;
 
         // ----- ? (Help) -----
-        // Order: external links first, then Update (greyed),
-        // then About. Two separators split the three logical
-        // groups (info-and-community, self-update, app-info).
-        // The two greyed entries (`ID_HELP_MANUAL`,
-        // `ID_HELP_UPDATE`) are placeholders — their command ids
-        // are reserved so the menu layout is stable across builds
-        // even while the targets aren't wired.
+        // Order: external links first, then Update, then About.
+        // Two separators split the three logical groups
+        // (info-and-community, self-update, app-info).
+        // `ID_HELP_MANUAL` is a greyed placeholder — its command id
+        // is reserved so the menu layout is stable across builds
+        // while its target isn't wired. `ID_HELP_UPDATE` starts
+        // greyed and is enabled as its menu opens, once the
+        // updater's worker has found that this copy can update
+        // itself (`updater::refresh_menu_entry`).
         let help_menu = CreateMenu()?;
         AppendMenuW(
             help_menu,
@@ -19180,6 +19183,10 @@ pub fn run(initial_path: Option<PathBuf>, perf: codepp_core::perf::Perf) -> Resu
         // After the pump, so the distribution covers the whole
         // session. No-op without `--perf`.
         perf.report();
+        // Last of all: the installer of an update the worker verified
+        // (DESIGN.md §11.4). The window is gone and the session saved;
+        // the process ends as this returns.
+        updater::launch_ready_update();
         Ok(())
     }
 }
@@ -26109,6 +26116,9 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                 // wnd_proc and produce aliasing UB.
                 let pending: Vec<PendingDialog> = {
                     if let Some(state) = state_from_hwnd(hwnd) {
+                        // The updater's worker, once the first paint has
+                        // asked for it: only a thread is started here.
+                        updater::start_if_asked(&mut state.shell);
                         let (shell, mut ui) = state.split();
                         shell.drain(&mut ui)
                     } else {
@@ -26168,6 +26178,17 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                 // so a search-completion that reveals the dock
                 // doesn't compete with a same-wake jump.
                 apply_pending_fif_jumps(hwnd);
+                // The updater's worker has verified a downloaded
+                // update: quit, as a close does, so that the session
+                // is saved and whatever is in progress finishes first.
+                // The installer is started as the process ends
+                // (`updater::launch_ready_update`). The borrow ends
+                // with the statement; `request_quit` takes its own.
+                let update_ready =
+                    state_from_hwnd(hwnd).is_some_and(|state| state.shell.update_is_ready());
+                if update_ready {
+                    request_quit(hwnd);
+                }
                 LRESULT(0)
             }
             // UDL editor saved a UDL — re-scan the registry from
@@ -27386,6 +27407,16 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                     ID_HELP_ABOUT => {
                         show_about_dialog(hwnd);
                     }
+                    // ? → Update Code++: a check with the updater's
+                    // own window, whatever the Auto-updater preference
+                    // says. Only asks the worker; nothing waits here.
+                    // A copy that cannot update itself does nothing,
+                    // a posted command for the greyed entry included.
+                    ID_HELP_UPDATE => {
+                        if let Some(state) = state_from_hwnd(hwnd) {
+                            state.shell.check_for_updates();
+                        }
+                    }
                     // Language → User-Defined language → Open UDL
                     // folder (Phase 4.6 m2). Creates
                     // `<config_dir>/userDefineLangs/` if missing,
@@ -27814,6 +27845,15 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                         // the helper so the entry list, cmd ids, and
                         // active-tab check mark stay in sync.
                         refresh_window_menu(state.right_shortcuts_menu, &state.shell);
+                    } else {
+                        // The "?" menu, of which no handle is kept:
+                        // any other popup simply does not hold the
+                        // entry.
+                        updater::refresh_menu_entry(
+                            HMENU(popup_hmenu_value as *mut c_void),
+                            ID_HELP_UPDATE,
+                            &state.shell,
+                        );
                     }
                 }
                 DefWindowProcW(hwnd, msg, wparam, lparam)
@@ -28067,7 +28107,18 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                 // return. And whatever another start handed over that
                 // the quit kept from opening gets a Code++ of its own.
                 instance::release();
-                instance::restart_for_unopened();
+                let restarted = instance::restart_for_unopened();
+
+                // The updater: stop its library's threads, and keep a
+                // verified update aside for `run` to start once the
+                // loop has ended. After the save and the lock, since
+                // stopping the library can wait a moment. An update is
+                // let go if Code++ was just started again for a file
+                // handed over: that copy runs the executable the
+                // installer would have to replace.
+                if let Some(state) = state_from_hwnd(hwnd) {
+                    updater::stop_at_quit(&mut state.shell, restarted);
+                }
 
                 // Free the toolbar's image list. The OS would
                 // reclaim it at process exit anyway, but explicit
@@ -28532,6 +28583,19 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                             // A tab's top partway into a wrapped line waits
                             // for the paint that wraps it.
                             editor.settle_wrapped_top();
+                            // The updater's worker starts once a frame is
+                            // on screen, and not before (DESIGN.md §11.2):
+                            // a paint outside the startup's plugin restore
+                            // posts a wake, and the wake handler starts it.
+                            // Not from here: this notification can arrive
+                            // below a frame that has the state borrowed.
+                            // Once it is started this is one comparison.
+                            if !STARTUP_RESTORE.with(std::cell::Cell::get)
+                                && !quit_requested()
+                                && updater::paint_asks()
+                            {
+                                let _ = PostMessageW(Some(hwnd), WM_APP_WAKE, WPARAM(0), LPARAM(0));
+                            }
                         }
                     } else if nmhdr.code == SCN_MODIFIED {
                         // Confirms the pending keystroke actually
@@ -32939,6 +33003,132 @@ mod plugin_staging_guards {
 }
 
 #[cfg(test)]
+mod updater_guards {
+    //! Where the window touches the updater (DESIGN.md §11.2, §11.4).
+    //! Each ordering here compiles either way and reads the same in a
+    //! diff, and what it protects shows only in a run nobody makes by
+    //! accident: a slower first frame, an installer started under a
+    //! running Code++, an update dropped at a quit.
+
+    use super::plugin_reentry_guards::{block_after, code_only, fn_body, production_src};
+
+    /// Nothing of the updater runs before the first frame: the worker is
+    /// started only from the wake handler, and only after a paint of
+    /// the main editor has asked for it.
+    #[test]
+    fn the_worker_is_started_from_the_wake_after_a_first_paint() {
+        let src = code_only(production_src());
+        assert!(
+            !src.contains("start_updater("),
+            "the window starts the updater's worker itself; only \
+             `updater::start_if_asked` may, which a first paint arms"
+        );
+        assert_eq!(
+            src.matches("updater::start_if_asked(").count(),
+            1,
+            "the worker is started from one place"
+        );
+        assert_eq!(src.matches("updater::paint_asks()").count(), 1);
+        let wake = code_only(&block_after(production_src(), "WM_APP_WAKE => {"));
+        let start = wake
+            .find("updater::start_if_asked(&mut state.shell);")
+            .expect("the wake handler no longer starts the updater's worker, so nothing does");
+        let gate = wake
+            .find("if quitting() {")
+            .expect("the wake handler's quit gate is gone");
+        assert!(
+            gate < start,
+            "the worker is started once the quit has begun"
+        );
+        // The ask is in the paint notification's own branch, after the
+        // paint is accounted for, and is one statement that only posts
+        // a wake: it must not take the shell, and it must not ask
+        // during the startup restore or once a quit is asked for.
+        let paint: String = code_only(&block_after(
+            production_src(),
+            "} else if nmhdr.code == SCN_PAINTED {",
+        ))
+        .split_whitespace()
+        .collect();
+        let settled = paint
+            .find("editor.settle_wrapped_top();")
+            .expect("the paint branch no longer settles the view");
+        let ask = paint
+            .find(
+                "if!STARTUP_RESTORE.with(std::cell::Cell::get)&&!quit_requested()\
+                 &&updater::paint_asks(){let_=PostMessageW(Some(hwnd),WM_APP_WAKE,\
+                 WPARAM(0),LPARAM(0));}",
+            )
+            .expect(
+                "the paint notification no longer asks for the updater's worker as it \
+                 did: outside the startup restore and a quit, and by posting a wake only",
+            );
+        assert!(
+            settled < ask,
+            "the worker is asked for before the paint is accounted for"
+        );
+    }
+
+    /// A verified update asks for the quit from the wake handler, as a
+    /// close does, and from nowhere else; the installer is started by
+    /// `run`, last.
+    #[test]
+    fn a_ready_update_quits_through_the_request_and_is_launched_last() {
+        let wake = code_only(&block_after(production_src(), "WM_APP_WAKE => {"));
+        let ready = wake
+            .find("state.shell.update_is_ready()")
+            .expect("the wake handler no longer looks for a verified update");
+        let request = wake[ready..]
+            .find("request_quit(hwnd);")
+            .expect("a verified update no longer asks to quit");
+        assert!(
+            !wake[ready..ready + request].contains("quit(hwnd)"),
+            "a verified update quits directly instead of asking"
+        );
+        let run = code_only(&fn_body(production_src(), "run"));
+        let report = run.rfind("perf.report();").expect("run no longer reports");
+        let launch = run
+            .rfind("updater::launch_ready_update();")
+            .expect("run no longer starts a verified update's installer");
+        assert!(report < launch);
+        let tail: String = run[launch..].split_whitespace().collect();
+        assert_eq!(
+            tail, "updater::launch_ready_update();Ok(())}}",
+            "something runs after the installer is started; the process is to end there"
+        );
+        assert_eq!(
+            code_only(production_src())
+                .matches("updater::launch_ready_update()")
+                .count(),
+            1
+        );
+    }
+
+    /// At the quit: the session saved and the lock let go first, then a
+    /// restart for handed-over files, then the updater stopped with the
+    /// answer of that restart, and all of it before the state is freed.
+    #[test]
+    fn the_updater_is_stopped_after_the_save_and_before_the_state_goes() {
+        let arm = code_only(&block_after(
+            &production_src()[production_src()
+                .find("            WM_DESTROY => {\n")
+                .or_else(|| production_src().find("            WM_DESTROY => {\r\n"))
+                .expect("the main window's WM_DESTROY arm is gone")..],
+            "WM_DESTROY => {",
+        ));
+        let at = |needle: &str| {
+            arm.find(needle)
+                .unwrap_or_else(|| panic!("`{needle}` is gone from WM_DESTROY"))
+        };
+        let save = at("shell.save_session(&mut ui)");
+        let release = at("instance::release();");
+        let restart = at("let restarted = instance::restart_for_unopened();");
+        let stop = at("updater::stop_at_quit(&mut state.shell, restarted);");
+        let free = at("Box::from_raw(raw as *mut WindowState)");
+        assert!(save < release && release < restart && restart < stop && stop < free);
+    }
+}
+
 #[cfg(test)]
 mod shutdown_timing_guards {
     //! A plugin that persists whether its dock panel was open asks
