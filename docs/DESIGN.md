@@ -4082,10 +4082,146 @@ These are explicitly out of scope for v1 and will be revisited only after Phase 
 - Tree-sitter highlighting. Lexilla covers v1; tree-sitter is a later experiment.
 - Settings UI beyond an editable `config.xml`. v1 reuses Notepad++'s text-based config style.
 - Multi-window (more than one top-level window per process). v1 is single-window, multi-tab.
-- Auto-update. Manual download for v1.
 
 ---
 
-## 11. Next Action
+## 11. Auto-Update
 
-Proceed to **Phase 0**: create the workspace, the crate skeletons, and the no-op `build.rs` that confirms the Scintilla submodule is present. CI must be green before any Phase 1 work begins.
+**Status: decided in November 2026, not implemented.** This section is the design the implementation follows. Nothing in it has been built, and the only measurements are three of the project's Forgejo instance: that it serves a raw file of the repository without authentication (§11.7), its version, and that its Debian registry answers (§11.9). WinSparkle's function names are as its 0.9.4 header declares them, and its imports as its DLL's import table lists them (§11.2), both read from the release's own zip; Sparkle's keys and methods are from its documentation, or from memory where a statement says so. Neither library has been run. §11.10 lists what must be tried before anything is built on it.
+
+### 11.1 What is used
+
+| Platform | Mechanism |
+| --- | --- |
+| Windows | [WinSparkle](https://winsparkle.org) (MIT), 0.9.4 or later, as `WinSparkle.dll` beside `codepp.exe`. Only the `.msi` installation updates itself. |
+| macOS | [Sparkle](https://sparkle-project.org) 2 (MIT), as `Sparkle.framework` inside `Code++.app`. |
+| Linux | No in-app updater. A `.deb` is updated by `apt`, from the project's package repository on Forgejo (§11.9), and the tarball by hand. |
+
+The two share one design: an appcast feed that names the newest version and where to download it, and an Ed25519 signature on each download, checked against a public key built into the app. Neither needs an Authenticode or Developer ID certificate, which no build has (§9.2).
+
+Rejected: Velopack, which replaces the installer with its own packaging and `Update.exe`; `cargo-packager-updater`, which is meant for apps packaged by cargo-packager; Notepad++'s WinGUp, which is LGPL (§6.6 has the reasoning for copyleft binaries); and an updater of Code++'s own, which stays the fallback for Windows if WinSparkle fails §11.2 when measured.
+
+### 11.2 The rules it keeps
+
+These are the conditions the maintainer set, and each is a gate on the implementation:
+
+- **Nothing of the updater runs before first paint.** No library is loaded, no file read, no registry key opened, no thread started and no network request made on the way to the first frame. §8's cold-start figure with the updater enabled must be indistinguishable from the figure with it disabled, measured as §8 measures.
+- **Nothing of the updater ever blocks the UI thread.** The check, the download, the signature verification and the library load itself all run off it. A slow or unreachable feed host must not be observable in typing or in the window's responsiveness.
+- **Both libraries are loaded lazily, by path, and only when needed.** `codepp.exe` does not import `WinSparkle.dll`, and the macOS binary does not link `Sparkle.framework`; each is loaded at run time (`LoadLibraryExW` with the full path of the file beside the executable, `dlopen` or `NSBundle` for the framework in the bundle) when a check is due or the user asks for one. A session in which no check is due and the user asks for none never loads either.
+- **What the DLL's own imports resolve to.** A full path settles which `WinSparkle.dll` is loaded, not where the DLLs it imports come from: by default Windows looks in the application's folder first. The load therefore passes `LOAD_LIBRARY_SEARCH_SYSTEM32` and no other search flag, so they come from System32 and from nowhere else. Read from the import table of the 0.9.4 x64 DLL: it imports fifteen DLLs, every one of them Windows' own (`KERNEL32`, `USER32`, `WININET`, `CRYPT32` and the like), and no C runtime DLL. Before it calls anything, Code++ checks that the DLL is the version it was built for, since a copy of another version left beside the executable has another API.
+- **The installation's folder is trusted, as it already is.** Whoever can write there can replace `codepp.exe` or add a plugin, so a replaced `WinSparkle.dll` gives them nothing more (§6.5). An installation for the whole machine is in Program Files, which an unprivileged process cannot write, and that is the installation whose update runs elevated. An administrator who installs for the whole machine into a folder users can write (`INSTALLFOLDER`, §9.2) has given those users `codepp.exe` itself, with or without an updater. A compiled-in hash of the DLL was considered and left out for these reasons.
+- **This is the one exception to "static linking only".** `WinSparkle.dll` and `Sparkle.framework` are the only shipped dynamic libraries besides plugins. CLAUDE.md's rule, §4.1's and §9.1's statements, §8's row on `LoadLibrary` calls at startup and the `NPPM_DISABLEAUTOUPDATE` row of `docs/nppm-coverage.md` change with the implementing commit, and the release packaging's import check (§9.2) keeps refusing any other DLL import.
+- **§8's memory floor is measured both ways**: with no check due, where nothing is loaded, and after a check that found nothing, where the library is loaded. If the second misses the budget on Windows, the lever is `win_sparkle_cleanup` followed by unloading the DLL after a check that finds nothing. That must first be tried against the hazard §6.4 records for unmapping a library that still has threads.
+
+### 11.3 How a check runs
+
+Code++ decides *when*; the libraries only check, show their dialogs and install.
+
+- **The schedule is Code++'s own.** A pure function in `core` answers whether a check is due from the preference, the time of the last check and the interval, which is one day. Both libraries' own schedulers are switched off (`win_sparkle_set_automatic_check_for_updates(0)`; `SUEnableAutomaticChecks` off), which also keeps either from asking the user on the second start whether it may check, as both otherwise do (from memory, to confirm). One rule then holds for both platforms, and "Disable" is one switch.
+- **After first paint, on a worker.** Once the first frame is drawn and the startup restore is over, a worker thread reads the last-check time. If a check is due, it loads the library and asks for a background check (`win_sparkle_check_update_without_ui`; Sparkle's `checkForUpdatesInBackground`), which shows a window only when an update is found. A timer re-asks the same question every hour for a session that stays open past the interval.
+- **On macOS** Sparkle's objects are made and called on the main thread, as AppKit requires; its network and file work is asynchronous (from its documentation). The framework's load is the one step whose main-thread cost has to be measured.
+- **Results reach the UI the §5.4 way.** WinSparkle documents that its callbacks never run on the app's main thread, so each posts a typed message and a wake, and touches no window or shell state itself.
+
+**State.** WinSparkle keeps its state (last check time, a skipped version) in the registry by default. Code++ replaces that with `win_sparkle_set_config_methods`, which takes read, write and delete callbacks, and keeps the values in a small file of its own in the configuration folder. The callbacks may be called from any thread (its header), so the file has its own lock and is not part of `config.xml`, which the UI thread owns. So the updater keeps no state in the registry on Windows; the one value it reads there is the installer's (§11.4). Sparkle keeps its state in the app's user defaults (`~/Library/Preferences/<bundle id>.plist`); no way to redirect that is known, it is the platform's convention, and it is accepted. The time of Code++'s own last check lives in Code++'s file on both platforms, so deciding whether a check is due loads no library.
+
+### 11.4 Installing an update
+
+**Windows.** WinSparkle downloads the `.msi` and verifies its signature. Code++ then runs the installer itself, through `win_sparkle_set_user_run_installer_callback`, for three reasons:
+
+- *The installation's kind.* A per-user installation (`MSIINSTALLPERUSER=1 ALLUSERS=2`) must be upgraded with the same properties, or the new version is installed for the whole machine beside the old one. The feed's fixed installer arguments cannot know which kind a user has. The `.msi` writes one registry value holding its installation folder, under the root its kind calls for, as its other entries are (§9.2). The root that holds a value naming the running executable's own folder is the kind: `HKEY_LOCAL_MACHINE`, which an unprivileged process cannot write, is asked first, so a value planted under `HKEY_CURRENT_USER` cannot turn a per-machine installation into a per-user one. The value is compared and never put into a command line. A copy that finds no such value has no updater.
+- *The quit.* The callback asks the UI thread to quit through `request_quit`, so the quit waits for whatever is in progress, saves the session and its backups, and lets go of the instance lock, exactly as a close does (§7.4). The installer is started as the last step before the process exits. No work is lost: the next start restores the session. A quit that has to wait, behind a plugin's own loop say, delays the installer with it.
+- *The file that was verified must be the file that runs.* WinSparkle leaves the download where the user's other programs can write, and for a per-machine installation it is then run elevated. So Code++ does not take the path it is handed on trust. The intent, none of it tried:
+  - It opens the file allowing others to read it and nothing else, and verifies the Ed25519 signature itself on that open file. Only then does it read the package's version, and it refuses one that is not newer than the running Code++.
+  - It keeps the file open until the installer is done with it, through a handle the installer's process inherits, so that the file can be neither written nor replaced meanwhile. `msiexec.exe` is started as an ordinary process, by its full path in System32, with arguments Code++ builds itself; nothing from the feed reaches the command line. Windows Installer asks for elevation itself, later, and does the elevated work in its service, so the process Code++ starts is not elevated and can inherit the handle. That is how Windows Installer is understood to work, not something measured here.
+  - The signature has to come from somewhere: WinSparkle hands the callback a path and nothing else. The candidate is that Code++ fetches the feed itself, off the UI thread and only on this path, and takes the signature from it; a feed that changed since WinSparkle read it then fails the verification, which refuses the update. That is a second request, and Ed25519 in Code++, which Windows' own CNG may not offer on every supported version (§11.10). With both, Code++ holds most of what an updater needs besides its windows, which is to be weighed against the fallback of §11.1 when §11.10 is worked through.
+  - **Until §11.10 has shown that the file installed is the file verified, no update of a per-machine installation is shipped.** A per-user installation runs nothing elevated, so there the swap gains a program of the user's nothing it could not do already.
+
+A per-machine installation shows the UAC prompt, with "Unknown publisher" while the builds are unsigned.
+
+The zip is not an installation Windows Installer knows, so a Code++ run from it has no updater: "Update Code++" stays greyed there, no check runs, and the zip does not carry `WinSparkle.dll`.
+
+**macOS.** Sparkle downloads the zip of `Code++.app`, verifies it, replaces the bundle and relaunches. Its quit goes through `terminate:`, the one quit path the backend has, so the session is saved the same way. An app still running from the disk image, or from a quarantined download macOS has translocated, sits on a read-only path and cannot be replaced (Sparkle's documented behaviour, from memory); it has to be moved to `/Applications` first.
+
+### 11.5 The preference and the menu entry
+
+- **Settings → Preferences… gains a category "MISC."** with one field, "Auto-updater", a drop-down of "Enable" and "Disable". The default is "Enable". It is stored in `config.xml` with the other preferences. Notepad++'s "on startup" and "on exit" variants are not offered: a per-machine `.msi` needs the user's consent at the UAC prompt, so nothing can be installed silently at exit, and one behaviour on both platforms is worth more than the variant.
+- **Enabled** means the scheduled check of §11.3: at most one request a day to the feed, after first paint, with a window only when there is an update. Nothing is downloaded or installed without the user's click. Enabled by default means that request is made without asking first; it carries no system profile, which both libraries leave off unless asked, but like any request it shows the project's server the copy's address and, in its user agent, its version.
+- **Disabled** means no library is loaded and no request is made, unless the user asks.
+- **"?" → "Update Code++"**, greyed on all three backends today, becomes the manual check: it loads the library and checks with the progress window (`win_sparkle_check_update_with_ui`; Sparkle's `checkForUpdates:`). It works whatever the preference says. On Linux, and in a Code++ run from the Windows zip, it stays greyed, and the "Auto-updater" field with it. Whether a copy can update itself is established after first paint, on the worker (§11.2 allows nothing earlier), and the entry and the field are greyed until it has been.
+
+### 11.6 Versions
+
+This holds from the commit that changes the release workflow; until then §9.2's pre-release scheme stands as written. Releases then carry plain versions: `0.2.0`, `0.2.1`. Both libraries compare the version the app reports with the feed's, and Windows Installer compares the same three numbers, so one version means one thing everywhere. Pre-release tags (`v0.1.0-alpha.2`) are no longer published. Two things follow:
+
+- A release needs its workspace version in `Cargo.toml`, since the tag no longer adds anything to it. `CODEPP_RELEASE_VERSION`, the `.deb`'s tilde and the same-version replacement in the `.msi` (§9.2) lose their purpose; §9.2 and `docs/RELEASING.md` change with the workflow.
+- A released version is never rebuilt. A fix is a new patch version, because a feed cannot offer `0.2.1` to a copy that already reports `0.2.1`.
+
+### 11.7 The feed and the signatures
+
+- **One feed per build that updates itself**: Windows x64, macOS arm64 and macOS x64. Each build knows its own feed's URL. Sparkle's documentation recommends separate feeds for macOS and Windows, and separate macOS feeds avoid depending on per-architecture selection inside one.
+- **The feeds are files in the repository, on a branch of their own.** The branch, `appcast`, shares no history with `main` and holds the three feed files and nothing else. An app asks Forgejo for the raw file: `https://git.fiedler.live/tux/code-plus-plus/raw/branch/appcast/<feed>.xml`. Measured against the instance: a raw file of the public repository is answered without authentication, as `text/plain`. Every change to a feed is then a commit, so the branch's history records what each feed said and when.
+  - *Not on `main`.* The release would have to push to the protected `main` with the release token, and every release would add a commit after its own tag and start CI for it.
+  - *The branch is protected*, so that only the release's account pushes to it, and nobody force-pushes or deletes it, or the history would record nothing (`docs/RELEASING.md` §5 gains the rule). An administrator of the repository can still change a feed without a release. The push mirror carries the branch to GitHub, but no installed copy asks GitHub.
+  - *The feed is written last.* `publish` uploads the release's files first and pushes the feed commit after them, so a feed never names a file that is not there yet.
+- **The feed's URL is fixed for good**, because every installed copy asks it. It holds the host, the owner, the repository's name and the branch's name, so none of the four can change without stranding the installed copies. The downloads a feed names are the release's files on Forgejo.
+- **Every download is signed** with the project's Ed25519 key, and each app carries the public key (`win_sparkle_set_eddsa_public_key`; `SUPublicEDKey`). A file the key did not sign is not installed, whoever controls the feed and the downloads, as long as the file that was verified is the file that runs (§11.4) and the key itself is not theirs too: with the key a secret of the same Forgejo instance that serves the feeds and the releases, whoever controls that server controls all three.
+- **A signature has no expiry and names no version.** A file signed once verifies for good, so whoever controls a feed can offer any release that was ever signed. Releases from before the updater carry no signature and cannot be offered. On macOS Sparkle compares versions; on Windows Code++ refuses a package that is not newer than itself (§11.4), and Windows Installer refuses an older `x.y.z` over a newer one besides (§9.2), though not the same `x.y.z`, which §11.6 never builds twice.
+- **The macOS feed is signed too**, with `SURequireSignedFeed` on from the first release that has an updater, so a copy never exists that accepts an unsigned feed. Sparkle 2.6.4 or later, for the signature-check fix its release notes describe.
+- **WinSparkle is not known to verify the feed itself**; its header speaks only of the update file's signature. So the Windows feed is untrusted input, and its integrity rests on the account and token that may push to the branch.
+  - Whoever can change it can withhold updates for as long as they hold it, keeping every Windows copy on the version it has. Nothing in this design defends against that; a signed macOS feed can be withheld or replayed the same way.
+  - Its texts (title, version, description) are shown in WinSparkle's window, and its download URL is fetched, whatever they say. The download is verified; the request is still made.
+  - Until §11.10 settles what WinSparkle renders and fetches, the Windows feed carries no release-notes link, since WinSparkle shows release notes in an embedded web view.
+
+**Signing runs in CI, with the key as a Forgejo Actions secret.** That is the maintainer's decision, over signing by hand on the maintainer's own machine.
+
+- The key is given to one job only, after every build has finished, and never to a build job: §9.2's rule that the build jobs hold no secrets stays. It is given to one runner only, is passed to the signing tool without being written under the workspace, and nothing of it is left on the runner afterwards.
+- **The boundary is the runner, not the job.** The runner is persistent and also runs CI's jobs, under the same account. Code that runs there, a pull request's build script among it, can leave something behind that reads the key the next time the signing job runs. So what protects the key is what keeps such code off the runner, which is what protects the two release tokens today: `v*` tags and `main` protected, and no CI run for a pull request from outside without approval (`docs/RELEASING.md` §5).
+- **Who else can have it.** Whoever administers the Forgejo server can read its secrets. And an account that may push a branch to the repository can push one whose workflow uses the secret, unless Forgejo can keep a secret to protected branches and tags (§11.10). Today both are the maintainer alone; a second account with write access would be a second holder of the key.
+- **The stake is higher than a token's, and this is recorded as accepted.** A stolen token can replace a release's files, which is visible and ends when the token is revoked. A stolen update key signs updates that every installed copy accepts, and it cannot be revoked: a new key reaches a copy only through an update signed with the old one, and a copy that never takes that update trusts the old key for good. A runner that runs nothing but the signing job, under an account of its own, would narrow this to that runner, and is the hardening to add if the setup allows it.
+- The private key is also to be kept offline, encrypted, in a place of the maintainer's. Losing it strands every installed copy on its version.
+
+### 11.8 What changes in the packages
+
+- The `.msi` gains `WinSparkle.dll`, and `Code++.app` gains `Sparkle.framework`, signed ad hoc with the bundle. Each is downloaded at packaging time at a pinned version and checked against a hash the script holds, as WiX is (§9.2). `THIRD_PARTY_LICENSES.md` gains both, with what each bundles. The zip does not carry the DLL, which it would never load, so the packaging script's rule that the `.msi` holds exactly the zip's files (§9.2) gains that one named difference.
+- The `.msi` writes the registry value that holds its folder (§11.4), and the packaging script's list of allowed registry keys names it.
+- `Info.plist` gains the feed URL, the public key and `SURequireSignedFeed`.
+- The release workflow gains the signing step, writes the three feeds and pushes them to the `appcast` branch (§11.7), and uploads the `.deb` to the package registry (§11.9).
+
+### 11.9 Linux: the apt repository
+
+Forgejo has a Debian package registry built in, and the release publishes the `.deb` to it, so a user who has added the repository once gets every later version from `apt upgrade`.
+
+- **It works on the project's instance.** Measured: `git.fiedler.live` runs Forgejo 14.0.3, and `https://git.fiedler.live/api/packages/tux/debian/repository.key` answers with a key without authentication, so the registry is enabled and public. Nothing has been uploaded to it yet.
+- **The registry belongs to an owner, not to a repository** (Forgejo's documentation): the repository's address is `https://git.fiedler.live/api/packages/tux/debian`. The package is linked to the Code++ repository once, by hand, in the package's settings, so that it shows on the project's page.
+- **Publishing** is one HTTP `PUT` of the `.deb` to `…/debian/pool/<distribution>/<component>/upload`, with a token, from `publish`. The distribution is `stable` and the component `main`: the package is one build for one architecture, and its own dependencies (§9.2) already keep it off a system it cannot run on. Forgejo's documentation says a distribution "may match the release name of the OS" and does not say that it must; an upload under `stable` is the first thing to try.
+- **A version is published once.** The registry refuses a second upload of the same name, version, distribution, component and architecture (`409 Conflict`, from its documentation). That agrees with §11.6, and it means a second run of `publish` for the same tag must take the refusal for "already there" rather than fail.
+- **A user adds the repository with two commands**, which the README and the release notes give: download the key into `/etc/apt/keyrings/`, and add a `deb [signed-by=…] https://git.fiedler.live/api/packages/tux/debian stable main` line. The `.deb` from the release page stays as the way to install without adding anything.
+- **The `.deb` never adds the repository itself.** A package could ship the key and the sources file as plain files, and a `.deb` installed by hand would then update itself from that day on. The maintainer decided against it: a package source is added by the user who wants it, not by a package they installed. So a `.deb` installed by hand stays at its version until the user adds the repository or installs a newer file.
+- **Who is trusted.** Forgejo signs the repository's index with a PGP key it keeps on the server, and `apt` checks that signature. So what `apt` installs is whatever the registry holds: the project's Ed25519 key plays no part on Linux, and the trust is in the server and in the token that may upload. A package is installed as root and may run scripts of its own as root, though Code++'s has none (§9.2). **So a token that can upload packages is worth as much as the update key**, and has the same protection and the same limit (§11.7): a token of its own, with no scope but packages if Forgejo offers that (§11.10), given to the publishing job alone, on a runner that is the real boundary. Whoever administers the server can sign an index too.
+- **The first trust is the connection.** A user downloads the repository's key from the server it will verify, so the first use rests on TLS to `git.fiedler.live` alone. The key's fingerprint is published in the README, which the GitHub mirror also carries, so that it can be compared with a copy the server did not serve, and the README's commands show the downloaded key's fingerprint (`gpg --show-keys`) before the key is used.
+
+### 11.10 To verify before building, and what is open
+
+To try, each against the real library, before the design above is relied on:
+
+- **WinSparkle and an `.msi`:** that the signature is verified before the installer callback runs, how long the downloaded file lives, and that an installer started as Code++ exits does not find `codepp.exe` still in use.
+- **WinSparkle's footprint:** the time `LoadLibraryExW` takes on a worker, with §11.2's flags, and the private memory the DLL adds, for §11.2.
+- **WinSparkle and the feed:** whether anything in it is verified; what it renders from a hostile feed besides release notes (title, version, description); and what it fetches: whether a download URL that is not `https:` is taken, whether a redirect to another scheme is followed, and that a TLS error ends the check rather than falling back.
+- **WinSparkle's download:** where the file is kept and who can write there; whether it bounds a download's size; and whether the callback's path can be opened denying writes, verified and handed to `msiexec` through an inherited handle, as §11.4 intends. For a per-machine installation that means showing, with a second process trying to write, replace and delete the file from the moment of the callback to the end of the installation, that it cannot, and that what is installed comes from the held file alone, the copy Windows Installer keeps of a package included. Code++ must not exit before the installer's process exists and holds the handle. This is the gate §11.4 sets on per-machine updates.
+- **WinSparkle's imports:** that it loads and works under the search flag of §11.2, including the DLLs it loads later by name, which its import table does not show.
+- **The key as a secret:** whether Forgejo can keep a secret to protected branches and tags, so that a workflow on any other branch does not get it.
+- **Ed25519 in Code++, and the signature to verify:** that fetching the feed a second time gives Code++ the signature WinSparkle verified against (§11.4), and whether CNG verifies Ed25519 on every Windows version Code++ supports. If not, the choice is a crate from `deny.toml`'s allowlist, which would be the first crypto crate in the tree, or leaving the second verification out and saying so.
+- **Windows Installer and versions:** how a package's version is read before it is run, and what Windows Installer does with a package of the same `x.y.z` and with an older one, per-user and per-machine.
+- **Sparkle with an ad-hoc signature:** that the app loads the framework at run time, and updates, without a Developer ID; and that `SURequireSignedFeed` is honoured there, with a feed whose signature is missing and one whose signature is wrong. Its documentation warns that the system may refuse to load it under an ad-hoc signature; its own test app is ad-hoc signed with EdDSA.
+- **Sparkle with its scheduler off:** that a background check asked for by the app behaves as §11.3 needs; and that the two permission prompts §11.3 expects to suppress do not appear.
+- **Sparkle's install:** that an archive is verified before it is unpacked, and what happens to a copy on a read-only or translocated path (§11.4).
+- **One key for both:** that a signature made by one project's tool verifies in the other, so a single key and a single signing step serve both feeds; and whether the signing can run on the Linux runner, or needs Sparkle's `sign_update` on the macOS one. Whichever it is, the key is on that one runner only.
+- **A feed served as `text/plain`:** that both libraries read a feed Forgejo serves raw, whatever its content type.
+- **The registry:** an upload under `stable` and `main`, and `apt update` and `apt install codepp` against it on a clean Debian or Ubuntu system.
+- **Forgejo's permissions:** whether a token can be limited to writing packages, and to one package; and that a branch can be protected against force-pushes and deletion.
+
+Open:
+
+- **Restarting after a Windows update.** The `.msi` runs no code of its own (§9.2), so it cannot start Code++ when it finishes.
+- **`NPPM_DISABLEAUTOUPDATE`**, a no-op today because there was nothing to disable. What Notepad++ does for it has to be measured before Code++ answers it.
+- **Replacing the key.** Neither library is known to accept a second public key, so a key can be replaced only by an update signed with the old one (§11.7). Whether a second, unused key can be built in from the start is not looked into.
