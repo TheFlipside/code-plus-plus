@@ -5396,6 +5396,7 @@ mod display_tests {
         crate::preferences::dialog_tests::the_category_list_shows_the_page_it_names();
         crate::preferences::dialog_tests::the_dialog_opens_with_focus_in_the_category_list();
         crate::preferences::dialog_tests::read_back_takes_every_page_as_the_user_left_it();
+        crate::preferences::dialog_tests::the_auto_updater_field_follows_what_the_copy_can_do();
         crate::dock::departure_tests::a_widget_moved_elsewhere_ends_its_registration();
         crate::dock::departure_tests::a_widget_put_back_keeps_its_registration();
         crate::dock::departure_tests::a_wrapped_widget_stays_until_its_wrapper_leaves();

@@ -1,25 +1,27 @@
 //! The Preferences dialog for the Cocoa backend.
 //!
 //! Mirrors `ui_gtk::preferences` and the Win32 `preferences` module, and
-//! edits the same two categories: **Recent Files History**
+//! edits the same three categories: **Recent Files History**
 //! ([`codepp_core::preferences::RecentFilesHistoryConfig`]), which shapes
-//! the File menu's recent-files region, and **Security**
+//! the File menu's recent-files region; **Security**
 //! ([`codepp_core::preferences::SecurityConfig`]), the guard on plugin
-//! panels' startup commands. On Close the controls are read back and
+//! panels' startup commands; and **MISC.**
+//! ([`codepp_core::preferences::MiscConfig`]), the "Auto-updater"
+//! pop-up (DESIGN.md §11.5). On Close the controls are read back and
 //! written through `Shell::set_preferences`, which clamps and persists
 //! them; the File menu picks the change up the next time it opens, since
 //! that region is rebuilt on every open, and the guard is consulted at
 //! the next start.
 //!
 //! **Why tabs in an `NSAlert` rather than a window.** Win32 and GTK show
-//! their categories as a list beside the page it picks. With two
+//! their categories as a list beside the page it picks. With three
 //! categories and a handful of controls each, a tab view is the Mac shape
 //! of the same thing — the one `System Settings`-era apps still use for
 //! a small pane — and it keeps the dialog an alert with an accessory
 //! view, a modal path this backend already exercises in three places,
 //! where a fresh `NSWindow` would need its own `setReleasedWhenClosed(false)`
-//! lifecycle care (DESIGN.md §7.4 records why). Both pages are read back
-//! at Close, the one not showing included.
+//! lifecycle care (DESIGN.md §7.4 records why). Every page is read back
+//! at Close, the ones not showing included.
 //!
 //! It lives in the **application menu** as "Settings…" with ⌘, — the
 //! placement and shortcut macOS mandates — rather than under a Settings
@@ -28,14 +30,14 @@
 use objc2::rc::Retained;
 use objc2::{sel, MainThreadOnly};
 use objc2_app_kit::{
-    NSAlert, NSBox, NSButton, NSButtonType, NSFont, NSTabView, NSTextField, NSTextFieldBezelStyle,
-    NSView,
+    NSAlert, NSBox, NSButton, NSButtonType, NSFont, NSPopUpButton, NSTabView, NSTextField,
+    NSTextFieldBezelStyle, NSView,
 };
 use objc2_foundation::{MainThreadMarker, NSPoint, NSRect, NSSize, NSString};
 
 use codepp_core::preferences::{
-    Preferences, RecentFileDisplayMode, RecentFilesHistoryConfig, CUSTOM_MAX_LENGTH_LIMIT,
-    MAX_ENTRIES_LIMIT,
+    Preferences, RecentFileDisplayMode, RecentFilesHistoryConfig, AUTO_UPDATER_CHOICES,
+    AUTO_UPDATER_HELP, AUTO_UPDATER_UNAVAILABLE, CUSTOM_MAX_LENGTH_LIMIT, MAX_ENTRIES_LIMIT,
 };
 
 use crate::menu::Actions;
@@ -87,12 +89,15 @@ session file, and one set by a plugin that is not the panel's own. \
 The panel keeps its place until you open it from its plugin's menu.\n\n\
 With this off, every saved command runs, as in Notepad++.";
 
-/// The controls the read-back needs, both pages'. Held only for the
+/// The controls the read-back needs, every page's. Held only for the
 /// life of one modal session.
 pub(crate) struct Controls {
     history: HistoryControls,
     /// The Security page's one switch.
     verify_panel_commands: Retained<NSButton>,
+    /// The MISC. page's "Auto-updater" pop-up, one item for each row of
+    /// [`AUTO_UPDATER_CHOICES`].
+    auto_updater: Retained<NSPopUpButton>,
 }
 
 /// The Recent Files History page's controls.
@@ -110,7 +115,9 @@ pub(crate) fn show() {
     let Some(mtm) = MainThreadMarker::new() else {
         return;
     };
-    let Some(current) = with_state(|st| st.shell.preferences.clone()) else {
+    let Some((current, can_self_update)) =
+        with_state(|st| (st.shell.preferences.clone(), st.shell.can_self_update()))
+    else {
         return;
     };
 
@@ -118,12 +125,16 @@ pub(crate) fn show() {
     // takes the same freeze every other modal on this backend does — a
     // worker wake could otherwise drain the shell mid-dialog.
     let _freeze = crate::DrainFreeze::new();
-    let (alert, controls) = build_dialog(&current, mtm);
+    let (alert, controls) = build_dialog(&current, can_self_update, mtm);
     alert.runModal();
 
     let mut updated = current.clone();
     updated.recent_files_history = read_back(&controls.history, &current.recent_files_history);
     updated.security.verify_panel_commands = controls.verify_panel_commands.state() != 0;
+    // No item selected (-1) is no choice, and changes nothing.
+    if let Ok(row) = usize::try_from(controls.auto_updater.indexOfSelectedItem()) {
+        updated.misc.set_auto_updater_row(row);
+    }
     if updated != current {
         with_state(|st| st.shell.set_preferences(updated));
     }
@@ -136,26 +147,44 @@ pub(crate) fn show() {
 /// Split from [`show`] so the wiring can be checked without entering a
 /// modal session — `runModal` cannot return without a human. Same
 /// reasoning, and the same split, as `search::build_goto_alert`.
+///
+/// `can_self_update` is `Shell::can_self_update`: while it is false the
+/// "Auto-updater" pop-up is disabled, showing the stored choice.
 pub(crate) fn build_dialog(
     prefs: &Preferences,
+    can_self_update: bool,
     mtm: MainThreadMarker,
 ) -> (Retained<NSAlert>, Controls) {
     let alert = NSAlert::new(mtm);
     alert.setMessageText(&NSString::from_str("Preferences"));
     alert.addButtonWithTitle(&NSString::from_str("Close"));
 
-    // The Security page's help text decides its height, so it is measured
-    // before the tab view is sized: both pages get the taller of the two.
+    // The Security and MISC. pages' help texts decide their heights, so
+    // they are measured before the tab view is sized: every page gets
+    // the tallest of the three.
     let help = help_label(VERIFY_PANEL_COMMANDS_HELP, mtm);
     let required_security_height =
         security_page_height(fit_to_width(&help, WIDTH - HELP_WIDTH_ALLOWANCE));
+    let updater_help = help_label(
+        if can_self_update {
+            AUTO_UPDATER_HELP
+        } else {
+            AUTO_UPDATER_UNAVAILABLE
+        },
+        mtm,
+    );
+    let required_misc_height =
+        security_page_height(fit_to_width(&updater_help, WIDTH - HELP_WIDTH_ALLOWANCE));
     let tabs = NSTabView::initWithFrame(
         NSTabView::alloc(mtm),
         NSRect::new(
             NSPoint::new(0.0, 0.0),
             NSSize::new(
                 WIDTH,
-                HISTORY_HEIGHT.max(required_security_height) + TAB_CHROME,
+                HISTORY_HEIGHT
+                    .max(required_security_height)
+                    .max(required_misc_height)
+                    + TAB_CHROME,
             ),
         ),
     );
@@ -177,12 +206,23 @@ pub(crate) fn build_dialog(
         mtm,
     );
 
+    let (misc_page, misc_height) = crate::search::tab_page("MISC.", &tabs, mtm);
+    let auto_updater = build_misc_page(
+        &misc_page,
+        misc_height,
+        &updater_help,
+        prefs.misc.auto_updater_row(),
+        can_self_update,
+        mtm,
+    );
+
     alert.setAccessoryView(Some(&tabs));
     (
         alert,
         Controls {
             history,
             verify_panel_commands,
+            auto_updater,
         },
     )
 }
@@ -316,6 +356,69 @@ fn build_security_page(
     help.setFrameOrigin(NSPoint::new(BOX_PAD, help_y));
     inside.addSubview(help);
     switch
+}
+
+/// The MISC. page: one "Updates" box holding the "Auto-updater" pop-up,
+/// with an item for each row of [`AUTO_UPDATER_CHOICES`] and item `row`
+/// selected, and what the field means below it. While this copy of
+/// Code++ cannot update itself the pop-up is disabled: it shows the
+/// stored choice and cannot change it. Returns the pop-up.
+fn build_misc_page(
+    page: &NSView,
+    height: f64,
+    help: &NSTextField,
+    row: usize,
+    can_self_update: bool,
+    mtm: MainThreadMarker,
+) -> Retained<NSPopUpButton> {
+    /// Width of the "Auto-updater:" label ahead of the pop-up.
+    const LABEL_WIDTH: f64 = 100.0;
+    /// Width of the pop-up, enough for its longest item.
+    const POPUP_WIDTH: f64 = 120.0;
+
+    let width = page.frame().size.width;
+    let frame = NSBox::initWithFrame(
+        NSBox::alloc(mtm),
+        NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(width, height)),
+    );
+    frame.setTitle(&NSString::from_str("Updates"));
+    page.addSubview(&frame);
+    // As in `build_security_page`: the box is the fallback only so that
+    // there is no panic path in a dialog.
+    let inside: Retained<NSView> = frame
+        .contentView()
+        .unwrap_or_else(|| Retained::into_super(frame.clone()));
+    let inner = inside.frame().size;
+    let help_height = fit_to_width(help, inner.width - 2.0 * BOX_PAD);
+    // The pop-up's row takes the switch's place in the Security page's
+    // layout, and the help text sits below it the same way.
+    let (row_y, help_y) = security_rows(inner.height, help_height);
+    // A label is `GAP` shorter than the pop-up's row, so it is raised by
+    // half of that to sit level with the pop-up's text.
+    inside.addSubview(&label(
+        "Auto-updater:",
+        BOX_PAD,
+        row_y + GAP / 2.0,
+        LABEL_WIDTH,
+        mtm,
+    ));
+    let popup = NSPopUpButton::initWithFrame_pullsDown(
+        NSPopUpButton::alloc(mtm),
+        NSRect::new(
+            NSPoint::new(BOX_PAD + LABEL_WIDTH, row_y),
+            NSSize::new(POPUP_WIDTH, ROW),
+        ),
+        false,
+    );
+    for (title, _) in AUTO_UPDATER_CHOICES {
+        popup.addItemWithTitle(&NSString::from_str(title));
+    }
+    popup.selectItemAtIndex(isize::try_from(row).unwrap_or(0));
+    popup.setEnabled(can_self_update);
+    inside.addSubview(&popup);
+    help.setFrameOrigin(NSPoint::new(BOX_PAD, help_y));
+    inside.addSubview(help);
+    popup
 }
 
 /// Where the switch and the help text sit in the box's content view,

@@ -1,12 +1,16 @@
 //! Settings → Preferences… dialog for the GTK backend.
 //!
 //! Mirrors the Win32 `preferences` module, layout included: a category
-//! list on the left and the selected category's page on the right. Two
+//! list on the left and the selected category's page on the right. Three
 //! categories today, in the Win32 list's order and with its names —
 //! **Recent Files History**
-//! ([`codepp_core::preferences::RecentFilesHistoryConfig`]) and
+//! ([`codepp_core::preferences::RecentFilesHistoryConfig`]),
 //! **Security** ([`codepp_core::preferences::SecurityConfig`]), the guard
-//! on plugin panels' startup commands. The pages sit in a `GtkStack`,
+//! on plugin panels' startup commands, and **MISC.**
+//! ([`codepp_core::preferences::MiscConfig`]), the "Auto-updater"
+//! drop-down, greyed while `Shell::can_self_update` is false, which on
+//! this platform it stays, since a package manager updates Code++ here
+//! (DESIGN.md §11). The pages sit in a `GtkStack`,
 //! and the list is a `GtkListBox` in a bordered scrolled window, like the
 //! Win32 list box, with a row made from each of the stack's pages, so a
 //! page cannot lack a row or a row a page. The dialog opens with keyboard
@@ -25,8 +29,8 @@
 //! including the negative-sense "Don't check at launch time" checkbox.
 
 use codepp_core::preferences::{
-    Preferences, RecentFileDisplayMode, RecentFilesHistoryConfig, CUSTOM_MAX_LENGTH_LIMIT,
-    MAX_ENTRIES_LIMIT,
+    Preferences, RecentFileDisplayMode, RecentFilesHistoryConfig, AUTO_UPDATER_CHOICES,
+    AUTO_UPDATER_HELP, AUTO_UPDATER_UNAVAILABLE, CUSTOM_MAX_LENGTH_LIMIT, MAX_ENTRIES_LIMIT,
 };
 use gtk::prelude::*;
 
@@ -83,6 +87,9 @@ struct Controls {
     history: HistoryControls,
     /// The Security page's checkbox.
     verify: gtk::CheckButton,
+    /// The MISC. page's "Auto-updater" drop-down, one row for each of
+    /// [`AUTO_UPDATER_CHOICES`].
+    auto_updater: gtk::ComboBoxText,
 }
 
 /// What [`build_content`] builds.
@@ -100,10 +107,12 @@ struct Body {
 /// presents them a category at a time, and on Close writes the (clamped)
 /// result back through `Shell::set_preferences`.
 pub(crate) fn show(window: &gtk::Window) {
-    let Some(current) = with_state(|st| st.shell.preferences.clone()) else {
+    let Some((current, can_self_update)) =
+        with_state(|st| (st.shell.preferences.clone(), st.shell.can_self_update()))
+    else {
         return;
     };
-    let (dialog, controls) = build_dialog(window, &current);
+    let (dialog, controls) = build_dialog(window, &current, can_self_update);
     run_frozen(&dialog);
     // Every close — the button, Esc, the window's own close — reads back,
     // as on Win32.
@@ -129,7 +138,11 @@ pub(crate) fn show(window: &gtk::Window) {
 /// Build the dialog over `window`, seeded from `current`, and show it with
 /// keyboard focus on the category list's selected row. Returns the dialog
 /// and the [`Controls`] [`read_back`] reads.
-fn build_dialog(window: &gtk::Window, current: &Preferences) -> (gtk::Dialog, Controls) {
+fn build_dialog(
+    window: &gtk::Window,
+    current: &Preferences,
+    can_self_update: bool,
+) -> (gtk::Dialog, Controls) {
     let dialog = gtk::Dialog::with_buttons(
         Some("Preferences"),
         Some(window),
@@ -142,7 +155,7 @@ fn build_dialog(window: &gtk::Window, current: &Preferences) -> (gtk::Dialog, Co
     content.set_margin_bottom(PAD);
     content.set_margin_start(PAD);
     content.set_margin_end(PAD);
-    let body = build_content(current);
+    let body = build_content(current, can_self_update);
     content.pack_start(&body.root, true, true, 0);
 
     dialog.show_all();
@@ -169,10 +182,13 @@ fn run_frozen(dialog: &gtk::Dialog) {
 }
 
 /// Build the dialog's content, seeded from `current`: the category list
-/// beside a stack holding one page per category.
-fn build_content(current: &Preferences) -> Body {
+/// beside a stack holding one page per category. `can_self_update` is
+/// `Shell::can_self_update`: while it is false the "Auto-updater"
+/// drop-down is greyed.
+fn build_content(current: &Preferences, can_self_update: bool) -> Body {
     let (recent_files, history) = recent_files_page(&current.recent_files_history);
     let (security, verify) = security_page(current.security.verify_panel_commands);
+    let (misc, auto_updater) = misc_page(current.misc.auto_updater_row(), can_self_update);
 
     // Titled and ordered as the Win32 list's rows: `category_list` makes
     // its rows from these. Each page is shown before it is added, because
@@ -182,6 +198,7 @@ fn build_content(current: &Preferences) -> Body {
     for (page, title) in [
         (&recent_files, "Recent Files History"),
         (&security, "Security"),
+        (&misc, "MISC."),
     ] {
         page.show_all();
         stack.add_titled(page, title, title);
@@ -194,7 +211,11 @@ fn build_content(current: &Preferences) -> Body {
     Body {
         root,
         list,
-        controls: Controls { history, verify },
+        controls: Controls {
+            history,
+            verify,
+            auto_updater,
+        },
     }
 }
 
@@ -349,6 +370,40 @@ fn security_page(verify: bool) -> (gtk::Box, gtk::CheckButton) {
     (page, check)
 }
 
+/// The MISC. page: the "Auto-updater" drop-down with the rows of
+/// [`AUTO_UPDATER_CHOICES`], showing row `row`, and what it means below
+/// it, in a frame captioned as the Win32 page's is. While this copy of
+/// Code++ cannot update itself the drop-down is greyed: it shows the
+/// stored choice and cannot change it. Returns the page and the
+/// drop-down.
+fn misc_page(row: usize, can_self_update: bool) -> (gtk::Box, gtk::ComboBoxText) {
+    let section = section_box();
+    let line = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+    line.pack_start(&gtk::Label::new(Some("Auto-updater:")), false, false, 0);
+    let combo = gtk::ComboBoxText::new();
+    for (label, _) in AUTO_UPDATER_CHOICES {
+        combo.append_text(label);
+    }
+    combo.set_active(u32::try_from(row).ok());
+    combo.set_sensitive(can_self_update);
+    line.pack_start(&combo, false, false, 0);
+    section.pack_start(&line, false, false, 0);
+    let help = gtk::Label::new(Some(if can_self_update {
+        AUTO_UPDATER_HELP
+    } else {
+        AUTO_UPDATER_UNAVAILABLE
+    }));
+    help.set_xalign(0.0);
+    help.set_line_wrap(true);
+    help.set_max_width_chars(60);
+    help.style_context().add_class("dim-label");
+    section.pack_start(&help, false, false, 0);
+
+    let page = page_box();
+    page.pack_start(&framed("Updates", &section), false, false, 0);
+    (page, combo)
+}
+
 /// Read every page's controls back into a copy of `prior`, whichever page
 /// is showing. `SpinButton` ranges already clamp, and
 /// `Shell::set_preferences` clamps again defensively, so `as u32` here is
@@ -378,6 +433,10 @@ fn read_back(c: &Controls, prior: &Preferences) -> Preferences {
         RecentFileDisplayMode::FullPath
     };
     updated.security.verify_panel_commands = c.verify.is_active();
+    // No row selected is no choice, and changes nothing.
+    if let Some(row) = c.auto_updater.active() {
+        updated.misc.set_auto_updater_row(row as usize);
+    }
     updated
 }
 
@@ -412,7 +471,8 @@ fn framed(title: &str, child: &impl IsA<gtk::Widget>) -> gtk::Frame {
 pub(crate) mod dialog_tests {
     use super::{build_content, build_dialog, read_back, Body};
     use codepp_core::preferences::{
-        Preferences, RecentFileDisplayMode, CUSTOM_MAX_LENGTH_LIMIT, MAX_ENTRIES_LIMIT,
+        Preferences, RecentFileDisplayMode, AUTO_UPDATER_CHOICES, AUTO_UPDATER_HELP,
+        AUTO_UPDATER_UNAVAILABLE, CUSTOM_MAX_LENGTH_LIMIT, MAX_ENTRIES_LIMIT,
     };
     use gtk::prelude::*;
 
@@ -420,22 +480,25 @@ pub(crate) mod dialog_tests {
     /// the page holding its own controls. The dialog opens on the first.
     pub(crate) fn the_category_list_shows_the_page_it_names() {
         gtk::init().expect("gtk::init failed — no display?");
-        let body = build_content(&Preferences::default());
+        let body = build_content(&Preferences::default(), true);
         body.root.show_all();
         let stack = stack_of(&body);
         let list = &body.list;
 
         let titles: Vec<String> = list.children().iter().map(row_title).collect();
-        assert_eq!(titles, ["Recent Files History", "Security"]);
+        assert_eq!(titles, ["Recent Files History", "Security", "MISC."]);
 
         let history = body.controls.history.dont_check.upcast_ref::<gtk::Widget>();
         let guard = body.controls.verify.upcast_ref::<gtk::Widget>();
+        let updater = body.controls.auto_updater.upcast_ref::<gtk::Widget>();
         assert_eq!(list.selected_row().map(|r| r.index()), Some(0));
         assert!(showing(&stack, history), "opens on Recent Files History");
         // Back to the first row as well, so its page is shown by the row and
         // not only by being where the dialog opens.
         select(list, 1);
         assert!(showing(&stack, guard), "the Security row shows the guard");
+        select(list, 2);
+        assert!(showing(&stack, updater), "the MISC. row shows the updater");
         select(list, 0);
         assert!(showing(&stack, history), "the first row shows its page");
     }
@@ -446,7 +509,7 @@ pub(crate) mod dialog_tests {
     pub(crate) fn the_dialog_opens_with_focus_in_the_category_list() {
         gtk::init().expect("gtk::init failed — no display?");
         let parent = gtk::Window::new(gtk::WindowType::Toplevel);
-        let (dialog, _) = build_dialog(&parent, &Preferences::default());
+        let (dialog, _) = build_dialog(&parent, &Preferences::default(), true);
         let list: gtk::ListBox =
             find(dialog.upcast_ref()).expect("the dialog holds a category list");
         let row = list.selected_row().expect("a row is selected");
@@ -466,27 +529,39 @@ pub(crate) mod dialog_tests {
     pub(crate) fn read_back_takes_every_page_as_the_user_left_it() {
         gtk::init().expect("gtk::init failed — no display?");
         for prefs in samples() {
-            let body = build_content(&prefs);
-            body.root.show_all();
-            assert_eq!(
-                read_back(&body.controls, &prefs),
-                prefs,
-                "an untouched dialog changes nothing"
-            );
+            // Greyed or not, an untouched drop-down is read back as it
+            // was seeded.
+            for can_self_update in [false, true] {
+                let body = build_content(&prefs, can_self_update);
+                body.root.show_all();
+                assert_eq!(
+                    read_back(&body.controls, &prefs),
+                    prefs,
+                    "an untouched dialog changes nothing"
+                );
+            }
         }
 
         let prior = Preferences::default();
-        let body = build_content(&prior);
+        let body = build_content(&prior, true);
         body.root.show_all();
         let stack = stack_of(&body);
         let (c, list) = (&body.controls, &body.list);
         // Changed on the Security page, which is then left.
         select(list, 1);
         c.verify.set_active(!prior.security.verify_panel_commands);
+        // And on the MISC. page: the other row of the drop-down.
+        select(list, 2);
+        let other_row = (prior.misc.auto_updater_row() + 1) % AUTO_UPDATER_CHOICES.len();
+        c.auto_updater.set_active(u32::try_from(other_row).ok());
         select(list, 0);
         assert!(
             !showing(&stack, c.verify.upcast_ref()),
             "the Security page must not be showing"
+        );
+        assert!(
+            !showing(&stack, c.auto_updater.upcast_ref()),
+            "the MISC. page must not be showing"
         );
         let h = &c.history;
         h.dont_check.set_active(prior.recent_files_history.enabled);
@@ -512,6 +587,63 @@ pub(crate) mod dialog_tests {
             got.security.verify_panel_commands,
             !prior.security.verify_panel_commands
         );
+        assert_eq!(got.misc.auto_updater, !prior.misc.auto_updater);
+
+        // A drop-down with no row selected is no choice.
+        c.auto_updater.set_active(None);
+        assert_eq!(
+            read_back(c, &prior).misc.auto_updater,
+            prior.misc.auto_updater
+        );
+    }
+
+    /// The drop-down has the shared table's rows in its order and shows
+    /// the stored choice. On a copy that cannot update itself it is
+    /// greyed and the page says so; on one that can, it is not, and the
+    /// page says what the field means.
+    pub(crate) fn the_auto_updater_field_follows_what_the_copy_can_do() {
+        gtk::init().expect("gtk::init failed — no display?");
+        for (row, &(_, enabled)) in AUTO_UPDATER_CHOICES.iter().enumerate() {
+            let mut prefs = Preferences::default();
+            prefs.misc.auto_updater = enabled;
+            for can_self_update in [false, true] {
+                let body = build_content(&prefs, can_self_update);
+                body.root.show_all();
+                let combo = &body.controls.auto_updater;
+                let rows = combo.model().map_or(0, |m| m.iter_n_children(None));
+                assert_eq!(usize::try_from(rows).ok(), Some(AUTO_UPDATER_CHOICES.len()));
+                assert_eq!(combo.active().map(|r| r as usize), Some(row));
+                assert_eq!(
+                    combo.active_text().as_deref(),
+                    Some(AUTO_UPDATER_CHOICES[row].0)
+                );
+                assert_eq!(combo.is_sensitive(), can_self_update);
+                let page = combo
+                    .ancestor(gtk::Frame::static_type())
+                    .expect("the drop-down is in a frame");
+                let mut texts = Vec::new();
+                labels_of(&page, &mut texts);
+                let (shown, hidden) = if can_self_update {
+                    (AUTO_UPDATER_HELP, AUTO_UPDATER_UNAVAILABLE)
+                } else {
+                    (AUTO_UPDATER_UNAVAILABLE, AUTO_UPDATER_HELP)
+                };
+                assert!(texts.iter().any(|t| t == shown), "{texts:?}");
+                assert!(!texts.iter().any(|t| t == hidden), "{texts:?}");
+            }
+        }
+    }
+
+    /// The text of every label under `widget`.
+    fn labels_of(widget: &gtk::Widget, out: &mut Vec<String>) {
+        if let Some(label) = widget.downcast_ref::<gtk::Label>() {
+            out.push(label.text().to_string());
+        }
+        if let Some(container) = widget.downcast_ref::<gtk::Container>() {
+            for child in container.children() {
+                labels_of(&child, out);
+            }
+        }
     }
 
     /// Stored preferences covering each display mode, each switch both
@@ -525,6 +657,7 @@ pub(crate) mod dialog_tests {
         h.max_entries = 0;
         h.custom_max_length = 1;
         flipped.security.verify_panel_commands = !flipped.security.verify_panel_commands;
+        flipped.misc.auto_updater = !flipped.misc.auto_updater;
 
         let mut limits = Preferences::default();
         let h = &mut limits.recent_files_history;
