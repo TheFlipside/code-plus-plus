@@ -5,21 +5,28 @@
 .DESCRIPTION
     Reads the binaries `cargo build --release --target <Target>` left in
     `target\<Target>\release` and writes two files into <OutDir>, both
-    made from one folder of files, so that they carry the same ones:
+    made from one folder of files:
 
       codepp-<Label>-<version>.zip  `codepp.exe`, the bundled plugin
                                     DLLs and the licence files, with no
                                     folder around them: Explorer's
                                     "Extract All" makes one named after
                                     the zip.
-      codepp-<Label>-<version>.msi  an installer for the same files,
-                                    built from
-                                    packaging\windows\codepp.wxs, which
-                                    says what else it sets up.
+      codepp-<Label>-<version>.msi  an installer for the same files and
+                                    one more, `WinSparkle.dll`, built
+                                    from packaging\windows\codepp.wxs,
+                                    which says what else it sets up.
 
     The plugin DLLs sit beside the executable in both, which is where
     `codepp_platform::stage_bundled_plugins` looks for them on first
     start.
+
+    `WinSparkle.dll` is the updater's library (DESIGN.md section 11).
+    Only an installed Code++ updates itself, so only the installer
+    carries it; a Code++ run from the zip would never load it. It is
+    not built here: the script fetches WinSparkle's release zip from
+    GitHub at each run, whose version and SHA-256 are written below,
+    and takes the one file out of it.
 
     The version comes from CODEPP_RELEASE_VERSION, which the workflow
     also gives the build, so the files' names and the About dialog
@@ -75,6 +82,27 @@ $wixPackages = @{
     'wixtoolset.ui.wixext' = '5EF2C707614B9F70B6BBADD2D4ABCB4124EFEE215E9B16BFBC80113079A604C7'
 }
 
+# WinSparkle, as its project publishes it on GitHub: the version, the
+# SHA-256 of the release zip, which is the digest GitHub shows for the
+# file, and the SHA-256 of the one file taken out of it, the x64 DLL.
+# The second says which bytes an installation holds, to whoever wants
+# to compare. Code++ refuses a WinSparkle.dll of any other version
+# (crates\platform\src\winsparkle.rs), so the version here and
+# `EXPECTED_VERSION` there move together; so do the notices in
+# THIRD_PARTY_LICENSES.md, which name what this version bundles. To
+# move to another version, download the zip, compare its SHA-256 with
+# the digest on the release's page, write both hashes here, run the
+# binding's opt-in test against the new DLL (docs/DEVELOPMENT.md),
+# then build the installer and update an installed Code++ with it once.
+$winSparkleVersion = '0.9.4'
+$winSparkleZipSha256 = '6037DF37FC263BD1650A1C4949681A9D40FFE991D01F35892A406CB5D103C976'
+$winSparkleDllSha256 = '9B43B1C16EE39FB9A91B5BD75138767898779510E0836BE2919250607CDBE8AB'
+# The release zip holds a DLL for each architecture; this is the one
+# for the only target a Windows release is built for.
+if ($Target -ne 'x86_64-pc-windows-msvc') {
+    throw "no WinSparkle.dll is pinned for the target '$Target', only for x86_64-pc-windows-msvc"
+}
+
 # The preinstalled plugins (DESIGN.md section 6.6). `example_hello` is the SDK
 # sample and is left out of a release; staging skips a plugin that is
 # not beside the executable.
@@ -125,6 +153,33 @@ function ConvertTo-LicenceRtf {
     $rtf.ToString()
 }
 
+# Download <Url> to <File> and refuse it unless it has the expected
+# SHA-256.
+function Get-VerifiedFile {
+    param(
+        [Parameter(Mandatory = $true)][string]$Url,
+        [Parameter(Mandatory = $true)][string]$Sha256,
+        [Parameter(Mandatory = $true)][string]$File
+    )
+    # Windows PowerShell 5.1 does not offer TLS 1.2 unless asked.
+    [System.Net.ServicePointManager]::SecurityProtocol =
+        [System.Net.ServicePointManager]::SecurityProtocol -bor [System.Net.SecurityProtocolType]::Tls12
+    # With a time limit, so that a connection that stalls fails the job
+    # instead of holding it; and without the progress display, which in
+    # Windows PowerShell 5.1 slows a download many times over.
+    $ProgressPreference = 'SilentlyContinue'
+    try {
+        Invoke-WebRequest -Uri $Url -OutFile $File -UseBasicParsing -TimeoutSec 120
+    }
+    catch {
+        throw "could not download ${Url}: $($_.Exception.Message)"
+    }
+    $found = (Get-FileHash -LiteralPath $File -Algorithm SHA256).Hash
+    if ($found -ne $Sha256) {
+        throw "$Url has SHA-256 $found, not the $Sha256 this script expects; it is not used"
+    }
+}
+
 # Fetch one package from nuget.org into <Into>, refuse it unless it has
 # the expected SHA-256, and unpack it. Returns the folder it is in.
 function Get-VerifiedPackage {
@@ -135,27 +190,44 @@ function Get-VerifiedPackage {
         [Parameter(Mandatory = $true)][string]$Into
     )
     $file = Join-Path $Into "$Id.$Version.nupkg"
-    $url = "https://api.nuget.org/v3-flatcontainer/$Id/$Version/$Id.$Version.nupkg"
-    # Windows PowerShell 5.1 does not offer TLS 1.2 unless asked.
-    [System.Net.ServicePointManager]::SecurityProtocol =
-        [System.Net.ServicePointManager]::SecurityProtocol -bor [System.Net.SecurityProtocolType]::Tls12
-    # With a time limit, so that a connection that stalls fails the job
-    # instead of holding it; and without the progress display, which in
-    # Windows PowerShell 5.1 slows a download many times over.
-    $ProgressPreference = 'SilentlyContinue'
-    try {
-        Invoke-WebRequest -Uri $url -OutFile $file -UseBasicParsing -TimeoutSec 120
-    }
-    catch {
-        throw "could not download ${url}: $($_.Exception.Message)"
-    }
-    $found = (Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash
-    if ($found -ne $Sha256) {
-        throw "$url has SHA-256 $found, not the $Sha256 this script expects; it is not used"
-    }
+    Get-VerifiedFile "https://api.nuget.org/v3-flatcontainer/$Id/$Version/$Id.$Version.nupkg" $Sha256 $file
     $folder = Join-Path $Into $Id
     [System.IO.Compression.ZipFile]::ExtractToDirectory($file, $folder)
     $folder
+}
+
+# Fetch WinSparkle's release zip into <Into>, refuse it unless it has
+# the expected SHA-256, and take the x64 DLL out of it into <To>, which
+# then holds that one file. Nothing else of the zip is unpacked.
+function Get-WinSparkleDll {
+    param(
+        [Parameter(Mandatory = $true)][string]$Version,
+        [Parameter(Mandatory = $true)][string]$ZipSha256,
+        [Parameter(Mandatory = $true)][string]$DllSha256,
+        [Parameter(Mandatory = $true)][string]$Into,
+        [Parameter(Mandatory = $true)][string]$To
+    )
+    $zip = Join-Path $Into "WinSparkle-$Version.zip"
+    Get-VerifiedFile "https://github.com/vslavik/winsparkle/releases/download/v$Version/WinSparkle-$Version.zip" $ZipSha256 $zip
+    $entryName = "WinSparkle-$Version/x64/Release/WinSparkle.dll"
+    New-Item -ItemType Directory -Force -Path $To | Out-Null
+    $dll = Join-Path $To 'WinSparkle.dll'
+    $archive = [System.IO.Compression.ZipFile]::OpenRead($zip)
+    try {
+        $entries = @($archive.Entries | Where-Object { $_.FullName -ceq $entryName })
+        if ($entries.Count -ne 1) {
+            throw "expected one $entryName in WinSparkle's release zip, found $($entries.Count)"
+        }
+        [System.IO.Compression.ZipFileExtensions]::ExtractToFile($entries[0], $dll)
+    }
+    finally {
+        $archive.Dispose()
+    }
+    $found = (Get-FileHash -LiteralPath $dll -Algorithm SHA256).Hash
+    if ($found -ne $DllSha256) {
+        throw "$entryName has SHA-256 $found, not the $DllSha256 this script expects; it is not used"
+    }
+    $dll
 }
 
 # The one file of that name below a folder.
@@ -335,6 +407,10 @@ try {
     $wixUi = Get-OnlyFile (
         Get-VerifiedPackage 'wixtoolset.ui.wixext' $wixVersion $wixPackages['wixtoolset.ui.wixext'] $tools
     ) 'WixToolset.UI.wixext.dll'
+    # And the updater's library, into a folder of its own: it goes into
+    # the installer and not into the zip.
+    $updater = Join-Path $work 'updater'
+    $updaterDll = Get-WinSparkleDll $winSparkleVersion $winSparkleZipSha256 $winSparkleDllSha256 $tools $updater
 
     foreach ($binary in $binaries) {
         Copy-Item -LiteralPath $binary -Destination $stage
@@ -357,7 +433,7 @@ try {
     [System.IO.Compression.ZipFile]::CreateFromDirectory(
         $stage, $archive, [System.IO.Compression.CompressionLevel]::Optimal, $false)
 
-    # The installer, from the same folder of files.
+    # The installer, from the same folder of files and the updater's.
     $aux = Join-Path $work 'installer'
     New-Item -ItemType Directory -Force -Path $aux | Out-Null
     $licence = ConvertTo-LicenceRtf -Text (Get-Content -LiteralPath 'LICENSE' -Raw -Encoding UTF8)
@@ -378,6 +454,7 @@ try {
         '-d', "FullVersion=$version",
         '-d', "Icon=$((Resolve-Path -LiteralPath $icon).Path)",
         '-bindpath', $stage,
+        '-bindpath', $updater,
         '-bindpath', $aux,
         '-intermediatefolder', (Join-Path $work 'wix'),
         '-pdbtype', 'none',
@@ -385,10 +462,11 @@ try {
 
     # Read the installer back: that it carries the version it is named
     # for, installs for the whole machine, holds exactly the files the
-    # zip holds, each at its size, runs no code of its own while
-    # installing, and holds no table and writes no registry key but the
-    # expected ones. Windows Installer stores a file's name as
-    # `short|long` when the name does not fit 8.3.
+    # zip holds and the updater's library, each at its size and with
+    # its bytes, runs no code of its own while installing, and holds no
+    # table and writes no registry key but the expected ones. Windows
+    # Installer stores a file's name as `short|long` when the name does
+    # not fit 8.3.
     $found = @(Get-MsiRows $installer "SELECT ``Value`` FROM ``Property`` WHERE ``Property`` = 'ProductVersion'")
     if ($found.Count -ne 1 -or $found[0] -ne $productVersion) {
         throw "the installer says its version is '$($found -join ', ')', expected '$productVersion'"
@@ -402,10 +480,44 @@ try {
             $cells = $_ -split "`t"
             "$(($cells[0] -split '\|')[-1]) ($($cells[1]) bytes)"
         } | Sort-Object)
-    $staged = @(Get-ChildItem -LiteralPath $stage -File |
+    $staged = @(@(Get-ChildItem -LiteralPath $stage -File) + @(Get-Item -LiteralPath $updaterDll) |
             ForEach-Object { "$($_.Name) ($($_.Length) bytes)" } | Sort-Object)
     if (Compare-Object $staged $packed -CaseSensitive) {
-        throw "the installer holds '$($packed -join ', ')', but the zip holds '$($staged -join ', ')'; packaging\windows\codepp.wxs lists the files to install"
+        throw "the installer holds '$($packed -join ', ')', but the zip's files and the updater's library are '$($staged -join ', ')'; packaging\windows\codepp.wxs lists the files to install"
+    }
+
+    # And byte for byte, which names and sizes do not show: WiX takes
+    # the installer's files out again, each under its key in the File
+    # table, and each must have the SHA-256 of the file it was made
+    # from. For the updater's library that is the hash written above,
+    # so the installer holds the pinned bytes whatever happened to the
+    # downloaded file between its check and the build.
+    $unpacked = Join-Path $work 'readback'
+    Invoke-Tool 'wix msi decompile' 'dotnet' @(
+        $wixDll, 'msi', 'decompile', $installer,
+        '-x', $unpacked,
+        '-intermediatefolder', (Join-Path $work 'wix-readback'),
+        '-out', (Join-Path $work 'readback.wxs'))
+    $found = @(Get-MsiRows $installer 'SELECT `File`, `FileName` FROM `File`' -Columns 2)
+    foreach ($row in $found) {
+        $cells = $row -split "`t"
+        $fileName = ($cells[1] -split '\|')[-1]
+        if ($fileName -ceq (Split-Path -Leaf $updaterDll)) {
+            $expected = $winSparkleDllSha256
+        }
+        else {
+            # The name is one of the stage folder's: the comparison
+            # above has just required that.
+            $expected = (Get-FileHash -LiteralPath (Join-Path $stage $fileName) -Algorithm SHA256).Hash
+        }
+        $inside = Join-Path (Join-Path $unpacked 'File') $cells[0]
+        if (-not (Test-Path -LiteralPath $inside -PathType Leaf)) {
+            throw "WiX did not hand back the installer's $fileName to compare"
+        }
+        $actual = (Get-FileHash -LiteralPath $inside -Algorithm SHA256).Hash
+        if ($actual -ne $expected) {
+            throw "the installer's $fileName has SHA-256 $actual, not the $expected of the file it was made from"
+        }
     }
 
     # The one custom action is the UI extension's, behind the

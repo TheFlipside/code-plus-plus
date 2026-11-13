@@ -490,7 +490,8 @@ there regardless, but how dialogs behave on the runner is unverified.
 ### Test the Windows updater binding against the real DLL (Windows)
 
 `codepp_platform::winsparkle` binds `WinSparkle.dll`, which is not in
-the tree: the release packaging will download it (DESIGN.md §11.8). Its
+the tree: the release packaging downloads it for the installer
+(DESIGN.md §11.8). Its
 unit tests need no DLL. One more drives the real one through the
 binding, and is opt-in for that reason:
 
@@ -537,14 +538,14 @@ this holds (DESIGN.md §11, `codepp_shell::updater`):
 - The installation is for one account. One for the whole machine has
   no updater yet (`codepp_platform::update_install::PER_MACHINE_UPDATES`,
   DESIGN.md §11.4).
-- `WinSparkle.dll`, version 0.9.4, is beside `codepp.exe`.
+- `WinSparkle.dll`, version 0.9.4, is beside `codepp.exe`, where the
+  `.msi` puts it.
 
 So a build tree never has one, whatever its environment. To try the
 whole path, package two versions with the variables set, install the
 older for your account (`MSIINSTALLPERUSER=1 ALLUSERS=2`, as under
-"Build the installers locally"), copy the DLL beside the installed
-`codepp.exe`, and serve a feed that offers the newer, signed with
-`winsparkle-tool sign`. Use a key made for the test
+"Build the installers locally"), and serve a feed that offers the
+newer, signed with `winsparkle-tool sign`. Use a key made for the test
 (`winsparkle-tool generate-key`), never the project's. Run the installed
 copy with `APPDATA` and `TEMP` pointed at scratch folders, and with
 `CODEPP_LOG=codepp_shell=debug` to see what the updater's worker decides:
@@ -912,7 +913,7 @@ against a pre-change build (DESIGN.md §7.4).
 
 The release workflow's packaging scripts run on a developer machine too, against a release build of the same target. They need the bundled crates' notices, which the workflow generates with `cargo about`; any non-empty file stands in for a local try. `docs/RELEASING.md` §1 says what each package holds.
 
-Windows, for the zip and the `.msi`. The installer is built with WiX, which runs on .NET, so `dotnet` must be on PATH (`winget install Microsoft.DotNet.SDK.10`). The script downloads the WiX version it names from nuget.org at each run, checks it against the hashes it holds, and installs nothing:
+Windows, for the zip and the `.msi`. The installer is built with WiX, which runs on .NET, so `dotnet` must be on PATH (`winget install Microsoft.DotNet.SDK.10`). The script downloads the WiX version it names from nuget.org, and WinSparkle's release zip from GitHub, at each run, checks them against the hashes it holds, and installs nothing:
 
 ```powershell
 $env:CODEPP_RELEASE_VERSION = '0.1.0-dev.local'

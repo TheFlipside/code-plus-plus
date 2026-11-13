@@ -168,8 +168,10 @@ jobs:
         run: cargo build --release --locked --target x86_64-pc-windows-msvc -p codepp-app -p codepp-cppmimetools -p codepp-cppconverter -p codepp-cppexport
 
       # The zip and the .msi. The installer is built with WiX, which the
-      # script fetches from nuget.org and checks against the hashes it
-      # holds; the runner needs .NET to run it (docs/RELEASING.md).
+      # script fetches from nuget.org, and carries WinSparkle.dll, which
+      # it fetches from WinSparkle's releases on GitHub; it checks both
+      # against the hashes it holds. The runner needs .NET to run WiX
+      # (docs/RELEASING.md).
       - name: Package
         shell: powershell
         env:

@@ -13,8 +13,10 @@
     FullVersion     the whole version, pre-release part included
     Icon            the path of assets/code++.ico
 
-  and two bind paths: the folder holding the files to install, which is
-  the folder the zip is made from, and one holding License.rtf.
+  and three bind paths: the folder holding the files to install, which
+  is the folder the zip is made from; one holding WinSparkle.dll, the
+  one file the installer has that the zip has not; and one holding
+  License.rtf.
 
   What it installs: the files, into Program Files\Code++; a Start Menu
   entry; `codepp` as a name Win+R and `start` find (App Paths); "Edit
@@ -213,6 +215,19 @@
       </Component>
       <Component Id="PluginExport">
         <File Source="cppexport.dll" KeyPath="yes" />
+      </Component>
+
+      <!--
+        The updater's library (DESIGN.md §11): WinSparkle's own build,
+        which the packaging script downloads and checks by hash.
+        `codepp.exe` does not import it. A Code++ that can update
+        itself loads it from beside the executable, after its first
+        paint and only when a check for a new version is due or asked
+        for; one that cannot, never does. The zip leaves it out, since
+        only an installed Code++ updates itself.
+      -->
+      <Component Id="UpdaterLibrary">
+        <File Source="WinSparkle.dll" KeyPath="yes" />
       </Component>
 
       <Component Id="Licence">
