@@ -15,6 +15,8 @@ pub mod plugin_stage;
 #[cfg(target_os = "windows")]
 pub mod update_signature;
 pub mod watch;
+#[cfg(target_os = "windows")]
+pub mod winsparkle;
 
 pub use config::{
     backups_dir, config_dir, config_xml_path, disabled_plugins_path, find_history_xml_path,

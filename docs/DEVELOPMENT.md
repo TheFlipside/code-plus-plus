@@ -487,6 +487,32 @@ watchdog reads each window's own `WS_VISIBLE` style rather than
 `IsWindowVisible` for that reason, and `--timeout` bounds every step
 there regardless, but how dialogs behave on the runner is unverified.
 
+### Test the Windows updater binding against the real DLL (Windows)
+
+`codepp_platform::winsparkle` binds `WinSparkle.dll`, which is not in
+the tree: the release packaging will download it (DESIGN.md §11.8). Its
+unit tests need no DLL. One more drives the real one through the
+binding, and is opt-in for that reason:
+
+```powershell
+$env:CODEPP_WINSPARKLE_DLL = "C:\path\to\WinSparkle-0.9.4\x64\Release\WinSparkle.dll"
+cargo test -p codepp-platform --lib -- winsparkle::tests::the_real_dll --ignored
+```
+
+Take the DLL from `WinSparkle-0.9.4.zip` on WinSparkle's GitHub
+releases page (`vslavik/winsparkle`). The zip's SHA-256 is
+`6037df37fc263bd1650a1c4949681a9d40ffe991d01f35892a406cb5d103c976`. The
+binding refuses any other version. The test serves a feed with nothing
+newer from `127.0.0.1` and asks for a check without a window, so
+nothing appears on screen, no registry key is written, and nothing is
+downloaded or installed. It starts the library, which a process can do
+once, so it is the only test that may.
+
+To see what the library itself does with a feed that *does* offer an
+update, without its windows reaching your screen, start the process on
+a desktop of its own (`CreateDesktopW`, then `STARTUPINFO.lpDesktop`):
+that is how the measurements in DESIGN.md §11.11 were taken.
+
 ### Add or change an `NPPM_*` / `NPPN_*` / docking constant or menu id
 
 Verify the number against Notepad++'s published headers, mechanically:
