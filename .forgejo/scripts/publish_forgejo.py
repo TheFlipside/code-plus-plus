@@ -48,7 +48,7 @@ class PublishError(Exception):
     """The release could not be published; the message says why."""
 
 
-class _NoRedirect(urllib.request.HTTPRedirectHandler):
+class NoRedirect(urllib.request.HTTPRedirectHandler):
     """Refuse to follow a redirect.
 
     urllib would send the request again, token included, to wherever the
@@ -80,7 +80,7 @@ class Forgejo:
         name = urllib.parse.quote(name, safe="")
         self._api = f"{base_url.rstrip('/')}/api/v1/repos/{owner}/{name}"
         self._token = token
-        self._opener = urllib.request.build_opener(_NoRedirect)
+        self._opener = urllib.request.build_opener(NoRedirect)
 
     def _send(
         self,
@@ -110,7 +110,7 @@ class Forgejo:
         """Make one request that must answer `expected`; return its body."""
         status, body = self._send(method, path, **kwargs)
         if status != expected:
-            raise PublishError(f"{what} failed: HTTP {status}\n{_shown(body)}")
+            raise PublishError(f"{what} failed: HTTP {status}\n{shown(body)}")
         return body
 
     def release_for_tag(self, tag: str) -> Optional[Dict[str, Any]]:
@@ -121,8 +121,8 @@ class Forgejo:
             return None
         if status != 200:
             what = f"looking up the release for {tag}"
-            raise PublishError(f"{what} failed: HTTP {status}\n{_shown(body)}")
-        return _json_object(body)
+            raise PublishError(f"{what} failed: HTTP {status}\n{shown(body)}")
+        return json_object(body)
 
     def create_release(
         self,
@@ -150,7 +150,7 @@ class Forgejo:
             body=json.dumps(payload).encode("utf-8"),
             content_type="application/json",
         )
-        return _json_object(body)
+        return json_object(body)
 
     def delete_asset(self, release_id: int, asset_id: int) -> None:
         """Remove one asset from a release."""
@@ -184,21 +184,21 @@ class Forgejo:
         )
 
 
-def _shown(body: bytes) -> str:
+def shown(body: bytes) -> str:
     """A server's answer, cut short, for an error message."""
     return body.decode("utf-8", errors="replace")[:ERROR_BODY_CHARS]
 
 
-def _json_object(body: bytes) -> Dict[str, Any]:
+def json_object(body: bytes) -> Dict[str, Any]:
     """Parse a server's answer, which must be a JSON object."""
     try:
         value = json.loads(body.decode("utf-8"))
     except ValueError as error:
         what = "the server's answer is not JSON"
-        raise PublishError(f"{what}: {_shown(body)}") from error
+        raise PublishError(f"{what}: {shown(body)}") from error
     if not isinstance(value, dict):
         what = "the server's answer is not a JSON object"
-        raise PublishError(f"{what}: {_shown(body)}")
+        raise PublishError(f"{what}: {shown(body)}")
     return value
 
 
@@ -211,7 +211,7 @@ def _existing_assets(release: Dict[str, Any]) -> Dict[str, int]:
     return assets
 
 
-def _env(name: str) -> str:
+def env(name: str) -> str:
     """Return a variable the workflow must have set."""
     value = os.environ.get(name, "")
     if not value:
@@ -221,8 +221,8 @@ def _env(name: str) -> str:
 
 def publish(files_dir: Path, notes_file: Path) -> str:
     """Publish the release the environment describes; return its page."""
-    tag = _env("TAG")
-    forgejo = Forgejo(_env("FORGEJO_URL"), _env("REPO"), _env("TOKEN"))
+    tag = env("TAG")
+    forgejo = Forgejo(env("FORGEJO_URL"), env("REPO"), env("TOKEN"))
 
     try:
         files = sorted(p for p in files_dir.iterdir() if p.is_file())
@@ -235,7 +235,7 @@ def publish(files_dir: Path, notes_file: Path) -> str:
     release = forgejo.release_for_tag(tag)
     if release is None:
         print(f"creating release {tag}")
-        name = _env("RELEASE_NAME")
+        name = env("RELEASE_NAME")
         release = forgejo.create_release(tag, name, notes)
     else:
         print(f"release {tag} exists; replacing its files")

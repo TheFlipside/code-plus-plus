@@ -1,6 +1,6 @@
 # Code++ — Releasing
 
-A release is made by pushing a version tag. `.forgejo/workflows/release.yml` builds Code++ on the three runners, packages it, and publishes the result on Forgejo and on the GitHub mirror. Nothing is built or uploaded by hand.
+A release is made by pushing a version tag. `.forgejo/workflows/release.yml` builds Code++ on the three runners, packages it, publishes the result on Forgejo and on the GitHub mirror, and then offers it to the copies of Code++ that update themselves. Nothing is built or uploaded by hand.
 
 ---
 
@@ -39,7 +39,7 @@ Built by `.forgejo/scripts/package-windows.ps1` from `packaging/windows/codepp.w
 - **Upgrades.** Installing a build replaces the one that is installed. Windows Installer versions are numbers only, so a rehearsal build `0.2.0-dev.2f20913` (§3) is version `0.2.0` to it, and the installer lets a build replace another of the same `x.y.z`: one rehearsal build replaces another, and either replaces the release `0.2.0` or is replaced by it, without a word. It refuses to replace a newer `x.y.z` with an older one.
 - **The name.** A rehearsal build is listed among the installed apps as "Code++ 0.2.0-dev.2f20913", since its version column can only say 0.2.0. A release is listed as "Code++".
 - **Removal.** Settings → Apps. It removes what the installer put there and leaves the user's settings in `%APPDATA%\Code++`.
-- **The updater's library.** The installer puts one file beside `codepp.exe` that the zip does not have: `WinSparkle.dll`, WinSparkle 0.9.4's own x64 build, with which an installed Code++ checks for updates (DESIGN.md §11). Code++ loads it only if its build was given a feed and a key, which no release build is yet, and only in an installation for one account (DESIGN.md §11.4); until then the file is installed and never used. `THIRD_PARTY_LICENSES.md` §1.4 has its notices and those of the libraries built into it.
+- **The updater's library.** The installer puts one file beside `codepp.exe` that the zip does not have: `WinSparkle.dll`, WinSparkle 0.9.4's own x64 build, with which an installed Code++ checks for updates (DESIGN.md §11). Code++ loads it only in an installation for one account, which is the one that updates itself (§1.4, DESIGN.md §11.4); in an installation for the whole machine the file is installed and never used. `THIRD_PARTY_LICENSES.md` §1.4 has its notices and those of the libraries built into it.
 - **Without administrator rights.** `msiexec /i <file> MSIINSTALLPERUSER=1 ALLUSERS=2` installs for the current account alone, into `%LOCALAPPDATA%\Programs\Code++`, with the same Start Menu entry, "Edit with Code++" and "Open with" entries under that account. An installation of one kind does not see one of the other: installing for the machine does not replace a per-account installation.
 
 The Start Menu entry is a plain shortcut. An advertised one would have Windows Installer check the installation at every start, before the editor's first instruction runs, which the cold-start budget has no room for (DESIGN.md §8).
@@ -65,6 +65,18 @@ Built by `.forgejo/scripts/package-unix.sh` with `dpkg-deb`.
 
 Built by `.forgejo/scripts/package-unix.sh` with `hdiutil`: the same signed `Code++.app` as in the zip, beside a link to `/Applications`, so that installing is dragging one onto the other.
 
+### 1.4 The update feed
+
+A Code++ that the `.msi` installed for one account checks for a newer version by itself, at most once a day (DESIGN.md §11). It asks one file, `windows-x64.xml` on the repository's `appcast` branch:
+
+<https://git.fiedler.live/tux/code-plus-plus/raw/branch/appcast/windows-x64.xml>
+
+The file names the newest release's installer among the Forgejo release's files, its length, and its Ed25519 signature. `publish` signs the installer with the project's update key before it publishes anything (`.forgejo/scripts/update_feed.py`), and commits the feed to the branch as its last step, once both releases are out. Code++ installs nothing that signature does not verify, against the public key built into it.
+
+That address and that public key are in `.forgejo/workflows/release.yml`, as `CODEPP_UPDATE_FEED_URL` and `CODEPP_UPDATE_PUBLIC_KEY`. Neither can change once a release with them is out: every installed copy asks that address and trusts that key for good. So the repository's owner, its name, the branch's name and the file's name stay as they are.
+
+An installation for the whole machine does not update itself yet, and neither does a Code++ run from the zip, on Linux or on macOS (DESIGN.md §11.4, §11.1).
+
 ---
 
 ## 2. Cutting a release
@@ -88,7 +100,7 @@ Built by `.forgejo/scripts/package-unix.sh` with `hdiutil`: the same signed `Cod
 
    A version is plain because three things compare it: an installed Code++ deciding whether an update is newer, Windows Installer, and apt (DESIGN.md §11.6). A version that was released is never built again; a fix is the next patch version. A build for testers that is not a release is a manual run's (§3).
 
-4. **Watch the run** under Actions → Release. When `publish` is done, both release pages hold the files. The description lists the downloads, how to start an unsigned build on each platform, and the commits since the previous `v` tag; edit it on either page if it needs more.
+4. **Watch the run** under Actions → Release. When `publish` is done, both release pages hold the files, and the `appcast` branch holds the feed that offers the Windows installer to installed copies (§1.4). The description lists the downloads, how to start an unsigned build on each platform, and the commits since the previous `v` tag; edit it on either page if it needs more.
 
 ---
 
@@ -105,9 +117,11 @@ Do this once before the first real tag, and after any change to the workflow or 
 ## 4. When a run fails
 
 - **The push of the tag is rejected with "Tag … is protected".** No run starts. Your account is not on the allowlist of the `v*` tag rule (§5.4). Add your account to the allowlist, under the repository's Settings → Tags, and push the tag again.
-- **`prepare` refuses the tag.** The log says why: the tag does not match `Cargo.toml`, its commit is not on `main`, or a release token is missing. Delete the tag (`git push origin :refs/tags/<tag>`, `git tag -d <tag>`), fix the cause, and tag again. Nothing was published under it, so deleting it is safe.
+- **`prepare` refuses the tag.** The log says why: the tag does not match `Cargo.toml`, its commit is not on `main`, a release token is missing, or the `appcast` branch is (§5.5). Delete the tag (`git push origin :refs/tags/<tag>`, `git tag -d <tag>`), fix the cause, and tag again. Nothing was published under it, so deleting it is safe.
 - **A build fails.** Nothing has been published. Fix it on `main`, delete the tag as above, and tag the fixed commit. Once a version has been published, its tag stays where it is: a fix is the next version.
 - **A build's Package step fails for a missing tool.** `dotnet is not on PATH` on Windows, `dpkg-shlibdeps is not installed` on Linux: the runner lacks what §5.3 lists. Install it and run the job again.
+- **`publish` fails at "Sign the Windows installer".** Nothing has been published. The `UPDATE_SIGNING_KEY` secret is missing, is not a key, or is not the private half of the public key in the workflow; the log says which, and never shows the key. Set the secret (§5.1) and run the job again. If the runner's `openssl` is older than version 3, the log says that instead (§5.3).
+- **`publish` fails at "Publish the Windows update feed".** Both releases are out, and installed copies have not been told. The log says why: the release's installer could not be downloaded as it was signed, the branch is missing or the token may not push to it (§5.5), or the feed there already offers a newer version. Fix the cause and run the job again.
 - **`publish` fails halfway.** Run the job again. It finds the release it already made and replaces the files of the same name; it does not touch a title or description that exists.
 - **"GitHub mirror: tag … is not at …"** The job waited ten minutes for the tag to arrive on GitHub. The Forgejo release is already published. Sync the push mirror (repository Settings → Mirror settings → Synchronize now), then run the job again.
 
@@ -119,16 +133,25 @@ To withdraw a release, delete it on both pages and then delete the tag.
 
 ### 5.1 Secrets
 
-Two secrets, under the repository's (or the owning account's) Settings → Actions → Secrets. `prepare` fails before anything is built if either is missing.
+Three secrets, under the repository's (or the owning account's) Settings → Actions → Secrets. `prepare` fails before anything is built if either token is missing.
 
 | Secret | What it is | Needs |
 | --- | --- | --- |
 | `RELEASE_TOKEN` | a Forgejo access token | `write:repository` |
 | `GH_RELEASE_TOKEN` | a GitHub token for `TheFlipside/code-plus-plus` | a fine-grained token for that one repository with Contents, read and write |
+| `UPDATE_SIGNING_KEY` | the private half of the key updates are signed with | the one line of the key file `winsparkle-tool generate-key` wrote: 32 bytes in base64 |
 
 A classic GitHub token with `public_repo` works too, but it can write to every public repository of the account, so prefer the fine-grained one.
 
-`prepare` only checks that the two are set. The `publish` job uses them, on the `linux` runner; the build jobs never see them.
+`prepare` only checks that the two tokens are set. The `publish` job uses them, on the `linux` runner; the build jobs never see them. `RELEASE_TOKEN` also commits the update feed to the `appcast` branch (§5.5).
+
+`UPDATE_SIGNING_KEY` is worth more than both tokens (DESIGN.md §11.7). A token that leaks is revoked; this key cannot be. Every installed copy accepts what it signs, and a copy learns of a new key only through an update signed with the old one.
+
+- It reaches one step of `publish` and nothing else, `prepare` included, so a missing key stops a release only once the builds are done, though before anything is published.
+- Keep a copy offline, encrypted. Without the key no further update can be offered to the copies already installed.
+- Its public half is `CODEPP_UPDATE_PUBLIC_KEY` in the workflow. `publish` refuses to sign with a key whose public half is another.
+- Anyone who can push a branch with a workflow of their own to this repository can have that workflow read the secret, by a push or by a manual run of it. Today only the maintainer can push. Keep it so, or find out first whether Forgejo can keep a secret to protected branches and tags (DESIGN.md §11.10).
+- While `publish` signs, the key is in the memory of the signing script and of `openssl` on the `linux` runner. Anything running there under the same account at that moment could read it, which is why §5.4's third rule matters most for this secret.
 
 ### 5.2 The push mirror
 
@@ -140,7 +163,7 @@ Beyond what CI already needs (DEVELOPMENT.md):
 
 | Runner | Needs |
 | --- | --- |
-| `linux` | `python3` (3.8 or newer), `gh`, and network access to crates.io for the first `cargo install cargo-about`. For the `.deb`: a Debian or Ubuntu system with `dpkg-deb` and `dpkg-shlibdeps` (the `dpkg` and `dpkg-dev` packages; `build-essential` brings both) |
+| `linux` | `python3` (3.8 or newer), `gh`, `openssl` 3 or newer, which signs the Windows installer, and network access to crates.io for the first `cargo install cargo-about`. For the `.deb`: a Debian or Ubuntu system with `dpkg-deb` and `dpkg-shlibdeps` (the `dpkg` and `dpkg-dev` packages; `build-essential` brings both) |
 | `windows` | Windows PowerShell 5.1, which Windows ships. For the `.msi`: .NET, with `dotnet` on the PATH of the account the runner's jobs run as, and network access to nuget.org and github.com at every run |
 | `macos` | the Xcode Command Line Tools: `codesign`, `lipo`, `plutil`, `ditto`. For the `.dmg`: `hdiutil`, which macOS ships |
 
@@ -160,6 +183,30 @@ Three settings on the Forgejo side, which the workflow cannot make for itself:
 - **Protect `main`** (repository Settings → Branches), once anyone else has write access. A release is tagged on `main`, and the workflow that runs is the one in the tagged commit, so whoever can push to `main` decides what a release builds and what `publish` runs with the release tokens. The tag rule is only as strong as this one.
 - **Do not let pull requests from outside contributors run CI unapproved.** CI builds a pull request on the same persistent `linux` runner that runs `publish`, and a build runs the pull request's build scripts. Code running there while a release is being published could read the release tokens out of the publishing process, or leave a changed `gh`, `python3` or `cargo-about` behind for the next release. If outside pull requests are to build without approval, give `publish` a runner of its own first.
 
+### 5.5 The `appcast` branch
+
+The update feed (§1.4) is published on a branch of its own, `appcast`, which shares no history with `main` and holds the feeds and a note saying what it is. `prepare` refuses to release until it exists. Create it once, from a clone of the repository:
+
+```sh
+git worktree add --orphan -b appcast ../code-plus-plus-appcast
+cd ../code-plus-plus-appcast
+echo "The update feeds of Code++, written by the release workflow. Do not edit by hand." > README.md
+git add README.md
+git commit -m "appcast: the branch the update feeds are published on"
+git push origin appcast
+cd -
+git worktree remove ../code-plus-plus-appcast
+```
+
+Then protect it (repository Settings → Branches), with a rule for `appcast`:
+
+- Only the account `RELEASE_TOKEN` belongs to may push to it. That account commits the feed, through the API.
+- No force-push and no deletion, or the branch's history would no longer say what each feed offered and when.
+
+Whoever can push to the branch decides what installed copies are offered. They cannot make a copy install something the update key did not sign, but they can withhold a release, or offer an older signed one to a copy older still (DESIGN.md §11.7).
+
+CI does not run for the branch: it builds pushes to `main` and pull requests into it. The push mirror carries the branch to GitHub; no installed copy asks GitHub.
+
 ---
 
 ## 6. What the workflow checks
@@ -177,6 +224,8 @@ Three settings on the Forgejo side, which the workflow cannot make for itself:
 - **The version, again.** Both packaging scripts check the version they are given before using it, as `release-version.sh` did before them, since they can also be run by hand.
 - **The disk image.** `hdiutil verify`, after up to three attempts at creating it.
 - **The set of files.** `publish` requires exactly the eight files, by name, each a regular file.
+- **The update key.** `update_feed.py sign` requires the public key derived from `UPDATE_SIGNING_KEY` to be the one the builds carry, and the signature it makes to verify against that key, before anything is published.
+- **The update feed.** `update_feed.py check`, in `prepare`, requires the `appcast` branch to exist and the address the builds are given to be where the feed is published. `update_feed.py publish` downloads the installer from the address the feed names and requires it to be the file that was signed, and refuses to replace a feed that offers a newer version.
 - **The mirror's tag**, as §5.2 describes.
 
 ---
@@ -184,7 +233,9 @@ Three settings on the Forgejo side, which the workflow cannot make for itself:
 ## 7. Not done yet
 
 - **Code signing.** No build is signed with a certificate, and neither is an installer. A certificate is also the first thing "Edit with Code++" would take to show in Windows 11's short context menu (DESIGN.md §7.4, the entry on "Edit with Code++"); the maintainer has put that off to a later time. Windows shows SmartScreen's prompt, and its administrator prompt names the `.msi` as from an unknown publisher; macOS refuses the first start until the user allows it. The release description tells testers how. The macOS bundle has an ad-hoc signature only, which Apple Silicon requires of every binary; the disk image itself is not signed.
-- **More packages.** No `.rpm`, AppImage or Flatpak, no package repository to add to apt, and no update check in the app.
+- **More packages.** No `.rpm`, AppImage or Flatpak, and no package repository to add to apt yet.
+- **More of the updater.** Only a Code++ the `.msi` installed for one account updates itself (§1.4). An installation for the whole machine, macOS and the `.deb` do not yet (DESIGN.md §11).
+- **The feed's first real run.** Signing and the commit to the `appcast` branch have run against a stand-in for the server only, and a manual run (§3) rehearses neither.
 - **More of the installers.** The Windows installer has WiX's stock pictures and English text only, offers no choice of folder or of what to set up, and does not check the Windows version: on Windows 8.1 or older it would install a program that cannot start. The `.deb` has no manual page, changelog or AppStream metadata, so a software centre shows it without a description page, and `lintian` would say so; it has not been run on it. The disk image has no background picture or arranged icons.
 - **The macOS disk image on a Mac.** The `.dmg` step has run only against stand-ins for Apple's tools (DESIGN.md §9.2).
 - **A glibc baseline.** The Linux build runs on systems whose glibc and GTK 3 are at least as new as the `linux` runner's.
