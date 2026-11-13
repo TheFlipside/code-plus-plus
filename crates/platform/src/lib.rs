@@ -12,6 +12,8 @@ pub mod host_env;
 #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
 pub mod panel_key;
 pub mod plugin_stage;
+#[cfg(target_os = "windows")]
+pub mod update_signature;
 pub mod watch;
 
 pub use config::{

@@ -34,6 +34,8 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
+pub mod feed;
+
 /// How long after a check the next one is due: one day.
 pub const CHECK_INTERVAL_SECS: u64 = 24 * 60 * 60;
 

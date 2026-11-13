@@ -26,6 +26,9 @@ tempfile          = { workspace = true }
 tracing           = { workspace = true }
 
 [target.'cfg(target_os = "windows")'.dependencies]
+# `update_signature`: the updater verifies the installer it is about to
+# run. Windows only, since only the Windows updater needs it.
+ed25519-dalek = { workspace = true }
 windows = { version = "0.62", features = [
     "Win32_Foundation",
     # `panel_key`: DPAPI for the key at rest, CNG for its randomness and

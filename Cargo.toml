@@ -58,6 +58,11 @@ codepp-ui-win32 = { version = "0.1.0", path = "crates/ui_win32" }
 # External dependencies — pin every version here so cargo-deny's wildcard
 # check stays satisfied workspace-wide.
 crossbeam-channel = "0.5"
+# Ed25519 verification of an update before the Windows updater runs it
+# (DESIGN.md §11.4). The tree's one crypto crate: Windows' own CNG has no
+# Ed25519. Verification only, so no default features (precomputed
+# tables, zeroize). BSD-3-Clause.
+ed25519-dalek = { version = "3", default-features = false }
 encoding_rs = "0.8"
 globset = "0.4"
 # GTK 3 bindings for `ui_gtk`. GTK 3 — not 4 — because Scintilla has no
