@@ -18,14 +18,13 @@ use codepp_core::styles::{parse_rgb_hex, Styles};
 use codepp_core::{Encoding, Eol, LangType};
 use codepp_editor::{sc_eol_mode, EditorHandle};
 use codepp_scintilla_sys::{
-    SCI_ADDUNDOACTION, SCI_BEGINUNDOACTION, SCI_COLOURISE, SCI_CONVERTEOLS, SCI_EMPTYUNDOBUFFER,
-    SCI_ENDUNDOACTION, SCI_GETCOLUMN, SCI_GETCURRENTPOS, SCI_GETDOCPOINTER,
-    SCI_GETFIRSTVISIBLELINE, SCI_GETLENGTH, SCI_GETLINECOUNT, SCI_GETMODIFY, SCI_GETOVERTYPE,
-    SCI_GETSELECTIONEND, SCI_GETSELECTIONSTART, SCI_GETTEXT, SCI_GETZOOM, SCI_GOTOPOS,
-    SCI_LINEFROMPOSITION, SCI_LINESCROLL, SCI_LINESONSCREEN, SCI_POSITIONAFTER,
-    SCI_RELEASEDOCUMENT, SCI_SETDOCPOINTER, SCI_SETEMPTYSELECTION, SCI_SETEOLMODE,
-    SCI_SETSAVEPOINT, SCI_SETSELECTIONEND, SCI_SETSELECTIONSTART, SCI_SETTABWIDTH, SCI_SETTEXT,
-    SCI_STYLEGETBACK, SCI_STYLEGETFORE, SC_DOCUMENTOPTION_DEFAULT, STYLE_DEFAULT,
+    SCI_ADDUNDOACTION, SCI_BEGINUNDOACTION, SCI_COLOURISE, SCI_CONVERTEOLS, SCI_ENDUNDOACTION,
+    SCI_GETCOLUMN, SCI_GETCURRENTPOS, SCI_GETDOCPOINTER, SCI_GETFIRSTVISIBLELINE, SCI_GETLENGTH,
+    SCI_GETLINECOUNT, SCI_GETMODIFY, SCI_GETOVERTYPE, SCI_GETSELECTIONEND, SCI_GETSELECTIONSTART,
+    SCI_GETTEXT, SCI_GETZOOM, SCI_GOTOPOS, SCI_LINEFROMPOSITION, SCI_LINESCROLL, SCI_LINESONSCREEN,
+    SCI_POSITIONAFTER, SCI_RELEASEDOCUMENT, SCI_SETDOCPOINTER, SCI_SETEMPTYSELECTION,
+    SCI_SETEOLMODE, SCI_SETSAVEPOINT, SCI_SETSELECTIONEND, SCI_SETSELECTIONSTART, SCI_SETTABWIDTH,
+    SCI_SETTEXT, SCI_STYLEGETBACK, SCI_STYLEGETFORE, SC_DOCUMENTOPTION_DEFAULT, STYLE_DEFAULT,
 };
 
 /// Visible width of a TAB, in spaces. Matches `ui_win32`'s tab-width
@@ -41,9 +40,6 @@ const CHANGE_HISTORY_MARGIN: u32 = 4;
 /// Pixel width of the change-history strip when populated — a thin slice,
 /// matching `ui_win32`.
 const CHANGE_HISTORY_MARGIN_PX: i32 = 4;
-/// Change-history strip colour: Material orange 400 in Scintilla's
-/// `0x00BBGGRR` order, the same shade the active-tab indicator uses.
-const CHANGE_HISTORY_COLOR: u32 = 0x00_26_A7_FF;
 
 thread_local! {
     /// Clamped digit count the line-number margin is currently sized for
@@ -177,11 +173,7 @@ fn apply_predefined_styles(editor: &EditorHandle) {
     // The change-history "edit indicator" strip. Shared config so it looks
     // and behaves identically to Win32 (and the coming Cocoa backend);
     // per-document enablement happens in `activate_tab`.
-    editor.configure_change_history_margin(
-        CHANGE_HISTORY_MARGIN,
-        CHANGE_HISTORY_MARGIN_PX,
-        CHANGE_HISTORY_COLOR,
-    );
+    editor.configure_change_history_margin(CHANGE_HISTORY_MARGIN, CHANGE_HISTORY_MARGIN_PX);
     codepp_editor::theme::apply_brace_styles(editor);
     codepp_editor::theme::apply_indent_guide_style(editor);
 }
@@ -251,15 +243,10 @@ impl UiPlatform for GtkUi {
     }
 
     fn set_buffer_text(&mut self, text: &str, cursor: u64) {
-        let mut bytes = Vec::with_capacity(text.len() + 1);
-        bytes.extend_from_slice(text.as_bytes());
-        bytes.push(0);
-        self.editor.send(SCI_SETTEXT, 0, bytes.as_ptr() as isize);
-        // A freshly loaded file is not an edit: drop the undo history
-        // that the SETTEXT itself created and mark the buffer clean, or
-        // the user could Ctrl+Z their file back to empty.
-        self.editor.send(SCI_EMPTYUNDOBUFFER, 0, 0);
-        self.editor.send(SCI_SETSAVEPOINT, 0, 0);
+        // A freshly loaded file is not an edit: nothing to undo (or the
+        // user could Ctrl+Z their file back to empty), the buffer clean,
+        // and no line marked in the change-history strip.
+        self.editor.set_loaded_text(text);
         self.editor.send(SCI_GOTOPOS, cursor as usize, 0);
     }
 

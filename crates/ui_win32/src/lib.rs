@@ -152,31 +152,31 @@ use codepp_plugin_host::{
 use codepp_scintilla_sys::{
     ScintillaDirectFunction, Scintilla_RegisterClasses, CARETSTYLE_INVISIBLE, SCI_ADDUNDOACTION,
     SCI_BEGINUNDOACTION, SCI_CANREDO, SCI_CANUNDO, SCI_CLEAR, SCI_COLOURISE, SCI_CONVERTEOLS,
-    SCI_COPY, SCI_CREATEDOCUMENT, SCI_CUT, SCI_DOCLINEFROMVISIBLE, SCI_EMPTYUNDOBUFFER,
-    SCI_ENDUNDOACTION, SCI_GETCOLUMN, SCI_GETCURRENTPOS, SCI_GETDIRECTFUNCTION,
-    SCI_GETDIRECTPOINTER, SCI_GETDOCPOINTER, SCI_GETFIRSTVISIBLELINE, SCI_GETINDENTATIONGUIDES,
-    SCI_GETLENGTH, SCI_GETLINECOUNT, SCI_GETMODIFY, SCI_GETOVERTYPE, SCI_GETSELECTIONEND,
-    SCI_GETSELECTIONS, SCI_GETSELECTIONSTART, SCI_GETSELTEXT, SCI_GETTEXT, SCI_GETVIEWEOL,
-    SCI_GETVIEWWS, SCI_GETWRAPMODE, SCI_GETZOOM, SCI_GOTOLINE, SCI_GOTOPOS, SCI_LINEFROMPOSITION,
-    SCI_LINESCROLL, SCI_LINESONSCREEN, SCI_PASTE, SCI_POINTYFROMPOSITION, SCI_POSITIONAFTER,
-    SCI_POSITIONFROMLINE, SCI_POSITIONFROMPOINTCLOSE, SCI_REDO, SCI_RELEASEDOCUMENT,
-    SCI_REPLACETARGET, SCI_SELECTALL, SCI_SETCARETSTYLE, SCI_SETCODEPAGE, SCI_SETDOCPOINTER,
-    SCI_SETEMPTYSELECTION, SCI_SETEOLMODE, SCI_SETFONTQUALITY, SCI_SETHSCROLLBAR,
-    SCI_SETINDENTATIONGUIDES, SCI_SETMARGINWIDTHN, SCI_SETREADONLY, SCI_SETSAVEPOINT,
-    SCI_SETSCROLLWIDTH, SCI_SETSCROLLWIDTHTRACKING, SCI_SETSEL, SCI_SETSELECTIONEND,
-    SCI_SETSELECTIONMODE, SCI_SETSELECTIONSTART, SCI_SETTABWIDTH, SCI_SETTARGETEND,
-    SCI_SETTARGETSTART, SCI_SETTEXT, SCI_SETVIEWEOL, SCI_SETVIEWWS, SCI_SETVSCROLLBAR,
-    SCI_SETWRAPMODE, SCI_SETZOOM, SCI_STYLEGETBACK, SCI_STYLEGETFORE, SCI_TEXTHEIGHT, SCI_UNDO,
-    SCI_VISIBLEFROMDOCLINE, SCI_ZOOMIN, SCI_ZOOMOUT, SCN_MODIFIED, SCN_PAINTED, SCN_SAVEPOINTLEFT,
-    SCN_SAVEPOINTREACHED, SCN_STYLENEEDED, SCN_UPDATEUI, SC_AUTOMATICFOLD_CHANGE,
-    SC_AUTOMATICFOLD_CLICK, SC_AUTOMATICFOLD_SHOW, SC_CP_UTF8, SC_DOCUMENTOPTION_DEFAULT,
-    SC_EFF_QUALITY_LCD_OPTIMIZED, SC_EFF_QUALITY_NON_ANTIALIASED, SC_FOLDFLAG_LINEAFTER_CONTRACTED,
-    SC_IV_LOOKBOTH, SC_IV_NONE, SC_MARGIN_SYMBOL, SC_MARKNUM_FOLDER, SC_MARKNUM_FOLDEREND,
-    SC_MARKNUM_FOLDERMIDTAIL, SC_MARKNUM_FOLDEROPEN, SC_MARKNUM_FOLDEROPENMID,
-    SC_MARKNUM_FOLDERSUB, SC_MARKNUM_FOLDERTAIL, SC_MARK_BOXMINUS, SC_MARK_BOXMINUSCONNECTED,
-    SC_MARK_BOXPLUS, SC_MARK_BOXPLUSCONNECTED, SC_MARK_LCORNER, SC_MARK_TCORNER, SC_MARK_VLINE,
-    SC_MASK_FOLDERS, SC_MOD_DELETETEXT, SC_MOD_INSERTTEXT, SC_SEL_RECTANGLE, SC_SEL_STREAM,
-    SC_UPDATE_CONTENT, SC_UPDATE_SELECTION, SC_UPDATE_V_SCROLL, STYLE_DEFAULT,
+    SCI_COPY, SCI_CREATEDOCUMENT, SCI_CUT, SCI_DOCLINEFROMVISIBLE, SCI_ENDUNDOACTION,
+    SCI_GETCOLUMN, SCI_GETCURRENTPOS, SCI_GETDIRECTFUNCTION, SCI_GETDIRECTPOINTER,
+    SCI_GETDOCPOINTER, SCI_GETFIRSTVISIBLELINE, SCI_GETINDENTATIONGUIDES, SCI_GETLENGTH,
+    SCI_GETLINECOUNT, SCI_GETMODIFY, SCI_GETOVERTYPE, SCI_GETSELECTIONEND, SCI_GETSELECTIONS,
+    SCI_GETSELECTIONSTART, SCI_GETSELTEXT, SCI_GETTEXT, SCI_GETVIEWEOL, SCI_GETVIEWWS,
+    SCI_GETWRAPMODE, SCI_GETZOOM, SCI_GOTOLINE, SCI_GOTOPOS, SCI_LINEFROMPOSITION, SCI_LINESCROLL,
+    SCI_LINESONSCREEN, SCI_PASTE, SCI_POINTYFROMPOSITION, SCI_POSITIONAFTER, SCI_POSITIONFROMLINE,
+    SCI_POSITIONFROMPOINTCLOSE, SCI_REDO, SCI_RELEASEDOCUMENT, SCI_REPLACETARGET, SCI_SELECTALL,
+    SCI_SETCARETSTYLE, SCI_SETCODEPAGE, SCI_SETDOCPOINTER, SCI_SETEMPTYSELECTION, SCI_SETEOLMODE,
+    SCI_SETFONTQUALITY, SCI_SETHSCROLLBAR, SCI_SETINDENTATIONGUIDES, SCI_SETMARGINWIDTHN,
+    SCI_SETREADONLY, SCI_SETSAVEPOINT, SCI_SETSCROLLWIDTH, SCI_SETSCROLLWIDTHTRACKING, SCI_SETSEL,
+    SCI_SETSELECTIONEND, SCI_SETSELECTIONMODE, SCI_SETSELECTIONSTART, SCI_SETTABWIDTH,
+    SCI_SETTARGETEND, SCI_SETTARGETSTART, SCI_SETTEXT, SCI_SETVIEWEOL, SCI_SETVIEWWS,
+    SCI_SETVSCROLLBAR, SCI_SETWRAPMODE, SCI_SETZOOM, SCI_STYLEGETBACK, SCI_STYLEGETFORE,
+    SCI_TEXTHEIGHT, SCI_UNDO, SCI_VISIBLEFROMDOCLINE, SCI_ZOOMIN, SCI_ZOOMOUT, SCN_MODIFIED,
+    SCN_PAINTED, SCN_SAVEPOINTLEFT, SCN_SAVEPOINTREACHED, SCN_STYLENEEDED, SCN_UPDATEUI,
+    SC_AUTOMATICFOLD_CHANGE, SC_AUTOMATICFOLD_CLICK, SC_AUTOMATICFOLD_SHOW, SC_CP_UTF8,
+    SC_DOCUMENTOPTION_DEFAULT, SC_EFF_QUALITY_LCD_OPTIMIZED, SC_EFF_QUALITY_NON_ANTIALIASED,
+    SC_FOLDFLAG_LINEAFTER_CONTRACTED, SC_IV_LOOKBOTH, SC_IV_NONE, SC_MARGIN_SYMBOL,
+    SC_MARKNUM_FOLDER, SC_MARKNUM_FOLDEREND, SC_MARKNUM_FOLDERMIDTAIL, SC_MARKNUM_FOLDEROPEN,
+    SC_MARKNUM_FOLDEROPENMID, SC_MARKNUM_FOLDERSUB, SC_MARKNUM_FOLDERTAIL, SC_MARK_BOXMINUS,
+    SC_MARK_BOXMINUSCONNECTED, SC_MARK_BOXPLUS, SC_MARK_BOXPLUSCONNECTED, SC_MARK_LCORNER,
+    SC_MARK_TCORNER, SC_MARK_VLINE, SC_MASK_FOLDERS, SC_MOD_DELETETEXT, SC_MOD_INSERTTEXT,
+    SC_SEL_RECTANGLE, SC_SEL_STREAM, SC_UPDATE_CONTENT, SC_UPDATE_SELECTION, SC_UPDATE_V_SCROLL,
+    STYLE_DEFAULT,
 };
 use codepp_shell::{
     close_multi_enabled, pick_next_close_target, sanitize_filename_for_display,
@@ -2214,19 +2214,11 @@ impl UiPlatform for Win32Ui {
     }
 
     fn set_buffer_text(&mut self, text: &str, cursor: u64) {
-        // SCI_SETTEXT requires a null-terminated UTF-8 string. Build
-        // a single buffer; the address is valid for the duration of
-        // the synchronous direct-call.
-        let mut bytes = Vec::with_capacity(text.len() + 1);
-        bytes.extend_from_slice(text.as_bytes());
-        bytes.push(0);
-        self.editor.send(SCI_SETTEXT, 0, bytes.as_ptr() as isize);
-        // Loaded buffers start clean — clear the undo history (Scintilla
-        // would otherwise let Ctrl+Z undo the load itself, then mark
-        // everything as deleted) and reset the save point so the title
-        // bar isn't asterisk'd.
-        self.editor.send(SCI_EMPTYUNDOBUFFER, 0, 0);
-        self.editor.send(SCI_SETSAVEPOINT, 0, 0);
+        // Loaded buffers start clean: nothing to undo (Scintilla would
+        // otherwise let Ctrl+Z undo the load itself), at the save point
+        // so the title bar isn't asterisk'd, and with no line marked in
+        // the change-history strip.
+        self.editor.set_loaded_text(text);
         self.editor.send(SCI_GOTOPOS, cursor as usize, 0);
         // No line-number work here: the built-in `SC_MARGIN_NUMBER`
         // renders the new content's numbers itself, and the margin's
@@ -4167,30 +4159,25 @@ fn apply_caret_line_highlight(editor: &EditorHandle) {
 }
 
 /// Margin index for the change-history strip — the narrow vertical
-/// orange bar that flags lines edited since the last save. Skips
-/// the conventionally-reserved indices (1 = symbols/bookmarks,
-/// 2 = fold markers, 3 = future use) so a future plugin-installed
-/// marker margin can't collide with it.
+/// bar that shows which lines were edited: orange until they are saved,
+/// green once they are. Skips the conventionally-reserved indices
+/// (1 = symbols/bookmarks, 2 = fold markers, 3 = future use) so a
+/// future plugin-installed marker margin can't collide with it.
 const CHANGE_HISTORY_MARGIN: u32 = 4;
 /// Pixel width of [`CHANGE_HISTORY_MARGIN`] when populated. 4 px
 /// is wide enough for a strip to read at every supported DPI
 /// without competing with the line-number column to its left.
 const CHANGE_HISTORY_MARGIN_PX: i32 = 4;
-/// Stroke colour for the change-history strip — same Material
-/// `orange 400` shade [`TAB_ACTIVE_INDICATOR`] uses for the
-/// active-tab indicator. Reusing the colour ties the two
-/// "you're editing this" cues into one visual language.
-const CHANGE_HISTORY_COLOR: u32 = 0x00_26_A7_FF;
 
-// The change-history margin/marker setup and per-document enablement now
+// The change-history margin/marker setup and per-document enablement
 // live on the shared `EditorHandle` — `configure_change_history_margin`
-// (view-level: margin type/mask/width + the SC_MARKNUM_HISTORY_MODIFIED
-// marker, clearing margins 1-3 and silencing the sibling history markers)
-// and `enable_change_history` (per-document). Both are called from
+// (view-level: margin type/mask/width + the four SC_MARKNUM_HISTORY_*
+// markers and their colours, clearing margins 1-3) and
+// `enable_change_history` (per-document). Both are called from
 // `Win32Ui::run` (view) and each `SCI_CREATEDOCUMENT` site (per-doc), and
-// the GTK backend uses the identical pair so the strip matches across
+// the other backends use the identical pair so the strip matches across
 // platforms. Only the placement constants (`CHANGE_HISTORY_MARGIN`,
-// `_PX`, `_COLOR`) stay here as the Win32 call's arguments.
+// `_PX`) stay here as the Win32 call's arguments.
 
 // --- Fold margin colours + geometry ---------------------------------
 //
@@ -18347,18 +18334,14 @@ pub fn run(initial_path: Option<PathBuf>, perf: codepp_core::perf::Perf) -> Resu
         apply_caret_line_highlight(&editor);
 
         // Change-history strip: configure the dedicated narrow
-        // margin (type/width/mask + the `SC_MARKNUM_HISTORY_MODIFIED`
-        // marker's symbol + colour). Margin settings live on the
+        // margin (type/width/mask + the four `SC_MARKNUM_HISTORY_*`
+        // markers' symbol + colour). Margin settings live on the
         // view, so this single call covers every tab. The
         // per-document enable below covers the implicit doc the
         // Scintilla control creates at construction; subsequent
         // documents minted via `SCI_CREATEDOCUMENT` get the same
         // treatment at their respective creation sites.
-        editor.configure_change_history_margin(
-            CHANGE_HISTORY_MARGIN,
-            CHANGE_HISTORY_MARGIN_PX,
-            CHANGE_HISTORY_COLOR,
-        );
+        editor.configure_change_history_margin(CHANGE_HISTORY_MARGIN, CHANGE_HISTORY_MARGIN_PX);
         editor.enable_change_history();
 
         // Brace-match visual: initialise STYLE_BRACELIGHT (34) and
@@ -35816,6 +35799,190 @@ mod new_document_eol_guards {
             2,
             "the startup document and the empty window"
         );
+    }
+}
+
+#[cfg(test)]
+mod change_history_tests {
+    //! The change-history strip, against a real Scintilla control: a line
+    //! is orange while its change is unsaved and green once it is saved,
+    //! as in Notepad++, and a file just loaded shows neither. The markers
+    //! and the load are `EditorHandle`'s, which every backend calls.
+
+    use codepp_editor::{EditorHandle, CHANGE_HISTORY_MARKERS};
+    use codepp_scintilla_sys::{
+        SCI_EMPTYUNDOBUFFER, SCI_GETLINECOUNT, SCI_GETMODIFY, SCI_POSITIONFROMLINE, SCI_REDO,
+        SCI_SETSAVEPOINT, SCI_SETTEXT, SCI_UNDO, SC_MARKNUM_HISTORY_MODIFIED,
+        SC_MARKNUM_HISTORY_REVERTED_TO_MODIFIED, SC_MARKNUM_HISTORY_REVERTED_TO_ORIGIN,
+        SC_MARKNUM_HISTORY_SAVED, SC_MARK_FULLRECT,
+    };
+
+    use super::view_position_tests::{scintilla, Control};
+    use super::{CHANGE_HISTORY_MARGIN, CHANGE_HISTORY_MARGIN_PX};
+
+    const MODIFIED: isize = 1 << SC_MARKNUM_HISTORY_MODIFIED;
+    const SAVED: isize = 1 << SC_MARKNUM_HISTORY_SAVED;
+    const REVERTED_TO_ORIGIN: isize = 1 << SC_MARKNUM_HISTORY_REVERTED_TO_ORIGIN;
+    const REVERTED_TO_MODIFIED: isize = 1 << SC_MARKNUM_HISTORY_REVERTED_TO_MODIFIED;
+    const ALL: isize = MODIFIED | SAVED | REVERTED_TO_ORIGIN | REVERTED_TO_MODIFIED;
+
+    /// A message number from the vendored `Scintilla.h`, for the few the
+    /// tests send that the crate does not import.
+    fn sci(name: &str) -> u32 {
+        include_str!("../../scintilla-sys/vendor/scintilla/include/Scintilla.h")
+            .lines()
+            .find(|l| l.split_whitespace().nth(1) == Some(name))
+            .and_then(|l| l.split_whitespace().nth(2))
+            .and_then(|v| v.parse().ok())
+            .unwrap_or_else(|| panic!("{name} is not in Scintilla.h"))
+    }
+
+    /// A control with the strip set up and change history on, its
+    /// document still empty: a tab's document as `activate_tab` makes it.
+    fn fresh() -> Control {
+        let control = scintilla(400, 300, b"");
+        control
+            .editor
+            .configure_change_history_margin(CHANGE_HISTORY_MARGIN, CHANGE_HISTORY_MARGIN_PX);
+        control.editor.enable_change_history();
+        control
+    }
+
+    /// A tab's document once its file has landed.
+    fn loaded(text: &str) -> Control {
+        let control = fresh();
+        control.editor.set_loaded_text(text);
+        control
+    }
+
+    /// The change-history markers on each line, which is what the strip
+    /// draws.
+    fn states(editor: &EditorHandle) -> Vec<isize> {
+        let lines = usize::try_from(editor.send(SCI_GETLINECOUNT, 0, 0)).unwrap();
+        (0..lines)
+            .map(|line| editor.send(sci("SCI_MARKERGET"), line, 0) & ALL)
+            .collect()
+    }
+
+    /// Insert `text` at the start of `line`, as one undo step.
+    fn insert(editor: &EditorHandle, line: usize, text: &str) {
+        let pos = usize::try_from(editor.send(SCI_POSITIONFROMLINE, line, 0)).unwrap();
+        let mut bytes = text.as_bytes().to_vec();
+        bytes.push(0);
+        editor.send(sci("SCI_BEGINUNDOACTION"), 0, 0);
+        editor.send(sci("SCI_INSERTTEXT"), pos, bytes.as_ptr() as isize);
+        editor.send(sci("SCI_ENDUNDOACTION"), 0, 0);
+    }
+
+    #[test]
+    fn the_strip_draws_all_four_states_and_no_other_margin_does() {
+        let control = fresh();
+        let editor = &control.editor;
+        let mask = |margin: u32| editor.send(sci("SCI_GETMARGINMASKN"), margin as usize, 0);
+        // A marker no margin's mask holds is drawn as the line's
+        // background, so the strip has to hold all four.
+        assert_eq!(mask(CHANGE_HISTORY_MARGIN), ALL);
+        for other in 1..=3 {
+            assert_eq!(mask(other) & ALL, 0, "margin {other}");
+        }
+        assert_eq!(
+            editor.send(
+                sci("SCI_GETMARGINWIDTHN"),
+                CHANGE_HISTORY_MARGIN as usize,
+                0
+            ),
+            CHANGE_HISTORY_MARGIN_PX as isize
+        );
+        for (i, (marker, colour)) in CHANGE_HISTORY_MARKERS.iter().enumerate() {
+            assert_eq!(
+                editor.send(sci("SCI_MARKERSYMBOLDEFINED"), *marker as usize, 0),
+                SC_MARK_FULLRECT as isize,
+                "marker {marker}"
+            );
+            for (_, earlier) in &CHANGE_HISTORY_MARKERS[..i] {
+                assert_ne!(colour, earlier, "two states share a colour");
+            }
+        }
+        // Scintilla draws a line's markers in ascending number, each over
+        // the whole strip, so a line both saved and changed since shows as
+        // changed only while the unsaved marker is the higher.
+        const { assert!(SC_MARKNUM_HISTORY_MODIFIED > SC_MARKNUM_HISTORY_SAVED) };
+    }
+
+    #[test]
+    fn a_loaded_file_marks_no_line() {
+        let control = loaded("one\ntwo\nthree");
+        let editor = &control.editor;
+        assert_eq!(states(editor), [0, 0, 0]);
+        assert_eq!(editor.send(SCI_GETMODIFY, 0, 0), 0);
+        assert_eq!(editor.send(sci("SCI_CANUNDO"), 0, 0), 0);
+
+        // The control: the same load without the reset, which is what
+        // `set_buffer_text` did while the saved marker drew nothing. The
+        // text going in is a change, and the save point makes it a saved
+        // one, on every line.
+        let control = fresh();
+        let editor = &control.editor;
+        editor.send(SCI_SETTEXT, 0, c"one\ntwo\nthree".as_ptr() as isize);
+        editor.send(SCI_EMPTYUNDOBUFFER, 0, 0);
+        editor.send(SCI_SETSAVEPOINT, 0, 0);
+        assert_eq!(states(editor), [SAVED, SAVED, SAVED]);
+    }
+
+    #[test]
+    fn a_change_is_orange_until_it_is_saved_and_green_after() {
+        let control = loaded("one\ntwo\nthree");
+        let editor = &control.editor;
+        insert(editor, 1, "x");
+        assert_eq!(states(editor), [0, MODIFIED, 0]);
+        // What `mark_saved` sends after a save.
+        editor.send(SCI_SETSAVEPOINT, 0, 0);
+        assert_eq!(states(editor), [0, SAVED, 0]);
+        // A new change is orange, beside the green of the saved one, and
+        // on the saved line itself.
+        insert(editor, 2, "y");
+        assert_eq!(states(editor), [0, SAVED, MODIFIED]);
+        insert(editor, 1, "z");
+        assert_eq!(states(editor), [0, SAVED | MODIFIED, MODIFIED]);
+        editor.send(SCI_SETSAVEPOINT, 0, 0);
+        assert_eq!(states(editor), [0, SAVED, SAVED]);
+    }
+
+    #[test]
+    fn undoing_a_saved_change_marks_the_line_as_unlike_the_file() {
+        let control = loaded("one\ntwo\nthree");
+        let editor = &control.editor;
+        insert(editor, 0, "x");
+        editor.send(SCI_SETSAVEPOINT, 0, 0);
+        assert_eq!(states(editor), [SAVED, 0, 0]);
+        // The line is the text the file was opened with again, and the
+        // file on disk has the change.
+        editor.send(SCI_UNDO, 0, 0);
+        assert_eq!(states(editor), [REVERTED_TO_ORIGIN, 0, 0]);
+        assert_ne!(editor.send(SCI_GETMODIFY, 0, 0), 0);
+        editor.send(SCI_REDO, 0, 0);
+        assert_eq!(states(editor), [SAVED, 0, 0]);
+        assert_eq!(editor.send(SCI_GETMODIFY, 0, 0), 0);
+    }
+
+    #[test]
+    fn a_reload_clears_the_strip_and_changes_are_tracked_again() {
+        let control = loaded("one\ntwo\nthree");
+        let editor = &control.editor;
+        insert(editor, 0, "x");
+        editor.send(SCI_SETSAVEPOINT, 0, 0);
+        insert(editor, 2, "y");
+        assert_eq!(states(editor), [SAVED, 0, MODIFIED]);
+        // A reload puts the file's text in over saved and unsaved changes
+        // alike, with undo steps still there to be dropped.
+        editor.set_loaded_text("one\ntwo\nthree\nfour");
+        assert_eq!(states(editor), [0, 0, 0, 0]);
+        assert_eq!(editor.send(SCI_GETMODIFY, 0, 0), 0);
+        assert_eq!(editor.send(sci("SCI_CANUNDO"), 0, 0), 0);
+        insert(editor, 3, "z");
+        assert_eq!(states(editor), [0, 0, 0, MODIFIED]);
+        editor.send(SCI_SETSAVEPOINT, 0, 0);
+        assert_eq!(states(editor), [0, 0, 0, SAVED]);
     }
 }
 

@@ -82,29 +82,64 @@ use codepp_core::{Ending, Eol, ViewPosition, MAX_KEPT_FOLDS};
 use codepp_scintilla_sys::CreateLexer;
 use codepp_scintilla_sys::{
     sptr_t, uptr_t, ScintillaDirectFunction, SCI_BRACEBADLIGHT, SCI_BRACEHIGHLIGHT, SCI_BRACEMATCH,
-    SCI_CONTRACTEDFOLDNEXT, SCI_DOCLINEFROMVISIBLE, SCI_FOLDLINE, SCI_GETANCHOR, SCI_GETCHARAT,
-    SCI_GETCODEPAGE, SCI_GETCOLUMN, SCI_GETCURRENTPOS, SCI_GETDOCPOINTER, SCI_GETENDSTYLED,
-    SCI_GETEOLMODE, SCI_GETFIRSTVISIBLELINE, SCI_GETFOLDLEVEL, SCI_GETLENGTH, SCI_GETLINECOUNT,
-    SCI_GETRANGEPOINTER, SCI_GETSCROLLWIDTH, SCI_GETSELECTIONEND, SCI_GETSELECTIONNEND,
-    SCI_GETSELECTIONNSTART, SCI_GETSELECTIONS, SCI_GETSELECTIONSTART, SCI_GETTARGETEND,
-    SCI_GETTARGETSTART, SCI_GETWRAPMODE, SCI_GETXOFFSET, SCI_LINEFROMPOSITION, SCI_LINELENGTH,
-    SCI_LINESONSCREEN, SCI_MARKERDEFINE, SCI_MARKERENABLEHIGHLIGHT, SCI_MARKERSETBACK,
-    SCI_MARKERSETBACKSELECTED, SCI_MARKERSETFORE, SCI_POSITIONFROMLINE, SCI_REPLACETARGET,
-    SCI_REPLACETARGETRE, SCI_SEARCHANCHOR, SCI_SEARCHINTARGET, SCI_SEARCHNEXT, SCI_SEARCHPREV,
-    SCI_SELECTIONISRECTANGLE, SCI_SETAUTOMATICFOLD, SCI_SETCARETLINEBACK, SCI_SETCARETLINEVISIBLE,
-    SCI_SETCHANGEHISTORY, SCI_SETFIRSTVISIBLELINE, SCI_SETFOLDFLAGS, SCI_SETFOLDMARGINCOLOUR,
-    SCI_SETFOLDMARGINHICOLOUR, SCI_SETILEXER, SCI_SETKEYWORDS, SCI_SETMARGINMASKN,
-    SCI_SETMARGINSENSITIVEN, SCI_SETMARGINTYPEN, SCI_SETMARGINWIDTHN, SCI_SETPROPERTY,
-    SCI_SETSEARCHFLAGS, SCI_SETSEL, SCI_SETSELECTIONEND, SCI_SETSELECTIONSTART, SCI_SETSTYLING,
-    SCI_SETTARGETRANGE, SCI_SETXOFFSET, SCI_STARTSTYLING, SCI_STYLECLEARALL, SCI_STYLESETBACK,
-    SCI_STYLESETBOLD, SCI_STYLESETFONT, SCI_STYLESETFORE, SCI_STYLESETITALIC, SCI_STYLESETSIZE,
-    SCI_STYLESETUNDERLINE, SCI_TEXTWIDTH, SCI_VISIBLEFROMDOCLINE, SCI_WORDENDPOSITION,
-    SCI_WORDSTARTPOSITION, SCI_WRAPCOUNT, SC_CHANGE_HISTORY_ENABLED, SC_CHANGE_HISTORY_MARKERS,
-    SC_CP_UTF8, SC_EOL_CR, SC_EOL_CRLF, SC_EOL_LF, SC_FOLDACTION_CONTRACT, SC_FOLDLEVELHEADERFLAG,
-    SC_MARGIN_NUMBER, SC_MARGIN_SYMBOL, SC_MARKNUM_HISTORY_MODIFIED,
-    SC_MARKNUM_HISTORY_REVERTED_TO_MODIFIED, SC_MARKNUM_HISTORY_REVERTED_TO_ORIGIN,
-    SC_MARKNUM_HISTORY_SAVED, SC_MARK_EMPTY, SC_MARK_FULLRECT, SC_WRAP_NONE, STYLE_LINENUMBER,
+    SCI_CONTRACTEDFOLDNEXT, SCI_DOCLINEFROMVISIBLE, SCI_EMPTYUNDOBUFFER, SCI_FOLDLINE,
+    SCI_GETANCHOR, SCI_GETCHARAT, SCI_GETCODEPAGE, SCI_GETCOLUMN, SCI_GETCURRENTPOS,
+    SCI_GETDOCPOINTER, SCI_GETENDSTYLED, SCI_GETEOLMODE, SCI_GETFIRSTVISIBLELINE, SCI_GETFOLDLEVEL,
+    SCI_GETLENGTH, SCI_GETLINECOUNT, SCI_GETRANGEPOINTER, SCI_GETSCROLLWIDTH, SCI_GETSELECTIONEND,
+    SCI_GETSELECTIONNEND, SCI_GETSELECTIONNSTART, SCI_GETSELECTIONS, SCI_GETSELECTIONSTART,
+    SCI_GETTARGETEND, SCI_GETTARGETSTART, SCI_GETWRAPMODE, SCI_GETXOFFSET, SCI_LINEFROMPOSITION,
+    SCI_LINELENGTH, SCI_LINESONSCREEN, SCI_MARKERDEFINE, SCI_MARKERENABLEHIGHLIGHT,
+    SCI_MARKERSETBACK, SCI_MARKERSETBACKSELECTED, SCI_MARKERSETFORE, SCI_POSITIONFROMLINE,
+    SCI_REPLACETARGET, SCI_REPLACETARGETRE, SCI_SEARCHANCHOR, SCI_SEARCHINTARGET, SCI_SEARCHNEXT,
+    SCI_SEARCHPREV, SCI_SELECTIONISRECTANGLE, SCI_SETAUTOMATICFOLD, SCI_SETCARETLINEBACK,
+    SCI_SETCARETLINEVISIBLE, SCI_SETCHANGEHISTORY, SCI_SETFIRSTVISIBLELINE, SCI_SETFOLDFLAGS,
+    SCI_SETFOLDMARGINCOLOUR, SCI_SETFOLDMARGINHICOLOUR, SCI_SETILEXER, SCI_SETKEYWORDS,
+    SCI_SETMARGINMASKN, SCI_SETMARGINSENSITIVEN, SCI_SETMARGINTYPEN, SCI_SETMARGINWIDTHN,
+    SCI_SETPROPERTY, SCI_SETSAVEPOINT, SCI_SETSEARCHFLAGS, SCI_SETSEL, SCI_SETSELECTIONEND,
+    SCI_SETSELECTIONSTART, SCI_SETSTYLING, SCI_SETTARGETRANGE, SCI_SETTEXT, SCI_SETXOFFSET,
+    SCI_STARTSTYLING, SCI_STYLECLEARALL, SCI_STYLESETBACK, SCI_STYLESETBOLD, SCI_STYLESETFONT,
+    SCI_STYLESETFORE, SCI_STYLESETITALIC, SCI_STYLESETSIZE, SCI_STYLESETUNDERLINE, SCI_TEXTWIDTH,
+    SCI_VISIBLEFROMDOCLINE, SCI_WORDENDPOSITION, SCI_WORDSTARTPOSITION, SCI_WRAPCOUNT,
+    SC_CHANGE_HISTORY_ENABLED, SC_CHANGE_HISTORY_MARKERS, SC_CP_UTF8, SC_EOL_CR, SC_EOL_CRLF,
+    SC_EOL_LF, SC_FOLDACTION_CONTRACT, SC_FOLDLEVELHEADERFLAG, SC_MARGIN_NUMBER, SC_MARGIN_SYMBOL,
+    SC_MARKNUM_HISTORY_MODIFIED, SC_MARKNUM_HISTORY_REVERTED_TO_MODIFIED,
+    SC_MARKNUM_HISTORY_REVERTED_TO_ORIGIN, SC_MARKNUM_HISTORY_SAVED, SC_MARK_FULLRECT,
+    SC_WRAP_NONE, STYLE_LINENUMBER,
 };
+
+/// The change-history strip's colour for a line changed since the last
+/// save: Material orange 400 (`#FFA726`) in Scintilla's `0x00BBGGRR` order,
+/// the shade the active-tab indicator uses.
+pub const CHANGE_HISTORY_MODIFIED_COLOUR: u32 = 0x00_26_A7_FF;
+/// The strip's colour for a line changed and then saved, so it is as on
+/// disk again: Material green 400 (`#66BB6A`).
+pub const CHANGE_HISTORY_SAVED_COLOUR: u32 = 0x00_6A_BB_66;
+/// The strip's colour for a line whose saved change was undone back to the
+/// text the file was opened with, so it differs from disk: Material light
+/// blue 400 (`#29B6F6`).
+pub const CHANGE_HISTORY_REVERTED_TO_ORIGIN_COLOUR: u32 = 0x00_F6_B6_29;
+/// The strip's colour for a line whose saved change was undone, but not
+/// back to the text the file was opened with, so it differs from disk:
+/// Material lime 600 (`#C0CA33`).
+pub const CHANGE_HISTORY_REVERTED_TO_MODIFIED_COLOUR: u32 = 0x00_33_CA_C0;
+
+/// The four markers Scintilla's change history gives a line, each with the
+/// colour the strip draws it in
+/// ([`EditorHandle::configure_change_history_margin`]). The hues follow
+/// Scintilla's defaults for them, which Notepad++'s default style keeps:
+/// orange, green, blue, yellow-green.
+pub const CHANGE_HISTORY_MARKERS: [(u32, u32); 4] = [
+    (
+        SC_MARKNUM_HISTORY_REVERTED_TO_ORIGIN,
+        CHANGE_HISTORY_REVERTED_TO_ORIGIN_COLOUR,
+    ),
+    (SC_MARKNUM_HISTORY_SAVED, CHANGE_HISTORY_SAVED_COLOUR),
+    (SC_MARKNUM_HISTORY_MODIFIED, CHANGE_HISTORY_MODIFIED_COLOUR),
+    (
+        SC_MARKNUM_HISTORY_REVERTED_TO_MODIFIED,
+        CHANGE_HISTORY_REVERTED_TO_MODIFIED_COLOUR,
+    ),
+];
 
 /// What [`EditorHandle::save_view`] reads and [`EditorHandle::restore_view`]
 /// puts back: where the view stood, and which folds were contracted.
@@ -1392,15 +1427,15 @@ impl EditorHandle {
         self.send(SCI_BRACEBADLIGHT, pos as uptr_t, 0);
     }
 
-    /// Enable Scintilla's built-in change-history tracking on the
+    /// Set Scintilla's built-in change-history tracking on the
     /// **currently bound** document. `flags` is a bitmask of
     /// `SC_CHANGE_HISTORY_*` values (`ENABLED | MARKERS` is the
-    /// pair Code++'s edit-indicator strip uses). Per-document
+    /// pair Code++'s change-history strip uses; 0 turns tracking off
+    /// and drops what the document had tracked). Per-document
     /// setting — must be re-applied after every
-    /// `SCI_CREATEDOCUMENT`. Once enabled, Scintilla auto-applies
-    /// `SC_MARKNUM_HISTORY_MODIFIED` to lines that diverge from the
-    /// last save-point and clears them when `SCI_SETSAVEPOINT`
-    /// advances the baseline.
+    /// `SCI_CREATEDOCUMENT`. Once enabled, Scintilla tracks each line's
+    /// state against the save point, and the view draws it with the
+    /// `SC_MARKNUM_HISTORY_*` markers ([`CHANGE_HISTORY_MARKERS`]).
     pub fn set_change_history(&self, flags: u32) {
         self.send(SCI_SETCHANGEHISTORY, flags as uptr_t, 0);
     }
@@ -1410,48 +1445,87 @@ impl EditorHandle {
     /// fresh `SCI_CREATEDOCUMENT` starts with history off, so this must be
     /// called on each new document after binding it. Margin configuration
     /// lives on the view — see [`Self::configure_change_history_margin`].
+    ///
+    /// Scintilla starts tracking only on a document with nothing to undo
+    /// (`CellBuffer::ChangeHistorySet`), and ignores the request otherwise.
     pub fn enable_change_history(&self) {
         self.set_change_history(SC_CHANGE_HISTORY_ENABLED | SC_CHANGE_HISTORY_MARKERS);
     }
 
-    /// Configure the change-history "edit indicator" margin — the thin
-    /// coloured strip that marks lines changed since the last save. Sets
-    /// the margin's type, mask, width, and the `SC_MARKNUM_HISTORY_MODIFIED`
-    /// marker's symbol + colour. View-level state, so one call survives
-    /// every `SCI_SETDOCPOINTER` cycle the tab strip drives; per-document
-    /// *enablement* is [`Self::enable_change_history`].
+    /// Forget every change the bound document has tracked, and track from
+    /// its text as it is now: no line is marked afterwards. The document
+    /// must have nothing to undo, or Scintilla does not start tracking
+    /// again (see [`Self::enable_change_history`]).
+    pub fn reset_change_history(&self) {
+        self.set_change_history(0);
+        self.enable_change_history();
+    }
+
+    /// Put a file's text into the bound document as its loaded state:
+    /// nothing to undo, at the save point, and with no line marked in the
+    /// change-history strip. Every backend's `set_buffer_text` is this plus
+    /// its caret.
     ///
-    /// Shared by every backend (Win32, GTK, and the coming Cocoa) so the
-    /// strip looks and behaves identically. `colour` is a Scintilla
-    /// `0x00BBGGRR` value — Code++ passes its Material orange 400, the same
-    /// shade the active-tab indicator uses, tying the "you're editing this"
-    /// cues into one visual language.
+    /// The change history is reset because `SCI_SETTEXT` is an edit like
+    /// any other to Scintilla: it marks every line modified, and the save
+    /// point then turns them all saved, which the strip would draw green
+    /// down a file nobody has touched. `SCI_EMPTYUNDOBUFFER` drops the undo
+    /// steps and leaves the change history as it is, so a reload would also
+    /// keep the marks of edits the reload has just discarded. The reset
+    /// comes after it, since tracking starts only with nothing to undo.
+    pub fn set_loaded_text(&self, text: &str) {
+        // `SCI_SETTEXT` reads a NUL-terminated string; the buffer outlives
+        // the synchronous call.
+        let mut bytes = Vec::with_capacity(text.len() + 1);
+        bytes.extend_from_slice(text.as_bytes());
+        bytes.push(0);
+        self.send(SCI_SETTEXT, 0, bytes.as_ptr() as sptr_t);
+        self.send(SCI_EMPTYUNDOBUFFER, 0, 0);
+        self.reset_change_history();
+        self.send(SCI_SETSAVEPOINT, 0, 0);
+    }
+
+    /// Configure the change-history margin — the thin coloured strip that
+    /// shows each line's state against the file on disk, as Notepad++'s
+    /// does: changed and not saved, changed and saved, and the two states
+    /// an undo past a save leaves ([`CHANGE_HISTORY_MARKERS`]). Sets the
+    /// margin's type, mask and width, and each marker's symbol and colour.
+    /// View-level state, so one call survives every `SCI_SETDOCPOINTER`
+    /// cycle the tab strip drives; per-document *enablement* is
+    /// [`Self::enable_change_history`].
     ///
-    /// Critical detail: Scintilla's default mask for margin 1 is
-    /// `~SC_MASK_FOLDERS`, which *includes* the history-marker family
-    /// (21-24). With `SC_CHANGE_HISTORY_MARKERS` on, every margin whose
-    /// mask matches renders it — so without cleanup the strip would also
-    /// paint in margin 1 at margin 1's width. Margins 1-3 are therefore
-    /// defensively cleared, and the three sibling history markers
-    /// (`SAVED` paints a green line background over every just-loaded line,
-    /// etc.) are silenced to `SC_MARK_EMPTY` — visually no-ops that keep
-    /// Scintilla's internal tracking intact for a future feature.
-    pub fn configure_change_history_margin(&self, margin: u32, width_px: i32, colour: u32) {
+    /// Shared by every backend, colours included, so the strip looks and
+    /// behaves identically on all three.
+    ///
+    /// Two details the mask carries:
+    ///
+    /// * Scintilla's default mask for margin 1 is `~SC_MASK_FOLDERS`, which
+    ///   *includes* the history-marker family (21-24). With
+    ///   `SC_CHANGE_HISTORY_MARKERS` on, every margin whose mask matches
+    ///   renders it — so without cleanup the strip would also paint in
+    ///   margin 1 at margin 1's width. Margins 1-3 are therefore
+    ///   defensively cleared.
+    /// * A marker no margin's mask holds is drawn as the line's
+    ///   *background* instead, so all four markers must be in this
+    ///   margin's mask. One left out would tint whole lines of text.
+    ///
+    /// A line can be in several states at once, part of it saved and part
+    /// changed since. Scintilla draws a line's markers in ascending number,
+    /// and each fills the strip, so the highest wins: a line with any
+    /// unsaved change shows as unsaved.
+    pub fn configure_change_history_margin(&self, margin: u32, width_px: i32) {
         for unused in 1..=3u32 {
             self.set_margin_mask(unused, 0);
             self.set_margin_width(unused, 0);
         }
-        for silenced in [
-            SC_MARKNUM_HISTORY_REVERTED_TO_ORIGIN,
-            SC_MARKNUM_HISTORY_SAVED,
-            SC_MARKNUM_HISTORY_REVERTED_TO_MODIFIED,
-        ] {
-            self.marker_define(silenced, SC_MARK_EMPTY);
-        }
         self.set_margin_type(margin, SC_MARGIN_SYMBOL);
-        self.set_margin_mask(margin, 1 << SC_MARKNUM_HISTORY_MODIFIED);
-        self.marker_define(SC_MARKNUM_HISTORY_MODIFIED, SC_MARK_FULLRECT);
-        self.marker_set_back(SC_MARKNUM_HISTORY_MODIFIED, colour);
+        let mut mask = 0;
+        for (marker, colour) in CHANGE_HISTORY_MARKERS {
+            self.marker_define(marker, SC_MARK_FULLRECT);
+            self.marker_set_back(marker, colour);
+            mask |= 1 << marker;
+        }
+        self.set_margin_mask(margin, mask);
         self.set_margin_width(margin, width_px);
     }
 

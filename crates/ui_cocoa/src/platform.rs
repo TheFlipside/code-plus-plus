@@ -18,7 +18,7 @@ use codepp_core::{Encoding, Eol, LangType};
 use codepp_editor::{sc_eol_mode, EditorHandle};
 use codepp_scintilla_sys::{
     SCI_ADDUNDOACTION, SCI_BEGINUNDOACTION, SCI_COLOURISE, SCI_CONVERTEOLS, SCI_CREATEDOCUMENT,
-    SCI_EMPTYUNDOBUFFER, SCI_ENDUNDOACTION, SCI_GETCOLUMN, SCI_GETCURRENTPOS, SCI_GETDOCPOINTER,
+    SCI_ENDUNDOACTION, SCI_GETCOLUMN, SCI_GETCURRENTPOS, SCI_GETDOCPOINTER,
     SCI_GETFIRSTVISIBLELINE, SCI_GETLENGTH, SCI_GETLINECOUNT, SCI_GETMODIFY, SCI_GETOVERTYPE,
     SCI_GETSELECTIONEND, SCI_GETSELECTIONSTART, SCI_GETTEXT, SCI_GETZOOM, SCI_GOTOPOS,
     SCI_LINEFROMPOSITION, SCI_LINESCROLL, SCI_LINESONSCREEN, SCI_POSITIONAFTER,
@@ -51,9 +51,6 @@ const CHANGE_HISTORY_MARGIN: u32 = 4;
 /// Pixel width of the change-history strip when populated — a thin
 /// slice, matching the other backends.
 const CHANGE_HISTORY_MARGIN_PX: i32 = 4;
-/// Change-history strip colour: Material orange 400 in Scintilla's
-/// `0x00BBGGRR` order, the same shade the active-tab indicator uses.
-const CHANGE_HISTORY_COLOR: u32 = 0x00_26_A7_FF;
 
 /// Pack an `(r, g, b)` triple into Scintilla's BGR colour word.
 const fn rgb_to_scintilla_colour((r, g, b): (u8, u8, u8)) -> u32 {
@@ -254,11 +251,7 @@ pub(crate) fn apply_predefined_styles(editor: &EditorHandle) {
     // an outlined bar with a lighter fill rather than the solid strip
     // Win32 and GTK show. That was the visible symptom of this call
     // being missing: same feature, different appearance, on macOS only.
-    editor.configure_change_history_margin(
-        CHANGE_HISTORY_MARGIN,
-        CHANGE_HISTORY_MARGIN_PX,
-        CHANGE_HISTORY_COLOR,
-    );
+    editor.configure_change_history_margin(CHANGE_HISTORY_MARGIN, CHANGE_HISTORY_MARGIN_PX);
     // Both were likewise missing here while present on the other two
     // backends, so brace matching and indent guides rendered with
     // Scintilla's defaults instead of Code++'s palette.
@@ -319,15 +312,10 @@ impl UiPlatform for CocoaUi {
     }
 
     fn set_buffer_text(&mut self, text: &str, cursor: u64) {
-        let mut bytes = Vec::with_capacity(text.len() + 1);
-        bytes.extend_from_slice(text.as_bytes());
-        bytes.push(0);
-        self.editor.send(SCI_SETTEXT, 0, bytes.as_ptr() as isize);
-        // A freshly loaded file is not an edit: drop the undo history the
-        // `SETTEXT` itself created and mark the buffer clean, or the user
-        // could ⌘Z their file back to empty.
-        self.editor.send(SCI_EMPTYUNDOBUFFER, 0, 0);
-        self.editor.send(SCI_SETSAVEPOINT, 0, 0);
+        // A freshly loaded file is not an edit: nothing to undo (or the
+        // user could ⌘Z their file back to empty), the buffer clean, and
+        // no line marked in the change-history strip.
+        self.editor.set_loaded_text(text);
         self.editor.send(SCI_GOTOPOS, cursor as usize, 0);
     }
 
