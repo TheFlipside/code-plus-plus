@@ -58,6 +58,7 @@ mod style_config;
 mod tabs;
 mod toolbar;
 mod udl;
+mod updater;
 mod window;
 mod workspace;
 
@@ -870,6 +871,9 @@ unsafe fn on_sci_notify_inner(message: u32, lparam: usize) {
                 p.mark_first_draw();
                 p.painted();
             }
+            // The updater starts once a frame is on screen, and not
+            // before (DESIGN.md §11.2). This only queues its start.
+            updater::after_paint();
             with_state(|st| {
                 // Repair first, measure second. `clamp_scroll_width_to_viewport`
                 // reads the clip's width, and on a paint that follows a
@@ -1928,6 +1932,18 @@ pub(crate) fn present_deferred_dialogs() {
         return;
     }
     DIALOG_QUEUE.with(|q| q.borrow_mut().extend(dialogs));
+    pump_dialogs();
+}
+
+/// Queue an error dialog and present it in its turn, through the one
+/// queue every dialog goes through (see [`pump_dialogs`]).
+pub(crate) fn queue_error_dialog(title: &str, message: &str) {
+    DIALOG_QUEUE.with(|q| {
+        q.borrow_mut().push_back(PendingDialog::Error {
+            title: title.to_owned(),
+            message: message.to_owned(),
+        });
+    });
     pump_dialogs();
 }
 

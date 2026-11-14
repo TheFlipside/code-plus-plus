@@ -89,6 +89,8 @@ use codepp_plugin_host::{
 pub mod fif;
 #[cfg(target_os = "windows")]
 pub mod updater;
+#[cfg(any(target_os = "windows", target_os = "macos"))]
+pub mod updater_state;
 pub use codepp_core::ViewPosition;
 pub use codepp_editor::CursorText;
 pub use fif::{FifError, FifEvent, FifJobId, FifRequest, FifStats, OpenBufferOutcome};

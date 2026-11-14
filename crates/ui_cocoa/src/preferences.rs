@@ -137,6 +137,8 @@ pub(crate) fn show() {
     }
     if updated != current {
         with_state(|st| st.shell.set_preferences(updated));
+        // "Enable" takes effect now, not at the next hour.
+        crate::updater::preferences_changed();
     }
     // The recent-files region is rebuilt on the next File-menu open, so
     // nothing else has to be told. Matches `ui_gtk`.

@@ -35,16 +35,18 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, PoisonError};
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::sync::{Arc, PoisonError};
+use std::time::{Duration, Instant};
 
-use codepp_core::update::{self, feed, UpdaterState};
+use codepp_core::update::{self, feed};
 use codepp_platform::update_feed::{self, FetchError};
 use codepp_platform::update_install::{
     self, InstallError, InstallKind, VerifiedInstaller, PER_MACHINE_UPDATES,
 };
 use codepp_platform::winsparkle::{self, ConfigStore, WinSparkle};
 use crossbeam_channel::{Receiver, Sender};
+
+use crate::updater_state::{now, StateStore};
 
 /// The feed's URL, if the build was given one.
 const BUILD_FEED_URL: Option<&str> = option_env!("CODEPP_UPDATE_FEED_URL");
@@ -180,68 +182,6 @@ fn verify_against_feed(
     .map_err(PrepareError::Install)
 }
 
-/// The updater's state file behind a lock, as the place the library
-/// keeps its values (in place of the registry) and Code++ the time of
-/// its last check.
-///
-/// Every change is written to the file at once. The library calls from
-/// threads of its own, a few times per check.
-struct StateStore {
-    path: PathBuf,
-    state: Mutex<UpdaterState>,
-}
-
-impl StateStore {
-    /// The state kept at `path`, or an empty one if there is no file
-    /// there, or one that cannot be read: the cost of starting over is
-    /// one check made a day early and a skipped version offered again.
-    fn load(path: PathBuf) -> Self {
-        let state = match codepp_platform::open_regular_file(&path) {
-            Ok(Some(file)) => UpdaterState::read_from(file).unwrap_or_else(|error| {
-                tracing::warn!(error = ?error.to_string(), "updater.xml could not be read; starting it over");
-                UpdaterState::default()
-            }),
-            Ok(None) => {
-                tracing::warn!("updater.xml is not a regular file; starting it over");
-                UpdaterState::default()
-            }
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => UpdaterState::default(),
-            Err(error) => {
-                tracing::warn!(error = ?error.to_string(), "updater.xml could not be opened; starting it over");
-                UpdaterState::default()
-            }
-        };
-        Self {
-            path,
-            state: Mutex::new(state),
-        }
-    }
-
-    /// Change the state and, if `change` says it changed, save it.
-    fn update(&self, change: impl FnOnce(&mut UpdaterState) -> bool) {
-        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
-        if change(&mut state) {
-            if let Err(error) = state.save(&self.path) {
-                tracing::warn!(error = ?error.to_string(), "updater.xml could not be written");
-            }
-        }
-    }
-
-    fn last_check(&self) -> Option<u64> {
-        self.state
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .last_check
-    }
-
-    fn set_last_check(&self, now: u64) {
-        self.update(|state| {
-            state.last_check = Some(now);
-            true
-        });
-    }
-}
-
 /// [`StateStore`] as the library's store. A newtype, since the library
 /// takes ownership of its store and the worker keeps reading the same
 /// state.
@@ -268,13 +208,6 @@ impl ConfigStore for LibraryStore {
     fn delete(&self, name: &str) {
         self.0.update(|state| state.remove(name));
     }
-}
-
-/// The current time, in seconds since the Unix epoch.
-fn now() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |since| since.as_secs())
 }
 
 /// What makes this copy able to update itself, all of it established on
@@ -699,22 +632,6 @@ mod tests {
         assert_eq!(library.read("UpdateTempDir"), None);
         library.write("Bad\u{1}Name", "1");
         assert_eq!(library.read("Bad\u{1}Name"), None);
-    }
-
-    #[test]
-    fn a_state_file_that_cannot_be_read_starts_over() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("updater.xml");
-        std::fs::write(&path, b"<updater last-check=\"12\"><value").unwrap();
-        let store = StateStore::load(path.clone());
-        assert_eq!(store.last_check(), None);
-        // And is replaced by a good one at the first change.
-        store.set_last_check(34);
-        assert_eq!(StateStore::load(path).last_check(), Some(34));
-        // A folder where the file should be is not a state either.
-        let folder = dir.path().join("folder.xml");
-        std::fs::create_dir(&folder).unwrap();
-        assert_eq!(StateStore::load(folder).last_check(), None);
     }
 
     /// Standard base64, for the feeds these tests write.

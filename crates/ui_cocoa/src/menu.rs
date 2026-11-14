@@ -665,6 +665,13 @@ define_class!(
             });
         }
 
+        /// "?" → "Update Code++": check for a new version now, with the
+        /// updater's own window (DESIGN.md §11.5).
+        #[unsafe(method(codeppCheckForUpdates:))]
+        fn check_for_updates(&self, _sender: Option<&NSObject>) {
+            crate::at_callback_boundary("menu:checkForUpdates", (), crate::updater::check_now);
+        }
+
         /// Run one plugin's menu command. Carries the host-allocated
         /// `FuncItem.cmd_id` in its tag — an **id**, not an index, so a
         /// rebuild between opening the menu and clicking it resolves to
@@ -829,6 +836,11 @@ fn validate(item: &NSMenuItem) -> bool {
         // which means the state cannot go stale between a rebuild and a
         // click — and these three are static, so nothing rebuilds them.
         return crate::has_recent_files();
+    } else if action == sel!(codeppCheckForUpdates:) {
+        // Greyed until the updater has established, after the first
+        // paint, that this copy can update itself, and for good on one
+        // that cannot (DESIGN.md §11.5). Read without the window's state.
+        return crate::updater::available();
     }
     true
 }
@@ -1806,7 +1818,14 @@ fn build_help_menu(actions: &Actions, mtm: MainThreadMarker) -> Retained<NSMenuI
     }
     add_disabled(&menu, mtm, "Code++ Online User Manual");
     menu.addItem(&NSMenuItem::separatorItem(mtm));
-    add_disabled(&menu, mtm, "Update Code++");
+    add(
+        &menu,
+        mtm,
+        "Update Code++",
+        sel!(codeppCheckForUpdates:),
+        "",
+        Some(actions),
+    );
     item
 }
 
