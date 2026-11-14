@@ -4732,10 +4732,16 @@ impl Shell {
             return Err(ShellError::AlreadyOpen);
         }
 
-        let (old_path, encoding) = {
+        let (old_path, encoding, buffer_id) = {
             let tab = self.active().ok_or(ShellError::NoActivePath)?;
-            (tab.path.clone(), tab.encoding.clone())
+            (tab.path.clone(), tab.encoding.clone(), tab.id as isize)
         };
+        // NPPN_FILEBEFORESAVE, as `save_current_to_disk` queues it: after
+        // the refusals and before the buffer is read, so a refused Save As
+        // announces nothing and a failed write still pairs with no
+        // FILESAVED, as there.
+        self.pending_notifications
+            .push(Notification::FileBeforeSave { buffer_id });
         let text = ui.get_buffer_text();
         // Encode BEFORE the unwatch below — if encoding fails we
         // return early and the unwatch never happens, so the old
@@ -4808,11 +4814,8 @@ impl Shell {
                 );
                 // Notification push first, then dirty-glyph clear —
                 // see save_current_to_disk for the ordering rationale.
-                {
-                    let buffer_id = self.active().map_or(0, |t| t.id as isize);
-                    self.pending_notifications
-                        .push(Notification::FileSaved { buffer_id });
-                }
+                self.pending_notifications
+                    .push(Notification::FileSaved { buffer_id });
                 // Save As writes to a real path, so the buffer is no
                 // longer unsaved-from-restore. Released *before*
                 // `mark_saved`: its `SCI_SETSAVEPOINT` reaches Win32's
@@ -17180,6 +17183,41 @@ mod tests {
             Notification::FileSaved { buffer_id } => assert_eq!(*buffer_id, expected_id),
             other => panic!("expected FileSaved, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn save_as_queues_file_before_save_then_file_saved() {
+        let dir = tempfile::tempdir().unwrap();
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+        shell.new_untitled(&mut ui);
+        let _ = shell.take_notifications();
+
+        ui.buffer_text = "text".to_string();
+        shell
+            .save_buffer_as(&mut ui, dir.path().join("saved-as.txt"))
+            .unwrap();
+
+        let expected_id = shell.active().expect("active tab").id as isize;
+        let notifications = shell.take_notifications();
+        assert_eq!(notifications.len(), 2, "{notifications:?}");
+        assert!(
+            matches!(notifications[0], Notification::FileBeforeSave { buffer_id } if buffer_id == expected_id),
+            "{notifications:?}"
+        );
+        assert!(
+            matches!(notifications[1], Notification::FileSaved { buffer_id } if buffer_id == expected_id),
+            "{notifications:?}"
+        );
+
+        // A refused Save As announces nothing.
+        shell.new_untitled(&mut ui);
+        let _ = shell.take_notifications();
+        assert!(shell
+            .save_buffer_as(&mut ui, dir.path().join("saved-as.txt"))
+            .is_err());
+        assert!(shell.take_notifications().is_empty());
     }
 
     // -- Multi-tab data model tests (milestone 6a) ------------------
