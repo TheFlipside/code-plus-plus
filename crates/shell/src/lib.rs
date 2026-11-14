@@ -1702,6 +1702,45 @@ pub fn tab_display_name(tab: &Tab) -> String {
     sanitize_filename_for_display(&owned)
 }
 
+/// The headline of the warning a backend shows when Save As writes
+/// nothing because the tab its chooser was opened for is no longer in
+/// front (`ui_gtk`'s and `ui_cocoa`'s `report_save_as_refused`). A constant
+/// rather than a literal at the call so the unit tests can pin it with
+/// the rest of the wording: the source guards strip string literals.
+pub const SAVE_AS_REFUSED_TITLE: &str = "Nothing was saved";
+
+/// The body of that warning, shared so the backends cannot drift on it.
+///
+/// Both the name and the path are sanitized here. A file or folder name
+/// can carry line breaks and bidi controls, and a dialog's secondary
+/// text (GTK's, an `NSAlert`'s informative text) renders them as real
+/// lines and reordered text. The name is `tab_display_name`'s, so
+/// already sanitized, and a second pass changes nothing; it is made here
+/// so that no caller can hand this a raw name. The paragraph break is
+/// added after sanitizing, which would otherwise replace it.
+///
+/// Every paragraph opens with fixed English. GTK lays a paragraph out in
+/// the direction of its first letter, so one opening with a name that
+/// starts with a Hebrew or Arabic letter would run right to left. Whether
+/// AppKit does the same was not checked; fixed text first is safe either way.
+#[must_use]
+pub fn save_as_refused_text(name: &str, path: &Path, still_open: bool) -> String {
+    let name = sanitize_str_for_display(name);
+    let path = sanitize_path_for_display(path);
+    if still_open {
+        format!(
+            "Another tab came to the front while the Save As dialog was open, \
+             so '{name}' was not saved to {path}.\n\n\
+             Switch back to '{name}' and choose Save As again."
+        )
+    } else {
+        format!(
+            "The tab '{name}' was closed while the Save As dialog was open, \
+             so nothing was saved to {path}."
+        )
+    }
+}
+
 /// An untitled tab's name, unsanitized: what it was renamed to, else
 /// `new N`, else `Untitled` for a buffer with no number. The tail of
 /// [`tab_display_name`], and what a plugin is told an untitled buffer's
@@ -12318,6 +12357,78 @@ fn spawn_forwarder<T: Send + 'static>(
             }
         })
         .expect("forwarder thread spawn");
+}
+
+#[cfg(test)]
+mod save_as_refused_tests {
+    //! The words a refused Save As shows, on GTK and macOS. Pure, so they
+    //! run on every runner.
+    use super::{save_as_refused_text, SAVE_AS_REFUSED_TITLE};
+    use std::path::Path;
+
+    #[test]
+    fn the_headline_says_nothing_was_saved() {
+        assert_eq!(SAVE_AS_REFUSED_TITLE, "Nothing was saved");
+    }
+
+    #[test]
+    fn a_tab_still_open_is_named_with_the_path_and_the_way_back() {
+        assert_eq!(
+            save_as_refused_text("new 1", Path::new("/home/u/notes.txt"), true),
+            "Another tab came to the front while the Save As dialog was open, \
+             so 'new 1' was not saved to /home/u/notes.txt.\n\n\
+             Switch back to 'new 1' and choose Save As again."
+        );
+    }
+
+    #[test]
+    fn a_tab_that_has_closed_is_not_one_to_switch_back_to() {
+        assert_eq!(
+            save_as_refused_text("new 1", Path::new("/home/u/notes.txt"), false),
+            "The tab 'new 1' was closed while the Save As dialog was open, \
+             so nothing was saved to /home/u/notes.txt."
+        );
+    }
+
+    /// A line break in a file or folder name would forge a line of its own
+    /// in the dialog, and a bidi override would reorder what follows it.
+    /// Only the paragraph break the text adds itself may survive. The name
+    /// is tried too, although callers pass one already sanitized: this is
+    /// the last step before the dialog.
+    #[test]
+    fn neither_name_nor_path_can_forge_lines_or_reorder_the_text() {
+        let name = "n\nForged line\u{202E}txt.exe";
+        let path = Path::new("/tmp/a\nYour files were deleted./\u{202E}txt.exe");
+        for (still_open, breaks) in [(true, 2), (false, 0)] {
+            let text = save_as_refused_text(name, path, still_open);
+            assert_eq!(text.matches('\n').count(), breaks, "{text:?}");
+            assert!(!text.contains('\u{202E}'), "{text:?}");
+            assert!(
+                text.contains("'n\u{FFFD}Forged line\u{FFFD}txt.exe'"),
+                "{text:?}"
+            );
+            assert!(
+                text.contains("/tmp/a\u{FFFD}Your files were deleted./\u{FFFD}txt.exe"),
+                "{text:?}"
+            );
+        }
+    }
+
+    /// GTK lays a paragraph out in the direction of its first letter, so
+    /// none may open with the name: one starting with a Hebrew letter, as
+    /// here, would turn the whole paragraph right to left.
+    #[test]
+    fn every_paragraph_opens_with_fixed_text() {
+        for still_open in [true, false] {
+            let text = save_as_refused_text("\u{5D0}\u{5D1}.txt", Path::new("/tmp/x"), still_open);
+            for paragraph in text.split("\n\n") {
+                assert!(
+                    paragraph.starts_with(|c: char| c.is_ascii_alphabetic()),
+                    "{paragraph:?}"
+                );
+            }
+        }
+    }
 }
 
 #[cfg(test)]

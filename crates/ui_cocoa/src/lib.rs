@@ -3578,8 +3578,15 @@ fn save_active_file_as() {
     // active tab too. So the tab the panel was opened for is noted here
     // and looked up again before anything is written, as `ui_gtk`'s Save
     // As and Win32's `run_save_as_flow` do. A look that cannot read the
-    // state counts as "moved".
-    let Some(for_tab) = with_state(|st| st.shell.active().map(|t| t.id)).flatten() else {
+    // state counts as "moved". The name is noted with the id: by the
+    // time a refusal is reported, the tab may have closed and taken its
+    // name with it.
+    let Some((for_tab, name)) = with_state(|st| {
+        st.shell
+            .active()
+            .map(|t| (t.id, codepp_shell::tab_display_name(t)))
+    })
+    .flatten() else {
         return;
     };
     let panel = NSSavePanel::savePanel(mtm);
@@ -3590,7 +3597,11 @@ fn save_active_file_as() {
         return;
     };
     if !active_tab_is(for_tab) {
-        tracing::warn!("Save As abandoned: another tab came to the front while the panel was up");
+        tracing::warn!(
+            for_tab,
+            "Save As abandoned: the tab the panel was opened for is no longer in front"
+        );
+        report_save_as_refused(for_tab, &name, &path);
         return;
     }
     let result = with_state(|st| {
@@ -3610,6 +3621,31 @@ fn save_active_file_as() {
     // so the dirty marker will not clear itself. Save As additionally
     // renames the tab, which the strip rebuild here picks up.
     refresh_tab_chrome();
+}
+
+/// Tell the user that [`save_active_file_as`] wrote nothing, because the
+/// tab its panel was opened for is no longer the one in front. They
+/// picked a path, and a refusal that is only logged leaves them to find
+/// nothing there. A warning, not an error: the save was refused on
+/// purpose, so that one buffer's text could not land at the path chosen
+/// for another. Same words as `ui_gtk`'s, from the shell.
+fn report_save_as_refused(for_tab: i32, name: &str, path: &std::path::Path) {
+    let Some(mtm) = MainThreadMarker::new() else {
+        return;
+    };
+    // Whether the tab is still open decides the advice. A read that fails
+    // answers "still open", which sends the user to look for their work
+    // rather than telling them it is gone.
+    let still_open = with_state(|st| st.shell.tabs.iter().any(|t| t.id == for_tab)).unwrap_or(true);
+    let _freeze = DrainFreeze::new();
+    let alert = NSAlert::new(mtm);
+    alert.setMessageText(&NSString::from_str(codepp_shell::SAVE_AS_REFUSED_TITLE));
+    alert.setInformativeText(&NSString::from_str(&codepp_shell::save_as_refused_text(
+        name, path, still_open,
+    )));
+    alert.setAlertStyle(NSAlertStyle::Warning);
+    alert.addButtonWithTitle(&NSString::from_str("OK"));
+    alert.runModal();
 }
 
 pub(crate) fn action_save_all() {
@@ -4968,8 +5004,8 @@ mod source_invariants {
             .find("let _freeze = DrainFreeze::new();")
             .expect("Save As no longer holds a freeze for as long as it runs");
         let noted = body
-            .find("let Some(for_tab) =")
-            .expect("Save As no longer notes the tab its panel is for");
+            .find("let Some((for_tab, name)) =")
+            .expect("Save As no longer notes the tab its panel is for, and its name");
         let panel = body
             .find("runModal()")
             .expect("Save As no longer runs its panel");
@@ -4989,6 +5025,47 @@ mod source_invariants {
             "Save As writes even though another tab came to the front"
         );
         a_second_look_fails_closed();
+    }
+
+    /// A refused Save As says so before it returns, in the shell's
+    /// sanitized words, and does nothing else for a tab no longer in
+    /// front; the name it is given is `tab_display_name`'s. Bodies are
+    /// pinned whole: a check for one call is met by that call beside a
+    /// wrong one.
+    #[test]
+    fn a_refused_save_as_says_so_in_sanitized_words() {
+        let squash = |s: &str| s.split_whitespace().collect::<String>();
+        let src = production_src();
+        let body = code_only(&fn_body(src, "save_active_file_as"));
+        let noted = body.find("let Some((for_tab, name)) =").expect("no note");
+        let panel = body.find("runModal()").expect("no panel");
+        assert!(
+            squash(&body[noted..panel]).contains("(t.id,codepp_shell::tab_display_name(t))"),
+            "Save As notes a name other than `tab_display_name`'s, the sanitized one"
+        );
+        assert_eq!(
+            squash(&block_after(&body, "if !active_tab_is(for_tab) {")),
+            "{tracing::warn!(for_tab,);report_save_as_refused(for_tab,&name,&path);return;}",
+            "a refused Save As must log, say so and return, and do nothing else"
+        );
+        assert_eq!(
+            code_only(src).matches("report_save_as_refused(").count(),
+            2,
+            "the refusal must be reported from exactly one place"
+        );
+        assert_eq!(
+            squash(&code_only(&fn_body(src, "report_save_as_refused"))),
+            "{letSome(mtm)=MainThreadMarker::new()else{return;};\
+             letstill_open=with_state(|st|st.shell.tabs.iter().any(|t|t.id==for_tab))\
+             .unwrap_or(true);let_freeze=DrainFreeze::new();letalert=NSAlert::new(mtm);\
+             alert.setMessageText(&NSString::from_str(codepp_shell::SAVE_AS_REFUSED_TITLE));\
+             alert.setInformativeText(&NSString::from_str(\
+             &codepp_shell::save_as_refused_text(name,path,still_open,)));\
+             alert.setAlertStyle(NSAlertStyle::Warning);\
+             alert.addButtonWithTitle(&NSString::from_str());alert.runModal();}",
+            "the refusal's alert must take its words from the shell, read \"still open\" when \
+             the state cannot be read, hold the freeze and run modally"
+        );
     }
 
     /// Every second look goes through `active_tab_is`, and it answers

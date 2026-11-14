@@ -1751,8 +1751,8 @@ mod gesture_delivery_guard {
             squash(&fn_body(&menu, "report_save_as_refused")),
             "{letstill_open=with_state(|st|st.shell.tabs.iter().any(|t|t.id==for_tab))\
              .unwrap_or(true);crate::message_dialog(gtk::MessageType::Warning,\
-             gtk::ButtonsType::Ok,SAVE_AS_REFUSED_TITLE,\
-             &save_as_refused_text(name,path,still_open),);}",
+             gtk::ButtonsType::Ok,codepp_shell::SAVE_AS_REFUSED_TITLE,\
+             &codepp_shell::save_as_refused_text(name,path,still_open),);}",
             "the refusal's warning must take its text from `save_as_refused_text` and choose \
              its wording by whether the tab is still open, reading \"still open\" when the \
              state cannot be read"
