@@ -1827,7 +1827,17 @@ These are not blockers for the phase that surfaced them, but get addressed in Ph
 
   **What is not done.**
   * *Win32 is verified by a build and the lifted guards only.* Its changes are the selection handler's switch, the order of two deliveries and the close's binding, and the duplicates and the stale binding they remove were found by reading, not driven on Windows.
-  * *The Cocoa half has not run on AppKit.* It rests on the shared shell code, the lifted guards and a macOS type-check.
+  * ~~*The Cocoa half has not run on AppKit.* It rests on the shared shell code, the lifted guards and a macOS type-check.~~ *(Since run on macOS 27. `ui_cocoa`'s suite, the gestures' source guards among them, passes natively, 167 tests. The real app, a debug build started by its binary under a scratch `HOME` with `a.txt` and `b.txt` restored and `b.txt` in front, was driven by a library injected with `DYLD_INSERT_LIBRARIES`: it opened the Plugins menu, clicked `a.txt`'s tab by calling the tab button's `mouseDown:` with a mouse-up already posted, and ran the Window menu's and File menu's items by their own target and action. The system Save panel runs out of process and ignored the folder the driver set on it, so for Save As the driver replaced `NSSavePanel`'s `runModal` and `URL` to answer OK with a file in the scratch folder; everything Code++ does around the panel ran as it is. A probe plugin built outside the tree logged each notification with a timestamp and, from inside its handler, the current buffer and the notified buffer's path. The same driver and probe against `973c4bc`, the commit before:*
+
+    | Step | Before | After |
+    | --- | --- | --- |
+    | Click a tab | nothing | `BUFFERACTIVATED` for `a.txt` within 6 ms, before the click returns |
+    | A Window-menu pick | nothing | `BUFFERACTIVATED` within 5 ms |
+    | File → New | 4.5 s later, at the Save As's drain, naming the path Save As then gave it | `BUFFERACTIVATED` for `new 1` within 7 ms |
+    | Save | 2.4 s later, at the Save As's drain | `FILEBEFORESAVE` and `FILESAVED` within 11 ms |
+    | Save As | after the command returned | `FILESAVED` for `c.txt` before the command returned |
+
+    *In every handler the host answered both queries, and the current buffer was the one notified. One run each. Seen on the way and not changed: Save As queues `FILESAVED` and no `FILEBEFORESAVE`, on every backend, since it is the shell's `save_buffer_as`; whether Notepad++ sends one for Save As was not measured. A first run with the real panel, driven by a timer that set its folder and stopped its modal session, saved the untitled buffer as `~/Documents/Untitled` and logged no notification after it, not even the shutdown pair; that run's log path was relative, so whether the panel moved the working folder or a delivery failed was not established.)*
   * *A close prompt's Save is delivered after the close has removed the buffer*, on all three backends. `FILEBEFORECLOSE` goes out synchronously, and the save's queued `FILEBEFORESAVE` and `FILESAVED` follow it, so a path lookup from their handlers answers nothing. Delivering the queue ahead of the announcement was considered and rejected: plugin code would then run between the announcement and `FILEBEFORECLOSE`, with nothing looking at the tab again.
   * *Win32 delivers `NPPN_DOCORDERCHANGED` late* after a drag reorder or a pin: neither ends in a delivery there.
   * *Win32's ✕ on a background tab* delivers the activation, then posts the close, which closes whatever is in front by then. A plugin that switches tabs from `NPPN_BUFFERACTIVATED` there gets its tab closed; GTK and macOS look again.
