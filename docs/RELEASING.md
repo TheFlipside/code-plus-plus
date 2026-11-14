@@ -88,7 +88,7 @@ A macOS feed is signed as well: a comment after the document holds the signature
 
 The Windows feed's address and the public key are in `.forgejo/workflows/release.yml`, as `CODEPP_UPDATE_FEED_URL` and `CODEPP_UPDATE_PUBLIC_KEY`; the workflow's macOS packaging step names each macOS feed. None can change once a release with them is out: every installed copy asks that address and trusts that key for good. So the repository's owner, its name, the branch's name and the files' names stay as they are.
 
-An installation for the whole machine on Windows does not update itself yet, and neither does a Code++ run from the Windows zip or on Linux (DESIGN.md §11.4, §11.1).
+On Windows an installation updates itself whether it is for one account or the whole machine; a per-machine update installs elevated and raises a UAC consent prompt. A Code++ run from the Windows zip or on Linux does not update itself (DESIGN.md §11.4, §11.1).
 
 ---
 
@@ -265,7 +265,7 @@ Nothing has to be created: Forgejo makes the owner's Debian registry, and the ke
 - **Code signing.** No build is signed with a certificate, and neither is an installer. A certificate is also the first thing "Edit with Code++" would take to show in Windows 11's short context menu (DESIGN.md §7.4, the entry on "Edit with Code++"); the maintainer has put that off to a later time. Windows shows SmartScreen's prompt, and its administrator prompt names the `.msi` as from an unknown publisher; macOS refuses the first start until the user allows it. The release description tells testers how. The macOS bundle has an ad-hoc signature only, which Apple Silicon requires of every binary; the disk image itself is not signed.
 - **More packages.** No `.rpm`, AppImage or Flatpak.
 - **The apt repository's first real run.** The upload has run against a stand-in for the registry only, and `apt` has not installed from it yet (DESIGN.md §11.11).
-- **More of the updater.** A Code++ the `.msi` installed for one account updates itself, and so does `Code++.app` (§1.4). An installation for the whole machine does not yet, and a `.deb` is updated by `apt` (DESIGN.md §11).
+- **More of the updater.** A Code++ the `.msi` installed, for one account or the whole machine, updates itself, and so does `Code++.app` (§1.4). A `.deb` is updated by `apt` (DESIGN.md §11).
 - **The feeds' first real run.** Signing and the commits to the `appcast` branch have run against a stand-in for the server only, and a manual run (§3) rehearses neither. The macOS half has updated a packaged Code++ end to end on a developer's Mac, against a feed and a key made for the test (DESIGN.md §11.11).
 - **More of the installers.** The Windows installer has WiX's stock pictures and English text only, offers no choice of folder or of what to set up, and does not check the Windows version: on Windows 8.1 or older it would install a program that cannot start. The `.deb` has no manual page, changelog or AppStream metadata, so a software centre shows it without a description page, and `lintian` would say so; it has not been run on it. The disk image has no background picture or arranged icons.
 - **The macOS packaging on the runner.** The zip and the `.dmg` have been built and verified by the real script on a developer's Mac, for Apple Silicon (DESIGN.md §11.11). It has not run on the `macos` runner, and the Intel build has not been packaged or started anywhere.

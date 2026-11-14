@@ -22,10 +22,10 @@
 //! the state file.
 //!
 //! **A copy that can update itself** is one whose build was given a
-//! feed and a public key, that Windows Installer put where it is, of a
-//! kind that may update (§11.4), with the library's DLL beside it. Any
-//! other copy has no updater: a build tree, the zip, an installation
-//! for the whole machine while those are gated.
+//! feed and a public key, that Windows Installer put where it is
+//! (§11.4), for one account or the whole machine alike, with the
+//! library's DLL beside it. Any other copy has no updater: a build
+//! tree, or the zip.
 //!
 //! **The feed's URL and the public key are constants of the build**,
 //! `CODEPP_UPDATE_FEED_URL` and `CODEPP_UPDATE_PUBLIC_KEY` in its
@@ -40,9 +40,7 @@ use std::time::{Duration, Instant};
 
 use codepp_core::update::{self, feed};
 use codepp_platform::update_feed::{self, FetchError};
-use codepp_platform::update_install::{
-    self, InstallError, InstallKind, VerifiedInstaller, PER_MACHINE_UPDATES,
-};
+use codepp_platform::update_install::{self, InstallError, InstallKind, VerifiedInstaller};
 use codepp_platform::winsparkle::{self, ConfigStore, WinSparkle};
 use crossbeam_channel::{Receiver, Sender};
 
@@ -233,10 +231,6 @@ fn establish() -> Option<Installation> {
         tracing::debug!("no updater: Windows Installer did not put this copy here");
         return None;
     };
-    if kind == InstallKind::PerMachine && !PER_MACHINE_UPDATES {
-        tracing::info!("no updater: installations for all users cannot update themselves yet");
-        return None;
-    }
     let Some(library) = winsparkle::dll_beside_exe() else {
         tracing::debug!(
             "no updater: {} is not beside the executable",

@@ -535,9 +535,10 @@ this holds (DESIGN.md §11, `codepp_shell::updater`):
 - The copy was installed by the `.msi`, which records its folder under
   `Software\Code++\Installer` (`InstallFolder`), in `HKEY_LOCAL_MACHINE`
   or `HKEY_CURRENT_USER` by the installation's kind.
-- The installation is for one account. One for the whole machine has
-  no updater yet (`codepp_platform::update_install::PER_MACHINE_UPDATES`,
-  DESIGN.md §11.4).
+- The installation is for one account or for the whole machine; both
+  update themselves (DESIGN.md §11.4). A per-machine update installs
+  elevated, so it raises a UAC consent prompt that cannot be automated —
+  a driven test clicks it by hand.
 - `WinSparkle.dll`, version 0.9.4, is beside `codepp.exe`, where the
   `.msi` puts it.
 

@@ -21,15 +21,21 @@
 //! so a program cannot keep a way in from before. Windows Installer can
 //! still read the file through its path.
 //!
-//! **How far that is shown.** For an installation for one account, a
-//! real `msiexec.exe` has installed a package held this way, with the
-//! file refused to a writer until its process ended (DESIGN.md §11.11).
-//! For an installation for the whole machine the installing is done by
-//! the Windows Installer service, elevated, after a consent prompt, and
-//! nothing here has been run that way: whether the service reads the
-//! held file and no other has to be shown first (DESIGN.md §11.10).
-//! Until it is, [`PER_MACHINE_UPDATES`] is false and
-//! [`VerifiedInstaller::launch`] refuses such an installation.
+//! **How far that is shown.** A real `msiexec.exe` has installed a
+//! package held this way, with the file refused to a writer until the
+//! holding process ended, for an installation for one account and for
+//! one for the whole machine (DESIGN.md §11.11). The whole-machine case
+//! was driven to the end with the user's consent at the UAC prompt: the
+//! elevated service installed the very file that was verified — the
+//! installed executable and the service's own cached copy of the package
+//! both equalled it — the file stayed refused to a writer for the whole
+//! elevated install, and killing the holder mid-install, at the one
+//! timing tried, only aborted the update, with a file swapped in after
+//! the unlock never installed. Two things are not shown here: a kill
+//! during the file-copy phase rather than the early one, and — left to a
+//! virtual machine — a drive letter redirected for the logon session,
+//! which the elevated work in session 0 should not see but which cannot
+//! be tried on a live desktop (DESIGN.md §11.10).
 //!
 //! Nothing here is on the way to the first frame, and everything here
 //! blocks: it is for the updater's worker thread (DESIGN.md §11.2).
@@ -64,15 +70,6 @@ use crate::update_signature::{verifies, PUBLIC_KEY_LEN, SIGNATURE_LEN};
 /// memory to be verified, and Code++'s own installer is a few
 /// megabytes.
 pub const MAX_INSTALLER_BYTES: u64 = 256 * 1024 * 1024;
-
-/// Whether an installation for the whole machine may update itself.
-///
-/// False until it has been shown, with a real elevated installation,
-/// that what Windows Installer's service installs is the file
-/// [`verify`] holds and no other (DESIGN.md §11.4, §11.10). An
-/// installation for one account runs nothing elevated, so a program of
-/// that account gains nothing by getting round the hold.
-pub const PER_MACHINE_UPDATES: bool = false;
 
 /// The registry key and value in which the `.msi` records the folder it
 /// installed into, under `HKEY_LOCAL_MACHINE` for an installation for
@@ -219,9 +216,6 @@ pub enum InstallError {
     NoVersion,
     /// The package's version was not accepted: the version.
     VersionRefused(String),
-    /// The installation is for the whole machine, which
-    /// [`PER_MACHINE_UPDATES`] does not allow yet.
-    PerMachine,
     /// `msiexec.exe` could not be started.
     Launch(std::io::Error),
 }
@@ -246,9 +240,6 @@ impl std::fmt::Display for InstallError {
                     "the downloaded update is version {version}, which is not newer"
                 )
             }
-            Self::PerMachine => f.write_str(
-                "this copy of Code++ is installed for all users, which cannot update itself yet",
-            ),
             Self::Launch(error) => write!(f, "Windows Installer could not be started: {error}"),
         }
     }
@@ -513,14 +504,10 @@ impl VerifiedInstaller {
     ///
     /// # Errors
     ///
-    /// [`InstallError::PerMachine`] while [`PER_MACHINE_UPDATES`] is
-    /// false, [`InstallError::Path`] for a folder that cannot be put in
-    /// a command line, [`InstallError::Launch`] if the process could
-    /// not be started.
+    /// [`InstallError::Path`] for a folder that cannot be put in a
+    /// command line, [`InstallError::Launch`] if the process could not
+    /// be started.
     pub fn launch(self, kind: InstallKind, install_dir: &Path) -> Result<u32, InstallError> {
-        if kind == InstallKind::PerMachine && !PER_MACHINE_UPDATES {
-            return Err(InstallError::PerMachine);
-        }
         let system = system_directory().ok_or(InstallError::Path("no system folder"))?;
         let mut command = installer_command(&system, &self.path, kind, install_dir)?;
         let child = spawn_holding(&self.file, &mut command).map_err(InstallError::Launch)?;
@@ -1022,24 +1009,6 @@ mod tests {
         for refused in [r"", r"\", r"C:\", r"C:", "C:\\a\"b", "C:\\a\nb", "C:\\a\0b"] {
             assert!(quoted(Path::new(refused)).is_err(), "{refused:?}");
         }
-    }
-
-    #[test]
-    fn an_installation_for_the_whole_machine_is_not_started() {
-        let dir = tempfile::tempdir().unwrap();
-        let (path, signature) = signed_package(dir.path(), "update.msi", "0.2.1");
-        let (_, public) = key_pair();
-        let installer = verify(&path, &public, &[signature], |_| true).unwrap();
-        // This test goes when the gate is lifted.
-        const { assert!(!PER_MACHINE_UPDATES) };
-        assert!(matches!(
-            installer.launch(
-                InstallKind::PerMachine,
-                Path::new(r"C:\Program Files\Code++")
-            ),
-            Err(InstallError::PerMachine)
-        ));
-        assert!(can_write(&path), "and the file is let go of");
     }
 
     /// The hand-over that `launch` rests on, with a harmless process in
