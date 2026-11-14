@@ -31,14 +31,16 @@ permissions:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
-  # The updater of the Windows build (docs/DESIGN.md §11): where an
-  # installed Code++ asks for the newest version, and the public half of
-  # the key updates are signed with. Neither is a secret. Both are
-  # compiled into the Windows build, which is the only one that reads
-  # them, and update_feed.py holds the first against where it publishes
-  # the feed and the second against the private key it signs with.
-  # Neither may ever change for the copies already installed: they ask
-  # that address, and trust that key, for good.
+  # The updater (docs/DESIGN.md §11): where an installed Code++ for
+  # Windows asks for the newest version, and the public half of the key
+  # updates are signed with. Neither is a secret. Both are compiled into
+  # the Windows build, and update_feed.py holds the first against where
+  # it publishes the feed and the second against the private key it
+  # signs with. The macOS builds carry the same key and ask a feed of
+  # their own each, which their packaging step names and writes into the
+  # bundle; update_feed.py reads both back out of the zip before it
+  # signs. Neither may ever change for the copies already installed:
+  # they ask that address, and trust that key, for good.
   CODEPP_UPDATE_FEED_URL: https://git.fiedler.live/tux/code-plus-plus/raw/branch/appcast/windows-x64.xml
   CODEPP_UPDATE_PUBLIC_KEY: N5vTYIYXYUHRY5wE/P7/duraTr9JV7oMCqhf9FWbBwo=
 
@@ -293,10 +295,14 @@ jobs:
           CODEPP_RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
         run: cargo build --release --locked --target ${{ matrix.target }} -p codepp-app -p codepp-cppmimetools -p codepp-cppconverter -p codepp-cppexport
 
-      # The zip and the .dmg.
+      # The zip and the .dmg. With a feed in its environment the script
+      # puts Sparkle.framework into the bundle, at the version and hash
+      # it holds, and the feed and the key into its Info.plist. Each
+      # architecture asks a feed of its own.
       - name: Package
         env:
           CODEPP_RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
+          CODEPP_UPDATE_FEED_URL: https://git.fiedler.live/tux/code-plus-plus/raw/branch/appcast/${{ matrix.label }}.xml
         run: bash .forgejo/scripts/package-unix.sh ${{ matrix.target }} ${{ matrix.label }} release-notices/THIRD_PARTY_CRATES.md dist-release/${{ matrix.label }}
 
       # A folder per architecture, so that the two jobs cannot pick up
@@ -390,10 +396,17 @@ jobs:
       # not the private half of the public key the builds carry, stops
       # the release here. The feed goes into a folder of its own, not
       # among the release's files, and is published by the last step.
-      - name: Sign the Windows installer and write its update feed
+      # One feed for each build that updates itself. For a macOS zip
+      # the script also requires the bundle in it to ask for that feed
+      # and to carry the key the builds carry.
+      - name: Sign the update files and write their feeds
         env:
           UPDATE_SIGNING_KEY: ${{ secrets.UPDATE_SIGNING_KEY }}
-        run: python3 .forgejo/scripts/update_feed.py sign "release-files/codepp-windows-x64-$VERSION.msi" update-feeds/windows-x64.xml
+        run: |
+          set -euo pipefail
+          python3 .forgejo/scripts/update_feed.py sign "release-files/codepp-windows-x64-$VERSION.msi" update-feeds/windows-x64.xml
+          python3 .forgejo/scripts/update_feed.py sign "release-files/codepp-macos-arm64-$VERSION.zip" update-feeds/macos-arm64.xml
+          python3 .forgejo/scripts/update_feed.py sign "release-files/codepp-macos-x64-$VERSION.zip" update-feeds/macos-x64.xml
 
       - name: Write the release notes
         run: |
@@ -471,12 +484,16 @@ jobs:
           PACKAGES_TOKEN: ${{ secrets.PACKAGES_TOKEN }}
         run: python3 .forgejo/scripts/publish_deb.py "release-files/codepp-linux-amd64-$VERSION.deb"
 
-      # Last, once both releases are out: from this commit on, installed
-      # copies are offered the release. The script first downloads the
-      # installer from the address the feed names and requires it to be
-      # the file that was signed, so the feed never names a file that
-      # is not there.
-      - name: Publish the Windows update feed
+      # Last, once both releases are out: from these commits on,
+      # installed copies are offered the release. For each feed the
+      # script first downloads the file from the address the feed names
+      # and requires it to be the file that was signed, so a feed never
+      # names a file that is not there.
+      - name: Publish the update feeds
         env:
           TOKEN: ${{ secrets.RELEASE_TOKEN }}
-        run: python3 .forgejo/scripts/update_feed.py publish "release-files/codepp-windows-x64-$VERSION.msi" update-feeds/windows-x64.xml
+        run: |
+          set -euo pipefail
+          python3 .forgejo/scripts/update_feed.py publish "release-files/codepp-windows-x64-$VERSION.msi" update-feeds/windows-x64.xml
+          python3 .forgejo/scripts/update_feed.py publish "release-files/codepp-macos-arm64-$VERSION.zip" update-feeds/macos-arm64.xml
+          python3 .forgejo/scripts/update_feed.py publish "release-files/codepp-macos-x64-$VERSION.zip" update-feeds/macos-x64.xml

@@ -1,15 +1,25 @@
 #!/usr/bin/env python3
-"""Sign a release's Windows installer and publish the feed that offers it.
+"""Sign a release's update files and publish the feeds that offer them.
 
     update_feed.py check
     update_feed.py sign <installer> <feed-file>
     update_feed.py publish <installer> <feed-file>
 
-An installed Code++ on Windows asks one file for the newest version:
-`windows-x64.xml` on the repository's `appcast` branch, which holds the
-feeds and nothing else (docs/DESIGN.md, section 11.7). The feed names
-the release's installer, its length and its Ed25519 signature, and
-Code++ installs nothing that signature does not verify.
+An installed Code++ that updates itself asks one file for the newest
+version: its feed on the repository's `appcast` branch, which holds the
+feeds and a note saying so (docs/DESIGN.md, section 11.7). There is one
+feed for each build that updates itself, and <installer>'s name says
+which is meant:
+
+    codepp-windows-x64-<version>.msi   windows-x64.xml
+    codepp-macos-arm64-<version>.zip   macos-arm64.xml
+    codepp-macos-x64-<version>.zip     macos-x64.xml
+
+A feed names the release's file, its length and its Ed25519 signature,
+and nothing is installed that the signature does not verify. A macOS
+feed is signed as well, the way Sparkle reads it: a comment after the
+document holds the signature of everything before it. The app refuses
+a feed without one (`SURequireSignedFeed`).
 
 `check` asks the server whether the `appcast` branch exists, and
 compares the address the builds are given for the feed with where this
@@ -25,6 +35,12 @@ against that public key. A wrong secret therefore stops here, before
 anything is published. What is signed is a copy of the installer's
 bytes as this script read them, so the feed's length and signature are
 of the same bytes whatever happens to the file meanwhile.
+
+For a macOS zip, `sign` first reads the `Info.plist` of the bundle in
+it and requires the app to ask for the feed where this script publishes
+it, to carry the key the builds carry, and to be the release's version:
+what `check` establishes for the Windows build before anything is
+built, established for a macOS one before anything is published.
 
 The key is in this process's environment when it starts and in its
 memory until it ends, and in the memory of each `openssl` it is handed
@@ -52,12 +68,13 @@ neither the token nor the key appears on a command line:
     UPDATE_SIGNING_KEY  the private key: 32 bytes in base64, the form
                         `winsparkle-tool generate-key` writes (sign)
 
-and two the Windows build reads too, under the same names, so that the
-workflow states each once:
+and two the builds read too, under the same names, so that the workflow
+states each once:
 
     CODEPP_UPDATE_PUBLIC_KEY  the public key the builds carry: 32 bytes
                               in base64 (sign)
-    CODEPP_UPDATE_FEED_URL    where the builds ask for the feed (check)
+    CODEPP_UPDATE_FEED_URL    where the Windows build asks for its feed
+                              (check)
 
 `sign` needs `openssl` 3 or later on PATH, and a system where
 `/dev/stdin` names a process's standard input, which the Linux runner
@@ -74,8 +91,10 @@ import base64
 import binascii
 import hashlib
 import http.client
+import io
 import json
 import os
+import plistlib
 import re
 import subprocess
 import sys
@@ -83,15 +102,17 @@ import tempfile
 import urllib.error
 import urllib.parse
 import urllib.request
+import xml.parsers.expat
+import zipfile
+import zlib
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, NamedTuple, Optional, Tuple
 from xml.sax.saxutils import quoteattr
 
 import publish_forgejo as shared
 from publish_forgejo import Forgejo, PublishError
 
 FEED_BRANCH = "appcast"
-FEED_NAME = "windows-x64.xml"
 PUBLIC_KEY = "CODEPP_UPDATE_PUBLIC_KEY"
 FEED_URL = "CODEPP_UPDATE_FEED_URL"
 SPARKLE_NS = "http://www.andymatuschak.org/xml-namespaces/sparkle"
@@ -111,6 +132,57 @@ VERSION_PATTERN = re.compile(r"[0-9]+\.[0-9]+\.[0-9]+")
 # A file on a branch: its blob id and its content.
 Blob = Tuple[str, bytes]
 FEED_VERSION = re.compile(r"<sparkle:version>([^<]*)</sparkle:version>")
+
+# The bundle's Info.plist inside a macOS zip, and the most it may hold.
+BUNDLE_PLIST = "Code++.app/Contents/Info.plist"
+MOST_PLIST_BYTES = 64 * 1024
+# What reading it out of a zip that is not what it should be can raise:
+# no such member, a damaged archive or member, a compression this
+# Python lacks, and a plist that is not one.
+UNREADABLE_BUNDLE = (
+    KeyError,
+    ValueError,
+    OverflowError,
+    RuntimeError,
+    OSError,
+    EOFError,
+    zipfile.BadZipFile,
+    zipfile.LargeZipFile,
+    zlib.error,
+    plistlib.InvalidFileException,
+    xml.parsers.expat.ExpatError,
+)
+
+
+class Feed(NamedTuple):
+    """One feed: which of a release's files it offers, and to whom."""
+
+    # The build's label: the feed is <label>.xml, and the file it
+    # offers codepp-<label>-<version><suffix>.
+    label: str
+    suffix: str
+    # For the feed's title and the commit that publishes it.
+    platform: str
+    # Whether Sparkle reads it, on macOS: the feed is then signed too,
+    # and the bundle in the zip is held against it.
+    sparkle: bool
+
+    @property
+    def name(self) -> str:
+        """Return the feed's file name on the branch."""
+        return f"{self.label}.xml"
+
+    def offers(self, version: str) -> str:
+        """Return the name of the release's file this feed offers."""
+        return f"codepp-{self.label}-{version}{self.suffix}"
+
+
+WINDOWS = Feed("windows-x64", ".msi", "Windows", False)
+FEEDS = (
+    WINDOWS,
+    Feed("macos-arm64", ".zip", "macOS on Apple silicon", True),
+    Feed("macos-x64", ".zip", "macOS on Intel", True),
+)
 
 
 def _failed(what: str, status: int, body: bytes) -> PublishError:
@@ -196,9 +268,22 @@ def _numbers(version: str) -> Optional[Tuple[int, ...]]:
     return tuple(int(part) for part in version.split("."))
 
 
-def _installer(path: Path, version: str) -> bytes:
-    """Read the installer, which must be the release's, and return it."""
-    return shared.release_file(path, f"codepp-windows-x64-{version}.msi")
+def _feed_for(path: Path, version: str) -> Feed:
+    """Return the feed that offers `path`, going by its name."""
+    for feed in FEEDS:
+        if path.name == feed.offers(version):
+            return feed
+    names = ", ".join(feed.offers(version) for feed in FEEDS)
+    raise PublishError(f"the file must be one of {names}, not {path.name}")
+
+
+def _installer(path: Path, version: str) -> Tuple[Feed, bytes]:
+    """Read a file a feed offers, which must be the release's.
+
+    Return its feed and its bytes.
+    """
+    feed = _feed_for(path, version)
+    return feed, shared.release_file(path, feed.offers(version))
 
 
 def download_url(base_url: str, repo: str, tag: str, name: str) -> str:
@@ -214,10 +299,10 @@ def _joined(base_url: str, parts: Tuple[str, ...]) -> str:
     return f"{base_url.rstrip('/')}/{path}"
 
 
-def feed_url(base_url: str, repo: str) -> str:
-    """Return the address the server serves the published feed at."""
+def feed_url(base_url: str, repo: str, feed: Feed) -> str:
+    """Return the address the server serves a published feed at."""
     owner, _, project = repo.partition("/")
-    where = (owner, project, "raw", "branch", FEED_BRANCH, FEED_NAME)
+    where = (owner, project, "raw", "branch", FEED_BRANCH, feed.name)
     return _joined(base_url, where)
 
 
@@ -231,29 +316,35 @@ def _release_url(name: str) -> str:
     return download_url(base_url, repo, tag, name)
 
 
-def feed_text(version: str, url: str, signature: str, length: int) -> str:
-    """Return the feed that offers one installer.
+def feed_text(
+    feed: Feed,
+    version: str,
+    url: str,
+    signature: str,
+    length: int,
+) -> str:
+    """Return the feed that offers one file.
 
     The same inputs give the same bytes: the feed states no date, so
     that publishing a release a second time changes nothing. It has no
     release-notes link either, which WinSparkle would open in a web
     view (docs/DESIGN.md, section 11.7).
     """
-    enclosure = " ".join(
-        (
-            f"url={quoteattr(url)}",
-            f"sparkle:edSignature={quoteattr(signature)}",
-            f'length="{length}"',
-            'type="application/octet-stream"',
-            'sparkle:os="windows"',
-        )
-    )
+    attributes = [
+        f"url={quoteattr(url)}",
+        f"sparkle:edSignature={quoteattr(signature)}",
+        f'length="{length}"',
+        'type="application/octet-stream"',
+    ]
+    if not feed.sparkle:
+        attributes.append('sparkle:os="windows"')
+    enclosure = " ".join(attributes)
     return "\n".join(
         (
             '<?xml version="1.0" encoding="utf-8"?>',
             f'<rss version="2.0" xmlns:sparkle="{SPARKLE_NS}">',
             "  <channel>",
-            "    <title>Code++ for Windows</title>",
+            f"    <title>Code++ for {feed.platform}</title>",
             "    <item>",
             f"      <title>Code++ {version}</title>",
             f"      <sparkle:version>{version}</sparkle:version>",
@@ -264,6 +355,78 @@ def feed_text(version: str, url: str, signature: str, length: int) -> str:
             "",
         )
     )
+
+
+def signed_feed(feed: bytes, signature: bytes) -> bytes:
+    """Return `feed` with its signature after it, as Sparkle reads one.
+
+    The signature is of all of `feed`, and the comment states how many
+    bytes that is. These are the bytes Sparkle's own `sign_update`
+    appends (measured against 2.10.1; docs/DESIGN.md, section 11.11).
+    """
+    text = base64.b64encode(signature).decode("ascii")
+    comment = (
+        "<!-- sparkle-signatures:",
+        f"edSignature: {text}",
+        f"length: {len(feed)}",
+        "-->",
+        "",
+    )
+    return feed + "\n".join(comment).encode("ascii")
+
+
+def _bundle_settings(archive: bytes) -> Dict[str, object]:
+    """Return the Info.plist of the bundle in a macOS zip."""
+    try:
+        with zipfile.ZipFile(io.BytesIO(archive)) as bundle:
+            if bundle.getinfo(BUNDLE_PLIST).file_size > MOST_PLIST_BYTES:
+                raise PublishError(f"{BUNDLE_PLIST} in the zip is too large")
+            raw = bundle.read(BUNDLE_PLIST)
+        # A plist the packaging wrote is XML in UTF-8 and declares no
+        # entities. One that declares some could expand without bound
+        # as it is read, and in another encoding, UTF-16 say, the
+        # declaration would not show in the bytes: so the document must
+        # open as ASCII does.
+        if not raw.startswith(b"<?xml") or b"<!ENTITY" in raw:
+            raise PublishError(
+                f"{BUNDLE_PLIST} in the zip is not the plain XML the "
+                "packaging writes"
+            )
+        settings = plistlib.loads(raw)
+    except UNREADABLE_BUNDLE:
+        settings = None
+    if not isinstance(settings, dict):
+        raise PublishError(f"the zip holds no readable {BUNDLE_PLIST}")
+    return settings
+
+
+def _require_bundle(
+    archive: bytes,
+    feed: Feed,
+    version: str,
+    public_key: str,
+) -> None:
+    """Stop unless the bundle in a macOS zip is this feed's.
+
+    The app must ask for the feed where it is published, carry the key
+    the builds carry, and be the release's version: a build that asks
+    elsewhere, or trusts another key, would never see an update.
+    """
+    settings = _bundle_settings(archive)
+    asked = feed_url(shared.env("FORGEJO_URL"), shared.env("REPO"), feed)
+    expected = (
+        ("SUFeedURL", asked),
+        ("SUPublicEDKey", public_key.strip()),
+        ("CFBundleVersion", version),
+    )
+    for key, value in expected:
+        found = settings.get(key)
+        if found != value:
+            shown = shared.shown(str(found).encode("utf-8", "replace"))
+            raise PublishError(
+                f"the bundle in {feed.offers(version)} has {key} "
+                f"{shown!r}, and this release needs {value!r}"
+            )
 
 
 def _key(name: str, text: str) -> bytes:
@@ -342,11 +505,14 @@ def _private_pem(seed: bytes, public: bytes) -> bytes:
     return private_pem
 
 
-def signature_of(content: bytes, seed: bytes, public: bytes) -> bytes:
+def signature_of(
+    content: bytes, seed: bytes, public: bytes, what: str = "the installer"
+) -> bytes:
     """Sign `content` with the key `seed`; return the 64 bytes.
 
     `public` is the key the builds carry. The key derived from `seed`
-    must be it, and the signature must verify against it.
+    must be it, and the signature must verify against it. `what` names
+    `content` in a failure's message.
     """
     _require_openssl_3()
     private_pem = _private_pem(seed, public)
@@ -358,7 +524,7 @@ def signature_of(content: bytes, seed: bytes, public: bytes) -> bytes:
     # standard input. So it is given a copy of the bytes, in a folder
     # only this account can open: what is signed is then what this
     # script read, not what the installer's path names by now. Only
-    # public things are written there: the installer, the public key
+    # public things are written there: what is signed, the public key
     # and the signature.
     try:
         with tempfile.TemporaryDirectory() as scratch:
@@ -366,39 +532,44 @@ def signature_of(content: bytes, seed: bytes, public: bytes) -> bytes:
             Path(copy).write_bytes(content)
             status, signature = _openssl(sign_it + ["-in", copy], private_pem)
             if status != 0 or len(signature) != SIGNATURE_BYTES:
-                raise PublishError("openssl could not sign the installer")
+                raise PublishError(f"openssl could not sign {what}")
             (Path(scratch) / "public.pem").write_bytes(public_pem)
             (Path(scratch) / "signature").write_bytes(signature)
             verify += ["-inkey", str(Path(scratch) / "public.pem")]
             verify += ["-sigfile", str(Path(scratch) / "signature")]
             status, _ = _openssl(verify + ["-in", copy], b"")
     except OSError as error:
-        what = "the installer could not be copied for signing"
-        raise PublishError(f"{what}: {type(error).__name__}") from None
+        failed = f"{what} could not be copied for signing"
+        raise PublishError(f"{failed}: {type(error).__name__}") from None
     if status != 0:
-        what = "the installer's signature does not verify"
-        raise PublishError(f"{what} against {PUBLIC_KEY}")
+        failed = f"the signature of {what} does not verify"
+        raise PublishError(f"{failed} against {PUBLIC_KEY}")
     return signature
 
 
 def sign(installer: Path, feed_file: Path) -> str:
     """Sign the installer and write its feed; return the signature."""
     version = _version()
-    content = _installer(installer, version)
+    feed, content = _installer(installer, version)
     url = _release_url(installer.name)
     public = _key(PUBLIC_KEY, shared.env(PUBLIC_KEY))
+    if feed.sparkle:
+        _require_bundle(content, feed, version, shared.env(PUBLIC_KEY))
     seed = _key("UPDATE_SIGNING_KEY", shared.env("UPDATE_SIGNING_KEY"))
     # Out of this process's environment from here on, so that nothing it
     # starts inherits the key by oversight.
     os.environ.pop("UPDATE_SIGNING_KEY", None)
     signature = signature_of(content, seed, public)
     text = base64.b64encode(signature).decode("ascii")
-    feed = feed_text(version, url, text, len(content))
+    written = feed_text(feed, version, url, text, len(content)).encode("utf-8")
+    if feed.sparkle:
+        of_feed = signature_of(written, seed, public, "the feed")
+        written = signed_feed(written, of_feed)
     try:
         feed_file.parent.mkdir(parents=True, exist_ok=True)
         # As bytes: the text has its own line ends, which a text-mode
         # write would change on some systems.
-        feed_file.write_bytes(feed.encode("utf-8"))
+        feed_file.write_bytes(written)
     except OSError as error:
         raise PublishError(str(error)) from error
     return text
@@ -441,7 +612,7 @@ def _require_served(url: str, content: bytes) -> None:
         )
 
 
-def _require_not_newer(published: bytes, version: str) -> None:
+def _require_not_newer(published: bytes, version: str, name: str) -> None:
     """Stop if the feed on the branch offers a newer version than ours.
 
     Publishing an older release a second time must not take the feed
@@ -452,7 +623,7 @@ def _require_not_newer(published: bytes, version: str) -> None:
     ours = _numbers(version)
     if known and ours is not None and max(known) > ours:
         raise PublishError(
-            f"{FEED_NAME} on {FEED_BRANCH} offers a newer version than "
+            f"{name} on {FEED_BRANCH} offers a newer version than "
             f"{version}; it is left as it is"
         )
 
@@ -460,7 +631,8 @@ def _require_not_newer(published: bytes, version: str) -> None:
 def publish(installer: Path, feed_file: Path) -> str:
     """Put the feed on its branch; return what was done."""
     version = _version()
-    content = _installer(installer, version)
+    offered, content = _installer(installer, version)
+    name = offered.name
     url = _release_url(installer.name)
     try:
         feed = feed_file.read_bytes()
@@ -478,26 +650,30 @@ def publish(installer: Path, feed_file: Path) -> str:
         raise PublishError(
             f"the repository has no {FEED_BRANCH} branch (docs/RELEASING.md)"
         )
-    existing = forgejo.file_on_branch(FEED_NAME, FEED_BRANCH)
+    existing = forgejo.file_on_branch(name, FEED_BRANCH)
     if existing is not None and existing[1] == feed:
-        return f"{FEED_NAME} on {FEED_BRANCH} already offers {version}"
+        return f"{name} on {FEED_BRANCH} already offers {version}"
     if existing is not None:
-        _require_not_newer(existing[1], version)
+        _require_not_newer(existing[1], version, name)
     forgejo.write_file(
-        FEED_NAME,
+        name,
         FEED_BRANCH,
         feed,
-        f"Code++ {version} for Windows",
+        f"Code++ {version} for {offered.platform}",
         None if existing is None else existing[0],
     )
-    return f"{FEED_NAME} on {FEED_BRANCH} now offers {version}"
+    return f"{name} on {FEED_BRANCH} now offers {version}"
 
 
 def check() -> str:
-    """Stop unless the feed can be published where the builds ask for it."""
+    """Stop unless the feeds can be published where the builds ask.
+
+    The address compared is the Windows build's, which is compiled into
+    it. A macOS build's is in its bundle, and `sign` reads it there.
+    """
     base_url, repo = shared.env("FORGEJO_URL"), shared.env("REPO")
     forgejo = FeedRepo(base_url, repo, shared.env("TOKEN"))
-    asked, served = shared.env(FEED_URL), feed_url(base_url, repo)
+    asked, served = shared.env(FEED_URL), feed_url(base_url, repo, WINDOWS)
     if asked != served:
         raise PublishError(
             f"the builds would ask {asked} for the feed ({FEED_URL}), "
@@ -506,7 +682,7 @@ def check() -> str:
     if not forgejo.branch_exists(FEED_BRANCH):
         raise PublishError(
             f"the repository has no {FEED_BRANCH} branch, which the update "
-            "feed is published on; create it first (docs/RELEASING.md)"
+            "feeds are published on; create it first (docs/RELEASING.md)"
         )
     return f"the {FEED_BRANCH} branch exists; the feed is {served}"
 

@@ -560,6 +560,84 @@ $env:CODEPP_FEED_TEST_BAD_TLS_URLS = "https://expired.badssl.com/ https://wrong.
 cargo test -p codepp-platform --lib update_feed::tests::https -- --ignored
 ```
 
+### Build a copy of Code++ that can update itself (macOS)
+
+`cargo run -p codepp-app` has no updater: "?" → "Update Code++" stays
+greyed and nothing is ever checked. On macOS the updater is Sparkle,
+which reads everything it needs from the bundle (DESIGN.md §11,
+`crates/ui_cocoa/src/updater.rs`), so a copy can update itself only
+when it runs from a `Code++.app` that
+
+- names a feed and a key in its `Info.plist` (`SUFeedURL`,
+  `SUPublicEDKey`), and
+- holds `Contents/Frameworks/Sparkle.framework`.
+
+The packaging script writes both when its environment has the feed and
+the key, and builds a bundle without an updater otherwise:
+
+```sh
+export CODEPP_RELEASE_VERSION=0.1.0
+cargo build --release --locked --target aarch64-apple-darwin -p codepp-app -p codepp-cppmimetools -p codepp-cppconverter -p codepp-cppexport
+echo stand-in > notices.md
+CODEPP_UPDATE_FEED_URL=http://127.0.0.1:8765/tux/code-plus-plus/raw/branch/appcast/macos-arm64.xml \
+CODEPP_UPDATE_PUBLIC_KEY="<base64 of the 32-byte Ed25519 public key>" \
+    bash .forgejo/scripts/package-unix.sh aarch64-apple-darwin macos-arm64 notices.md dist-local
+```
+
+The feed's address must be `https:`, or `http://127.0.0.1:<port>/…`
+for a feed served on the same machine, and must end in
+`/macos-arm64.xml` (`/macos-x64.xml` for the Intel build). The script
+downloads Sparkle's release archive from GitHub and checks its hash.
+
+To try the whole path, package two versions (the version is
+`CODEPP_RELEASE_VERSION`), sign the newer zip, which also writes the
+signed feed, and serve both from `127.0.0.1` under the paths Forgejo
+uses (`/<owner>/<repo>/raw/branch/appcast/<feed>` and
+`/<owner>/<repo>/releases/download/<tag>/<file>`):
+
+```sh
+FORGEJO_URL=http://127.0.0.1:8765 REPO=tux/code-plus-plus TAG=v0.2.0 VERSION=0.2.0 \
+CODEPP_UPDATE_PUBLIC_KEY="<the public key, base64>" UPDATE_SIGNING_KEY="<the seed, base64>" \
+    python3 .forgejo/scripts/update_feed.py sign dist-local/codepp-macos-arm64-0.2.0.zip macos-arm64.xml
+```
+
+The script holds the bundle in the zip against those: it must ask for
+the feed at `FORGEJO_URL` and `REPO`, carry that public key, and be
+`VERSION`. It needs `openssl` 3 or later on `PATH`, which Homebrew's is
+and the system's LibreSSL is not. Use a key made for the test, never
+the project's: `openssl genpkey -algorithm ed25519`, whose 32-byte seed
+and public key in base64 (the last 32 bytes of `openssl pkey -outform
+DER` and of `openssl pkey -pubout -outform DER`) are what
+`UPDATE_SIGNING_KEY` and `CODEPP_UPDATE_PUBLIC_KEY` take. Sparkle's own
+`sign_update --verify`, from its release archive, checks a feed or a
+signature the script made.
+
+Two things to know before running such a copy on a Mac that has a real
+Code++:
+
+- **Start the test copy by its binary, with a scratch `HOME`:**
+  `HOME=<scratch> dist/Code++.app/Contents/MacOS/codepp`. Code++ finds
+  its configuration through `$HOME`, and a copy started any other way
+  (`open`, a double click, **Sparkle's "Install and Relaunch"**) gets
+  the real one from LaunchServices. `LSEnvironment` in the bundle's
+  `Info.plist` does not change that: it sets other variables and not
+  `HOME` (measured on macOS 27). The relaunched copy then saves the
+  real `session.xml`, writes `updater.xml` and copies its plugins over
+  the staged ones. So stop a test at "Ready to Install", or accept that
+  the relaunch runs against the real configuration. Quitting the app
+  there still installs the update, since Sparkle installs a downloaded
+  one as the app quits, but starts nothing.
+- **Give the test bundles a bundle identifier of their own**
+  (`plutil -replace CFBundleIdentifier`, then `codesign --force --sign -`):
+  Sparkle keeps its state in the user defaults of that identifier
+  (`SULastCheckTime`, a skipped version), which a scratch `HOME` does
+  not move either.
+
+`CODEPP_LOG=info` shows when the framework is loaded, and
+`codepp_ui_cocoa=debug` why a copy has no updater. Code++'s own record
+of its last check is `updater.xml` in the configuration folder; delete
+it to make a check due at the next start.
+
 ### Add or change an `NPPM_*` / `NPPN_*` / docking constant or menu id
 
 Verify the number against Notepad++'s published headers, mechanically:

@@ -14,9 +14,9 @@ Each platform gets an archive to unpack and a package to install, both made from
 | `codepp-windows-x64-<version>.msi` | Windows 10 and 11, 64-bit | an installer for the zip's files and the updater's library, `WinSparkle.dll` (§1.1) |
 | `codepp-linux-amd64-<version>.tar.gz` | Linux, x86-64, GTK 3 | one folder with `codepp`, the three plugin libraries, the licence files |
 | `codepp-linux-amd64-<version>.deb` | Debian and Ubuntu, x86-64 | a package of the tarball's files (§1.2) |
-| `codepp-macos-arm64-<version>.zip` | macOS, Apple Silicon | `Code++.app` |
+| `codepp-macos-arm64-<version>.zip` | macOS, Apple Silicon | `Code++.app`, with the updater's framework inside it (§1.3) |
 | `codepp-macos-arm64-<version>.dmg` | macOS, Apple Silicon | a disk image with the same `Code++.app` (§1.3) |
-| `codepp-macos-x64-<version>.zip` | macOS, Intel | `Code++.app` |
+| `codepp-macos-x64-<version>.zip` | macOS, Intel | `Code++.app`, with the updater's framework inside it (§1.3) |
 | `codepp-macos-x64-<version>.dmg` | macOS, Intel | a disk image with the same `Code++.app` (§1.3) |
 | `SHA256SUMS` | | the checksum of each of the eight |
 
@@ -66,17 +66,29 @@ Built by `.forgejo/scripts/package-unix.sh` with `dpkg-deb`.
 
 Built by `.forgejo/scripts/package-unix.sh` with `hdiutil`: the same signed `Code++.app` as in the zip, beside a link to `/Applications`, so that installing is dragging one onto the other.
 
+**The updater's framework.** The bundle, in the zip and in the disk image alike, holds `Sparkle.framework` in `Contents/Frameworks`: Sparkle 2.10.1's own build, unmodified and with the ad-hoc signature its project gave it, with which an installed Code++ checks for updates, downloads and installs them (DESIGN.md §11). Code++ does not link it and loads it only when a check is due or asked for. Its `Info.plist` names the architecture's feed (§1.4) and the key updates are signed with, and holds the settings Sparkle reads: its own schedule off, since Code++ decides when a check is made; an update verified before it is unpacked; a signed feed required, with no fallback; nothing installed without a click; and no feed text shown in a web view. `THIRD_PARTY_LICENSES.md` §1.5 has the framework's notices.
+
+The script puts the framework and those settings in only when its environment names a feed and a key (`CODEPP_UPDATE_FEED_URL`, `CODEPP_UPDATE_PUBLIC_KEY`), as the workflow's does. Run by hand without them it builds a bundle with no updater, in which "Update Code++" stays greyed.
+
+A copy opened from the disk image, or from any place it cannot be replaced in, is not updated: Sparkle says so when the user asks for a check, and a scheduled check there does nothing. The app has to be dragged to `/Applications` first.
+
 ### 1.4 The update feed
 
-A Code++ that the `.msi` installed for one account checks for a newer version by itself, at most once a day (DESIGN.md §11). It asks one file, `windows-x64.xml` on the repository's `appcast` branch:
+A Code++ that the `.msi` installed for one account, and a `Code++.app` on macOS, check for a newer version by themselves, at most once a day (DESIGN.md §11). Each asks one file on the repository's `appcast` branch, its feed:
 
-<https://git.fiedler.live/tux/code-plus-plus/raw/branch/appcast/windows-x64.xml>
+| Build | Feed | Offers |
+| --- | --- | --- |
+| Windows | <https://git.fiedler.live/tux/code-plus-plus/raw/branch/appcast/windows-x64.xml> | `codepp-windows-x64-<version>.msi` |
+| macOS, Apple Silicon | <https://git.fiedler.live/tux/code-plus-plus/raw/branch/appcast/macos-arm64.xml> | `codepp-macos-arm64-<version>.zip` |
+| macOS, Intel | <https://git.fiedler.live/tux/code-plus-plus/raw/branch/appcast/macos-x64.xml> | `codepp-macos-x64-<version>.zip` |
 
-The file names the newest release's installer among the Forgejo release's files, its length, and its Ed25519 signature. `publish` signs the installer with the project's update key before it publishes anything (`.forgejo/scripts/update_feed.py`), and commits the feed to the branch as its last step, once both releases are out. Code++ installs nothing that signature does not verify, against the public key built into it.
+A feed names the newest release's file among the Forgejo release's files, its length, and its Ed25519 signature. `publish` signs the three files with the project's update key before it publishes anything (`.forgejo/scripts/update_feed.py`), and commits the feeds to the branch as its last step, once both releases are out. Nothing is installed that the signature does not verify, against the public key the build carries.
 
-That address and that public key are in `.forgejo/workflows/release.yml`, as `CODEPP_UPDATE_FEED_URL` and `CODEPP_UPDATE_PUBLIC_KEY`. Neither can change once a release with them is out: every installed copy asks that address and trusts that key for good. So the repository's owner, its name, the branch's name and the file's name stay as they are.
+A macOS feed is signed as well: a comment after the document holds the signature of everything before it, which is how Sparkle reads a signed feed, and the app refuses a feed without a valid one. The Windows feed is not signed, since WinSparkle would not check it (DESIGN.md §11.7).
 
-An installation for the whole machine does not update itself yet, and neither does a Code++ run from the zip, on Linux or on macOS (DESIGN.md §11.4, §11.1).
+The Windows feed's address and the public key are in `.forgejo/workflows/release.yml`, as `CODEPP_UPDATE_FEED_URL` and `CODEPP_UPDATE_PUBLIC_KEY`; the workflow's macOS packaging step names each macOS feed. None can change once a release with them is out: every installed copy asks that address and trusts that key for good. So the repository's owner, its name, the branch's name and the files' names stay as they are.
+
+An installation for the whole machine on Windows does not update itself yet, and neither does a Code++ run from the Windows zip or on Linux (DESIGN.md §11.4, §11.1).
 
 ---
 
@@ -101,7 +113,7 @@ An installation for the whole machine does not update itself yet, and neither do
 
    A version is plain because three things compare it: an installed Code++ deciding whether an update is newer, Windows Installer, and apt (DESIGN.md §11.6). A version that was released is never built again; a fix is the next patch version. A build for testers that is not a release is a manual run's (§3).
 
-4. **Watch the run** under Actions → Release. When `publish` is done, both release pages hold the files, and the `appcast` branch holds the feed that offers the Windows installer to installed copies (§1.4). The description lists the downloads, how to start an unsigned build on each platform, and the commits since the previous `v` tag; edit it on either page if it needs more.
+4. **Watch the run** under Actions → Release. When `publish` is done, both release pages hold the files, and the `appcast` branch holds the three feeds that offer the release to installed copies (§1.4). The description lists the downloads, how to start an unsigned build on each platform, and the commits since the previous `v` tag; edit it on either page if it needs more.
 
 ---
 
@@ -148,7 +160,7 @@ Four secrets, under the repository's (or the owning account's) Settings → Acti
 
 A classic GitHub token with `public_repo` works too, but it can write to every public repository of the account, so prefer the fine-grained one.
 
-`prepare` only checks that the three tokens are set. The `publish` job uses them, on the `linux` runner; the build jobs never see them. `RELEASE_TOKEN` also commits the update feed to the `appcast` branch (§5.5).
+`prepare` only checks that the three tokens are set. The `publish` job uses them, on the `linux` runner; the build jobs never see them. `RELEASE_TOKEN` also commits the update feeds to the `appcast` branch (§5.5).
 
 `PACKAGES_TOKEN` is a token of its own because of what it can do: `apt` installs what the registry holds, as root, on every system that has added the repository (DESIGN.md §11.9). Give it no scope but packages. If it belongs to another account than the repository's owner, set that account's name as `PACKAGES_USER` in the workflow step's `env`.
 
@@ -170,15 +182,17 @@ Beyond what CI already needs (DEVELOPMENT.md):
 
 | Runner | Needs |
 | --- | --- |
-| `linux` | `python3` (3.8 or newer), `gh`, `openssl` 3 or newer, which signs the Windows installer, and network access to crates.io for the first `cargo install cargo-about`. For the `.deb`: a Debian or Ubuntu system with `dpkg-deb` and `dpkg-shlibdeps` (the `dpkg` and `dpkg-dev` packages; `build-essential` brings both) |
+| `linux` | `python3` (3.8 or newer), `gh`, `openssl` 3 or newer, which signs the update files and the macOS feeds, and network access to crates.io for the first `cargo install cargo-about`. For the `.deb`: a Debian or Ubuntu system with `dpkg-deb` and `dpkg-shlibdeps` (the `dpkg` and `dpkg-dev` packages; `build-essential` brings both) |
 | `windows` | Windows PowerShell 5.1, which Windows ships. For the `.msi`: .NET, with `dotnet` on the PATH of the account the runner's jobs run as, and network access to nuget.org and github.com at every run |
-| `macos` | the Xcode Command Line Tools: `codesign`, `lipo`, `plutil`, `ditto`. For the `.dmg`: `hdiutil`, which macOS ships |
+| `macos` | the Xcode Command Line Tools: `codesign`, `lipo`, `plutil`, `ditto`. For the `.dmg`: `hdiutil`, which macOS ships. For the updater's framework: `curl`, `shasum` and `tar`, which macOS ships, and network access to github.com at every run |
 
 The workflow adds the Rust targets itself (`rustup target add`), the second macOS architecture included.
 
 The Windows installer is built with WiX 5, which runs on .NET. The packaging script names its version and the SHA-256 of two package files, WiX itself and its UI extension. At every run it downloads the two from nuget.org, refuses one whose hash is not the expected one, unpacks them into its temporary folder and runs WiX from there. Nothing of WiX is installed on the runner, and no copy cached there is used, so a release's installer is built by the same bytes whatever ran on the runner before. The .NET it was tried with is the SDK, version 10 (`winget install Microsoft.DotNet.SDK.10`); the runtime alone should do, and has not been tried. To move to another WiX version, follow the comment above the hashes in `.forgejo/scripts/package-windows.ps1`, then build the installer once by hand and install it: WiX 4 and later share the `.wxs` format, but nothing here has run on any version but 5.0.2.
 
 `WinSparkle.dll` is not built here either. The same script names WinSparkle's version, the SHA-256 of its release zip and the SHA-256 of the x64 DLL in it. At every run it downloads the zip from the project's releases on GitHub, refuses one whose hash is not the expected one, takes the one file out of it and checks that file's hash too. To move to another WinSparkle version, follow the comment above those hashes in the script: Code++ refuses a DLL of any version but the one it was built for, and `THIRD_PARTY_LICENSES.md` names what the version bundles, so all three change together.
+
+`Sparkle.framework` is fetched the same way by `package-unix.sh`, which names Sparkle's version and the SHA-256 of its release archive: at every run it downloads the archive from the project's releases on GitHub, refuses one whose hash is not the expected one, and takes the framework out of it unchanged. To move to another Sparkle version, change both and read DESIGN.md §11.11 for what was measured of this one: the settings in the bundle's `Info.plist` rest on those measurements.
 
 The `.deb`'s dependencies are read from the runner's own package database (§1.2), so the distribution the `linux` runner runs decides the oldest system the package installs on.
 
@@ -233,14 +247,15 @@ Nothing has to be created: Forgejo makes the owner's Debian registry, and the ke
 - **The macOS architecture.** `.forgejo/scripts/package-unix.sh` checks each binary with `lipo` before it is named for an architecture.
 - **The tool that builds the Windows installer.** `.forgejo/scripts/package-windows.ps1` uses WiX only as the two package files whose SHA-256 it holds (§5.3), and stops before writing anything if either arrives changed.
 - **The updater's library.** The same script takes `WinSparkle.dll` only out of the release zip whose SHA-256 it holds, checks the file's own SHA-256 as well (§5.3), and stops before writing anything if either differs. The read-back below holds the file inside the built installer to the same hash.
+- **The macOS updater.** `.forgejo/scripts/package-unix.sh` takes `Sparkle.framework` only out of the release archive whose SHA-256 it holds (§5.3), and stops before putting anything together if it arrives changed. The feed's address must be `https:`, must end in the architecture's own feed name, and with the key must hold nothing XML gives a meaning to, since both go into the `Info.plist`. After signing it verifies the bundle with its nested code, and reads back that the `Info.plist` names that feed and that key and that the framework in the bundle is the one that was downloaded, file for file.
 - **The Windows installer.** The same script reads the built `.msi` back through Windows Installer: that its version is the one it is named for, that it installs for the whole machine, and that it holds exactly the files the zip holds and `WinSparkle.dll`, each at the same size and, taken out of the installer again by WiX, with the same SHA-256, so a file added to the zip and forgotten in `packaging/windows/codepp.wxs` stops the release. It also requires that the installer runs no code of its own: the only custom action in it is the one behind the licence page's Print button, which WiX's UI brings, and no custom action is in any of its sequences, the elevated part of an installation included. And it requires that the installer does nothing but what §1.1 says: it may hold only the tables WiX writes for files, a shortcut, registry values, the upgrade rule and the UI, so not those that install a service, register a COM class, set an environment variable or change permissions; and it may write only the registry keys the `.wxs` names. A deliberate change to the `.wxs` that needs more is added to the lists in the script. The zip and the installer are made in a temporary folder and moved to the output folder together, so an installer that fails leaves neither.
 - **The Debian package.** `.forgejo/scripts/package-unix.sh` requires `dpkg-shlibdeps` to have named the packages of glibc and GTK 3, and reads the built `.deb` back: its version, that every entry belongs to root and has one of the four modes such a package has (so no set-group-ID folder or writable file gets in from the runner's temporary folder), that its control part holds the control file and no script, so nothing of the package's runs as root at installation or removal, and that it holds the binary, the link to it, the three plugins, the menu entry, an icon and the licence. A package that fails is deleted.
 - **The version, again.** Both packaging scripts check the version they are given before using it, as `release-version.sh` did before them, since they can also be run by hand.
 - **The disk image.** `hdiutil verify`, after up to three attempts at creating it.
 - **The set of files.** `publish` requires exactly the eight files, by name, each a regular file.
 - **The Debian package's upload.** `publish_deb.py` uploads only the release's own `.deb`, by name, and takes only the registry's 201, or its 409 for a version that is already there, for done. It then reads the package back from the registry without a token and fails if the bytes are not the release's; if it cannot read it back at all, it warns and passes.
-- **The update key.** `update_feed.py sign` requires the public key derived from `UPDATE_SIGNING_KEY` to be the one the builds carry, and the signature it makes to verify against that key, before anything is published.
-- **The update feed.** `update_feed.py check`, in `prepare`, requires the `appcast` branch to exist and the address the builds are given to be where the feed is published. `update_feed.py publish` downloads the installer from the address the feed names and requires it to be the file that was signed, and refuses to replace a feed that offers a newer version.
+- **The update key.** `update_feed.py sign` requires the public key derived from `UPDATE_SIGNING_KEY` to be the one the builds carry, and each signature it makes to verify against that key, before anything is published.
+- **The update feeds.** `update_feed.py check`, in `prepare`, requires the `appcast` branch to exist and the address the Windows build is given to be where its feed is published. For a macOS zip, `update_feed.py sign` reads the `Info.plist` of the bundle in it and requires the app to ask for the feed where it is published, to carry the key the builds carry, and to be the release's version, before it signs anything. `update_feed.py publish` downloads each file from the address its feed names and requires it to be the file that was signed, and refuses to replace a feed that offers a newer version.
 - **The mirror's tag**, as §5.2 describes.
 
 ---
@@ -250,9 +265,9 @@ Nothing has to be created: Forgejo makes the owner's Debian registry, and the ke
 - **Code signing.** No build is signed with a certificate, and neither is an installer. A certificate is also the first thing "Edit with Code++" would take to show in Windows 11's short context menu (DESIGN.md §7.4, the entry on "Edit with Code++"); the maintainer has put that off to a later time. Windows shows SmartScreen's prompt, and its administrator prompt names the `.msi` as from an unknown publisher; macOS refuses the first start until the user allows it. The release description tells testers how. The macOS bundle has an ad-hoc signature only, which Apple Silicon requires of every binary; the disk image itself is not signed.
 - **More packages.** No `.rpm`, AppImage or Flatpak.
 - **The apt repository's first real run.** The upload has run against a stand-in for the registry only, and `apt` has not installed from it yet (DESIGN.md §11.11).
-- **More of the updater.** Only a Code++ the `.msi` installed for one account updates itself (§1.4). An installation for the whole machine, macOS and the `.deb` do not yet (DESIGN.md §11).
-- **The feed's first real run.** Signing and the commit to the `appcast` branch have run against a stand-in for the server only, and a manual run (§3) rehearses neither.
+- **More of the updater.** A Code++ the `.msi` installed for one account updates itself, and so does `Code++.app` (§1.4). An installation for the whole machine does not yet, and a `.deb` is updated by `apt` (DESIGN.md §11).
+- **The feeds' first real run.** Signing and the commits to the `appcast` branch have run against a stand-in for the server only, and a manual run (§3) rehearses neither. The macOS half has updated a packaged Code++ end to end on a developer's Mac, against a feed and a key made for the test (DESIGN.md §11.11).
 - **More of the installers.** The Windows installer has WiX's stock pictures and English text only, offers no choice of folder or of what to set up, and does not check the Windows version: on Windows 8.1 or older it would install a program that cannot start. The `.deb` has no manual page, changelog or AppStream metadata, so a software centre shows it without a description page, and `lintian` would say so; it has not been run on it. The disk image has no background picture or arranged icons.
-- **The macOS disk image on a Mac.** The `.dmg` step has run only against stand-ins for Apple's tools (DESIGN.md §9.2).
+- **The macOS packaging on the runner.** The zip and the `.dmg` have been built and verified by the real script on a developer's Mac, for Apple Silicon (DESIGN.md §11.11). It has not run on the `macos` runner, and the Intel build has not been packaged or started anywhere.
 - **A glibc baseline.** The Linux build runs on systems whose glibc and GTK 3 are at least as new as the `linux` runner's.
 - **Tests in the release.** The workflow trusts the CI run of the tagged commit.
