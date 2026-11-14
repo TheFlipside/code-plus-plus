@@ -30,6 +30,19 @@
 # `dpkg-dev` packages) on a Debian or Ubuntu system, whose package
 # database says which packages the binaries' libraries come from. The
 # .dmg needs `hdiutil`, which macOS ships.
+#
+# The macOS bundle updates itself (docs/DESIGN.md, section 11) when the
+# environment names its feed and the key its updates are signed with,
+# as the release workflow does:
+#
+#   CODEPP_UPDATE_FEED_URL    where the installed app asks for the newest
+#                             version; it must end in /<label>.xml
+#   CODEPP_UPDATE_PUBLIC_KEY  the Ed25519 public key, 32 bytes in base64
+#
+# The bundle then carries Sparkle.framework, downloaded here at the
+# version and hash this script holds, and its Info.plist the settings
+# Sparkle reads. With neither set the bundle has no updater, and
+# nothing is downloaded.
 
 set -euo pipefail
 
@@ -281,6 +294,81 @@ EOF
     icon="assets/code++.icns"
     [ -f "$icon" ] || fail "no application icon at $icon (tools/codepp-app-icon/generate.py writes it)"
 
+    # The updater's library and settings, when the build has a feed.
+    # Downloaded and checked before anything is put together, so that a
+    # download that fails or arrives changed leaves nothing behind.
+    #
+    # Sparkle's version and the SHA-256 of its release archive, which is
+    # the digest GitHub shows for the file. To update: change both, and
+    # read docs/DESIGN.md section 11.11 for what was measured of this one.
+    sparkle_version=2.10.1
+    sparkle_sha256=1a856d2a9edb8e628de88121d7be04cf0e2167f8641650b78fca00b14244cf27
+    feed_url="${CODEPP_UPDATE_FEED_URL:-}"
+    public_key="${CODEPP_UPDATE_PUBLIC_KEY:-}"
+    sparkle=""
+    updater_keys=""
+    if [ -n "$feed_url" ] || [ -n "$public_key" ]; then
+      [ -n "$feed_url" ] && [ -n "$public_key" ] ||
+        fail "CODEPP_UPDATE_FEED_URL and CODEPP_UPDATE_PUBLIC_KEY go together; only one is set"
+      # Both go into the Info.plist as they are, so neither may hold a
+      # character XML gives a meaning to. The address is https, or this
+      # machine itself for a test of the updater, and names this
+      # architecture's feed: the two macOS builds must not ask for each
+      # other's.
+      if ! (
+        LC_ALL=C
+        case "$feed_url" in *[!A-Za-z0-9:/._~%+-]*) exit 1 ;; esac
+        case "$feed_url" in https://?* | http://127.0.0.1:?*) ;; *) exit 1 ;; esac
+        case "$feed_url" in */"$label.xml") ;; *) exit 1 ;; esac
+        case "$public_key" in *[!A-Za-z0-9+/=]*) exit 1 ;; esac
+        [ "${#public_key}" -eq 44 ]
+      ); then
+        fail "CODEPP_UPDATE_FEED_URL must be an https address ending in /$label.xml, and CODEPP_UPDATE_PUBLIC_KEY 32 bytes in base64"
+      fi
+      sparkle_archive="$work/Sparkle-$sparkle_version.tar.xz"
+      curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 \
+        --max-time 300 --output "$sparkle_archive" \
+        "https://github.com/sparkle-project/Sparkle/releases/download/$sparkle_version/Sparkle-$sparkle_version.tar.xz" ||
+        fail "Sparkle $sparkle_version could not be downloaded"
+      got=$(shasum -a 256 "$sparkle_archive" | cut -d ' ' -f 1)
+      [ "$got" = "$sparkle_sha256" ] ||
+        fail "Sparkle-$sparkle_version.tar.xz has SHA-256 $got, expected $sparkle_sha256; it is not unpacked"
+      # Only the framework is taken out of the archive.
+      mkdir "$work/sparkle"
+      tar -xJf "$sparkle_archive" -C "$work/sparkle" ./Sparkle.framework ||
+        fail "the Sparkle archive could not be unpacked"
+      sparkle="$work/sparkle/Sparkle.framework"
+      [ -f "$sparkle/Versions/B/Sparkle" ] || fail "the Sparkle archive holds no framework binary"
+      # The framework comes signed ad hoc by its project and goes into
+      # the bundle as it is; this says the archive unpacked whole.
+      codesign --verify --strict --deep "$sparkle" ||
+        fail "Sparkle.framework does not verify as it was unpacked"
+      # What Sparkle reads (docs/DESIGN.md, section 11.8). Its own
+      # schedule is off: Code++ decides when a check is made. An update
+      # is verified before it is unpacked, the feed must be signed, and
+      # a feed that fails that is refused for good, where Sparkle's
+      # default starts accepting it after twenty days. Nothing is
+      # installed without a click, and no feed text is shown in a web
+      # view.
+      updater_keys="    <key>SUFeedURL</key>
+    <string>$feed_url</string>
+    <key>SUPublicEDKey</key>
+    <string>$public_key</string>
+    <key>SUEnableAutomaticChecks</key>
+    <false/>
+    <key>SUAllowsAutomaticUpdates</key>
+    <false/>
+    <key>SURequireSignedFeed</key>
+    <true/>
+    <key>SUVerifyUpdateBeforeExtraction</key>
+    <true/>
+    <key>SUSignedFeedFailureExpirationInterval</key>
+    <integer>0</integer>
+    <key>SUShowReleaseNotes</key>
+    <false/>
+"
+    fi
+
     app="$work/Code++.app"
     mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
     install -m 755 "$bin_dir/codepp" "$app/Contents/MacOS/codepp"
@@ -291,6 +379,11 @@ EOF
     done
     install -m 644 "$icon" "$app/Contents/Resources/codepp.icns"
     copy_licences "$app/Contents/Resources"
+    if [ -n "$sparkle" ]; then
+      # `ditto`, which keeps the framework's symlinks and modes.
+      mkdir "$app/Contents/Frameworks"
+      ditto "$sparkle" "$app/Contents/Frameworks/Sparkle.framework"
+    fi
 
     # CFBundleVersion takes numbers and dots only, so it gets the
     # version without the part a manual run's build has after x.y.z.
@@ -329,7 +422,7 @@ EOF
     <string>Copyright © Max Fiedler and Code++ contributors. MIT License.</string>
     <key>NSPrincipalClass</key>
     <string>NSApplication</string>
-</dict>
+$updater_keys</dict>
 </plist>
 EOF
     plutil -lint "$app/Contents/Info.plist"
@@ -343,7 +436,19 @@ EOF
       codesign --force --sign - "$lib"
     done
     codesign --force --sign - "$app"
-    codesign --verify --strict "$app"
+    codesign --verify --strict --deep "$app"
+    if [ -n "$sparkle" ]; then
+      # Read back: the bundle asks the feed it was packaged for with the
+      # key it was given, and holds the framework as it was downloaded.
+      [ "$(plutil -extract SUFeedURL raw "$app/Contents/Info.plist")" = "$feed_url" ] ||
+        fail "the bundle's Info.plist does not name the feed"
+      [ "$(plutil -extract SUPublicEDKey raw "$app/Contents/Info.plist")" = "$public_key" ] ||
+        fail "the bundle's Info.plist does not hold the update key"
+      # Links compared as links: followed, the framework's own
+      # (`Versions/Current`) read to `diff` as a folder inside itself.
+      diff -r --no-dereference "$sparkle" "$app/Contents/Frameworks/Sparkle.framework" >/dev/null ||
+        fail "the bundle's Sparkle.framework is not the one that was downloaded, or this diff could not compare the two"
+    fi
 
     archive="$out_dir/$name.zip"
     rm -f "$archive"
