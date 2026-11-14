@@ -2033,11 +2033,17 @@ fn present_dialog(dialog: PendingDialog) {
                 "Reload it from disk? Unsaved changes in this buffer will be lost.",
             ));
             alert.setAlertStyle(NSAlertStyle::Warning);
+            // Keep Mine first: this prompt appears unasked while the user
+            // may be typing, and NSAlert makes its first button the
+            // default, on Return, so a stray keystroke must keep the edits.
+            // NSAlert focuses its *last* button (measured), which Space
+            // presses under Full Keyboard Access, so focus Keep Mine too.
+            let keep = alert.addButtonWithTitle(&NSString::from_str("Keep Mine"));
             alert.addButtonWithTitle(&NSString::from_str("Reload"));
-            alert.addButtonWithTitle(&NSString::from_str("Keep Mine"));
-            // `NSAlertFirstButtonReturn` is 1000; the first button is
+            alert.window().setInitialFirstResponder(Some(&keep));
+            // `NSAlertSecondButtonReturn` is 1001; the second button is
             // "Reload".
-            if alert.runModal() == 1000 {
+            if alert.runModal() == 1001 {
                 // The shell decides what the Yes consents to, from what
                 // the buffer holds now: over nothing unsaved it consents
                 // to nothing, so text typed during the load survives it.
@@ -5212,7 +5218,7 @@ mod source_invariants {
             &code_only(&fn_body(production_src(), "present_dialog")),
             "PendingDialog::ConfirmReload(path) => {",
         );
-        let reload = block_after(&arm, "if alert.runModal() == 1000 {");
+        let reload = block_after(&arm, "if alert.runModal() == 1001 {");
         assert!(
             reload.contains("shell.confirm_reload(&mut ui, path.clone());")
                 && arm.matches("confirm_reload(").count() == 1
@@ -5220,6 +5226,20 @@ mod source_invariants {
                 && !arm.contains(".active()"),
             "the reload prompt no longer passes its Yes, and only its Yes, to \
              `Shell::confirm_reload` for the file it named"
+        );
+        // Read with its strings, which `code_only` drops. NSAlert makes
+        // its first button the default, so Keep Mine must be added first.
+        let raw = block_after(
+            &fn_body(production_src(), "present_dialog"),
+            "PendingDialog::ConfirmReload(path) => {",
+        );
+        let keep = raw.find(r#"addButtonWithTitle(&NSString::from_str("Keep Mine"))"#);
+        let reload = raw.find(r#"addButtonWithTitle(&NSString::from_str("Reload"))"#);
+        assert!(
+            matches!((keep, reload), (Some(k), Some(r)) if k < r)
+                && raw.matches("addButtonWithTitle(").count() == 2
+                && raw.contains("alert.window().setInitialFirstResponder(Some(&keep));"),
+            "the unasked reload prompt's default and focused button must be Keep Mine, not Reload"
         );
     }
 
