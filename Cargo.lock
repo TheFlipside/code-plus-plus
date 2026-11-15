@@ -145,7 +145,7 @@ checksum = "9330f8b2ff13f34540b44e946ef35111825727b38d33286ef986142615121801"
 
 [[package]]
 name = "codepp-app"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "codepp-build-helpers",
  "codepp-core",
@@ -158,11 +158,11 @@ dependencies = [
 
 [[package]]
 name = "codepp-build-helpers"
-version = "0.1.0"
+version = "0.2.0"
 
 [[package]]
 name = "codepp-core"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "crossbeam-channel",
  "encoding_rs",
@@ -176,7 +176,7 @@ dependencies = [
 
 [[package]]
 name = "codepp-cppconverter"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "codepp-build-helpers",
  "codepp-plugin-sdk",
@@ -184,7 +184,7 @@ dependencies = [
 
 [[package]]
 name = "codepp-cppexport"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "codepp-build-helpers",
  "codepp-plugin-sdk",
@@ -192,7 +192,7 @@ dependencies = [
 
 [[package]]
 name = "codepp-cppmimetools"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "codepp-build-helpers",
  "codepp-plugin-sdk",
@@ -201,7 +201,7 @@ dependencies = [
 
 [[package]]
 name = "codepp-editor"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "codepp-core",
  "codepp-scintilla-sys",
@@ -211,7 +211,7 @@ dependencies = [
 
 [[package]]
 name = "codepp-example-hello"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "codepp-build-helpers",
  "codepp-plugin-sdk",
@@ -219,7 +219,7 @@ dependencies = [
 
 [[package]]
 name = "codepp-npp-plugin-test"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "codepp-core",
  "codepp-editor",
@@ -235,7 +235,7 @@ dependencies = [
 
 [[package]]
 name = "codepp-platform"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "crossbeam-channel",
  "ed25519-dalek",
@@ -249,7 +249,7 @@ dependencies = [
 
 [[package]]
 name = "codepp-plugin-host"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "codepp-core",
  "codepp-editor",
@@ -260,14 +260,14 @@ dependencies = [
 
 [[package]]
 name = "codepp-plugin-sdk"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "codepp-plugin-host",
 ]
 
 [[package]]
 name = "codepp-scintilla-sys"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "cc",
  "pkg-config",
@@ -275,7 +275,7 @@ dependencies = [
 
 [[package]]
 name = "codepp-shell"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "codepp-core",
  "codepp-editor",
@@ -291,7 +291,7 @@ dependencies = [
 
 [[package]]
 name = "codepp-udl"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "codepp-platform",
  "libc",
@@ -303,7 +303,7 @@ dependencies = [
 
 [[package]]
 name = "codepp-ui-cocoa"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "block2",
  "codepp-core",
@@ -322,7 +322,7 @@ dependencies = [
 
 [[package]]
 name = "codepp-ui-gtk"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "codepp-core",
  "codepp-editor",
@@ -337,7 +337,7 @@ dependencies = [
 
 [[package]]
 name = "codepp-ui-win32"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "codepp-core",
  "codepp-editor",
