@@ -956,7 +956,9 @@ thread_local! {
 /// its control at zero size without `WS_VISIBLE`, for the same reason.
 /// The npp handle as `parent` makes a view in no window, which a plugin
 /// can drive through `SCI_*` alone — a text buffer with Scintilla's search
-/// and styling — or put in a view of its own later.
+/// and styling — or put in a view of its own later. So does a null
+/// `parent`: Notepad++ takes a NULL lParam for its own window, which the
+/// npp handle stands for here. Until Phase 5 null was refused.
 ///
 /// The view is **kept for the rest of the process**. A plugin that
 /// captured its direct-call pair (`SCI_GETDIRECTFUNCTION`) holds pointers
@@ -967,7 +969,7 @@ thread_local! {
 /// plugin that asks for a view per file it processes would otherwise leak
 /// without end.
 ///
-/// Refused, besides null: a Scintilla view as the parent, the host's own
+/// Refused: a Scintilla view as the parent, the host's own
 /// or a plugin's — a Scintilla has no room for a subview of anyone
 /// else's; anything the runtime says is not a view; the host's container
 /// around a plugin's docked panel — the panel's own view is what to pass;
@@ -1088,17 +1090,18 @@ pub(crate) fn create_plugin_scintilla(parent: *mut c_void, main_window: &NSWindo
     ptr
 }
 
-/// Where a view made for a plugin goes: `Ok(None)` for the npp handle — no
-/// window at all — or the view to add it to, or why `parent` is refused.
+/// Where a view made for a plugin goes: `Ok(None)` for the npp handle or
+/// null — no window at all — or the view to add it to, or why `parent` is
+/// refused.
 /// See [`create_plugin_scintilla`] for what is refused.
 fn plugin_scintilla_parent(
     parent: *mut c_void,
     main_window: &NSWindow,
 ) -> Result<Option<Retained<NSView>>, &'static str> {
-    if parent.is_null() {
-        return Err("the parent is null");
-    }
-    if std::ptr::eq(parent, npp_sentinel()) {
+    // Null is the host's own window, as a NULL lParam is in Notepad++,
+    // and is taken as the npp handle is: this backend's npp handle is no
+    // window, so both make one in none.
+    if parent.is_null() || std::ptr::eq(parent, npp_sentinel()) {
         return Ok(None);
     }
     if is_known_scintilla(parent) {
@@ -1763,7 +1766,6 @@ pub mod smoke_support {
             // SAFETY: a plain accessor on a live view, on the main thread.
             let frame_view = unsafe { rig.content.superview() }.expect("a window's frame view");
             for (what, parent) in [
-                ("null", std::ptr::null_mut()),
                 ("the host's own Scintilla view", host_sci),
                 ("an NSObject", handle_of(&not_a_view)),
                 (
@@ -1796,6 +1798,36 @@ pub mod smoke_support {
             assert!(
                 make(detached, main).is_null(),
                 "a plugin's own Scintilla view was accepted as a parent"
+            );
+
+            // Null: the host's own window in Notepad++, so the npp handle
+            // here — a view in no window, of its own, hidden and routed.
+            // Charged to a plugin of its own, to leave the shared
+            // allowance to the checks after this one.
+            let for_null = {
+                let _calling = codepp_plugin_host::CallingPlugin::enter(5);
+                make(std::ptr::null_mut(), main)
+            };
+            assert!(!for_null.is_null(), "a null parent made no view");
+            assert_ne!(
+                for_null, detached,
+                "a null parent answered a view made before"
+            );
+            let view = view_at(for_null);
+            assert!(
+                unsafe { view.superview() }.is_none(),
+                "the view for a null parent was put somewhere"
+            );
+            assert!(view.isHidden(), "the view for a null parent was shown");
+            assert_eq!(
+                round_trip(for_null, "abcd"),
+                4,
+                "the view for a null parent is not routed"
+            );
+            assert_eq!(
+                super::dispatch(detached, SCI_GETLENGTH, 0, 0),
+                3,
+                "the view for a null parent shares the other detached view's text"
             );
 
             // A free-standing view of the plugin's: in it, hidden and

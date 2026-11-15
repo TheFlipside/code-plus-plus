@@ -1077,7 +1077,9 @@ thread_local! {
 /// next to nothing.) The npp handle as `parent` makes a widget in no
 /// container, which a plugin can drive through `SCI_*` alone — a text
 /// buffer with Scintilla's search and styling — or add to a container of
-/// its own later.
+/// its own later. So does a null `parent`: Notepad++ takes a NULL lParam
+/// for its own window, which the npp handle stands for here. Until Phase 5
+/// null was refused.
 ///
 /// The widget is the plugin's, to destroy with its container or on its
 /// own, as a Win32 plugin destroys its control. Once it is destroyed the
@@ -1099,7 +1101,7 @@ thread_local! {
 /// that makes one per dialog it opens runs out, and reusing one is the
 /// way.
 ///
-/// Refused, besides null: see [`plugin_scintilla_parent`].
+/// Refused: see [`plugin_scintilla_parent`].
 ///
 /// Its notifications go to the plugin's `messageProc` — see
 /// [`forward_plugin_sci_notify`] — after the host's own housekeeping for
@@ -1286,11 +1288,11 @@ fn connect_plugin_scintilla(index: usize, view: &gtk::Widget, scrollbars: &[gtk:
     });
 }
 
-/// Where a widget made for a plugin goes: `Ok(None)` for the npp handle —
-/// no container at all — or the container to add it to, or why `parent`
-/// is refused.
+/// Where a widget made for a plugin goes: `Ok(None)` for the npp handle
+/// or null — no container at all — or the container to add it to, or why
+/// `parent` is refused.
 ///
-/// Refused, besides null: anything `GObject` says is not a
+/// Refused: anything `GObject` says is not a
 /// `GtkContainer`; any Scintilla widget, the host's or a plugin's, live or
 /// destroyed — a Scintilla has no room for anyone else's child; a widget
 /// of the host's own,
@@ -1307,10 +1309,10 @@ fn connect_plugin_scintilla(index: usize, view: &gtk::Widget, scrollbars: &[gtk:
 fn plugin_scintilla_parent(
     parent: *mut c_void,
 ) -> Result<Option<Borrowed<gtk::Container>>, &'static str> {
-    if parent.is_null() {
-        return Err("the parent is null");
-    }
-    if std::ptr::eq(parent, npp_sentinel()) {
+    // Null is the host's own window, as a NULL lParam is in Notepad++,
+    // and is taken as the npp handle is: this backend's npp handle is no
+    // window, so both make one in none.
+    if parent.is_null() || std::ptr::eq(parent, npp_sentinel()) {
         return Ok(None);
     }
     // SAFETY: not one of the host's non-object handles; by the ABI's
@@ -4423,6 +4425,7 @@ pub(crate) mod host_made_tests {
         // or a later scenario's widget is refused by the quota, which
         // reads like an unrelated bug.
         scintilla_parents_are_checked(&main, host_sci);
+        a_null_parent_is_taken_as_the_npp_handle();
         a_full_paned_is_refused_before_a_widget_is_made();
         widgets_are_charged_to_the_plugin_that_asked();
         a_container_that_turns_the_widget_away_leaves_it_routed();
@@ -4436,6 +4439,46 @@ pub(crate) mod host_made_tests {
         plugin_icons_are_drawn_at_the_screens_pixels();
     }
 
+    /// A null parent is the host's own window in Notepad++, which the npp
+    /// handle stands for here: a widget in no container, of its own,
+    /// hidden and routed, as the npp handle makes one. Both are charged to
+    /// a plugin of their own, to leave the shared allowance to the
+    /// scenarios after this one.
+    fn a_null_parent_is_taken_as_the_npp_handle() {
+        let _calling = CallingPlugin::enter(5);
+        let ask = create_plugin_scintilla;
+        let detached = ask(npp_sentinel());
+        assert!(
+            !detached.is_null(),
+            "the npp handle as parent made no widget"
+        );
+        assert_eq!(round_trip(detached, "abc"), 3);
+        let for_null = ask(std::ptr::null_mut());
+        assert!(!for_null.is_null(), "a null parent made no widget");
+        assert_ne!(
+            for_null, detached,
+            "a null parent answered a widget made before"
+        );
+        assert!(
+            parent_of(for_null).is_null(),
+            "the widget for a null parent was put somewhere"
+        );
+        assert!(
+            !widget_at(for_null).is_visible(),
+            "the widget for a null parent was shown"
+        );
+        assert_eq!(
+            round_trip(for_null, "abcd"),
+            4,
+            "the widget for a null parent is not routed"
+        );
+        assert_eq!(
+            plugin_dispatch(detached, SCI_GETLENGTH, 0, 0),
+            3,
+            "the widget for a null parent shares the other detached widget's text"
+        );
+    }
+
     /// Where a widget may go, and where it may not.
     fn scintilla_parents_are_checked(main: &gtk::Window, host_sci: *mut c_void) {
         let ask = create_plugin_scintilla;
@@ -4444,7 +4487,6 @@ pub(crate) mod host_made_tests {
         let full_bin = gtk::Frame::new(None);
         full_bin.add(&gtk::Label::new(None));
         for (what, parent) in [
-            ("null", std::ptr::null_mut()),
             ("the host's own Scintilla widget", host_sci),
             ("a GObject that is no widget", handle_of(&not_a_widget)),
             ("a widget that is no container", handle_of(&not_a_container)),

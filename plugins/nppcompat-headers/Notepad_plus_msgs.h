@@ -243,10 +243,27 @@ typedef struct sessionInfo_ {
 
 /* v3: create a fresh Scintilla control as a child of the
  *     plugin-supplied parent HWND (lParam). wParam is unused.
- *     Returns the new HWND as LRESULT, or 0 on failure (NULL /
- *     dead parent, CreateWindowExW failure). Plugin owns the
+ *     Returns the new HWND as LRESULT, or 0 on failure (dead
+ *     parent, CreateWindowExW failure). Plugin owns the
  *     new control's lifetime — it MUST DestroyWindow before
- *     the parent goes away. The control is initialised with
+ *     the parent goes away.
+ *     A NULL lParam is the host's own window, as in Notepad++
+ *     ("otherwise the parent window is Notepad++"), and is
+ *     taken exactly as the npp handle is for lParam. On Windows
+ *     that makes a hidden, zero-sized child of the main window
+ *     (Notepad++ 8.9.8.1, measured, makes the same child, 100 by
+ *     100), which goes with the main window at exit unless the
+ *     plugin destroys it first. Its notifications go to the main
+ *     window, which acts on none of them and does not pass them
+ *     on: Notepad++ hands them to every plugin's beNotified
+ *     (measured), Code++ to nobody, so drive such a control
+ *     through SCI_* or give it a parent of your own (SetParent)
+ *     whose window procedure hears it. On macOS and Linux, where
+ *     the npp handle is no window, NULL makes a view or widget
+ *     in no window or container, as described below. Until
+ *     Phase 5 a NULL lParam answered 0 on every platform. A
+ *     negative lParam still answers 0.
+ *     The control is initialised with
  *     SCI_SETCODEPAGE = SC_CP_UTF8 so it inherits the host's
  *     UTF-8-internal invariant; plugins are free to override
  *     that and any other Scintilla setting via direct
@@ -255,9 +272,9 @@ typedef struct sessionInfo_ {
  *     On macOS lParam is an NSView*, and the answer is a
  *     ScintillaView* inside it, hidden and zero-sized for the
  *     plugin to size (setFrame:, an autoresizing mask) and show
- *     (setHidden:NO). The npp handle as lParam makes a view in
- *     no window: a text buffer driven through SCI_* alone, or
- *     placed by the plugin later. The parent must be the
+ *     (setHidden:NO). The npp handle as lParam, or NULL, makes
+ *     a view in no window: a text buffer driven through SCI_*
+ *     alone, or placed by the plugin later. The parent must be the
  *     plugin's own — a view in the host's main window or a
  *     floating dock window is refused unless it is inside the
  *     plugin's docked panel. The host keeps every view it makes
@@ -291,8 +308,8 @@ typedef struct sessionInfo_ {
  *     hexpand / vexpand on it. A container that turns the widget
  *     away for a reason of its own (a GtkMenu takes only menu
  *     items) leaves it in no container, still answered and
- *     routed; the npp handle as lParam makes a widget in no
- *     container too. The parent must be the plugin's own, as on
+ *     routed; the npp handle as lParam, or NULL, makes a widget
+ *     in no container too. The parent must be the plugin's own, as on
  *     macOS: a widget in the host's main window or a floating
  *     dock window is refused unless it is inside a plugin's dock
  *     panel, wherever that panel is, and so are the host's

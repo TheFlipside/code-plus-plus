@@ -1667,8 +1667,16 @@ pub trait HostServices {
     /// Create a fresh Scintilla control as a child of the
     /// plugin-supplied `parent` HWND. Drives
     /// [`NPPM_CREATESCINTILLAHANDLE`]. Returns the new HWND on
-    /// success, NULL on failure (NULL parent, dead parent
-    /// HWND, `CreateWindowExW` failure, …).
+    /// success, NULL on failure (dead parent HWND,
+    /// `CreateWindowExW` failure, …).
+    ///
+    /// **A null `parent` means the host's own window**, as a NULL
+    /// lParam does in Notepad++, and an implementation takes it
+    /// exactly as it takes the npp handle for a parent: on Win32 the
+    /// control is a hidden child of the main window, and on macOS and
+    /// GTK, where the npp handle is no window, it is in no window or
+    /// container. The dispatcher hands null through and never a
+    /// negative value.
     ///
     /// The plugin owns the new control's lifetime; it MUST
     /// `DestroyWindow` the HWND before its parent goes away.
@@ -2112,22 +2120,29 @@ pub unsafe fn dispatch_nppm<S: HostServices>(
             // wparam: unused (upstream ABI). lparam: parent HWND
             // the plugin wants the new Scintilla parented to —
             // typically a dialog or container the plugin
-            // created. Returns: HWND of the new Scintilla
-            // control as `isize`, or 0 on failure (NULL parent,
-            // dead parent, `CreateWindowExW` failure).
+            // created — or NULL for the host's own window, as in
+            // Notepad++: its header says "otherwise the parent
+            // window is Notepad++", and 8.9.8.1, measured, answers
+            // a NULL lparam with a hidden child of its main window
+            // (DESIGN.md §7.4). Until Phase 5 Code++ answered NULL
+            // with 0. Returns: HWND of the new Scintilla control
+            // as `isize`, or 0 on failure (dead parent,
+            // `CreateWindowExW` failure).
             //
             // Plugin owns the new control's lifetime; it MUST
             // `DestroyWindow` the HWND before its parent goes
             // away. Win32 will tear it down with the parent if
             // the plugin forgets, but the plugin is on the hook
-            // for orderly cleanup.
+            // for orderly cleanup. One made in the host's own
+            // window goes with that window, at exit.
             //
-            // Reject NULL / negative lparam up front — same
+            // Reject a negative lparam up front — same
             // kernel-mode-pointer guard MODELESSDIALOG /
-            // ADDTOOLBARICON / allocator messages use. A NULL
-            // parent would create a top-level Scintilla, which
-            // isn't what the upstream ABI promises.
-            if lparam <= 0 {
+            // ADDTOOLBARICON / allocator messages use. NULL goes
+            // to the host as it is: which window is the host's
+            // own is the backend's to say
+            // ([`HostServices::create_plugin_scintilla`]).
+            if lparam < 0 {
                 return Some(0);
             }
             let parent = lparam as crate::ffi::Hwnd;
@@ -9202,14 +9217,26 @@ mod tests {
     }
 
     #[test]
-    fn create_scintilla_handle_null_lparam_returns_zero() {
-        // NULL parent rejected up front — would create a
-        // top-level Scintilla, which isn't what the upstream
-        // ABI promises. Trait must NOT be called.
+    fn create_scintilla_handle_null_lparam_asks_the_host_for_its_own_window() {
+        // A NULL parent is the host's own window, as in Notepad++
+        // (measured against 8.9.8.1: a hidden child of its main
+        // window). The dispatcher hands the null on, the host says
+        // which window that is, and its answer comes back, whatever
+        // wparam holds. Until Phase 5 this answered 0 unasked.
+        for wparam in [0usize, 7] {
+            let mut s = MockServices {
+                plugin_scintilla_return: 0xDEAD_BEEF_usize,
+                ..Default::default()
+            };
+            let r = unsafe { dispatch_nppm(&mut s, NPPM_CREATESCINTILLAHANDLE, wparam, 0) };
+            assert_eq!(r, Some(0xDEAD_BEEF_isize));
+            assert_eq!(s.plugin_scintilla_parents, vec![0usize]);
+        }
+        // And a host that makes none for it is relayed as 0.
         let mut s = MockServices::default();
         let r = unsafe { dispatch_nppm(&mut s, NPPM_CREATESCINTILLAHANDLE, 0, 0) };
         assert_eq!(r, Some(0));
-        assert!(s.plugin_scintilla_parents.is_empty());
+        assert_eq!(s.plugin_scintilla_parents, vec![0usize]);
     }
 
     #[test]

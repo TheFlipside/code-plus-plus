@@ -802,6 +802,132 @@ fn class_is_host_owned(name: &str) -> bool {
     name.starts_with(HOST_CLASS_PREFIX)
 }
 
+/// `NPPM_CREATESCINTILLAHANDLE` on this backend: make a Scintilla
+/// control for a plugin, as a child of `parent`, and return its
+/// handle, or null.
+///
+/// **A null `parent` is the host's own window**, `main_hwnd`, as a NULL
+/// lParam is in Notepad++, whose header says "otherwise the parent
+/// window is Notepad++". Measured against 8.9.8.1: a NULL lParam and
+/// its own window as lParam each give a hidden child of its main
+/// window (DESIGN.md §7.4). So the control is made exactly as it is
+/// for a plugin that names `_nppHandle`, and it goes with the main
+/// window at exit unless the plugin destroys it first. Until Phase 5 a
+/// NULL parent was refused before it got here.
+///
+/// The Scintilla window class is already registered
+/// (`Scintilla_RegisterClasses` runs at startup), so `CreateWindowExW`
+/// against [`SCINTILLA_CLASS`] produces a fresh control with its own
+/// document, undo stack and direct-call function pointer.
+///
+/// The control is made **hidden and zero-sized**, for the plugin to
+/// size and show inside its own dialog or container: `WS_CHILD` with
+/// no `WS_VISIBLE`. `WS_CLIPCHILDREN`, `WS_VSCROLL` and `WS_HSCROLL`
+/// are the styles Notepad++ gives a plugin's Scintilla, so the
+/// plugin's scroll messages have a real bar to drive. (Notepad++ makes
+/// it 100 by 100, measured; a plugin sizes it either way.) Its code
+/// page is set to UTF-8, the host's own invariant, which a plugin may
+/// override afterwards.
+///
+/// A control whose parent is the main window sends its notifications
+/// there, where every Scintilla arm of `main_wnd_proc`'s `WM_NOTIFY`
+/// is filtered to the host's own view by `hwndFrom`, so they change
+/// nothing of the host's. They are not passed on to plugins either,
+/// where Notepad++ passes them to every plugin's `beNotified`
+/// (measured; DESIGN.md §7.4): such a control is driven through
+/// `SCI_*`, or re-parented by its plugin to a window that hears it.
+///
+/// The returned handle escapes into plugin address space: the plugin
+/// holds it past this call and is to `DestroyWindow` it before its
+/// parent dies. The host has no hook to detect a plugin's
+/// use-after-destroy; this is the in-process "trust the plugin not to
+/// crash us" model Notepad++ uses (DESIGN.md §6.5).
+///
+/// Refused, with a warning: a `parent` that is no live window, which
+/// also covers a null `main_hwnd` for a null `parent`, and the
+/// `HWND_BROADCAST` pseudo-handle (0xFFFF), the one positive
+/// pseudo-handle the dispatcher's negative-lparam guard lets through.
+/// `parent` is never dereferenced: it is only given to `IsWindow` and
+/// to `CreateWindowExW`.
+///
+/// Win32 has no atomic "create only if the parent is live", so a
+/// plugin that destroys its window from another thread between the
+/// check and the create can still race the host into a failed create
+/// (logged) or a child of a dying window. That race is the plugin's to
+/// avoid on its own windows; the host is UI-thread-only for its own.
+fn make_plugin_scintilla(
+    parent: codepp_plugin_host::Hwnd,
+    main_hwnd: HWND,
+) -> codepp_plugin_host::Hwnd {
+    let parent_hwnd = if parent.is_null() {
+        main_hwnd
+    } else {
+        HWND(parent)
+    };
+    // SAFETY: plain Win32 calls on the UI thread — the NPPM dispatch
+    // this is reached from runs nowhere else. `parent_hwnd` is checked
+    // live before it is used, and the new control is this call's own
+    // until it is returned.
+    unsafe {
+        if !IsWindow(Some(parent_hwnd)).as_bool() {
+            tracing::warn!(
+                parent = parent_hwnd.0 as usize,
+                host_window = parent.is_null(),
+                "NPPM_CREATESCINTILLAHANDLE: the window to make the control in is not a live                  window (the host's own, for a NULL parent)"
+            );
+            return core::ptr::null_mut();
+        }
+        // The host's executable module is the right hInstance:
+        // Scintilla's window class was registered against it at
+        // startup. The plugin's DLL would be wrong; the class is the
+        // host's.
+        let instance = match GetModuleHandleW(None) {
+            Ok(h) => h,
+            Err(e) => {
+                tracing::warn!(
+                    error = ?e,
+                    "NPPM_CREATESCINTILLAHANDLE: GetModuleHandleW failed"
+                );
+                return core::ptr::null_mut();
+            }
+        };
+        let new_hwnd = match CreateWindowExW(
+            WINDOW_EX_STYLE::default(),
+            SCINTILLA_CLASS,
+            PCWSTR::null(),
+            WS_CHILD | WS_CLIPCHILDREN | WS_VSCROLL | WS_HSCROLL,
+            0,
+            0,
+            0,
+            0,
+            Some(parent_hwnd),
+            None,
+            Some(instance.into()),
+            None,
+        ) {
+            Ok(h) => h,
+            Err(e) => {
+                tracing::warn!(
+                    error = ?e,
+                    parent = parent_hwnd.0 as usize,
+                    "NPPM_CREATESCINTILLAHANDLE: CreateWindowExW failed"
+                );
+                return core::ptr::null_mut();
+            }
+        };
+        // Scintilla 5.x defaults to `SC_CP_UTF8` already; set
+        // explicitly, a later Scintilla changing its default changes
+        // nothing here.
+        SendMessageW(
+            new_hwnd,
+            SCI_SETCODEPAGE,
+            Some(WPARAM(SC_CP_UTF8 as usize)),
+            None,
+        );
+        new_hwnd.0
+    }
+}
+
 /// Window styles stripped from a plugin's docking dialog when the
 /// host adopts it as a child of a dock frame.
 ///
@@ -3171,136 +3297,15 @@ impl UiPlatform for Win32Ui {
         &mut self,
         parent: codepp_plugin_host::Hwnd,
     ) -> codepp_plugin_host::Hwnd {
-        // Create a Scintilla control as a child of the
-        // plugin-supplied `parent`. The Scintilla window class
-        // is already registered (`Scintilla_RegisterClasses`
-        // runs at startup), so `CreateWindowExW` against
-        // `SCINTILLA_CLASS` produces a fresh control with its
-        // own document, undo stack, and direct-call function
-        // pointer. The plugin owns the new HWND's lifetime.
+        // The main window is found as every other method of this type
+        // finds it. A failure leaves it null, which
+        // `make_plugin_scintilla` refuses as it refuses any parent that
+        // is no live window.
         //
-        // SAFETY: every Win32 call here runs on the UI thread
-        // (the trait method is invoked from a NPPM dispatch).
-        // The plugin's `Hwnd` opaque pointer is the same
-        // `*mut c_void` Win32 ABI uses for `HWND` — we wrap it
-        // back into windows-rs's newtype here. We never
-        // dereference it; we only feed it to `IsWindow` and
-        // pass it as the parent to `CreateWindowExW`.
-        //
-        // The returned HWND escapes into plugin address space:
-        // the plugin holds it past this function's lifetime
-        // and is contractually obliged to `DestroyWindow` it
-        // before the parent dies. The host has no lifetime
-        // hook to detect a misbehaving plugin's use-after-
-        // destroy; this is the same in-process "trust the
-        // plugin not to crash us" model Notepad++ uses (and
-        // documented in DESIGN.md §6.5).
-        let parent_hwnd = HWND(parent);
-        // Belt-and-suspenders null check. The dispatcher's
-        // `lparam <= 0` guard already rejects NULL via the
-        // NPPM path, but the `HostServices` trait is `pub` —
-        // a future direct caller (e.g. a Phase-5 GTK/Cocoa
-        // NPPM bridge) could bypass the dispatcher.
-        // `is_invalid()` is the canonical windows-rs null
-        // test; the `IsWindow` call below catches dead-but-
-        // non-null parents.
-        if parent_hwnd.is_invalid() {
-            return core::ptr::null_mut();
-        }
-        unsafe {
-            // Defensive: a plugin that passes a HWND it has
-            // already destroyed would otherwise feed a dead
-            // HWND to `CreateWindowExW`, which Win32 reports as
-            // a confusing "invalid window handle" error. Reject
-            // up front instead. `IsWindow` also rejects the
-            // `HWND_BROADCAST` pseudo-HWND (0xFFFF), the only
-            // positive Win32 pseudo-HWND value that would
-            // survive the dispatcher's `lparam <= 0` guard.
-            //
-            // TOCTOU note: Win32 has no atomic "create only if
-            // parent is live" syscall, so a plugin that
-            // destroys `parent_hwnd` from a worker thread
-            // between this `IsWindow` check and the
-            // `CreateWindowExW` call can race the host into
-            // either a `CreateWindowExW` failure (benign,
-            // logged below) or a child whose parent is
-            // garbage-collected indeterminately. The plugin is
-            // contractually responsible for not racing
-            // destroy-against-create on its own HWNDs; the
-            // host stays UI-thread-only for its own state, so
-            // it cannot itself introduce the race.
-            if !IsWindow(Some(parent_hwnd)).as_bool() {
-                tracing::warn!(
-                    parent = parent_hwnd.0 as usize,
-                    "NPPM_CREATESCINTILLAHANDLE: parent HWND is not a live window"
-                );
-                return core::ptr::null_mut();
-            }
-            // The host's executable module handle is the right
-            // hInstance for `CreateWindowExW` here — Scintilla's
-            // window class was registered against this module
-            // by `Scintilla_RegisterClasses` at startup. Using
-            // the plugin's DLL hInstance here would be wrong;
-            // the class is host-owned, not plugin-owned.
-            let instance = match GetModuleHandleW(None) {
-                Ok(h) => h,
-                Err(e) => {
-                    tracing::warn!(
-                        error = ?e,
-                        "NPPM_CREATESCINTILLAHANDLE: GetModuleHandleW failed"
-                    );
-                    return core::ptr::null_mut();
-                }
-            };
-            // WS_CHILD: parented control, no caption / no system menu.
-            // No WS_VISIBLE: the plugin decides when to show — typical
-            // pattern is to size + show inside the plugin's own
-            // dialog/container after creation. WS_CLIPCHILDREN keeps
-            // any future child redraws (Scintilla itself doesn't add
-            // any in this configuration, but plugins occasionally
-            // overlay tooltips) from flickering. WS_VSCROLL /
-            // WS_HSCROLL match the styles N++ uses for plugin-owned
-            // Scintillas so plugin scroll messages have a real bar to
-            // drive.
-            let new_hwnd = match CreateWindowExW(
-                WINDOW_EX_STYLE::default(),
-                SCINTILLA_CLASS,
-                PCWSTR::null(),
-                WS_CHILD | WS_CLIPCHILDREN | WS_VSCROLL | WS_HSCROLL,
-                0,
-                0,
-                0,
-                0,
-                Some(parent_hwnd),
-                None,
-                Some(instance.into()),
-                None,
-            ) {
-                Ok(h) => h,
-                Err(e) => {
-                    tracing::warn!(
-                        error = ?e,
-                        parent = parent_hwnd.0 as usize,
-                        "NPPM_CREATESCINTILLAHANDLE: CreateWindowExW failed"
-                    );
-                    return core::ptr::null_mut();
-                }
-            };
-            // Initialise the codepage to UTF-8 so plugin-owned
-            // Scintillas inherit the host's UTF-8-internal
-            // invariant. Scintilla 5.x defaults to SC_CP_UTF8
-            // already, but setting it explicitly is robust to
-            // a future Scintilla version flipping the default.
-            // Plugins that need a different codepage can
-            // override after the call returns.
-            SendMessageW(
-                new_hwnd,
-                SCI_SETCODEPAGE,
-                Some(WPARAM(SC_CP_UTF8 as usize)),
-                None,
-            );
-            new_hwnd.0
-        }
+        // SAFETY: `tab_hwnd` is the host's own tab control, a child of
+        // the main window, on this thread.
+        let main_hwnd = unsafe { GetParent(self.tab_hwnd) }.unwrap_or_default();
+        make_plugin_scintilla(parent, main_hwnd)
     }
 
     fn register_dock_dialog(
@@ -36824,5 +36829,229 @@ mod eol_conversion_guards {
                 "a row converts by hand (`{by_hand}`), past the shell's refusals"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod plugin_scintilla_tests {
+    //! `NPPM_CREATESCINTILLAHANDLE` on this backend, against real
+    //! windows: a null parent is the host's own window, as a NULL lParam
+    //! is in Notepad++ (measured against 8.9.8.1; DESIGN.md §7.4), and
+    //! the control is otherwise made as it always was.
+
+    use std::ffi::c_void;
+
+    use codepp_scintilla_sys::{SCI_GETCODEPAGE, SCI_GETLENGTH, SCI_SETTEXT, SC_CP_UTF8};
+    use windows::core::{w, PCWSTR};
+    use windows::Win32::Foundation::{HWND, LPARAM, RECT, WPARAM};
+    use windows::Win32::UI::WindowsAndMessaging::{
+        CreateWindowExW, DestroyWindow, GetAncestor, GetClassNameW, GetWindowLongPtrW,
+        GetWindowRect, SendMessageW, GA_PARENT, GWL_STYLE, WS_CHILD, WS_CLIPCHILDREN,
+        WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_HSCROLL, WS_POPUP, WS_VISIBLE, WS_VSCROLL,
+    };
+
+    use super::make_plugin_scintilla;
+    use super::plugin_reentry_guards::{code_without_strings, fn_body, production_src};
+    use super::view_position_tests::scintilla;
+
+    /// A top-level window that is never shown, destroyed when it drops
+    /// with every control made in it.
+    struct Top(HWND);
+
+    impl Drop for Top {
+        fn drop(&mut self) {
+            // SAFETY: the window `top` created on this thread.
+            unsafe {
+                let _ = DestroyWindow(self.0);
+            }
+        }
+    }
+
+    /// A stand-in for the main window, or for a window of a plugin's.
+    fn top() -> Top {
+        // SAFETY: a plain window of a system class, on this thread.
+        let hwnd = unsafe {
+            CreateWindowExW(
+                WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
+                w!("Static"),
+                PCWSTR::null(),
+                WS_POPUP,
+                -32000,
+                -32000,
+                300,
+                200,
+                None,
+                None,
+                None,
+                None,
+            )
+        }
+        .expect("a top-level window");
+        Top(hwnd)
+    }
+
+    /// Scintilla's window class, registered as the editor registers it
+    /// at startup. The rig's own control does it, and is then dropped.
+    fn register_scintilla() {
+        drop(scintilla(1, 1, b""));
+    }
+
+    fn send(view: *mut c_void, msg: u32, wparam: usize, lparam: isize) -> isize {
+        // SAFETY: a live Scintilla control this test made, on its thread.
+        unsafe { SendMessageW(HWND(view), msg, Some(WPARAM(wparam)), Some(LPARAM(lparam))) }.0
+    }
+
+    /// What a control made for a plugin must be, wherever it was put: a
+    /// Scintilla child of `parent`, hidden and zero-sized, with the
+    /// styles Notepad++ gives one, in UTF-8.
+    fn assert_made_in(view: *mut c_void, parent: HWND, what: &str) {
+        assert!(!view.is_null(), "{what}: no control was made");
+        let hwnd = HWND(view);
+        // SAFETY: plain reads of a live window, on this thread.
+        unsafe {
+            assert_eq!(
+                GetAncestor(hwnd, GA_PARENT),
+                parent,
+                "{what}: the control is not a child of the window meant"
+            );
+            let mut class = [0u16; 32];
+            let n = GetClassNameW(hwnd, &mut class);
+            assert_eq!(
+                String::from_utf16_lossy(&class[..usize::try_from(n).unwrap()]),
+                "Scintilla",
+                "{what}: not a Scintilla control"
+            );
+            // The low 16 bits are the class's own.
+            let style = GetWindowLongPtrW(hwnd, GWL_STYLE) as u32 & 0xFFFF_0000;
+            assert_eq!(
+                style & WS_VISIBLE.0,
+                0,
+                "{what}: the control is shown before its plugin shows it"
+            );
+            assert_eq!(
+                style,
+                (WS_CHILD | WS_CLIPCHILDREN | WS_VSCROLL | WS_HSCROLL).0,
+                "{what}: the control's styles"
+            );
+            let mut rect = RECT::default();
+            GetWindowRect(hwnd, &raw mut rect).expect("the control's rectangle");
+            assert_eq!(
+                (rect.right - rect.left, rect.bottom - rect.top),
+                (0, 0),
+                "{what}: the control has a size before its plugin gives it one"
+            );
+        }
+        assert_eq!(
+            send(view, SCI_GETCODEPAGE, 0, 0),
+            SC_CP_UTF8 as isize,
+            "{what}: the control is not UTF-8"
+        );
+    }
+
+    /// A null parent makes the control in the main window, exactly as
+    /// naming the main window does, and each call makes a control of its
+    /// own with a document of its own.
+    #[test]
+    fn a_null_parent_is_the_main_window() {
+        register_scintilla();
+        let main = top();
+        let for_null = make_plugin_scintilla(std::ptr::null_mut(), main.0);
+        assert_made_in(for_null, main.0, "a null parent");
+        let for_main = make_plugin_scintilla(main.0 .0, main.0);
+        assert_made_in(for_main, main.0, "the main window as parent");
+        let again = make_plugin_scintilla(std::ptr::null_mut(), main.0);
+        assert_made_in(again, main.0, "a second null parent");
+        assert!(
+            for_null != for_main && for_null != again && for_main != again,
+            "two requests were answered with one control"
+        );
+        send(for_null, SCI_SETTEXT, 0, c"hello".as_ptr() as isize);
+        assert_eq!(send(for_null, SCI_GETLENGTH, 0, 0), 5);
+        assert_eq!(
+            send(again, SCI_GETLENGTH, 0, 0),
+            0,
+            "two null-parent controls share a document"
+        );
+    }
+
+    /// A window the plugin names is still the parent, whatever the main
+    /// window is.
+    #[test]
+    fn a_named_parent_is_still_the_parent() {
+        register_scintilla();
+        let main = top();
+        let plugins_own = top();
+        let view = make_plugin_scintilla(plugins_own.0 .0, main.0);
+        assert_made_in(view, plugins_own.0, "a plugin's own window as parent");
+    }
+
+    /// No live window to make it in, no control: a null parent with no
+    /// main window, or a main window that is gone; a named window that
+    /// is gone; and the broadcast pseudo-handle.
+    #[test]
+    fn a_parent_that_is_no_live_window_is_refused() {
+        register_scintilla();
+        let main = top();
+        let gone = {
+            let t = top();
+            t.0
+        };
+        assert!(
+            make_plugin_scintilla(std::ptr::null_mut(), HWND::default()).is_null(),
+            "a null parent with no main window made a control"
+        );
+        assert!(
+            make_plugin_scintilla(std::ptr::null_mut(), gone).is_null(),
+            "a null parent with a destroyed main window made a control"
+        );
+        assert!(
+            make_plugin_scintilla(gone.0, main.0).is_null(),
+            "a destroyed window was taken as a parent"
+        );
+        assert!(
+            make_plugin_scintilla(0xFFFF_usize as *mut c_void, main.0).is_null(),
+            "HWND_BROADCAST was taken as a parent"
+        );
+    }
+
+    /// The trait method makes the control through the one function,
+    /// handing it the plugin's parent as it came and the main window as
+    /// every other method of the type finds it. A constant in either
+    /// place compiles: a null main window would refuse every null
+    /// parent, and so would `parent` passed for it.
+    #[test]
+    fn the_method_hands_on_the_parent_and_the_main_window() {
+        fn squashed(text: &str) -> String {
+            text.chars().filter(|c| !c.is_whitespace()).collect()
+        }
+        let src = production_src();
+        assert_eq!(
+            squashed(&code_without_strings(&fn_body(
+                src,
+                "create_plugin_scintilla"
+            ))),
+            "{letmain_hwnd=unsafe{GetParent(self.tab_hwnd)}.unwrap_or_default();\
+             make_plugin_scintilla(parent,main_hwnd)}",
+            "`create_plugin_scintilla` no longer hands the parent and the main window on as they are"
+        );
+        assert_eq!(
+            code_without_strings(src)
+                .matches("make_plugin_scintilla(")
+                .count(),
+            2,
+            "a plugin's Scintilla is made somewhere besides the trait method"
+        );
+        let make = squashed(&code_without_strings(&fn_body(
+            src,
+            "make_plugin_scintilla",
+        )));
+        assert!(
+            make.starts_with(
+                "{letparent_hwnd=ifparent.is_null(){main_hwnd}else{HWND(parent)};\
+                 unsafe{if!IsWindow(Some(parent_hwnd)).as_bool(){"
+            ),
+            "`make_plugin_scintilla` no longer takes a null parent for the main window, \
+             or no longer checks the window it settled on before it makes anything"
+        );
     }
 }

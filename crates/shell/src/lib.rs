@@ -613,7 +613,10 @@ pub trait UiPlatform {
     /// on failure. On Win32 it is a child window of `parent`, which
     /// the plugin destroys before the parent goes. On Cocoa `parent`
     /// is an `NSView*`, and on GTK a `GtkContainer*`, or the npp handle
-    /// for a view in no window or a widget in no container. The host
+    /// for a view in no window or a widget in no container. A null
+    /// `parent` is the host's own window, as a NULL lParam is in
+    /// Notepad++, and every backend takes it as it takes the npp
+    /// handle: Win32 makes a hidden child of the main window. The host
     /// keeps a reference to what it makes for the rest of the
     /// process; on GTK the widget is still the plugin's to destroy,
     /// after which the host routes nothing to it. The default, NULL,

@@ -176,8 +176,12 @@ typedef struct FuncItem_ {
  *      batch has had TBMODIFICATION and its panels are back — or, on
  *      Windows and Linux, not at all if the host is asked to quit
  *      meanwhile (6).
- *   4. beNotified() is called for every NPPN_ / SCN_ notification
- *      delivered while the plugin is loaded.
+ *   4. beNotified() is called for every NPPN_ notification delivered
+ *      while the plugin is loaded. Code++ does not yet pass Scintilla's
+ *      own SCN_ notifications on to it, as Notepad++ does: not the
+ *      editor's, and not those of a Scintilla control made in the
+ *      host's own window (NPPM_CREATESCINTILLAHANDLE with a NULL
+ *      lParam or the npp handle).
  *   5. messageProc() is called for plugin-targeted Win32 messages
  *      that aren't NPPN/SCN notifications. On Linux and macOS it also
  *      receives the DMN_* notifications about the plugin's dock panels,

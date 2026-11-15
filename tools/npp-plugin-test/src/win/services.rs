@@ -827,7 +827,12 @@ impl HostServices for Bridge<'_> {
             self.0.rec.refuse("scintilla-view");
             return core::ptr::null_mut();
         }
-        let parent = HWND(parent);
+        // Null is the host's own window, as in Notepad++ and the editor.
+        let parent = if parent.is_null() {
+            self.0.env.npp
+        } else {
+            HWND(parent)
+        };
         // SAFETY: `IsWindow` only reads.
         if parent.is_invalid() || !unsafe { IsWindow(Some(parent)) }.as_bool() {
             return core::ptr::null_mut();
