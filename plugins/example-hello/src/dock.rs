@@ -47,12 +47,15 @@
 //! 6. **On Linux and macOS, "Show Dock Panel" has a toolbar button**
 //!    (`NPPM_ADDTOOLBARICON`), added at `NPPN_TBMODIFICATION`. It runs
 //!    the command and shows its check mark as pressed.
-//! 7. **On Linux and macOS, switching between the two panels' tabs**,
-//!    dragging a panel out to float or resizing its band reports what
-//!    the host sends on the status bar: `DMN_SWITCHIN` for the panel
-//!    coming in, `DMN_SWITCHOFF` for the one going behind it, and
+//! 7. **Switching between the two panels' tabs**, dragging a panel out
+//!    to float or resizing its band reports what the host sends on the
+//!    status bar: `DMN_SWITCHIN` for the panel coming in,
+//!    `DMN_SWITCHOFF` for the one going behind it, and
 //!    `DMN_FLOATDROPPED` for each panel laid out somewhere new — on
-//!    macOS once a drag has ended, on Linux as it goes.
+//!    Windows and macOS once a drag has ended, on Linux as it goes. On
+//!    Windows these three come from the panel's container window and
+//!    not from the main window, as in Notepad++, so the panel accepts
+//!    them from there.
 //!
 //! Linux and macOS share everything but how the content is built —
 //! `hosted` registers, shows, renames and hears the `DMN_*`, and a
@@ -1107,6 +1110,7 @@ mod win {
         fn DefWindowProcW(hwnd: Hwnd, msg: u32, wparam: usize, lparam: isize) -> isize;
         fn GetClientRect(hwnd: Hwnd, rect: *mut Rect) -> i32;
         fn MoveWindow(hwnd: Hwnd, x: i32, y: i32, w: i32, h: i32, repaint: i32) -> i32;
+        fn IsChild(parent: Hwnd, hwnd: Hwnd) -> i32;
     }
 
     #[link(name = "kernel32")]
@@ -1271,20 +1275,43 @@ mod win {
                     // a pointer to at least an NMHDR, live for this
                     // call.
                     let (from, code) = unsafe { ((*nmhdr).hwnd_from, (*nmhdr).code) };
-                    // All three come from the host's *main* window,
-                    // and are accepted only from there — the way
-                    // Notepad++'s docking-dialog template checks it,
-                    // which is what makes this demo a test of the field
-                    // and not only of the code: a host sending these
-                    // from anywhere else reaches the template-built
-                    // plugins that make up most of the ecosystem not at
-                    // all.
-                    if from != sdk::npp_handle() {
-                        return Some(0);
-                    }
+                    // Two families, from two windows, as Notepad++
+                    // sends them. DMN_CLOSE, DMN_DOCK and DMN_FLOAT come
+                    // from the host's *main* window, and are accepted
+                    // only from there — the way Notepad++'s
+                    // docking-dialog template checks it, which is what
+                    // makes this demo a test of the field and not only
+                    // of the code: a host sending these from anywhere
+                    // else reaches the template-built plugins that make
+                    // up most of the ecosystem not at all.
+                    // DMN_SWITCHIN, DMN_SWITCHOFF and DMN_FLOATDROPPED
+                    // come from the panel's *container*, a window of
+                    // the host's that this panel sits inside — so they
+                    // are accepted from a window this one is a
+                    // descendant of that is not the main window, and a
+                    // plugin behind the template's check never sees
+                    // them.
+                    let from_main = from == sdk::npp_handle();
+                    // SAFETY: `IsChild` takes any two handle values.
+                    let from_container = !from_main && unsafe { IsChild(from, hwnd) } != 0;
+                    let which = if hwnd == PANEL_2.load(Ordering::Acquire) {
+                        "notes panel"
+                    } else {
+                        "panel"
+                    };
                     // Switch on the low word: DMN_DOCK and DMN_FLOAT
                     // carry their container number in the high one.
                     match code & 0xFFFF {
+                        sdk::DMN_SWITCHIN if from_container => sdk::set_status(&format!(
+                            "Example Hello: {which} came on screen (DMN_SWITCHIN)"
+                        )),
+                        sdk::DMN_SWITCHOFF if from_container => sdk::set_status(&format!(
+                            "Example Hello: {which} went behind another tab (DMN_SWITCHOFF)"
+                        )),
+                        sdk::DMN_FLOATDROPPED if from_container => sdk::set_status(&format!(
+                            "Example Hello: {which} laid out anew (DMN_FLOATDROPPED)"
+                        )),
+                        _ if !from_main => {}
                         sdk::DMN_CLOSE => {
                             let item = if hwnd == PANEL_2.load(Ordering::Acquire) {
                                 crate::imp::CMD_SHOW_SECOND_DOCK_PANEL

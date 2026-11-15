@@ -336,7 +336,11 @@ typedef struct tTbData_ {
  *   wParam          0
  *   lParam          NMHDR*
  *   nmhdr.code      MAKELONG(DMN_xxx, container)
- *   nmhdr.hwndFrom  the host's MAIN window (the one in NppData)
+ *   nmhdr.hwndFrom  DMN_CLOSE, DMN_DOCK, DMN_FLOAT: the host's MAIN
+ *                   window (the one in NppData). DMN_SWITCHIN,
+ *                   DMN_SWITCHOFF, DMN_FLOATDROPPED: the panel's
+ *                   container, a window of the host's that hClient
+ *                   is inside.
  *   nmhdr.idFrom    0
  *
  * That is Notepad++'s shape, field for field, measured against
@@ -347,9 +351,11 @@ typedef struct tTbData_ {
  *   - Switch on LOWORD(nmhdr.code). The high word carries the
  *     container number for DMN_DOCK and DMN_FLOAT, so comparing the
  *     whole code fails for every panel docked anywhere but the left.
- *   - hwndFrom is the main window for all three. Notepad++'s
- *     docking-dialog template ignores a WM_NOTIFY whose hwndFrom is
- *     not the main window it was initialised with.
+ *   - hwndFrom is the main window for DMN_CLOSE, DMN_DOCK and
+ *     DMN_FLOAT. Notepad++'s docking-dialog template ignores a
+ *     WM_NOTIFY whose hwndFrom is not the main window it was
+ *     initialised with — which is also why it never sees the other
+ *     three, below.
  *
  * DMN_CLOSE fires when the user closes the panel from the X on its
  * group's caption; the high word is 0. The panel is hidden, never
@@ -369,7 +375,9 @@ typedef struct tTbData_ {
  * floating window to another. Moving between two panels on the same
  * side is not a container change (a side is one container), and
  * neither is hiding and re-showing a panel — so neither sends
- * anything.
+ * anything. On Windows, registering a panel that is already
+ * registered sends it again, and only it, as Notepad++ sends it on
+ * every registration.
  *
  * One deliberate difference from Notepad++: docking a floating panel
  * back by double-clicking its caption, Notepad++ sends DMN_FLOAT
@@ -404,18 +412,22 @@ typedef struct tTbData_ {
  * sends DMN_FLOATDROPPED to every panel of a container whenever it
  * lays the container out, a plain tab switch included; Code++ sends
  * none of those repeats. A resize — of the window, a band, a floating
- * panel — is reported on macOS when it ends, not at every step of the
- * drag. On Linux it is reported as it goes, at most once a pass of the
- * main loop, since there is no telling when a resize the window
- * manager drives has ended: nearer Notepad++, which reports every step,
- * than macOS is. On Linux, too, what a change to the arrangement owes
- * — a show, a close, a tab switch, a float, a dock — is sent before
- * GTK has laid that change out, so in the handler the panel's widget
- * may still have its old size; a plugin that needs the new geometry
- * follows the widget's size-allocate signal. A resize is reported once
- * GTK has laid it out. On Linux and macOS no DMN_* is sent from the
- * moment the host begins to quit, which comes before it sends
- * NPPN_BEFORESHUTDOWN — not even DMN_CLOSE for a panel closed
+ * panel — is reported on Windows and macOS when it ends, not at every
+ * step of the drag; on Windows minimizing the window reports nothing,
+ * and restoring it reports only what changed meanwhile. On Linux a
+ * resize is reported as it goes, at most once a pass of the main
+ * loop, since there is no telling when a resize the window manager
+ * drives has ended: nearer Notepad++, which reports every step, than
+ * the other two are. On Windows and macOS a panel's window or view has
+ * its new place and size by the time its plugin is told, a panel
+ * behind its group's front tab included. On Linux what a change to
+ * the arrangement owes — a show, a close, a tab switch, a float, a
+ * dock — is sent before GTK has laid that change out, so in the
+ * handler the panel's widget may still have its old size; a plugin
+ * that needs the new geometry follows the widget's size-allocate
+ * signal. A resize is reported once GTK has laid it out. No DMN_* is
+ * sent from the moment the host begins to quit, which comes before it
+ * sends NPPN_BEFORESHUTDOWN — not even DMN_CLOSE for a panel closed
  * meanwhile.
  * When one change owes several notifications they go out in this
  * order: DMN_DOCK / DMN_FLOAT, then every DMN_SWITCHIN, then every
@@ -427,20 +439,22 @@ typedef struct tTbData_ {
  * in answer to these — two panels each bringing itself back to the
  * front whenever told it went behind — are cut off: past 768
  * notifications worked through in one delivery, sent or dropped as no
- * longer true, Code++ drops the rest and logs a warning. That cut-off
- * applies on macOS and Linux; Windows has none yet.
+ * longer true, Code++ drops the rest and logs a warning.
  *
- * Code++ sends these three on macOS and Linux; Windows does not send
- * them yet, so a portable plugin must not depend on them there. In
- * Notepad++ their hwndFrom is the panel's container window rather
- * than the main window, so a handler behind the docking-dialog
- * template's hwndFrom check never sees them: handle them without it.
- * Of what is said here about Notepad++'s own behaviour, only that —
- * the container sends them as tabs switch — was measured, with a
+ * On Windows these three come from the panel's container window, as
+ * they do in Notepad++, and not from the main window: in Code++ the
+ * group window hClient is a child of. So a handler behind the
+ * docking-dialog template's hwndFrom check never sees them, in either
+ * host: handle them without it. Do not keep the container's handle —
+ * the host makes a new window for a group that floats or docks — and
+ * do not take it for hClient's parent: in Notepad++ hClient's parent
+ * is a child of the container. IsChild(nmhdr.hwndFrom, hClient) holds
+ * in both. Of what is said here about Notepad++'s own behaviour, only
+ * that the container sends them as tabs switch was measured, with a
  * probe plugin; the rest (when it repeats them, that docked panels get
  * DMN_FLOATDROPPED, that a closed panel gets no DMN_SWITCHOFF, that a
- * resize is reported at every step, the order) was read from its
- * source.
+ * resize is reported at every step, the order, the windows' parents)
+ * was read from its source.
  *
  * Off Windows — on Linux and macOS, where hClient is a widget or a
  * view — the same notifications go to the plugin's messageProc
@@ -457,9 +471,9 @@ typedef struct tTbData_ {
 #define DMN_CLOSE        (DMN_FIRST + 1)  /* user closed the panel (panel hidden) */
 #define DMN_DOCK         (DMN_FIRST + 2)  /* panel is docked; HIWORD(code) = CONT_* */
 #define DMN_FLOAT        (DMN_FIRST + 3)  /* panel is floating; HIWORD(code) >= 4 */
-#define DMN_SWITCHIN     (DMN_FIRST + 4)  /* panel came on screen (not sent on Windows yet) */
-#define DMN_SWITCHOFF    (DMN_FIRST + 5)  /* panel went behind another tab (not sent on Windows yet) */
-#define DMN_FLOATDROPPED (DMN_FIRST + 6)  /* panel laid out anew (not sent on Windows yet) */
+#define DMN_SWITCHIN     (DMN_FIRST + 4)  /* panel came on screen */
+#define DMN_SWITCHOFF    (DMN_FIRST + 5)  /* panel went behind another tab */
+#define DMN_FLOATDROPPED (DMN_FIRST + 6)  /* panel laid out anew */
 
 #ifdef __cplusplus
 } /* extern "C" */

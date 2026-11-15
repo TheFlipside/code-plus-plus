@@ -1291,22 +1291,36 @@ struct DockEntry {
     /// in a debugger next to the rest of its `tTbData`.
     #[allow(dead_code)]
     u_mask: u32,
-    /// The container this plugin was last told its panel is in,
-    /// through `DMN_DOCK` / `DMN_FLOAT`. `None` until the first
-    /// reconcile after registration, which is what makes that
-    /// reconcile send the registration-time notification upstream
-    /// sends from `createDockableDlg`.
+    /// What this plugin has been told about its panel by the `DMN_*`
+    /// a dock reconcile sends: the container (`DMN_DOCK` /
+    /// `DMN_FLOAT`), whether the panel is in front (`DMN_SWITCHIN` /
+    /// `DMN_SWITCHOFF`) and where it is laid out
+    /// (`DMN_FLOATDROPPED`). Told nothing at registration, which is
+    /// what makes the first reconcile after it send the
+    /// registration-time notification upstream sends from
+    /// `createDockableDlg`. The record and the rule are the shared
+    /// ones, [`codepp_plugin_host::docking::PanelTold`], so this
+    /// backend owes what GTK and Cocoa owe for the same change.
     ///
-    /// Written by the reconciler *before* the notification goes out,
-    /// not after. A plugin's handler runs with no borrow held and may
-    /// send `NPPM_DMMSHOW` / `NPPM_DMMHIDE` back, which reconciles
-    /// again from inside the delivery loop; recording first is what
-    /// makes that nested pass see the transition as already told
-    /// rather than telling it a second time. It does not bound the
-    /// round trip by itself — a handler that registers a *new* panel
-    /// gives the nested pass something new to send — and the queue in
-    /// `dock_panels::deliver_container_notices` is what does.
-    dmn_container: Option<codepp_core::dock::DockContainer>,
+    /// Written by `dock_panels::panel_notices` *before* anything is
+    /// sent, not after. A plugin's handler runs with no borrow held
+    /// and may send `NPPM_DMMSHOW` / `NPPM_DMMHIDE` back, which
+    /// reconciles again from inside the delivery loop; recording
+    /// first is what makes that nested pass see the change as already
+    /// told rather than telling it a second time. It does not bound
+    /// the round trip by itself — a handler that registers a *new*
+    /// panel gives the nested pass something new to send — and the
+    /// queue in `dock_panels::drain_dock_notices` is what does.
+    told: codepp_plugin_host::docking::PanelTold,
+    /// Which registration this is: the next number from
+    /// `dock_panels::next_registration_serial`, kept for as long as
+    /// the registration stands, a refresh by a second
+    /// `NPPM_DMMREGASDCKDLG` included. A queued `DMN_*` names the
+    /// registration it was raised for by this, not by `h_client`:
+    /// Windows gives a destroyed window's handle value to a new one,
+    /// so a notice that waited behind a plugin's handler could
+    /// otherwise reach a window registered since at the old value.
+    serial: u64,
     /// The plugin the host took the registration for
     /// (`DockDialogParams::caller`): the one it was calling when the
     /// message arrived, or `None` when it was calling none, as for a
@@ -3429,7 +3443,7 @@ impl UiPlatform for Win32Ui {
                 // inside the handler of such a notice, which would
                 // otherwise be answered with another for as long as
                 // the plugin kept registering from it.
-                let tell_again = !dock_panels::delivering_container_notices();
+                let tell_again = !dock_panels::delivering_dock_notices();
                 if !refresh_dock_registration(entry, params, tell_again) {
                     return None;
                 }
@@ -3572,7 +3586,8 @@ impl UiPlatform for Win32Ui {
                 module_name: params.module_name,
                 dlg_id: params.dlg_id,
                 u_mask: params.u_mask,
-                dmn_container: None,
+                told: codepp_plugin_host::docking::PanelTold::default(),
+                serial: dock_panels::next_registration_serial(),
                 caller: params.caller,
             });
             // Seed where the panel will land the first time it is
@@ -19412,6 +19427,12 @@ unsafe fn relayout_now(main_hwnd: HWND) {
             rect.bottom,
         );
     }
+    // A docked plugin panel may have been laid out somewhere new, and
+    // this pass may be all that happened — a resize of the window, a
+    // splitter dragged — with no reconcile to tell its plugin. Asked
+    // for, never done here: this runs inside `WM_SIZE`, wherever that
+    // was sent from.
+    dock_panels::request_placement_check(main_hwnd);
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -19447,18 +19468,11 @@ unsafe fn layout_children(
     // lives in `compute_frame` and is re-applied idempotently on
     // every pass, so a window-resize-down past a persisted band
     // size is corrected here without rewriting the stored size.
-    let mid = codepp_core::dock::DockRect::new(
-        0,
-        toolbar_height,
-        width.max(0),
-        (height - status_height - toolbar_height).max(0),
-    );
-    let frame = codepp_core::dock::compute_frame(
-        mid,
-        &dock_chrome.layout,
-        MIN_SCINTILLA_WIDTH_PX,
-        MIN_SCINTILLA_HEIGHT_PX,
-    );
+    //
+    // `dock_panels::dock_area_frame` is that carve, and the one the
+    // `DMN_FLOATDROPPED` notices read too, so a plugin is told its
+    // panel moved exactly when this pass moved it.
+    let frame = dock_panels::dock_area_frame(&dock_chrome.layout, toolbar_height, width, height);
 
     unsafe {
         // Toolbar at the very top (y=0), full width; status bar at
@@ -23567,11 +23581,13 @@ unsafe fn dock_close_panel(main_hwnd: HWND, panel: DockPanel) {
 /// `NPPM_DMMUPDATEDISPINFO`; whether it is shown; and where it is.
 ///
 /// With `tell_again` the plugin is told its panel's container once
-/// more, by the reconcile that follows: what it was last told is
-/// forgotten, so `container_notices` sends `DMN_DOCK` or `DMN_FLOAT` as
-/// it does after a first registration. Notepad++ sends that notice on
-/// every registration, a repeated one included (measured in 8.9.8.1).
-/// The caller passes `false` from inside the delivery of such a
+/// more, by the reconcile that follows: the container it was last told
+/// of is forgotten, so `dock_panels::panel_notices` sends `DMN_DOCK` or
+/// `DMN_FLOAT` as it does after a first registration. Notepad++ sends
+/// that notice on every registration, a repeated one included (measured
+/// in 8.9.8.1). Only the container is forgotten: the panel stays shown
+/// where it was, so no `DMN_SWITCHIN` or `DMN_FLOATDROPPED` goes with
+/// it. The caller passes `false` from inside the delivery of a dock
 /// notice.
 ///
 /// `false`, with nothing changed, in two cases. Both are a plugin
@@ -23641,7 +23657,7 @@ unsafe fn refresh_dock_registration(
     entry.dlg_id = params.dlg_id;
     entry.u_mask = params.u_mask;
     if tell_again {
-        entry.dmn_container = None;
+        entry.told.forget_container();
     }
     true
 }
@@ -28174,6 +28190,14 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                     save_session_now(hwnd);
                     return LRESULT(0);
                 }
+                if wparam.0 == dock_panels::PLACEMENT_TIMER_ID {
+                    // The dock area or a floating group was laid out
+                    // anew. Tells the plugin panels that ended up
+                    // somewhere new, and nothing if none did, so a
+                    // stray tick costs a look and nothing else.
+                    dock_panels::check_plugin_panel_placements(hwnd);
+                    return LRESULT(0);
+                }
                 if wparam.0 == instance::FORWARDED_TIMER_ID {
                     // A file another start handed over is still
                     // waiting for the window to be free to open it.
@@ -28231,6 +28255,13 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                 dock_panels::sweep_departed_plugin_panels(hwnd);
                 LRESULT(0)
             }
+            windows::Win32::UI::WindowsAndMessaging::WM_EXITSIZEMOVE => {
+                // The user let go of the window's frame. The checks its
+                // `WM_SIZE`s asked for were held back while the drag
+                // went on, so a resize is reported once, here.
+                dock_panels::request_placement_check(hwnd);
+                DefWindowProcW(hwnd, msg, wparam, lparam)
+            }
             WM_DESTROY => {
                 // Persist the session before tearing down. Pull live
                 // text/cursor through the editor while it still
@@ -28245,6 +28276,7 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                 let _ = KillTimer(Some(hwnd), AUTOSAVE_TIMER_ID);
                 let _ = KillTimer(Some(hwnd), WORKSPACE_UNFOLD_TIMER_ID);
                 let _ = KillTimer(Some(hwnd), instance::FORWARDED_TIMER_ID);
+                let _ = KillTimer(Some(hwnd), dock_panels::PLACEMENT_TIMER_ID);
                 // No later start is sent to this window: one made from
                 // now on waits for the instance lock, let go below.
                 instance::unmark_window();
@@ -33979,14 +34011,22 @@ mod quit_guards {
         );
         let dock = include_str!("dock_panels.rs");
         let dock = dock.find("#[cfg(test)]").map_or(dock, |i| &dock[..i]);
-        let notices = squashed(&code_without_strings(&fn_body(
-            dock,
-            "deliver_container_notices",
-        )));
-        assert!(
-            notices.starts_with("{ifcrate::quitting(){return;}"),
-            "DMN_DOCK / DMN_FLOAT are sent after the quit has begun"
-        );
+        // The dock's notices — `DMN_DOCK` / `DMN_FLOAT`, `DMN_SWITCHIN` /
+        // `DMN_SWITCHOFF`, `DMN_FLOATDROPPED` — stop at three places:
+        // nothing is raised, nothing is queued or drained, and the
+        // sender itself, which every one of them goes out through,
+        // sends nothing.
+        for (function, what) in [
+            ("notify_plugin_panels", "raised"),
+            ("drain_dock_notices", "queued"),
+            ("send_dock_notice", "sent"),
+        ] {
+            let body = squashed(&code_without_strings(&fn_body(dock, function)));
+            assert!(
+                body.starts_with("{ifcrate::quitting(){return;}"),
+                "a dock notice is {what} after the quit has begun"
+            );
+        }
     }
 
     #[test]

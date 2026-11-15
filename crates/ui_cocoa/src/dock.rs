@@ -1651,7 +1651,7 @@ fn notify_plugin_panels() {
 /// the nested pass must find the change already recorded. What bounds the
 /// round trip when a handler registers a *new* panel — which the nested
 /// pass has genuinely not told — is the delivery's queue, not this order.
-/// The same order as Win32's `container_notices` and GTK's
+/// The same order as Win32's `panel_notices` and GTK's
 /// `panel_notices`, and a source scan pins it on all three.
 ///
 /// Placements are read off the carve [`place_children`] lays the dock

@@ -343,7 +343,9 @@ pub const DMN_FLOAT: u32 = 1050 + 3;
 /// `DMN_SWITCHIN` — the panel came on screen: its tab is now the one
 /// its group shows, where it had been hidden or behind another tab.
 /// Nothing in the high word — compare the whole code, as Notepad++'s own
-/// panels do. Off Windows it arrives like [`DMN_CLOSE`]; see
+/// panels do. On Windows it arrives at the panel's window procedure
+/// like [`DMN_CLOSE`], but from the panel's container window and not
+/// from the main window; off Windows it arrives like [`DMN_CLOSE`]. See
 /// `Docking.h` for when each backend sends it.
 pub const DMN_SWITCHIN: u32 = 1050 + 4;
 

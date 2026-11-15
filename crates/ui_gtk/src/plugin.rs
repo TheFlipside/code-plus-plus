@@ -848,7 +848,7 @@ pub(crate) fn close_plugin_panel(panel: codepp_core::dock::DockPanel) {
 /// delivery is running only appends to the queue and returns, and the
 /// outermost call drains it in order: nothing is dropped that is still
 /// true, and the nesting stays one level deep whatever the plugin does.
-/// The same queue Win32's `deliver_container_notices` and Cocoa's keep.
+/// The same queue Win32's `drain_dock_notices` and Cocoa's keep.
 ///
 /// Queued behind a handler that may change the layout, a notice is
 /// checked again when its turn comes (`crate::dock::notice_still_applies`)

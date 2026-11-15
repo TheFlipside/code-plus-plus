@@ -273,6 +273,20 @@ impl PanelTold {
             relaid,
         }
     }
+
+    /// Forget the container the plugin was last told of, so the next
+    /// [`Self::update`] owes `DMN_DOCK` / `DMN_FLOAT` again, as the first
+    /// one after a registration does — and nothing else: whether the
+    /// panel is in front and where it is laid out stay on record, so no
+    /// `DMN_SWITCHIN` or `DMN_FLOATDROPPED` is repeated with it.
+    ///
+    /// For a backend that takes a second registration of a panel that is
+    /// already registered: Notepad++ sends the container notice on every
+    /// registration, a repeated one included (measured, DESIGN.md §7.4),
+    /// while the panel stays shown where it was.
+    pub fn forget_container(&mut self) {
+        self.container = None;
+    }
 }
 
 /// The `DMN_*` codes one reconcile sends, in the order they go out: every
@@ -698,6 +712,32 @@ mod tests {
         assert_eq!(update(&mut ws, &l, Workspace), owed(None, true));
         l.set_floating_rect(group, DockRect::new(150, 120, 300, 400));
         assert_eq!(update(&mut ws, &l, Workspace), Owed::default());
+    }
+
+    /// A second registration of a registered panel is told its container
+    /// again and nothing else: a panel that is on screen and laid out is
+    /// not switched in or relaid out a second time for it.
+    #[test]
+    fn a_forgotten_container_is_told_again_and_nothing_else() {
+        let mut l = DockLayout::new();
+        l.show(Workspace);
+        let mut told = PanelTold::default();
+        update(&mut told, &l, Workspace);
+        assert_eq!(
+            update(&mut told, &l, Workspace),
+            Owed::default(),
+            "precondition: the record is up to date, the panel in front and laid out"
+        );
+        told.forget_container();
+        assert_eq!(
+            update(&mut told, &l, Workspace),
+            Owed {
+                container: Some(DMN_DOCK),
+                switch: None,
+                relaid: false
+            }
+        );
+        assert_eq!(update(&mut told, &l, Workspace), Owed::default());
     }
 
     /// A docked panel is relaid out when its own rectangle changes and not

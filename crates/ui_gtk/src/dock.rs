@@ -1110,7 +1110,7 @@ fn notify_plugin_panels() {
 /// the nested pass must find the change already recorded. What bounds
 /// the round trip when a handler registers a *new* panel — which the
 /// nested pass has genuinely not told — is the delivery's queue, not this
-/// order. Win32's `container_notices` and Cocoa's `panel_notices` keep
+/// order. Win32's `panel_notices` and Cocoa's `panel_notices` keep
 /// the same order, and a source scan pins it on all three.
 ///
 /// Placements are read off [`carve`] — the carve [`on_area_allocated`]
