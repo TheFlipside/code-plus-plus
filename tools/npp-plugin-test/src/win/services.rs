@@ -882,8 +882,19 @@ impl HostServices for Bridge<'_> {
         {
             return false;
         }
-        if self.0.rec.docks.iter().any(|d| d.h_client == h_client) {
-            return false;
+        // The same window again refreshes its registration, as in the
+        // editor: what the plugin says now replaces what it said, the
+        // panel stays shown or hidden, and only another module's
+        // registration of it is refused.
+        if let Some(dock) = self.dock_mut(params.h_client) {
+            if !dock.module.eq_ignore_ascii_case(&params.module_name) {
+                return false;
+            }
+            dock.name = params.name;
+            dock.module = params.module_name;
+            dock.dlg_id = params.dlg_id;
+            dock.tb_data = params.tb_data;
+            return true;
         }
         if self.0.rec.docks.len() >= MAX_REGISTRATIONS {
             self.0.rec.refuse("dock-panel");

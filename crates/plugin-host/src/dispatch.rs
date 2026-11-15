@@ -1707,8 +1707,10 @@ pub trait HostServices {
     /// alone; the plugin must follow with `NPPM_DMMSHOW`.
     ///
     /// The plugin keeps ownership of `h_client`: the host hides
-    /// the panel rather than destroying anything, and a plugin
-    /// must not `DestroyWindow` it while the registration stands.
+    /// the panel rather than destroying anything. A plugin that
+    /// destroys it, or takes it out of the host's containers, ends
+    /// the registration (`Docking.h` states the contract for each
+    /// platform).
     /// `DockDialogParams` carries owned host-side copies of the
     /// plugin's wide-char fields, so nothing the *initial*
     /// registration needs outlives this call — but
@@ -1717,15 +1719,21 @@ pub trait HostServices {
     /// carry a lifetime contract on the plugin. See its field
     /// doc.
     ///
-    /// `params.h_icon_tab` and `params.rc_float` are snapshotted
-    /// but not yet acted on: a tab carries the host's own glyph,
-    /// and the host decides a float's rectangle itself.
+    /// `params.h_icon_tab` is drawn on the panel's tab when
+    /// `params.u_mask` carries `DWS_ICONTAB`. `params.rc_float` is
+    /// snapshotted but not acted on: the host decides a float's
+    /// rectangle itself.
     ///
     /// Returns `true` on success, `false` for a dead `h_client`,
     /// one belonging to another process or to the host itself, a
-    /// duplicate registration, or the per-session registration
-    /// cap. The dispatcher rejects a null `h_client` before
-    /// reaching the trait.
+    /// second panel under an identity one already holds, or the
+    /// per-session registration cap. The dispatcher rejects a null
+    /// `h_client` before reaching the trait.
+    ///
+    /// On Windows, registering again a window whose registration
+    /// stands is no duplicate: it refreshes that registration from
+    /// the `tTbData` given now and answers `true`, as Notepad++
+    /// answers TRUE for it (DESIGN.md §7.4).
     fn register_dock_dialog(&mut self, params: DockDialogParams) -> bool;
 
     /// Show the panel whose content is `h_client`, bringing it to
@@ -1733,22 +1741,28 @@ pub trait HostServices {
     /// [`NPPM_DMMSHOW`]. The `h_client` must already have been
     /// registered via `NPPM_DMMREGASDCKDLG`; calls against an
     /// unregistered HWND return `false`.
+    ///
+    /// The answer does not reach the plugin, here or for the two
+    /// methods below: each message answers `1` whatever the handle,
+    /// as Notepad++'s does, and the dispatcher only logs a `false`.
     fn show_dock_dialog(&mut self, h_client: crate::ffi::Hwnd) -> bool;
 
     /// Hide the panel whose content is `h_client`. Drives
     /// [`NPPM_DMMHIDE`]. The registration survives, and so does
     /// the panel's position — a subsequent `NPPM_DMMSHOW` reopens
-    /// it where it was. Returns `false` for an unregistered HWND.
+    /// it where it was. Returns `false` for an unregistered HWND,
+    /// which the plugin does not see: it is answered `1` either way.
     fn hide_dock_dialog(&mut self, h_client: crate::ffi::Hwnd) -> bool;
 
     /// Update the panel's display info from the plugin's current
     /// `tTbData`. Drives
-    /// [`NPPM_DMMUPDATEDISPINFO`]. The plugin must keep its
-    /// original `tTbData` registration alive (re-pointing the
-    /// `psz_name` / `psz_add_info` buffers without re-registering
-    /// is allowed, but the host re-reads them on this call and
-    /// caches owned copies). Returns `true` on success, `false`
-    /// for unregistered HWND.
+    /// [`NPPM_DMMUPDATEDISPINFO`]. The plugin must keep the
+    /// `tTbData` it last registered `h_client` with alive
+    /// (re-pointing the `psz_name` / `psz_add_info` buffers without
+    /// re-registering is allowed, but the host re-reads them on this
+    /// call and caches owned copies). Returns `true` on success,
+    /// `false` for unregistered HWND, which the plugin does not see:
+    /// it is answered `1` either way.
     fn update_dock_disp_info(&mut self, h_client: crate::ffi::Hwnd) -> bool;
 
     /// Bring the dock panel named `name` to the front of whatever
@@ -2891,8 +2905,10 @@ pub unsafe fn dispatch_nppm<S: HostServices>(
 
         NPPM_DMMREGASDCKDLG => {
             // wparam: unused. lparam: pointer to a `tTbData`.
-            // Returns: 1 on success, 0 on bad args / duplicate
-            // registration / frame-creation failure.
+            // Returns: 1 when the host registered the panel or
+            // refreshed its registration, 0 on bad args or when the
+            // host refused it — see
+            // `HostServices::register_dock_dialog`.
             //
             // Reject NULL / negative lparam up front — same
             // kernel-mode-pointer guard the rest of the
@@ -2944,42 +2960,55 @@ pub unsafe fn dispatch_nppm<S: HostServices>(
         }
 
         NPPM_DMMSHOW => {
-            // wparam: unused. lparam: HWND of the plugin's
-            // h_client that was previously registered via
-            // NPPM_DMMREGASDCKDLG. Returns: 1 on success, 0 if
-            // the HWND isn't a registered dock-client.
-            if lparam <= 0 {
-                return Some(0);
+            // wparam: unused. lparam: the h_client a plugin registered
+            // with NPPM_DMMREGASDCKDLG. Returns: 1, whatever the
+            // handle.
+            //
+            // Notepad++ 8.9.8.1 answers 1 for a window nobody
+            // registered, a handle that names no window, NULL, -1
+            // and a destroyed panel (each measured for this message,
+            // NPPM_DMMHIDE and NPPM_DMMUPDATEDISPINFO; DESIGN.md
+            // §7.4), and its header says "Return TRUE" for all three.
+            // So a 0 from Code++ would send a plugin written for it
+            // down a path that, for those handles, never runs there.
+            // Code++ answered 0 for a handle with no standing
+            // registration until the maintainer asked for Notepad++'s
+            // answer. Whether a panel was found is logged, since the
+            // answer no longer says.
+            //
+            // The handle is handed to the backend only when it could
+            // be one: not NULL and not negative, which on the
+            // platforms where it is a pointer is a kernel address.
+            // Nothing is ever read through it here.
+            if lparam <= 0 || !services.show_dock_dialog(lparam as crate::ffi::Hwnd) {
+                tracing::debug!(h = lparam, "NPPM_DMMSHOW: no panel is registered for that");
             }
-            let h_client = lparam as crate::ffi::Hwnd;
-            isize::from(services.show_dock_dialog(h_client))
+            1
         }
 
         NPPM_DMMHIDE => {
-            // wparam: unused. lparam: HWND of the registered
-            // h_client. Returns: 1 on success, 0 if the HWND
-            // isn't a registered dock-client.
-            if lparam <= 0 {
-                return Some(0);
+            // wparam: unused. lparam: the registered h_client.
+            // Returns: 1, whatever the handle — see NPPM_DMMSHOW.
+            if lparam <= 0 || !services.hide_dock_dialog(lparam as crate::ffi::Hwnd) {
+                tracing::debug!(h = lparam, "NPPM_DMMHIDE: no panel is registered for that");
             }
-            let h_client = lparam as crate::ffi::Hwnd;
-            isize::from(services.hide_dock_dialog(h_client))
+            1
         }
 
         NPPM_DMMUPDATEDISPINFO => {
-            // wparam: unused. lparam: HWND of the registered
-            // h_client. The plugin has updated its tTbData's
-            // wide-string fields and wants the host to re-read
-            // them; the host's HostServices implementation looks
-            // up the cached registration's pszName /
-            // pszAddInfo / pszModuleName pointers and refreshes
-            // the frame title. Returns: 1 on success, 0 if the
-            // HWND isn't a registered dock-client.
-            if lparam <= 0 {
-                return Some(0);
+            // wparam: unused. lparam: the registered h_client. The
+            // plugin has updated its tTbData's wide-string fields and
+            // wants the host to re-read them; the host's HostServices
+            // implementation walks the registration's retained
+            // pointers and refreshes the names the panel is found by.
+            // Returns: 1, whatever the handle — see NPPM_DMMSHOW.
+            if lparam <= 0 || !services.update_dock_disp_info(lparam as crate::ffi::Hwnd) {
+                tracing::debug!(
+                    h = lparam,
+                    "NPPM_DMMUPDATEDISPINFO: no panel is registered for that"
+                );
             }
-            let h_client = lparam as crate::ffi::Hwnd;
-            isize::from(services.update_dock_disp_info(h_client))
+            1
         }
 
         NPPM_DMMVIEWOTHERTAB => {
@@ -9321,32 +9350,48 @@ mod tests {
         assert!(!s.dock_dialogs[0].3);
     }
 
+    /// The three messages that take a panel's `h_client` answer 1
+    /// whatever it is, as Notepad++ does (measured in 8.9.8.1), and
+    /// change nothing for a handle no panel is registered for. The
+    /// backend is still asked about any handle that could be one.
     #[test]
-    fn dmm_show_unregistered_returns_zero() {
-        let mut s = MockServices::default();
-        let r = unsafe { dispatch_nppm(&mut s, NPPM_DMMSHOW, 0, 0xDEAD_isize) };
-        assert_eq!(r, Some(0));
+    fn dmm_show_hide_and_update_answer_one_for_a_handle_nobody_registered() {
+        for (message, call) in [
+            (NPPM_DMMSHOW, "show_dock_dialog(h=0xdead)"),
+            (NPPM_DMMHIDE, "hide_dock_dialog(h=0xdead)"),
+            (NPPM_DMMUPDATEDISPINFO, "update_dock_disp_info(h=0xdead)"),
+        ] {
+            let mut s = MockServices {
+                dock_dialogs: vec![(0xCAFE, "Console".into(), "NppExec".into(), true)],
+                ..Default::default()
+            };
+            let r = unsafe { dispatch_nppm(&mut s, message, 0, 0xDEAD_isize) };
+            assert_eq!(r, Some(1), "message {message:#x}");
+            assert_eq!(s.calls(), vec![call], "message {message:#x}");
+            assert_eq!(
+                s.dock_dialogs,
+                vec![(0xCAFE, "Console".into(), "NppExec".into(), true)],
+                "message {message:#x} changed a panel it was not sent for"
+            );
+        }
     }
 
+    /// NULL answers 1 too, and so does a negative value, as measured
+    /// for NULL and -1; neither is a handle, so the backend is not
+    /// asked about it.
     #[test]
-    fn dmm_hide_unregistered_returns_zero() {
-        let mut s = MockServices::default();
-        let r = unsafe { dispatch_nppm(&mut s, NPPM_DMMHIDE, 0, 0xDEAD_isize) };
-        assert_eq!(r, Some(0));
-    }
-
-    #[test]
-    fn dmm_show_null_lparam_returns_zero() {
-        let mut s = MockServices::default();
-        let r = unsafe { dispatch_nppm(&mut s, NPPM_DMMSHOW, 0, 0) };
-        assert_eq!(r, Some(0));
-    }
-
-    #[test]
-    fn dmm_hide_negative_lparam_returns_zero() {
-        let mut s = MockServices::default();
-        let r = unsafe { dispatch_nppm(&mut s, NPPM_DMMHIDE, 0, -1isize) };
-        assert_eq!(r, Some(0));
+    fn dmm_show_hide_and_update_answer_one_for_what_is_no_handle() {
+        for message in [NPPM_DMMSHOW, NPPM_DMMHIDE, NPPM_DMMUPDATEDISPINFO] {
+            for lparam in [0, -1isize, isize::MIN] {
+                let mut s = MockServices::default();
+                let r = unsafe { dispatch_nppm(&mut s, message, 0, lparam) };
+                assert_eq!(r, Some(1), "message {message:#x}, lparam {lparam}");
+                assert!(
+                    s.calls().is_empty(),
+                    "message {message:#x} asked the backend about lparam {lparam}"
+                );
+            }
+        }
     }
 
     #[test]
@@ -9357,13 +9402,7 @@ mod tests {
         };
         let r = unsafe { dispatch_nppm(&mut s, NPPM_DMMUPDATEDISPINFO, 0, 0xCAFE_isize) };
         assert_eq!(r, Some(1));
-    }
-
-    #[test]
-    fn dmm_update_disp_info_unregistered_returns_zero() {
-        let mut s = MockServices::default();
-        let r = unsafe { dispatch_nppm(&mut s, NPPM_DMMUPDATEDISPINFO, 0, 0xCAFE_isize) };
-        assert_eq!(r, Some(0));
+        assert_eq!(s.calls(), vec!["update_dock_disp_info(h=0xcafe)"]);
     }
 
     /// Sends `NPPM_DMMVIEWOTHERTAB` with `units` — a NUL-terminated

@@ -283,15 +283,19 @@ pub const STATUSBAR_DOC_TYPE: usize = 0;
 pub const NPPM_GETFULLPATHFROMBUFFERID: u32 = NPPMSG + 58;
 
 /// `NPPM_DMMREGASDCKDLG(0, *tTbData)` — register a plugin-owned
-/// dialog HWND as a dockable panel. The host wraps it in a frame of
-/// its own; the plugin keeps ownership of the HWND *and* of the
+/// dialog HWND as a dockable panel. The host adopts it as the content
+/// of a dock panel; the plugin keeps ownership of the HWND *and* of the
 /// `tTbData`, which the host retains for
-/// [`NPPM_DMMUPDATEDISPINFO`].
+/// [`NPPM_DMMUPDATEDISPINFO`]. On Windows, registering a docked `hClient`
+/// again refreshes its registration from the `tTbData` given now.
 pub const NPPM_DMMREGASDCKDLG: u32 = NPPMSG + 33;
 
 /// `NPPM_DMMSHOW(0, hClient)` — show the panel registered for
 /// `hClient`. Registration alone does not show it. On Windows the
-/// panel then takes keyboard focus, as in Notepad++.
+/// panel then takes keyboard focus, as in Notepad++. Returns non-zero
+/// whatever `hClient` is, as Notepad++ does, so the answer cannot tell
+/// a plugin that a panel was shown; so do [`NPPM_DMMHIDE`] and
+/// [`NPPM_DMMUPDATEDISPINFO`].
 pub const NPPM_DMMSHOW: u32 = NPPMSG + 30;
 
 /// `NPPM_DMMHIDE(0, hClient)` — hide it again. The registration

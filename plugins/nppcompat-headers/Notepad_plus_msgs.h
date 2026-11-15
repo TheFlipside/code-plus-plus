@@ -399,9 +399,11 @@ typedef struct sessionInfo_ {
  *
  * The host adopts the plugin's `hClient` HWND as the content of a
  * dock panel and re-parents it into whichever group container the
- * panel currently lives in; the plugin keeps ownership of the HWND
- * (register before plugin shutdown, but DO NOT destroy it while it
- * is registered). The host also rewrites `hClient`'s window styles
+ * panel currently lives in; the plugin keeps ownership of the HWND.
+ * Destroying it, or re-parenting it out of the host's windows, ends
+ * the registration and closes the panel; registering again brings
+ * it back (see Docking.h). The host also rewrites `hClient`'s window
+ * styles
  * to those of a child window — a dialog created as a top-level
  * window would otherwise draw its own caption and border inside
  * the host's. See `Docking.h` for the `tTbData` struct, the `DWS_*`
@@ -421,15 +423,22 @@ typedef struct sessionInfo_ {
  *     On macOS the first view that accepts first responder, the
  *     `NSView*` itself or one inside it, takes it. On Linux focus
  *     stays where it was, for now.
- *     Returns 1 on success, 0 if the HWND isn't registered. */
+ *     Returns 1 whatever lParam is, one no panel is registered for
+ *     included, as Notepad++ does (measured in 8.9.8.1 for a window
+ *     never registered, a handle that names none, NULL, -1 and a
+ *     destroyed panel; its header says "Return TRUE"). Nothing
+ *     happens for such a handle, and the answer cannot tell a plugin
+ *     that its panel was shown; keep track of your own registrations.
+ *     Until Phase 5 Code++ answered 0 for it. */
 #define NPPM_DMMSHOW                      (NPPMSG + 30)
 /* v3: hide the panel previously registered for the `hClient`
  *     HWND in lParam (wParam unused). Registration survives, and
  *     so does the panel's position — a subsequent NPPM_DMMSHOW
  *     reopens it where it was. The user clicking the panel's X
  *     routes through the same hide path (no DestroyWindow), after
- *     the plugin has been sent DMN_CLOSE. Returns 1 on success,
- *     0 if the HWND isn't registered. */
+ *     the plugin has been sent DMN_CLOSE. Returns 1 whatever
+ *     lParam is, as NPPM_DMMSHOW does and as Notepad++ does, measured
+ *     for the same handles. */
 #define NPPM_DMMHIDE                      (NPPMSG + 31)
 /* v3: refresh the panel's display info from the plugin's
  *     tTbData. wParam unused; lParam: registered hClient. The
@@ -441,7 +450,9 @@ typedef struct sessionInfo_ {
  *     does. The caption does not move: it is the name the panel's
  *     saved position is kept under, and a caption that followed
  *     every rename would lose the user's layout each time.
- *     Returns 1 if the HWND is registered, 0 otherwise. */
+ *     Returns 1 whatever lParam is, as NPPM_DMMSHOW does and as
+ *     Notepad++ does, measured for the same handles; for a handle no
+ *     panel is registered for, nothing is read. */
 #define NPPM_DMMUPDATEDISPINFO            (NPPMSG + 32)
 /* v3: register a plugin's HWND as a dockable dialog. wParam
  *     unused; lParam: pointer to a `tTbData` (see Docking.h).
@@ -455,10 +466,19 @@ typedef struct sessionInfo_ {
  *     this call returns.
  *     Returns 1 on success, 0 for null hClient / dead HWND /
  *     an hClient owned by another process or belonging to the
- *     host itself / duplicate registration / the host's
+ *     host itself / a second window under a pszName and
+ *     pszModuleName another registered window has / the host's
  *     per-session registration cap / a new pszName once the
  *     same pszModuleName has registered 8 distinct names in
- *     this session.
+ *     this session / on Windows, a registration made once the
+ *     host has begun to quit. On Windows a registration that
+ *     has ended (hClient destroyed, or re-parented out of the
+ *     host's windows) is no duplicate, and neither is the
+ *     same hClient registered again while it is docked: that
+ *     refreshes the registration from the tTbData given now
+ *     and returns 1, as Notepad++ returns 1 for it, unless it
+ *     names another pszModuleName or the host can tell another
+ *     plugin sent it, which return 0. See Docking.h for both.
  *     On Linux hClient is a GtkWidget* instead, and hIconTab a
  *     GdkPixbuf*; on macOS they are an NSView* and an NSImage*: see
  *     Docking.h for those contracts and for how the DMN_*

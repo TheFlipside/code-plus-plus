@@ -114,6 +114,73 @@ extern "C" {
  * bands. It applies only until the user moves the panel; from then
  * on the remembered position wins.
  *
+ * On Windows hClient is the panel only while it is a direct child of
+ * the host's own windows, where NPPM_DMMREGASDCKDLG puts it: a dock
+ * container, or the main window while the panel is not on screen. A
+ * plugin that destroys hClient, or re-parents it anywhere else
+ * (SetParent into a window of its own, or to the desktop), ends the
+ * registration. From then on the NPPM_DMM* messages do for that
+ * window what they do for one never registered (nothing, though
+ * NPPM_DMMSHOW, NPPM_DMMHIDE and NPPM_DMMUPDATEDISPINFO still answer 1,
+ * as they do for any handle), the host sends it no DMN_*, and
+ * the host does not move, size, show, hide or re-parent it again: it
+ * is the plugin's window. The host leaves it styled as it was when
+ * docked (WS_CHILD, no caption or frame), so restyle it yourself if
+ * you want a top-level window. The panel closes, with no DMN_CLOSE,
+ * when the host next lays its panels out. For a panel that was on
+ * screen, or a window destroyed inside a container, that is as soon
+ * as control is back in the message loop; for one that was hidden
+ * nothing shows meanwhile.
+ *
+ * To dock again, register again and show the panel with NPPM_DMMSHOW:
+ * the same window, or a new one under the same pszName. It comes back
+ * on the side it was on. A replacement registered before the host has
+ * looked takes the panel over in place and keeps it open, so a plugin
+ * can destroy its window and register a new one in one go. Do not
+ * count on undoing a move by putting the window back yourself: that
+ * works only until the host next looks. A window re-parented to the
+ * host's MAIN window has not left: it sits where you put it, over the
+ * main window, until the next layout pass puts it back in its
+ * container. Because a window put back in time is still registered,
+ * keep its tTbData alive for as long as the window exists, not only
+ * until you move it. And once the host has begun to quit,
+ * NPPM_DMMREGASDCKDLG is refused.
+ *
+ * Registering hClient again while it is still docked is allowed on
+ * Windows, and refreshes the registration: the host takes the tTbData
+ * given now (which it retains in place of the first, so the first may
+ * be let go of), with its pszName, pszModuleName, dlgID, uMask and
+ * hIconTab, and answers 1. The panel stays as it is: shown or hidden,
+ * where it was, under the caption and the saved position it was first
+ * registered with, as after NPPM_DMMUPDATEDISPINFO. The plugin is
+ * told the panel's container again, with DMN_DOCK or DMN_FLOAT, as
+ * after a first registration and as Notepad++ tells it; only a
+ * registration sent from inside the handler of one of those two is not
+ * answered with another. So a plugin may register its panel every time
+ * it is asked to show it. pszModuleName must be the module the window
+ * is registered under, compared regardless of ASCII case; another
+ * module's is refused, and so is a registration the host can tell
+ * comes from another plugin than the first, since either is a plugin
+ * registering a window that is not its own. A second window under the
+ * pszName and pszModuleName of a window that is still registered is
+ * refused too: destroy the first, or take it out, before registering
+ * its replacement, or give the second a name of its own.
+ *
+ * Notepad++ differs in what it keeps (measured in 8.9.8.1). It never
+ * takes a moved window back either, and it accepts the same second
+ * registration, of a window that left and of one still docked. But it
+ * keeps the first registration for good: the panel stays open with
+ * nothing in it, NPPM_DMMSHOW and NPPM_DMMHIDE go on showing and
+ * hiding the window wherever it now is, DMN_* still arrive, and
+ * NPPM_DMMGETPLUGINHWNDBYNAME still answers the old handle, a
+ * destroyed one included. And it takes a second window under a name
+ * and dlgID a docked one has, showing it where the first was and
+ * hiding the first; Code++ knows a panel by its module and name, and
+ * has room for one. A docked window registered again under a new
+ * pszName is found there by the old name and by the new, and here by
+ * the new one only. Notepad++ also takes such a registration under
+ * another pszModuleName.
+ *
  * hIconTab is drawn on the panel's tab when uMask carries
  * DWS_ICONTAB; without it the tab carries a generic plugin glyph.
  * rcFloat, iPrevCont and pszAddInfo are stored but not yet acted

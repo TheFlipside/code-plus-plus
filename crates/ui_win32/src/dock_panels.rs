@@ -50,8 +50,8 @@ use std::ffi::c_void;
 use windows::core::{w, PCWSTR};
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::{
-    AlphaBlend, BeginPaint, ClientToScreen, CreateCompatibleDC, DeleteDC, DrawTextW, EndPaint,
-    FillRect, GetDC, GetObjectW, GetStockObject, GetSysColorBrush, GetTextExtentPoint32W,
+    AlphaBlend, BeginPaint, ClientToScreen, CreateCompatibleDC, DeleteDC, DeleteObject, DrawTextW,
+    EndPaint, FillRect, GetDC, GetObjectW, GetStockObject, GetSysColorBrush, GetTextExtentPoint32W,
     InvalidateRect, ReleaseDC, SelectObject, SetBkMode, AC_SRC_ALPHA, AC_SRC_OVER, BITMAP,
     BLENDFUNCTION, COLOR_3DFACE, COLOR_WINDOW, DEFAULT_GUI_FONT, DT_CENTER, DT_END_ELLIPSIS,
     DT_NOPREFIX, DT_SINGLELINE, DT_VCENTER, HBITMAP, HDC, HFONT, HGDIOBJ, PAINTSTRUCT, TRANSPARENT,
@@ -70,6 +70,9 @@ use windows::Win32::UI::WindowsAndMessaging::{
     SW_SHOW, WINDOW_EX_STYLE, WM_CAPTURECHANGED, WM_GETMINMAXINFO, WM_LBUTTONDOWN, WM_LBUTTONUP,
     WM_MOUSEMOVE, WM_PAINT, WM_SETCURSOR, WM_SIZE, WNDCLASSEXW, WS_CHILD, WS_CLIPCHILDREN,
     WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_POPUP, WS_THICKFRAME,
+};
+use windows::Win32::UI::WindowsAndMessaging::{
+    GetAncestor, PostMessageW, GA_PARENT, WM_DESTROY, WM_PARENTNOTIFY,
 };
 use windows::Win32::UI::WindowsAndMessaging::{IsWindow, IsWindowVisible, SendMessageW, WM_NOTIFY};
 
@@ -380,12 +383,267 @@ fn panel_content_hwnd(state: &WindowState, panel: DockPanel) -> HWND {
         // plugin has not been lazily loaded yet, which is the normal
         // case rather than an error. The reconciler skips a null
         // content window and the group renders as an empty tab until
-        // the plugin registers.
+        // the plugin registers. Null, too, for a registration whose
+        // window has left ([`registration_stands`]): that window is
+        // the plugin's again, and nothing here may move or size it.
         DockPanel::Plugin(_) => state
             .dock_dialogs
             .iter()
-            .find(|e| e.panel == panel)
+            .find(|e| e.panel == panel && registration_stands(e.h_client))
             .map_or(HWND::default(), |e| e.h_client),
+    }
+}
+
+// --- plugin panels whose window has left ---------------------------------------
+
+/// Whether the registration a plugin made for `h_client` still stands:
+/// the window exists, and is a direct child of one of the host's own
+/// containers — a dock group, or the main window, where the content of
+/// a panel that is not on screen is parked.
+///
+/// A plugin ends its registration by destroying the window, or by
+/// re-parenting it out of the host's containers — `SetParent` into a
+/// window of its own, or to the desktop. From then on the window is the
+/// plugin's again: the `NPPM_DMM*` messages no longer find it, and
+/// nothing in this module moves, sizes, shows, hides or re-parents it.
+/// [`retire_departed`] drops the registration and closes its panel the
+/// next time the host looks. Registering the window again, or another
+/// under the same name, brings the panel back on the side it was on.
+///
+/// Read from Windows every time, never recorded. There is nothing to
+/// record it from: a window is not told when a child is re-parented
+/// away, and `WM_PARENTNOTIFY` for a destroyed one is sent only where
+/// the child's own extended style allows it. So the fact is asked for
+/// where it matters, which is three or four `user32` calls.
+///
+/// Before this, the reconciler did the opposite of what the GTK and
+/// Cocoa backends do: its next pass found the window somewhere else and
+/// took it back with a `SetParent` of its own, out of whatever window
+/// the plugin had put it in. Measured with a probe plugin: Notepad++
+/// 8.9.8.1 never takes such a window back — it only re-parents at
+/// `NPPM_DMMREGASDCKDLG` — so a plugin written for it expects to keep
+/// what it moved. DESIGN.md §7.4 has the measurement.
+///
+/// The parent is identified by window class, as [`find_main_hwnd`]
+/// identifies the main window, so this needs no `WindowState` and can
+/// be asked from inside any borrow. `GetAncestor(GA_PARENT)`, not
+/// `GetParent`: a window made top-level again without `WS_POPUP` set
+/// still has `WS_CHILD`, and what `GetParent` answers for it is not
+/// worth relying on.
+///
+/// What this cannot see is a handle value Windows has given to another
+/// window since the registered one was destroyed, the hazard every
+/// `IsWindow` check on a kept handle has. The new window would have to
+/// be a direct child of a host container too — which the host's own
+/// windows are: its groups and splitters, the two built-in panels. So
+/// a window of a class only the host registers never stands, as
+/// registration refuses one (`is_host_own_window`): a stale
+/// registration must not have the reconciler re-parent and size the
+/// host's own chrome as a plugin's panel. A plugin's new window, or one
+/// of the host's system-class controls, given the old value is the case
+/// left.
+pub(crate) fn registration_stands(h_client: HWND) -> bool {
+    if h_client.is_invalid() {
+        return false;
+    }
+    // SAFETY: every call takes any handle value. They read the handle
+    // table, the window tree and a class name, and answer FALSE, null
+    // or 0 for a handle that names no window.
+    unsafe {
+        IsWindow(Some(h_client)).as_bool()
+            && !is_of_host_class(h_client)
+            && is_host_container(GetAncestor(h_client, GA_PARENT))
+    }
+}
+
+/// Whether `hwnd` is of a window class only the host registers. See
+/// [`registration_stands`].
+unsafe fn is_of_host_class(hwnd: HWND) -> bool {
+    let mut buf = [0u16; 64];
+    // SAFETY: the buffer's true length is passed; the call writes at
+    // most that and answers 0 for a handle that names no window.
+    let len = unsafe { GetClassNameW(hwnd, &mut buf) };
+    usize::try_from(len).is_ok_and(|len| {
+        crate::class_is_host_owned(&String::from_utf16_lossy(&buf[..len.min(buf.len())]))
+    })
+}
+
+/// Whether `hwnd` is a window the host parents panel content to: the
+/// main window or a dock group, by class. See [`registration_stands`].
+unsafe fn is_host_container(hwnd: HWND) -> bool {
+    if hwnd.is_invalid() {
+        return false;
+    }
+    let mut buf = [0u16; 64];
+    // SAFETY: the buffer's true length is passed; the call writes at
+    // most that and answers 0 for a handle that names no window.
+    let len = unsafe { GetClassNameW(hwnd, &mut buf) };
+    let Ok(len) = usize::try_from(len) else {
+        return false;
+    };
+    let name = &buf[..len.min(buf.len())];
+    // SAFETY: both are `w!` literals, NUL-terminated and 'static.
+    len > 0 && unsafe { name == MAIN_CLASS.as_wide() || name == DOCK_GROUP_CLASS.as_wide() }
+}
+
+/// What [`retire_departed`] did.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub(crate) struct Retired {
+    /// How many registrations were dropped.
+    pub registrations: usize,
+    /// The panels closed because no registration stands for them now.
+    pub closed: Vec<DockPanel>,
+}
+
+/// Drop every registration that no longer stands, and close the panels
+/// they held. `stands` is [`registration_stands`]; a parameter so the
+/// policy can be tested on handle values that name no window.
+///
+/// Closing is the honest outcome, and the one GTK and Cocoa reach:
+/// nothing is left to show. The layout remembers the side the panel
+/// was on, so a plugin that registers the window again, or a fresh one
+/// under the same name, gets it back there. No `DMN_CLOSE`: the plugin took
+/// the window away itself, as with `NPPM_DMMHIDE`.
+///
+/// A panel is left open when another registration stands for it, or
+/// when it is `keep_open` — the panel `NPPM_DMMREGASDCKDLG` is about to
+/// register a replacement for. A plugin that destroys its window and
+/// registers a new one under the same name, a natural way to rebuild a
+/// panel, keeps the panel on screen through it.
+///
+/// A parked panel is closed too, or it would be saved as open with
+/// nothing registered for it.
+///
+/// Model and list only. It sends no message and moves no window, so it
+/// runs under whatever borrow its caller holds; the caller reconciles
+/// afterwards. Each dropped registration's tab icon, which is the
+/// host's own bitmap, is deleted here.
+pub(crate) fn retire_departed(
+    dialogs: &mut Vec<crate::DockEntry>,
+    layout: &mut DockLayout,
+    keep_open: Option<DockPanel>,
+    stands: impl Fn(HWND) -> bool,
+) -> Retired {
+    if dialogs.iter().all(|e| stands(e.h_client)) {
+        return Retired::default();
+    }
+    let (live, departed): (Vec<crate::DockEntry>, Vec<crate::DockEntry>) = std::mem::take(dialogs)
+        .into_iter()
+        .partition(|e| stands(e.h_client));
+    *dialogs = live;
+    let mut closed: Vec<DockPanel> = Vec::new();
+    for entry in &departed {
+        if let Some(bmp) = entry.tab_icon {
+            // SAFETY: the bitmap was made by `icon_to_tab_bitmap` at
+            // registration and is owned by this entry alone, which is
+            // being dropped.
+            let _ = unsafe { DeleteObject(bmp.into()) };
+        }
+        let panel = entry.panel;
+        if keep_open == Some(panel) || dialogs.iter().any(|e| e.panel == panel) {
+            continue;
+        }
+        // Two ended registrations for one panel close it once: after
+        // the first, it is neither open nor parked.
+        if layout.is_visible(panel) || layout.is_parked(panel) {
+            layout.hide(panel);
+            closed.push(panel);
+        }
+    }
+    Retired {
+        registrations: departed.len(),
+        closed,
+    }
+}
+
+/// The one record of a retirement: nothing on screen says why a panel
+/// closed.
+pub(crate) fn log_retired(retired: &Retired) {
+    for panel in &retired.closed {
+        tracing::info!(
+            panel = panel.persist_key(),
+            "a plugin took its dock panel's window out of the host's containers, moving or \
+             destroying it; closing the panel"
+        );
+    }
+    if retired.registrations > 0 {
+        tracing::debug!(
+            registrations = retired.registrations,
+            closed = retired.closed.len(),
+            "dropped plugin dock registrations whose windows have left"
+        );
+    }
+}
+
+thread_local! {
+    /// Set while a [`WM_APP_DOCK_SWEEP`] is posted and not yet handled,
+    /// so a group that repaints many times asks once.
+    ///
+    /// [`WM_APP_DOCK_SWEEP`]: crate::WM_APP_DOCK_SWEEP
+    static SWEEP_POSTED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Ask the main window to look for registrations that no longer stand,
+/// once control is back in a message loop
+/// ([`sweep_departed_plugin_panels`]).
+///
+/// Posted, never done on the spot, because the two places that ask are
+/// the wrong places to reconcile from. A group's `WM_PAINT` would have
+/// the reconcile destroy the window being painted, when the departed
+/// panel was the only one in it. And `WM_PARENTNOTIFY` arrives before
+/// the child is destroyed, while it still reads as standing.
+///
+/// Nothing once the quit has begun: a plugin destroys its panels while
+/// it shuts down, and the layout to save is the one the user had.
+fn request_departure_sweep(main_hwnd: HWND) {
+    if crate::quitting() || SWEEP_POSTED.with(|p| p.replace(true)) {
+        return;
+    }
+    // SAFETY: `PostMessageW` takes any handle value and only queues.
+    let posted = unsafe {
+        PostMessageW(
+            Some(main_hwnd),
+            crate::WM_APP_DOCK_SWEEP,
+            WPARAM(0),
+            LPARAM(0),
+        )
+    };
+    if posted.is_err() {
+        // Nothing will clear the flag, so clear it here; the next
+        // paint asks again.
+        SWEEP_POSTED.with(|p| p.set(false));
+    }
+}
+
+/// The main window's answer to [`request_departure_sweep`]: reconcile
+/// if any registration no longer stands. The reconcile is what retires
+/// it ([`apply_dock_layout`]'s first phase), so this decides nothing
+/// itself.
+///
+/// # Safety
+///
+/// `main_hwnd` must be the main window. UI thread only, with no
+/// `WindowState` borrow held.
+pub(crate) unsafe fn sweep_departed_plugin_panels(main_hwnd: HWND) {
+    // First, so nothing below can leave every later request waiting on
+    // a sweep that never comes.
+    SWEEP_POSTED.with(|p| p.set(false));
+    if crate::quitting() {
+        return;
+    }
+    // A state read declined here — the message dispatched by a loop
+    // running inside a guarded plugin call — reads as nothing departed,
+    // and the request is lost: the band stays empty until the group
+    // paints again or anything else reconciles. Posting again from here
+    // would spin that loop for as long as the guard is armed.
+    let departed = unsafe { state_from_hwnd(main_hwnd) }.is_some_and(|state| {
+        state
+            .dock_dialogs
+            .iter()
+            .any(|e| !registration_stands(e.h_client))
+    });
+    if departed {
+        unsafe { apply_dock_layout(main_hwnd) };
     }
 }
 
@@ -413,8 +671,167 @@ fn panel_icon_index(panel: DockPanel) -> usize {
 /// whose procs reach for `state_from_hwnd`, so holding the borrow
 /// across them is the same aliasing hazard every snapshot-then-drop
 /// site in `lib.rs` documents.
+///
+/// **One reconcile at a time on a thread.** Phases 2 to 4
+/// ([`reconcile_tree`]) send messages to plugin windows, and a plugin
+/// may answer one with an `NPPM_*` that changes the layout, which asks
+/// for a reconcile from inside this one. Run there and then, the nested
+/// pass would move the windows the outer one is in the middle of
+/// moving — and its own messages could be answered the same way, with
+/// nothing bounding the depth. So a call made while one is running only
+/// notes that another pass is owed, and the running one makes it once
+/// its own is done ([`run_reconcile`]).
+///
+/// The notifications of phase 6 are sent after the latch is released:
+/// a handler that shows or hides a panel reconciles at once, as it
+/// always has, and `deliver_container_notices` bounds that round trip
+/// with a queue of its own.
 pub(crate) unsafe fn apply_dock_layout(main_hwnd: HWND) {
+    // SAFETY: the caller's contract, passed on to each pass.
+    if run_reconcile(|| unsafe { reconcile_tree(main_hwnd) }).is_none() {
+        return;
+    }
+    // Phase 6 (borrow, then none): tell each plugin whose panel
+    // changed container, and each newly registered one where its
+    // panel lives. Last, so a plugin that reacts by querying the
+    // host or the window tree finds both already settled — and
+    // with no borrow held for the send, so its handler's
+    // `NPPM_*` is answered rather than declined.
     unsafe {
+        let notices = state_from_hwnd(main_hwnd)
+            .map(|state| container_notices(&state.dock_layout, &mut state.dock_dialogs))
+            .unwrap_or_default();
+        deliver_container_notices(main_hwnd, notices);
+    }
+}
+
+/// The most passes one [`apply_dock_layout`] makes before it stops
+/// answering requests made from inside its own passes.
+///
+/// A second pass is ordinary: a plugin's window procedure answers a
+/// message the first sent by showing or registering a panel. A plugin
+/// that answers *every* pass that way — one that rebuilds its panel
+/// each time the panel is shown, say — never settles, and each pass
+/// creates and re-parents windows. Eight is far past anything that
+/// settles and still a small, fixed amount of work.
+const MAX_RECONCILE_PASSES: u32 = 8;
+
+thread_local! {
+    /// Set while [`run_reconcile`] is running passes on this thread.
+    /// See [`Reconciling`].
+    static RECONCILING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// Set when a reconcile was asked for while one was running.
+    static RECONCILE_OWED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Marks a reconcile as running on this thread, so one asked for from
+/// inside it is noted instead of run. RAII, like `NoticeDelivery`, so
+/// the flag clears on the unwinding path too and one caught panic does
+/// not leave every later reconcile noted and never run.
+///
+/// Before this, a plugin could recurse the reconciler, and nothing of
+/// the host's bounded how deep. Phase 4 shows a panel's window, which
+/// sends it `WM_SHOWWINDOW` with no borrow held; a handler that
+/// destroys that window and registers a new one under the same name
+/// marks the layout dirty, and the NPPM arm reconciled from inside the
+/// handler — which showed the new window, whose handler did the same.
+/// Each level is a whole reconcile and a trip through the main window
+/// procedure. It became reachable when a replacement registration
+/// stopped being refused; the security audit of that change found it,
+/// and expected a stack overflow. Measured once with a probe plugin
+/// that rebuilds its panel whenever it is shown, on Windows 11: the
+/// nesting went 31 deep, then the plugin's `CreateWindowEx` returned no
+/// window and the panel was left with none. Nothing crashed, but the
+/// depth was whatever Windows allowed. With the latch the same plugin
+/// gets [`MAX_RECONCILE_PASSES`] passes and a warning in the log.
+struct Reconciling;
+
+impl Reconciling {
+    /// `None` when a reconcile is already running on this thread.
+    fn enter() -> Option<Self> {
+        if RECONCILING.with(|r| r.replace(true)) {
+            return None;
+        }
+        Some(Self)
+    }
+}
+
+impl Drop for Reconciling {
+    fn drop(&mut self) {
+        RECONCILING.with(|r| r.set(false));
+    }
+}
+
+/// Run `pass` until no further one is owed, at most
+/// [`MAX_RECONCILE_PASSES`] times, and answer how many ran. `None`
+/// when a reconcile is already running on this thread: that one is
+/// told another pass is owed, and nothing runs here.
+///
+/// Apart from [`apply_dock_layout`] so the bound can be tested without
+/// a window tree.
+fn run_reconcile(mut pass: impl FnMut()) -> Option<u32> {
+    let Some(_running) = Reconciling::enter() else {
+        RECONCILE_OWED.with(|o| o.set(true));
+        return None;
+    };
+    let mut passes = 0;
+    loop {
+        RECONCILE_OWED.with(|o| o.set(false));
+        pass();
+        passes += 1;
+        if !RECONCILE_OWED.with(std::cell::Cell::get) {
+            return Some(passes);
+        }
+        if passes >= MAX_RECONCILE_PASSES {
+            // What is still owed is dropped, not kept for later: the
+            // next reconcile begins by clearing it, as every pass does.
+            tracing::warn!(
+                passes,
+                "a plugin asks for a new dock layout every time its panel is laid out; \
+                 stopped reconciling for it"
+            );
+            return Some(passes);
+        }
+    }
+}
+
+/// One pass of [`apply_dock_layout`]: phases 0 to 5.
+///
+/// # Safety
+///
+/// As [`apply_dock_layout`]: `main_hwnd` is the main window, on the UI
+/// thread, with no `WindowState` borrow held.
+unsafe fn reconcile_tree(main_hwnd: HWND) {
+    unsafe {
+        // The sweep a group asks for is this pass's first phase, so
+        // whatever was asked for is being done. Clearing the latch
+        // here also frees it if the posted message was lost — taken
+        // off the queue by a loop that did not dispatch it — which
+        // would otherwise silence every later request.
+        SWEEP_POSTED.with(|p| p.set(false));
+
+        // Phase 0 (borrow): drop the registrations whose windows have
+        // left — destroyed, or re-parented out of the host's
+        // containers by their plugin — and close their panels, before
+        // anything below reads the model. This is the only place a
+        // registration is retired outside `NPPM_DMMREGASDCKDLG`, so
+        // every reconcile starts from registrations that stand.
+        //
+        // Not once the quit has begun: a plugin destroys its panels
+        // as it shuts down, and the layout to save is the one the
+        // user had.
+        if !crate::quitting() {
+            if let Some(state) = state_from_hwnd(main_hwnd) {
+                let retired = retire_departed(
+                    &mut state.dock_dialogs,
+                    &mut state.dock_layout,
+                    None,
+                    registration_stands,
+                );
+                log_retired(&retired);
+            }
+        }
+
         // Phase 1 (borrow): snapshot the model and current windows.
         let Some((layout, existing, panel_pair, splitters)) =
             state_from_hwnd(main_hwnd).map(|state| {
@@ -429,11 +846,22 @@ pub(crate) unsafe fn apply_dock_layout(main_hwnd: HWND) {
                         // and a plugin panel missing from this list
                         // is not a compile error, it is a group that
                         // appears with nothing inside it.
+                        //
+                        // Only registrations that stand: a window
+                        // that has left is the plugin's again, and
+                        // phase 0 retires none once the quit has
+                        // begun.
                         let mut pairs = vec![
                             (DockPanel::Workspace, state.workspace_hwnd),
                             (DockPanel::DocMap, state.docmap_hwnd),
                         ];
-                        pairs.extend(state.dock_dialogs.iter().map(|e| (e.panel, e.h_client)));
+                        pairs.extend(
+                            state
+                                .dock_dialogs
+                                .iter()
+                                .filter(|e| registration_stands(e.h_client))
+                                .map(|e| (e.panel, e.h_client)),
+                        );
                         pairs
                     },
                     state.dock_splitters,
@@ -461,7 +889,12 @@ pub(crate) unsafe fn apply_dock_layout(main_hwnd: HWND) {
                     let panel_hwnd = *panel_hwnd;
                     if GetParent(panel_hwnd).unwrap_or_default() == gw.hwnd {
                         let _ = ShowWindow(panel_hwnd, SW_HIDE);
-                        let _ = SetParent(panel_hwnd, Some(main_hwnd));
+                        // Asked again: the hide sent the window
+                        // `WM_SHOWWINDOW`, and a plugin may have
+                        // answered by taking it somewhere else.
+                        if GetParent(panel_hwnd).unwrap_or_default() == gw.hwnd {
+                            let _ = SetParent(panel_hwnd, Some(main_hwnd));
+                        }
                     }
                 }
                 let _ = DestroyWindow(gw.hwnd);
@@ -527,6 +960,18 @@ pub(crate) unsafe fn apply_dock_layout(main_hwnd: HWND) {
 
         // Phase 4 (no borrow): parent + show/hide the panel
         // contents, show the right chrome, position everything.
+        //
+        // A plugin's window is asked once more whether its
+        // registration stands, right before each thing done to it.
+        // Phases 2 to 4 send messages to plugin windows — every
+        // `SetParent` and `ShowWindow` here does — whose handlers may
+        // take a window out of the host's containers, and the
+        // snapshot above would then have this pass take it back with
+        // a `SetParent` of its own, or show or hide it in whatever
+        // window the plugin had just put it in.
+        let still_ours = |panel: DockPanel, hwnd: HWND| {
+            !matches!(panel, DockPanel::Plugin(_)) || registration_stands(hwnd)
+        };
         let group_hwnd = |id: u32| {
             survivors
                 .iter()
@@ -543,8 +988,14 @@ pub(crate) unsafe fn apply_dock_layout(main_hwnd: HWND) {
                 let Some((_, panel_hwnd)) = panel_pair.iter().find(|(p, _)| p == panel) else {
                     continue;
                 };
+                if !still_ours(*panel, *panel_hwnd) {
+                    continue;
+                }
                 if GetParent(*panel_hwnd).unwrap_or_default() != ghwnd {
                     let _ = SetParent(*panel_hwnd, Some(ghwnd));
+                    if !still_ours(*panel, *panel_hwnd) {
+                        continue;
+                    }
                 }
                 let _ = ShowWindow(
                     *panel_hwnd,
@@ -582,9 +1033,11 @@ pub(crate) unsafe fn apply_dock_layout(main_hwnd: HWND) {
         // Hidden panels go back under the (invisible) care of the
         // main window so a dying group can never take them along.
         for (panel, panel_hwnd) in panel_pair.iter().copied() {
-            if !layout.is_visible(panel) {
+            if !layout.is_visible(panel) && still_ours(panel, panel_hwnd) {
                 let _ = ShowWindow(panel_hwnd, SW_HIDE);
-                if GetParent(panel_hwnd).unwrap_or_default() != main_hwnd {
+                if still_ours(panel, panel_hwnd)
+                    && GetParent(panel_hwnd).unwrap_or_default() != main_hwnd
+                {
                     let _ = SetParent(panel_hwnd, Some(main_hwnd));
                 }
             }
@@ -611,17 +1064,6 @@ pub(crate) unsafe fn apply_dock_layout(main_hwnd: HWND) {
             let session = state.dock_layout.to_session();
             state.shell.set_dock_session(Some(session));
         }
-
-        // Phase 6 (borrow, then none): tell each plugin whose panel
-        // changed container, and each newly registered one where its
-        // panel lives. Last, so a plugin that reacts by querying the
-        // host or the window tree finds both already settled — and
-        // with no borrow held for the send, so its handler's
-        // `NPPM_*` is answered rather than declined.
-        let notices = state_from_hwnd(main_hwnd)
-            .map(|state| container_notices(&state.dock_layout, &mut state.dock_dialogs))
-            .unwrap_or_default();
-        deliver_container_notices(main_hwnd, notices);
     }
 }
 
@@ -734,10 +1176,19 @@ unsafe fn deliver_container_notices(main_hwnd: HWND, notices: Vec<(HWND, u32)>) 
     while let Some((main_hwnd, h_client, code)) =
         CONTAINER_NOTICES.with(|q| q.borrow_mut().pop_front())
     {
+        // A handler for an earlier notice began the quit: the plugins
+        // are being told the host is shutting down, and hear nothing
+        // of the dock after that. What is still queued goes with it;
+        // its entries are window handles, and nothing will send them.
+        if crate::quitting() {
+            CONTAINER_NOTICES.with(|q| q.borrow_mut().clear());
+            break;
+        }
         // A handler for an earlier notice may have destroyed this
-        // one's window; the record is already written, so skipping
-        // it loses nothing that could still be delivered.
-        if !unsafe { IsWindow(Some(h_client)) }.as_bool() {
+        // one's window, or taken it out of the host's containers,
+        // which ends its registration; the record is already written,
+        // so skipping it loses nothing that could still be delivered.
+        if !registration_stands(h_client) {
             continue;
         }
         // The one record of what a plugin was told about its panel's
@@ -767,6 +1218,16 @@ unsafe fn deliver_container_notices(main_hwnd: HWND, notices: Vec<(HWND, u32)>) 
             );
         }
     }
+}
+
+/// Whether a `DMN_DOCK` / `DMN_FLOAT` delivery is running on this
+/// thread, so that whatever asks is running inside a plugin's handler
+/// for one. A registration refreshed from there is not told its
+/// container again: the notice it would raise is queued behind the
+/// handler, whose next run would raise another, and the drain would
+/// not end while the plugin kept at it.
+pub(crate) fn delivering_container_notices() -> bool {
+    CONTAINER_NOTICES_DELIVERING.with(std::cell::Cell::get)
 }
 
 thread_local! {
@@ -899,9 +1360,21 @@ impl Drop for PanelFocusing {
 /// applies whatever is held when its dispatch ends, so one nested inside
 /// another — a plugin answering a notification the outer dispatch set
 /// off — may apply the outer request; it does so after its own
-/// reconcile, so the panel is on screen by then either way. The panel
-/// is recorded rather than its window, so a request that outlives its
-/// registration finds nothing instead of a reused handle.
+/// reconcile, so the panel is on screen by then.
+///
+/// One case loses the request. A show sent from a handler that a
+/// reconcile pass itself called — a plugin window's `WM_SHOWWINDOW` —
+/// has its reconcile put off until that pass is over
+/// ([`apply_dock_layout`]), so its arm finds the panel not yet on screen
+/// and drops the request. Keeping it for later instead was considered:
+/// the pass may have been started by a drag or a sweep, with no NPPM
+/// arm to apply it afterwards, and the request would then move focus at
+/// whatever unrelated message a plugin sent next, perhaps seconds later
+/// and in the middle of the user's typing. A lost focus is the smaller
+/// surprise.
+///
+/// The panel is recorded rather than its window, so a request that
+/// outlives its registration finds nothing instead of a reused handle.
 pub(crate) fn request_panel_focus(panel: DockPanel) {
     PANEL_FOCUS.with(|f| f.set(Some(panel)));
 }
@@ -932,7 +1405,7 @@ pub(crate) unsafe fn apply_requested_panel_focus(main_hwnd: HWND) {
         state
             .dock_dialogs
             .iter()
-            .find(|e| e.panel == panel)
+            .find(|e| e.panel == panel && registration_stands(e.h_client))
             .map(|e| e.h_client)
     });
     let Some(client) = client else {
@@ -1064,6 +1537,22 @@ fn tear_off_grab(cursor_dx: i32, source_w: i32, new_w: i32) -> (i32, i32) {
     let fraction = f64::from(cursor_dx.clamp(0, source_w.max(1))) / f64::from(source_w.max(1));
     let x = (fraction * f64::from(new_w)).round() as i32;
     (x.clamp(0, new_w.max(0)), DOCK_CAPTION_H / 2)
+}
+
+/// Whether a tab drag that ends now moves `panel`: only while the
+/// panel is still open in a group.
+///
+/// A drag lasts as long as the button is held, and a plugin can close
+/// the dragged panel meanwhile — `NPPM_DMMHIDE` from a timer, or its
+/// window destroyed or taken away, which retires the registration
+/// ([`retire_departed`]). `DockLayout::move_panel` reopens a closed
+/// panel at its target, so without this the drop would put back what
+/// the plugin had just closed; a retired panel would come back as a
+/// group with nothing registered for it, which nothing would ever
+/// close again.
+#[must_use]
+fn drop_moves_panel(layout: &DockLayout, panel: DockPanel) -> bool {
+    layout.is_visible(panel)
 }
 
 /// The dock area (between toolbar-bottom and status-bar-top) in
@@ -1230,6 +1719,24 @@ extern "system" fn dock_group_wnd_proc(
                 paint_group(hwnd);
                 LRESULT(0)
             }
+            WM_PARENTNOTIFY => {
+                // A child of this group is about to be destroyed. Its
+                // children are panel content, so if it is a plugin
+                // panel's, the registration ends with it; look once
+                // the destroy is over, since the window still exists
+                // right now. The low word is the event — clicks arrive
+                // here too — and `lParam` the window: a control deeper
+                // inside a plugin's panel is passed up as well, and
+                // destroying one of those ends nothing.
+                if (wparam.0 & 0xFFFF) as u32 == WM_DESTROY
+                    && GetAncestor(HWND(lparam.0 as *mut c_void), GA_PARENT) == hwnd
+                {
+                    if let Some(main) = find_main_hwnd(hwnd) {
+                        request_departure_sweep(main);
+                    }
+                }
+                DefWindowProcW(hwnd, msg, wparam, lparam)
+            }
             WM_LBUTTONDOWN => {
                 on_group_button_down(hwnd, lparam);
                 LRESULT(0)
@@ -1335,6 +1842,25 @@ unsafe fn paint_group(ghwnd: HWND) {
                     },
                 )
             });
+        // The front panel is a plugin's and its window has left: this
+        // group is painting an empty band. A window that is destroyed,
+        // or re-parented away, while it is on screen uncovers its
+        // parent, so this paint is the first the host hears of it —
+        // nothing tells a window that a child was re-parented away.
+        // Ask for the sweep that closes the panel; a departed window
+        // behind another tab waits for the next reconcile, with
+        // nothing on screen to show for it meanwhile.
+        let sweep_from = snapshot.as_ref().and_then(|(main, snap)| {
+            let front = *snap.panels.get(snap.active)?;
+            if !matches!(front, DockPanel::Plugin(_)) {
+                return None;
+            }
+            let departed = state_from_hwnd(*main)?
+                .dock_dialogs
+                .iter()
+                .any(|e| e.panel == front && !registration_stands(e.h_client));
+            departed.then_some(*main)
+        });
         let mut ps = PAINTSTRUCT::default();
         let hdc = BeginPaint(ghwnd, &raw mut ps);
         if let Some((_, snap)) = snapshot {
@@ -1343,6 +1869,9 @@ unsafe fn paint_group(ghwnd: HWND) {
             draw_group_chrome(hdc, ghwnd, rc.right, rc.bottom, &snap, icons, &plugin_icons);
         }
         let _ = EndPaint(ghwnd, &raw const ps);
+        if let Some(main) = sweep_from {
+            request_departure_sweep(main);
+        }
     }
 }
 
@@ -1706,7 +2235,18 @@ unsafe fn on_group_button_up(ghwnd: HWND) {
             };
             if let Some(state) = state_from_hwnd(main) {
                 match drag.subject {
-                    DragSubject::Panel(panel) => state.dock_layout.move_panel(panel, target),
+                    // Only a panel still open is moved. One closed
+                    // while the button was held — its plugin sent
+                    // `NPPM_DMMHIDE`, or took its window away and the
+                    // registration was retired — stays closed:
+                    // `move_panel` reopens a closed panel at the
+                    // target, and a retired one would come back as a
+                    // group with no registration and nothing in it.
+                    DragSubject::Panel(panel) => {
+                        if drop_moves_panel(&state.dock_layout, panel) {
+                            state.dock_layout.move_panel(panel, target);
+                        }
+                    }
                     DragSubject::Group(id) => state.dock_layout.move_group(id, target),
                 }
             }
@@ -2027,7 +2567,197 @@ mod tests {
             tab_icon: None,
             u_mask: 0,
             dmn_container: None,
+            caller: None,
         }
+    }
+
+    /// What a second `NPPM_DMMREGASDCKDLG` carries for `h_client`, with
+    /// no tab icon offered.
+    fn params_for_test(
+        h_client: HWND,
+        name: &str,
+        module: &str,
+        tb_data: *const codepp_plugin_host::TbData,
+        caller: Option<usize>,
+    ) -> codepp_plugin_host::DockDialogParams {
+        codepp_plugin_host::DockDialogParams {
+            h_client: h_client.0,
+            name: name.into(),
+            module_name: module.into(),
+            add_info: None,
+            h_icon_tab: core::ptr::null_mut(),
+            rc_float: codepp_plugin_host::TbRect::default(),
+            u_mask: codepp_plugin_host::DWS_DF_CONT_RIGHT,
+            dlg_id: 7,
+            i_prev_cont: 0,
+            tb_data,
+            caller,
+        }
+    }
+
+    /// Registering a docked window again takes what the plugin says
+    /// now — its `tTbData`, both names, the command and the mask — and
+    /// keeps the panel and the window. The plugin is told its container
+    /// again, except from inside the handler of such a notice. Under
+    /// another module, or from a plugin the host can tell is another,
+    /// it changes nothing.
+    #[test]
+    fn a_second_registration_refreshes_the_first() {
+        let panel = codepp_shell::intern_plugin_dock_panel("Refresh A", "RefreshTest.dll")
+            .expect("the identity");
+        let h = HWND(0x5151 as *mut c_void);
+        let first = 0x1000 as *const codepp_plugin_host::TbData;
+        let second = 0x2000 as *const codepp_plugin_host::TbData;
+        let told = Some(codepp_core::dock::DockContainer::Docked(DockSide::Bottom));
+        let mut entry = crate::DockEntry {
+            tb_data: first,
+            name: "Refresh A".into(),
+            module_name: "RefreshTest.dll".into(),
+            dlg_id: 3,
+            dmn_container: told,
+            caller: Some(2),
+            ..entry_for_test(panel, h)
+        };
+        let untouched = |entry: &crate::DockEntry| {
+            assert_eq!(entry.tb_data, first);
+            assert_eq!(entry.name, "Refresh A");
+            assert_eq!(entry.module_name, "RefreshTest.dll");
+            assert_eq!((entry.dlg_id, entry.u_mask), (3, 0));
+            assert_eq!(entry.dmn_container, told);
+            assert_eq!(entry.caller, Some(2));
+        };
+
+        // Another module's registration of this window is refused,
+        // whatever name it gives, and leaves the entry as it was.
+        let refused = unsafe {
+            crate::refresh_dock_registration(
+                &mut entry,
+                params_for_test(h, "Refresh A", "Other.dll", second, Some(2)),
+                true,
+            )
+        };
+        assert!(!refused);
+        untouched(&entry);
+
+        // So is one the host takes for another plugin than the first,
+        // though it names the right module.
+        let refused = unsafe {
+            crate::refresh_dock_registration(
+                &mut entry,
+                params_for_test(h, "Refresh B", "RefreshTest.dll", second, Some(5)),
+                true,
+            )
+        };
+        assert!(!refused);
+        untouched(&entry);
+
+        // From inside a container notice's handler the registration is
+        // refreshed, and what the plugin was told stands.
+        let taken = unsafe {
+            crate::refresh_dock_registration(
+                &mut entry,
+                params_for_test(h, "Refresh A", "RefreshTest.dll", first, Some(2)),
+                false,
+            )
+        };
+        assert!(taken);
+        assert_eq!(entry.dmn_container, told);
+
+        // The same module's, in another case and under a new name, is
+        // taken, from a sender the host cannot name: the plugin the
+        // first registration was taken for stays on record.
+        let taken = unsafe {
+            crate::refresh_dock_registration(
+                &mut entry,
+                params_for_test(h, "Refresh B", "REFRESHTEST.DLL", second, None),
+                true,
+            )
+        };
+        assert!(taken);
+        assert_eq!(entry.caller, Some(2));
+        // Told again: the next reconcile finds nothing on record and
+        // sends the registration's notice.
+        assert_eq!(entry.dmn_container, None);
+        let mut layout = DockLayout::new();
+        layout.set_initial_side(panel, DockSide::Bottom);
+        let notices = container_notices(&layout, std::slice::from_mut(&mut entry));
+        assert_eq!(notices, vec![(h, (3 << 16) | codepp_plugin_host::DMN_DOCK)]);
+        assert_eq!(entry.tb_data, second);
+        assert_eq!(entry.name, "Refresh B");
+        assert_eq!(entry.module_name, "REFRESHTEST.DLL");
+        assert_eq!(entry.dlg_id, 7);
+        assert_eq!(entry.u_mask, codepp_plugin_host::DWS_DF_CONT_RIGHT);
+        // The panel is the identity it was registered under, so its
+        // caption and its place in the session do not follow the name.
+        assert_eq!(entry.panel, panel);
+        assert_eq!(entry.panel.title(), "Refresh A");
+        assert_eq!(entry.h_client, h);
+        assert!(entry.tab_icon.is_none());
+
+        // A registration the host could attribute to nobody stays so:
+        // a plugin that refreshes it does not go on record for it, so
+        // it cannot keep the window's own plugin from doing the same.
+        let mut unattributed = crate::DockEntry {
+            module_name: "RefreshTest.dll".into(),
+            ..entry_for_test(panel, h)
+        };
+        for sender in [Some(5), Some(7)] {
+            let taken = unsafe {
+                crate::refresh_dock_registration(
+                    &mut unattributed,
+                    params_for_test(h, "Refresh A", "RefreshTest.dll", second, sender),
+                    true,
+                )
+            };
+            assert!(taken);
+            assert_eq!(unattributed.caller, None);
+        }
+    }
+
+    /// A refresh replaces the tab's icon, and deletes the one it had:
+    /// the bitmap is the host's own copy, made at registration.
+    #[test]
+    fn a_refresh_lets_go_of_the_old_tab_icon() {
+        use windows::Win32::Graphics::Gdi::{CreateBitmap, GetObjectW};
+
+        let panel = codepp_shell::intern_plugin_dock_panel("Refresh Icon", "RefreshTest.dll")
+            .expect("the identity");
+        let h = HWND(0x5252 as *mut c_void);
+        let old = unsafe { CreateBitmap(16, 16, 1, 32, None) };
+        assert!(!old.is_invalid());
+        let is_bitmap = |bmp: HBITMAP| {
+            let mut info = BITMAP::default();
+            unsafe {
+                GetObjectW(
+                    bmp.into(),
+                    size_of::<BITMAP>() as i32,
+                    Some((&raw mut info).cast()),
+                ) != 0
+            }
+        };
+        assert!(is_bitmap(old), "the test's own bitmap is not one");
+        let mut entry = crate::DockEntry {
+            tab_icon: Some(old),
+            module_name: "RefreshTest.dll".into(),
+            ..entry_for_test(panel, h)
+        };
+        // No icon offered now: the tab goes back to the host's glyph.
+        let taken = unsafe {
+            crate::refresh_dock_registration(
+                &mut entry,
+                params_for_test(
+                    h,
+                    "Refresh Icon",
+                    "RefreshTest.dll",
+                    core::ptr::null(),
+                    None,
+                ),
+                true,
+            )
+        };
+        assert!(taken);
+        assert!(entry.tab_icon.is_none());
+        assert!(!is_bitmap(old), "the old tab icon was leaked");
     }
 
     /// The bound the audit found missing, driven through real
@@ -2038,7 +2768,6 @@ mod tests {
     #[test]
     fn a_notice_raised_during_delivery_is_queued_not_nested() {
         use std::cell::{Cell, RefCell};
-        use windows::Win32::UI::WindowsAndMessaging::HWND_MESSAGE;
 
         const CHAIN: u32 = 12;
         thread_local! {
@@ -2078,28 +2807,33 @@ mod tests {
                 cbSize: u32::try_from(std::mem::size_of::<WNDCLASSEXW>()).unwrap_or(0),
                 lpfnWndProc: Some(probe_proc),
                 hInstance: instance.into(),
-                lpszClassName: w!("CodePlusPlusTestNoticeProbe"),
+                lpszClassName: w!("DockTestNoticeProbe"),
                 ..Default::default()
             };
             let _ = RegisterClassExW(&raw const class);
+            // Inside a dock group, as a registered panel's window is:
+            // a notice goes only to a window whose registration stands.
+            // Its class must not carry the host's own prefix either: a
+            // window of a host class never stands.
+            let container = container_for_test();
             let hwnd = CreateWindowExW(
                 WINDOW_EX_STYLE::default(),
-                w!("CodePlusPlusTestNoticeProbe"),
+                w!("DockTestNoticeProbe"),
                 PCWSTR::null(),
-                WS_POPUP,
+                WS_CHILD,
                 0,
                 0,
                 0,
                 0,
-                Some(HWND_MESSAGE),
+                Some(container),
                 None,
                 Some(instance.into()),
                 None,
             )
-            .expect("message-only probe window");
+            .expect("probe window");
 
             deliver_container_notices(HWND::default(), vec![(hwnd, 1)]);
-            let _ = DestroyWindow(hwnd);
+            let _ = DestroyWindow(container);
         }
 
         assert_eq!(
@@ -2112,6 +2846,18 @@ mod tests {
             1,
             "a notice was delivered from inside another notice's handler"
         );
+    }
+
+    /// A delivery is known to be running exactly while one is: what a
+    /// registration refreshed from a notice's handler goes by, so as
+    /// not to be answered with another notice.
+    #[test]
+    fn a_delivery_is_known_to_be_running_only_while_it_is() {
+        assert!(!delivering_container_notices());
+        let delivering = NoticeDelivery::enter().expect("no delivery is running yet");
+        assert!(delivering_container_notices());
+        drop(delivering);
+        assert!(!delivering_container_notices());
     }
 
     /// An unwind out of a drain must leave nothing behind: not the
@@ -2244,6 +2990,807 @@ mod tests {
         let n = container_notices(&l, &mut dialogs);
         assert_eq!(n.len(), 1);
         assert_eq!(n[0].1, codepp_plugin_host::DMN_DOCK);
+    }
+
+    /// A hidden window of the dock-group class, with no main window
+    /// above it, so its procedure finds no state and does nothing. A
+    /// child of it is where a registered panel's window lives.
+    unsafe fn container_for_test() -> HWND {
+        unsafe {
+            register_dock_classes();
+            CreateWindowExW(
+                WINDOW_EX_STYLE::default(),
+                DOCK_GROUP_CLASS,
+                PCWSTR::null(),
+                WS_POPUP,
+                0,
+                0,
+                0,
+                0,
+                None,
+                None,
+                Some(GetModuleHandleW(None).unwrap_or_default().into()),
+                None,
+            )
+            .expect("dock group window")
+        }
+    }
+
+    /// A hidden window of a system class: a child of `parent`, or a
+    /// top-level one of the "plugin's own".
+    unsafe fn plain_window_for_test(parent: Option<HWND>) -> HWND {
+        unsafe {
+            CreateWindowExW(
+                WINDOW_EX_STYLE::default(),
+                w!("Static"),
+                PCWSTR::null(),
+                if parent.is_some() { WS_CHILD } else { WS_POPUP },
+                0,
+                0,
+                10,
+                10,
+                parent,
+                None,
+                None,
+                None,
+            )
+            .expect("plain window")
+        }
+    }
+
+    /// The rule itself, on real windows: a registration stands while
+    /// its window is a direct child of a dock group or of the main
+    /// window, and ends when the plugin moves it anywhere else, wraps
+    /// it, or destroys it.
+    #[test]
+    fn a_registration_stands_only_inside_a_host_container() {
+        unsafe extern "system" fn plain_proc(
+            hwnd: HWND,
+            msg: u32,
+            wparam: WPARAM,
+            lparam: LPARAM,
+        ) -> LRESULT {
+            unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
+        }
+        unsafe {
+            let group = container_for_test();
+            // A stand-in for the main window: only its class matters
+            // to the rule, and nothing else in the test process
+            // registers that class.
+            let instance = GetModuleHandleW(None).unwrap_or_default();
+            let class = WNDCLASSEXW {
+                cbSize: u32::try_from(std::mem::size_of::<WNDCLASSEXW>()).unwrap_or(0),
+                lpfnWndProc: Some(plain_proc),
+                hInstance: instance.into(),
+                lpszClassName: MAIN_CLASS,
+                ..Default::default()
+            };
+            let _ = RegisterClassExW(&raw const class);
+            let main = CreateWindowExW(
+                WINDOW_EX_STYLE::default(),
+                MAIN_CLASS,
+                PCWSTR::null(),
+                WS_POPUP,
+                0,
+                0,
+                0,
+                0,
+                None,
+                None,
+                Some(instance.into()),
+                None,
+            )
+            .expect("stand-in main window");
+            let elsewhere = plain_window_for_test(None);
+            let client = plain_window_for_test(Some(group));
+
+            assert!(registration_stands(client), "docked in a group");
+            let _ = SetParent(client, Some(main));
+            assert!(registration_stands(client), "parked under the main window");
+
+            let _ = SetParent(client, Some(elsewhere));
+            assert!(
+                !registration_stands(client),
+                "moved into a window of the plugin's own"
+            );
+            let _ = SetParent(client, None);
+            assert!(!registration_stands(client), "made top-level");
+            let _ = SetParent(client, Some(group));
+            assert!(
+                registration_stands(client),
+                "back in a group, it stands again"
+            );
+
+            // Wrapped: inside a window that is itself inside the
+            // group. The wrapper is what the group would lay out, and
+            // it is not what was registered.
+            let wrapper = plain_window_for_test(Some(group));
+            let _ = SetParent(client, Some(wrapper));
+            assert!(!registration_stands(client), "inside a wrapper");
+            assert!(registration_stands(wrapper));
+
+            let _ = DestroyWindow(wrapper);
+            assert!(!registration_stands(client), "destroyed with its wrapper");
+            assert!(!registration_stands(wrapper), "destroyed");
+            assert!(!registration_stands(HWND::default()), "no handle at all");
+
+            // The containers themselves are not panels: a group is a
+            // popup or a child of the main window, the main window a
+            // top-level one.
+            assert!(!registration_stands(group));
+            assert!(!registration_stands(main));
+
+            // Nor is any window of the host's own classes, wherever it
+            // is: a docked group is a direct child of the main window,
+            // and a registration whose handle value Windows gave to one
+            // must not have the host lay its own chrome out as a panel.
+            let docked_group = CreateWindowExW(
+                WINDOW_EX_STYLE::default(),
+                DOCK_GROUP_CLASS,
+                PCWSTR::null(),
+                WS_CHILD,
+                0,
+                0,
+                0,
+                0,
+                Some(main),
+                None,
+                Some(instance.into()),
+                None,
+            )
+            .expect("docked group window");
+            assert!(
+                !registration_stands(docked_group),
+                "one of the host's own windows read as a plugin's panel"
+            );
+
+            let _ = DestroyWindow(group);
+            let _ = DestroyWindow(main);
+            let _ = DestroyWindow(elsewhere);
+        }
+    }
+
+    /// Two plugin panels and three handle values for the retirement
+    /// tests, which name no window: `stands` is a closure over them.
+    fn retirement_fixture() -> (DockPanel, DockPanel, HWND, HWND, HWND) {
+        (
+            codepp_core::dock::intern_plugin_panel("rt.dll", "Retired Panel").expect("intern"),
+            codepp_core::dock::intern_plugin_panel("rt.dll", "Standing Panel").expect("intern"),
+            HWND(0x1001 as *mut c_void),
+            HWND(0x1002 as *mut c_void),
+            HWND(0x1003 as *mut c_void),
+        )
+    }
+
+    /// A registration whose window has left is dropped and its panel
+    /// closed, with its place remembered; one that stands is not
+    /// touched, and a second pass finds nothing to do.
+    #[test]
+    fn a_departed_registration_is_dropped_and_its_panel_closed() {
+        let (gone, kept, h_gone, h_kept, _) = retirement_fixture();
+        let mut dialogs = vec![entry_for_test(gone, h_gone), entry_for_test(kept, h_kept)];
+        let mut l = DockLayout::new();
+        l.set_initial_side(gone, DockSide::Bottom);
+        l.set_initial_side(kept, DockSide::Bottom);
+        l.show(gone);
+        l.show(kept);
+        let before = l.container_of(gone);
+
+        // Every window standing: nothing happens.
+        assert_eq!(
+            retire_departed(&mut dialogs, &mut l, None, |_| true),
+            Retired::default()
+        );
+        assert_eq!(dialogs.len(), 2);
+
+        let retired = retire_departed(&mut dialogs, &mut l, None, |h| h != h_gone);
+        assert_eq!(
+            retired,
+            Retired {
+                registrations: 1,
+                closed: vec![gone],
+            }
+        );
+        assert_eq!(dialogs.len(), 1);
+        assert_eq!(dialogs[0].panel, kept, "the standing registration stays");
+        assert!(!l.is_visible(gone), "the departed panel is closed");
+        assert!(l.is_visible(kept), "the standing panel stays open");
+
+        assert_eq!(
+            retire_departed(&mut dialogs, &mut l, None, |h| h != h_gone),
+            Retired::default(),
+            "nothing is left to retire"
+        );
+
+        // Registered again and shown, the panel is back where it was.
+        assert!(
+            before.is_same(l.container_of(gone)),
+            "the layout forgot where the retired panel was"
+        );
+    }
+
+    /// A closed panel has nothing to close, and a parked one is closed
+    /// rather than saved as open with nothing registered for it.
+    #[test]
+    fn retiring_closes_a_parked_panel_and_leaves_a_closed_one() {
+        let (hidden, parked, h_hidden, h_parked, _) = retirement_fixture();
+        let mut dialogs = vec![
+            entry_for_test(hidden, h_hidden),
+            entry_for_test(parked, h_parked),
+        ];
+        let mut l = DockLayout::new();
+        l.show(parked);
+        assert!(l.park(&[parked]), "precondition: the panel parks");
+        assert!(l.is_parked(parked) && !l.is_visible(parked));
+
+        let retired = retire_departed(&mut dialogs, &mut l, None, |_| false);
+        assert_eq!(retired.registrations, 2);
+        assert_eq!(retired.closed, vec![parked]);
+        assert!(dialogs.is_empty());
+        assert!(!l.is_parked(parked), "a retired panel stayed parked");
+        assert!(!l.is_visible(parked) && !l.is_visible(hidden));
+    }
+
+    /// The panel a replacement holds, or is about to hold, stays open:
+    /// a plugin that destroys its window and registers a new one under
+    /// the same name keeps its panel on screen. Two ended registrations
+    /// for one panel close it once.
+    #[test]
+    fn a_replaced_panel_stays_open_through_the_retirement() {
+        let (panel, other, h_old, h_new, h_older) = retirement_fixture();
+
+        // `NPPM_DMMREGASDCKDLG`'s case: the replacement is not in the
+        // list yet, and names the panel to keep.
+        let mut dialogs = vec![entry_for_test(panel, h_old), entry_for_test(other, h_older)];
+        let mut l = DockLayout::new();
+        l.show(panel);
+        l.show(other);
+        let retired = retire_departed(&mut dialogs, &mut l, Some(panel), |_| false);
+        assert_eq!(retired.registrations, 2);
+        assert_eq!(
+            retired.closed,
+            vec![other],
+            "only the panel nobody replaces"
+        );
+        assert!(l.is_visible(panel), "the panel being re-registered closed");
+        assert!(!l.is_visible(other));
+
+        // A replacement already standing in the list.
+        let mut dialogs = vec![entry_for_test(panel, h_old), entry_for_test(panel, h_new)];
+        let mut l = DockLayout::new();
+        l.show(panel);
+        let retired = retire_departed(&mut dialogs, &mut l, None, |h| h == h_new);
+        assert_eq!(retired.registrations, 1);
+        assert!(retired.closed.is_empty());
+        assert!(l.is_visible(panel));
+        assert_eq!(dialogs.len(), 1);
+        assert_eq!(dialogs[0].h_client, h_new);
+
+        // Two ended registrations for one panel.
+        let mut dialogs = vec![entry_for_test(panel, h_old), entry_for_test(panel, h_older)];
+        let retired = retire_departed(&mut dialogs, &mut l, None, |_| false);
+        assert_eq!(retired.registrations, 2);
+        assert_eq!(retired.closed, vec![panel], "closed once, not twice");
+    }
+
+    /// A tab drag that ends moves only a panel still open. The second
+    /// half is why the guard exists: `move_panel` reopens a closed one.
+    #[test]
+    fn a_drop_does_not_put_back_a_panel_closed_during_the_drag() {
+        let (panel, _, _, _, _) = retirement_fixture();
+        let mut l = DockLayout::new();
+        l.show(panel);
+        assert!(drop_moves_panel(&l, panel));
+        l.hide(panel);
+        assert!(!drop_moves_panel(&l, panel));
+
+        l.move_panel(panel, DropTarget::Side(DockSide::Left));
+        assert!(
+            l.is_visible(panel),
+            "precondition: move_panel no longer reopens a closed panel, so the guard is moot"
+        );
+    }
+
+    /// Whitespace removed, so a guard pins statements and not the
+    /// layout rustfmt happens to give them.
+    fn squashed(text: &str) -> String {
+        text.chars().filter(|c| !c.is_whitespace()).collect()
+    }
+
+    /// The body of `name` in this file's production half, comments
+    /// stripped and whitespace removed.
+    fn own_body(name: &str) -> String {
+        use crate::plugin_reentry_guards::{code_only, fn_body};
+        let src = include_str!("dock_panels.rs");
+        let src = &src[..src.find("#[cfg(test)]").expect("test module")];
+        squashed(&code_only(&fn_body(src, name)))
+    }
+
+    /// The same for a function of `lib.rs`.
+    fn lib_body(name: &str) -> String {
+        use crate::plugin_reentry_guards::{code_only, fn_body, production_src};
+        squashed(&code_only(&fn_body(production_src(), name)))
+    }
+
+    /// Where `needle`, written with ordinary spacing, starts in a
+    /// squashed body.
+    fn at(body: &str, needle: &str) -> Option<usize> {
+        body.find(&squashed(needle))
+    }
+
+    /// The reconciler never takes a plugin's window back. Orderings a
+    /// unit test cannot see hold that: ended registrations are retired
+    /// before the model is read; the snapshot lists only windows whose
+    /// registration stands; and each is asked again right before every
+    /// call that re-parents, shows or hides it — after the previous
+    /// call too, since each of those calls sends the window a message
+    /// its plugin may answer by taking it away.
+    #[test]
+    fn the_reconciler_leaves_a_departed_window_alone() {
+        let apply = own_body("reconcile_tree");
+
+        let quit_check = at(&apply, "if !crate::quitting() {")
+            .expect("retirement must stand down once the quit has begun");
+        let retire = at(
+            &apply,
+            "retire_departed(&mut state.dock_dialogs, &mut state.dock_layout, None, \
+             registration_stands",
+        )
+        .expect("the reconcile no longer retires ended registrations");
+        let snapshot =
+            at(&apply, "state.dock_layout.clone()").expect("the reconcile's snapshot of the model");
+        assert!(
+            quit_check < retire && retire < snapshot,
+            "ended registrations must be retired, outside a quit, before the model is read"
+        );
+        assert!(
+            at(
+                &apply,
+                ".filter(|e| registration_stands(e.h_client)).map(|e| (e.panel, e.h_client))"
+            )
+            .is_some(),
+            "the snapshot must list only windows whose registration stands"
+        );
+
+        let ask = at(&apply, "if !still_ours(*panel, *panel_hwnd) { continue; }")
+            .expect("a shown panel's window is no longer asked before it is re-parented");
+        let into_group =
+            at(&apply, "SetParent(*panel_hwnd, Some(ghwnd))").expect("the re-parent into a group");
+        assert!(ask < into_group);
+        assert!(
+            at(
+                &apply[into_group..],
+                "SetParent(*panel_hwnd, Some(ghwnd)); \
+                 if !still_ours(*panel, *panel_hwnd) { continue; } } \
+                 let _ = ShowWindow(*panel_hwnd,"
+            ) == Some(0),
+            "a window re-parented into a group is shown or hidden without being asked again"
+        );
+        let hidden = at(
+            &apply,
+            "if !layout.is_visible(panel) && still_ours(panel, panel_hwnd) { \
+             let _ = ShowWindow(panel_hwnd, SW_HIDE); \
+             if still_ours(panel, panel_hwnd) \
+             && GetParent(panel_hwnd).unwrap_or_default() != main_hwnd { \
+             let _ = SetParent(panel_hwnd, Some(main_hwnd)); }",
+        )
+        .expect(
+            "a hidden panel's window must be asked before the hide and again before it is parked",
+        );
+        assert!(into_group < hidden);
+        assert!(
+            at(
+                &apply,
+                "if GetParent(panel_hwnd).unwrap_or_default() == gw.hwnd { \
+                 let _ = ShowWindow(panel_hwnd, SW_HIDE); \
+                 if GetParent(panel_hwnd).unwrap_or_default() == gw.hwnd { \
+                 let _ = SetParent(panel_hwnd, Some(main_hwnd)); } }"
+            )
+            .is_some(),
+            "a dying group's content must be moved out only while it is still that group's"
+        );
+        assert!(
+            at(
+                &apply,
+                "!matches!(panel, DockPanel::Plugin(_)) || registration_stands(hwnd)"
+            )
+            .is_some(),
+            "`still_ours` no longer asks whether a plugin's registration stands"
+        );
+        assert_eq!(
+            apply.matches("SetParent(").count(),
+            3,
+            "a new re-parent in the reconciler: it must ask `still_ours` like the others"
+        );
+
+        // What a group lays out is asked the same way.
+        assert!(
+            at(
+                &own_body("panel_content_hwnd"),
+                ".find(|e| e.panel == panel && registration_stands(e.h_client))"
+            )
+            .is_some(),
+            "a group would size and move a window that has left"
+        );
+    }
+
+    /// A group that notices a window gone only asks; the reconcile
+    /// runs from the message loop. From `WM_PAINT` it would destroy
+    /// the window being painted, and `WM_PARENTNOTIFY` arrives while
+    /// the window still exists. And nothing is asked, or done, once
+    /// the quit has begun.
+    #[test]
+    fn a_group_asks_for_the_sweep_and_never_reconciles_itself() {
+        let paint = own_body("paint_group");
+        let departed = at(
+            &paint,
+            ".any(|e| e.panel == front && !registration_stands(e.h_client))",
+        )
+        .expect("a group painting no longer looks for a front panel whose window has left");
+        let end_paint = at(&paint, "EndPaint(").expect("the paint");
+        let ask = at(
+            &paint,
+            "if let Some(main) = sweep_from { request_departure_sweep(main); }",
+        )
+        .expect("a group painting an empty band no longer asks for the sweep");
+        assert!(
+            departed < end_paint && end_paint < ask,
+            "the sweep is asked for mid-paint"
+        );
+        assert!(
+            !paint.contains("apply_dock_layout("),
+            "a group reconciles from inside its own WM_PAINT"
+        );
+
+        let proc = own_body("dock_group_wnd_proc");
+        let arm = at(&proc, "WM_PARENTNOTIFY => {").expect("a group no longer hears of a child");
+        let next = at(&proc[arm..], "WM_LBUTTONDOWN =>").expect("next arm");
+        let arm = &proc[arm..arm + next];
+        assert!(
+            at(
+                arm,
+                "if (wparam.0 & 0xFFFF) as u32 == WM_DESTROY \
+                 && GetAncestor(HWND(lparam.0 as *mut c_void), GA_PARENT) == hwnd { \
+                 if let Some(main) = find_main_hwnd(hwnd) { request_departure_sweep(main); } }"
+            )
+            .is_some(),
+            "the destruction of a child of the group, and only that, must ask for the sweep"
+        );
+        assert!(!arm.contains("apply_dock_layout("));
+
+        let request = own_body("request_departure_sweep");
+        assert!(
+            at(
+                &request,
+                "if crate::quitting() || SWEEP_POSTED.with(|p| p.replace(true)) { return; }"
+            )
+            .is_some(),
+            "the request must stand down during a quit, and be made once"
+        );
+        assert!(request.contains("PostMessageW(") && !request.contains("apply_dock_layout("));
+        assert!(
+            at(
+                &request,
+                "if posted.is_err() { SWEEP_POSTED.with(|p| p.set(false)); }"
+            )
+            .is_some(),
+            "a request that could not be posted would block every later one"
+        );
+
+        let sweep = own_body("sweep_departed_plugin_panels");
+        let clear = at(&sweep, "SWEEP_POSTED.with(|p| p.set(false));")
+            .expect("the sweep no longer clears its flag");
+        let quit_check = at(&sweep, "if crate::quitting() { return; }")
+            .expect("the sweep must do nothing once the quit has begun");
+        let reconcile = at(
+            &sweep,
+            "if departed { unsafe { apply_dock_layout(main_hwnd) }; }",
+        )
+        .expect("the sweep must reconcile only when a registration has ended");
+        assert!(clear < quit_check && quit_check < reconcile);
+        assert!(
+            at(&sweep, ".any(|e| !registration_stands(e.h_client))").is_some(),
+            "the sweep no longer looks for an ended registration"
+        );
+
+        // And the main window answers the message with the sweep.
+        use crate::plugin_reentry_guards::{code_only, production_src};
+        let lib = squashed(&code_only(production_src()));
+        assert!(
+            at(
+                &lib,
+                "WM_APP_DOCK_SWEEP => { dock_panels::sweep_departed_plugin_panels(hwnd); LRESULT(0) }"
+            )
+            .is_some(),
+            "nothing answers the sweep a group asks for"
+        );
+    }
+
+    /// Registration is the other place an ended registration is
+    /// dropped: only standing ones can refuse a new one, and the
+    /// retirement runs once the registration is going ahead — after the
+    /// `SetParent` that makes the window stand, which is why it does
+    /// not count the window being registered — keeping its panel open.
+    #[test]
+    fn registration_counts_only_standing_registrations_and_retires_the_rest() {
+        let register = lib_body("register_dock_dialog");
+        let quit = at(&register, "if quitting() {").expect(
+            "a registration during a quit would retire, and close panels the user had open",
+        );
+        assert!(
+            quit < at(&register, "IsWindow(Some(h_client))").expect("the first window check"),
+            "the quit check must come before anything is looked at"
+        );
+        assert!(
+            at(
+                &register,
+                "let standing = |e: &&DockEntry| dock_panels::registration_stands(e.h_client);"
+            )
+            .is_some(),
+            "registration no longer tells standing registrations from ended ones"
+        );
+        for check in [
+            "if dialogs.iter().filter(standing).count() >= DOCK_DIALOG_REGISTRATION_CAP {",
+            "if dialogs.iter().filter(standing).any(|e| e.panel == panel) {",
+        ] {
+            assert!(
+                at(&register, check).is_some(),
+                "an ended registration can refuse a new one: `{check}` is gone"
+            );
+        }
+        assert_eq!(
+            register.matches("dialogs.iter()").count(),
+            2,
+            "a check in registration reads the list without asking which registrations stand"
+        );
+        let adopt = at(
+            &register,
+            "if SetParent(h_client, Some(main_hwnd_owner)).is_err() {",
+        )
+        .expect("the adoption");
+        // A window whose registration stands is not registered a second
+        // time: the registration it has is refreshed, and the function
+        // answers before anything is counted, adopted, restyled or
+        // hidden — the panel is on screen, or wherever it was.
+        let refresh = at(
+            &register,
+            "if let Some(entry) = dialogs.iter_mut().find(|e| { \
+             e.h_client.0 == h_client.0 && dock_panels::registration_stands(e.h_client) }) { \
+             let (panel, u_mask) = (entry.panel, params.u_mask); \
+             let tell_again = !dock_panels::delivering_container_notices(); \
+             if !refresh_dock_registration(entry, params, tell_again) { return None; }",
+        )
+        .expect("a second registration of a standing window must refresh the first");
+        assert_eq!(register.matches("dialogs.iter_mut()").count(), 1);
+        // The mask's side is seeded again, and the layout marked for
+        // the reconcile that repaints the tab and sends the notice.
+        let answered = refresh
+            + at(
+                &register[refresh..],
+                "if let Some(side) = codepp_plugin_host::docking::dock_side_from_u_mask(u_mask) { \
+                 (*self.dock_layout).set_initial_side(panel, side); } \
+                 *self.dock_dirty = true; return Some(panel); }",
+            )
+            .expect("the refresh must seed the side, mark the layout and answer with its panel");
+        assert!(
+            at(&register, "caller: params.caller,").is_some(),
+            "a registration no longer records which plugin it was taken for"
+        );
+        let cap = at(&register, "DOCK_DIALOG_REGISTRATION_CAP {").expect("the cap");
+        assert!(
+            answered < cap && cap < adopt,
+            "a refresh must answer before the cap is counted and the window adopted"
+        );
+        for touches in [
+            "SetParent(",
+            "SetWindowLongPtrW(",
+            "ShowWindow(",
+            ".unpark(",
+        ] {
+            assert!(
+                at(&register[refresh..answered], touches).is_none(),
+                "a refresh moved or restyled a docked panel: `{touches}`"
+            );
+        }
+        let retire = at(
+            &register,
+            "dock_panels::retire_departed(dialogs, &mut *self.dock_layout, Some(panel), |h|",
+        )
+        .expect("registration must drop ended registrations and keep its own panel open");
+        let push = at(&register, "dialogs.push(DockEntry {").expect("the push");
+        assert!(
+            adopt < retire && retire < push,
+            "ended registrations are dropped once the window is adopted, before it is listed"
+        );
+        assert!(
+            at(
+                &register[retire..push],
+                "h != h_client && dock_panels::registration_stands(h)"
+            )
+            .is_some(),
+            "the window being registered must not count as a standing registration"
+        );
+    }
+
+    /// Every lookup a plugin's message makes, and everything the host
+    /// sends a panel's window, go by registrations that stand. And a
+    /// drop moves only a panel still open.
+    #[test]
+    fn plugin_messages_find_only_standing_registrations() {
+        for (function, needle) in [
+            (
+                "panel_for_client",
+                "if !dock_panels::registration_stands(h) { return None; }",
+            ),
+            (
+                "update_dock_disp_info",
+                "if !dock_panels::registration_stands(h) { return false; }",
+            ),
+            (
+                "view_other_dock_tab",
+                ".find(|e| e.name == name && dock_panels::registration_stands(e.h_client))",
+            ),
+            (
+                "dock_hwnd_by_module",
+                ") && dock_panels::registration_stands(entry.h_client)",
+            ),
+            (
+                "hide_plugin_panel",
+                "let target = target.filter(|h| dock_panels::registration_stands(*h)); \
+                 if let Some(h_client) = target {",
+            ),
+        ] {
+            assert!(
+                at(&lib_body(function), needle).is_some(),
+                "`{function}` finds a registration whose window has left"
+            );
+        }
+        let deliver = own_body("deliver_container_notices");
+        let stands = at(&deliver, "if !registration_stands(h_client) { continue; }")
+            .expect("a container notice goes to a window that has left");
+        // And a delivery under way stops, and drops what it had
+        // queued, once a handler has begun the quit.
+        let quit = at(
+            &deliver,
+            "pop_front()) { if crate::quitting() { \
+             CONTAINER_NOTICES.with(|q| q.borrow_mut().clear()); break; }",
+        )
+        .expect("a delivery under way goes on after the quit has begun");
+        assert!(quit < stands);
+        assert!(
+            at(
+                &own_body("apply_requested_panel_focus"),
+                ".find(|e| e.panel == panel && registration_stands(e.h_client))"
+            )
+            .is_some(),
+            "focus goes to a window that has left"
+        );
+        let up = own_body("on_group_button_up");
+        assert!(
+            at(
+                &up,
+                "if drop_moves_panel(&state.dock_layout, panel) { \
+                 state.dock_layout.move_panel(panel, target); }"
+            )
+            .is_some(),
+            "a drop puts back a panel closed during the drag"
+        );
+        assert_eq!(up.matches("move_panel(").count(), 1);
+    }
+
+    /// A reconcile asked for from inside one is owed, not run: the
+    /// running one makes another pass, and stops after a fixed number
+    /// when every pass asks again. Nested, a plugin that rebuilds its
+    /// panel whenever the panel is shown would recurse the host until
+    /// its stack ran out.
+    #[test]
+    fn a_reconcile_asked_for_during_one_is_owed_not_nested() {
+        use std::cell::Cell;
+
+        // Three passes are each answered with a request; the fourth
+        // settles.
+        let runs = Cell::new(0u32);
+        let passes = run_reconcile(|| {
+            runs.set(runs.get() + 1);
+            if runs.get() <= 3 {
+                let nested = run_reconcile(|| panic!("a nested reconcile ran"));
+                assert_eq!(nested, None, "the nested call must only note what is owed");
+            }
+        });
+        assert_eq!(passes, Some(4));
+        assert_eq!(runs.get(), 4);
+
+        // Every pass answered with a request: the bound.
+        let runs = Cell::new(0u32);
+        let passes = run_reconcile(|| {
+            runs.set(runs.get() + 1);
+            let _ = run_reconcile(|| panic!("a nested reconcile ran"));
+        });
+        assert_eq!(passes, Some(MAX_RECONCILE_PASSES));
+        assert_eq!(runs.get(), MAX_RECONCILE_PASSES);
+
+        // Nothing is left owed by that: the next reconcile runs once.
+        assert_eq!(run_reconcile(|| {}), Some(1));
+
+        // And an unwind out of a pass releases the latch.
+        let caught = std::panic::catch_unwind(|| run_reconcile(|| panic!("mid-pass")));
+        assert!(caught.is_err(), "precondition: the pass unwound");
+        assert_eq!(
+            run_reconcile(|| {}),
+            Some(1),
+            "the latch survived the unwind"
+        );
+    }
+
+    /// The reconciler's passes run only under the latch, and the
+    /// notifications of phase 6 go out once it is released, so a
+    /// handler that shows or hides a panel still reconciles at once.
+    #[test]
+    fn a_pass_runs_only_under_the_latch_and_notices_follow_it() {
+        let apply = own_body("apply_dock_layout");
+        let passes = at(
+            &apply,
+            "if run_reconcile(|| unsafe { reconcile_tree(main_hwnd) }).is_none() { return; }",
+        )
+        .expect("the reconcile no longer runs its passes under the latch");
+        let notices = at(&apply, "deliver_container_notices(main_hwnd").expect("the notices");
+        assert!(
+            passes < notices,
+            "the notices are sent before the passes are over"
+        );
+        let src = include_str!("dock_panels.rs");
+        let src = &src[..src.find("#[cfg(test)]").expect("test module")];
+        assert_eq!(
+            squashed(&crate::plugin_reentry_guards::code_only(src))
+                .matches("reconcile_tree(")
+                .count(),
+            2,
+            "a pass is run from somewhere other than `apply_dock_layout`, outside the latch"
+        );
+        let run = own_body("run_reconcile");
+        assert!(
+            at(
+                &run,
+                "let Some(_running) = Reconciling::enter() else { \
+                 RECONCILE_OWED.with(|o| o.set(true)); return None; };"
+            )
+            .is_some(),
+            "a nested reconcile must note that a pass is owed, and run nothing"
+        );
+        assert!(
+            at(
+                &own_body("reconcile_tree"),
+                "unsafe { SWEEP_POSTED.with(|p| p.set(false));"
+            )
+            .is_some(),
+            "a pass no longer frees the sweep latch, which a lost message would leave set"
+        );
+    }
+
+    /// A dropped registration's tab icon is the host's own bitmap and
+    /// is deleted exactly once: by the retirement, or at teardown,
+    /// which takes it out of the entry so a later retirement finds
+    /// none.
+    #[test]
+    fn a_tab_icon_is_deleted_once() {
+        use crate::plugin_reentry_guards::{code_only, production_src};
+        assert!(
+            at(
+                &own_body("retire_departed"),
+                "if let Some(bmp) = entry.tab_icon { let _ = unsafe { DeleteObject(bmp.into()) }; }"
+            )
+            .is_some(),
+            "a retired registration leaks its tab icon"
+        );
+        assert!(
+            at(
+                &squashed(&code_only(production_src())),
+                "for entry in &mut state.dock_dialogs { \
+                 if let Some(bmp) = entry.tab_icon.take() { let _ = DeleteObject(bmp.into()); } }"
+            )
+            .is_some(),
+            "teardown must take each icon out of its entry as it deletes it"
+        );
     }
 
     #[test]

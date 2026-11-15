@@ -654,6 +654,13 @@ const WM_APP_WAKE: u32 = WM_APP + 1;
 /// `WM_APP + 2` and `+ 3` are the UDL editor's.
 const WM_APP_QUIT: u32 = WM_APP + 4;
 
+/// Posted by a dock group that finds a plugin panel's window gone —
+/// destroyed, or re-parented away by its plugin — so the main window
+/// drops the registration and closes the panel once control is back in
+/// a message loop. See `dock_panels::request_departure_sweep`.
+/// `WM_APP + 5` is `instance::WM_APP_FORWARDED`.
+const WM_APP_DOCK_SWEEP: u32 = WM_APP + 6;
+
 /// Timer id used by `SetTimer` for the periodic session auto-save.
 /// The value is local to the main window's timer table; any
 /// non-zero `usize` distinct from other timers on the same HWND
@@ -1237,7 +1244,8 @@ struct DockEntry {
     /// Display title — also the window name
     /// `NPPM_DMMGETPLUGINHWNDBYNAME` compares. Owned `String`, decoded
     /// from the plugin's `pszName` at registration and refreshed
-    /// on every `NPPM_DMMUPDATEDISPINFO`.
+    /// on every `NPPM_DMMUPDATEDISPINFO`, and by a second registration
+    /// of the same window.
     ///
     /// This is the **value**, not the label: `view_other_dock_tab`
     /// matches it verbatim and `dock_hwnd_by_module` regardless of
@@ -1299,6 +1307,20 @@ struct DockEntry {
     /// gives the nested pass something new to send — and the queue in
     /// `dock_panels::deliver_container_notices` is what does.
     dmn_container: Option<codepp_core::dock::DockContainer>,
+    /// The plugin the host took the registration for
+    /// (`DockDialogParams::caller`): the one it was calling when the
+    /// message arrived, or `None` when it was calling none, as for a
+    /// registration sent from a plugin's own window procedure or
+    /// timer. Kept so that a second registration of the window by a
+    /// plugin the host can tell is another one is refused — see
+    /// `refresh_dock_registration`.
+    ///
+    /// Written once, at the first registration, and never taken from
+    /// a later one. Were a refresh to fill in a `None`, any plugin
+    /// could put itself on record for a window another registered
+    /// from its own window procedure, and that window's plugin would
+    /// then be refused its own refresh.
+    caller: Option<usize>,
 }
 
 /// State of Notepad++'s "Begin/End Select" feature — see
@@ -3288,6 +3310,16 @@ impl UiPlatform for Win32Ui {
         if h_client.is_invalid() {
             return None;
         }
+        // Not once the quit has begun. Nothing about the dock is
+        // retired from then on — plugins destroy their panels as they
+        // shut down, and the layout to save is the one the user had —
+        // and a registration is where retiring happens. A panel
+        // registered for a window that is about to go would show
+        // nothing either.
+        if quitting() {
+            tracing::debug!("NPPM_DMMREGASDCKDLG: refused, the host is quitting");
+            return None;
+        }
         unsafe {
             if !IsWindow(Some(h_client)).as_bool() {
                 tracing::warn!(
@@ -3366,25 +3398,58 @@ impl UiPlatform for Win32Ui {
                 );
                 return None;
             }
-            // Reject duplicate registrations of the same h_client,
-            // and any frame the host already created — registering a
-            // frame as its own client would nest it inside itself.
-            // Walking the Vec is O(n) but n is small (typically
-            // <= 4 docks per session) and this is the only
-            // call-site that grows it.
+            // A second registration of an h_client whose first still
+            // stands refreshes the first and answers as a registration
+            // does. Notepad++ answers TRUE for it and leaves the panel
+            // where it is (measured in 8.9.8.1, DESIGN.md §7.4), so a
+            // plugin that registers its panel every time it is asked
+            // to show it works there, and was refused here. Refusing
+            // also left the host holding the first `tTbData`, which
+            // the plugin may have let go of once it handed over a new
+            // one.
+            //
+            // A registration whose window has left — destroyed, or
+            // re-parented out of the host's containers by its plugin
+            // — counts for nothing here or below: it has ended
+            // (`dock_panels::registration_stands`), and the plugin
+            // registering that window again, or another under the same
+            // name, is how the panel comes back. Notepad++ takes both,
+            // measured with the same probe. Until this was so, a
+            // plugin that destroyed its panel and built a new one was
+            // refused as already registered for the rest of the
+            // session.
             let dialogs = &mut *self.dock_dialogs;
-            if dialogs.iter().any(|e| e.h_client.0 == h_client.0) {
-                tracing::warn!(
-                    h = h_client.0 as usize,
-                    "NPPM_DMMREGASDCKDLG: h_client already registered"
-                );
-                return None;
+            let standing = |e: &&DockEntry| dock_panels::registration_stands(e.h_client);
+            if let Some(entry) = dialogs.iter_mut().find(|e| {
+                e.h_client.0 == h_client.0 && dock_panels::registration_stands(e.h_client)
+            }) {
+                let (panel, u_mask) = (entry.panel, params.u_mask);
+                // Told its container again, as after a first
+                // registration — unless this registration comes from
+                // inside the handler of such a notice, which would
+                // otherwise be answered with another for as long as
+                // the plugin kept registering from it.
+                let tell_again = !dock_panels::delivering_container_notices();
+                if !refresh_dock_registration(entry, params, tell_again) {
+                    return None;
+                }
+                if let Some(side) = codepp_plugin_host::docking::dock_side_from_u_mask(u_mask) {
+                    (*self.dock_layout).set_initial_side(panel, side);
+                }
+                // The tab's icon may have changed, and the reconcile
+                // is what sends the container notice; nothing else on
+                // screen has changed, and the panel stays shown or
+                // hidden as it was.
+                *self.dock_dirty = true;
+                return Some(panel);
             }
             // Bound the number of registered frames so a buggy
             // / malicious plugin can't exhaust the per-process
             // GDI handle table by flooding REGASDCKDLG with
-            // fresh HWNDs.
-            if dialogs.len() >= DOCK_DIALOG_REGISTRATION_CAP {
+            // fresh HWNDs. Ended registrations do not add up beside
+            // the cap: every registration that gets past this point
+            // drops them all, below.
+            if dialogs.iter().filter(standing).count() >= DOCK_DIALOG_REGISTRATION_CAP {
                 tracing::warn!(
                     cap = DOCK_DIALOG_REGISTRATION_CAP,
                     "NPPM_DMMREGASDCKDLG: registration cap reached; rejecting"
@@ -3419,7 +3484,7 @@ impl UiPlatform for Win32Ui {
                 );
                 return None;
             };
-            if dialogs.iter().any(|e| e.panel == panel) {
+            if dialogs.iter().filter(standing).any(|e| e.panel == panel) {
                 tracing::warn!(
                     panel = panel.title(),
                     "NPPM_DMMREGASDCKDLG: that panel is already registered"
@@ -3439,6 +3504,24 @@ impl UiPlatform for Win32Ui {
                 );
                 return None;
             }
+            // Drop every registration that has ended, now that this
+            // one is going ahead. `panel` stays open if one of them
+            // held it: the window being registered replaces theirs,
+            // so a plugin that rebuilds its panel keeps it on screen.
+            // Any other panel an ended registration held is closed,
+            // as the reconciler would close it.
+            //
+            // An ended registration for this very `h_client` — the
+            // plugin took the window out and is docking it again —
+            // reads as standing from here on, since the `SetParent`
+            // above has just put the window under the main window.
+            // None stood for it before that, which the first check
+            // established, so any entry with this handle has ended.
+            let retired =
+                dock_panels::retire_departed(dialogs, &mut *self.dock_layout, Some(panel), |h| {
+                    h != h_client && dock_panels::registration_stands(h)
+                });
+            dock_panels::log_retired(&retired);
             // Make `h_client` look like the child it now is.
             //
             // `SetParent` changes the parent; it does not change the
@@ -3490,6 +3573,7 @@ impl UiPlatform for Win32Ui {
                 dlg_id: params.dlg_id,
                 u_mask: params.u_mask,
                 dmn_container: None,
+                caller: params.caller,
             });
             // Seed where the panel will land the first time it is
             // shown, from the plugin's own `DWS_DF_CONT_*`
@@ -3580,7 +3664,7 @@ impl UiPlatform for Win32Ui {
         // any name the sanitizer rewrote.
         let panel = unsafe { &*self.dock_dialogs }
             .iter()
-            .find(|e| e.name == name)
+            .find(|e| e.name == name && dock_panels::registration_stands(e.h_client))
             .map(|e| e.panel);
         let Some(panel) = panel else {
             return false;
@@ -3601,7 +3685,10 @@ impl UiPlatform for Win32Ui {
 
     fn update_dock_disp_info(&mut self, h_client: codepp_plugin_host::Hwnd) -> bool {
         let h = HWND(h_client);
-        if h.is_invalid() {
+        // Not for a window that has left the host's containers: its
+        // registration has ended, and the entry found under its handle
+        // would be one about to be dropped.
+        if !dock_panels::registration_stands(h) {
             return false;
         }
         // SAFETY: `dock_dialogs` is alive while `Win32Ui` is in scope
@@ -3647,9 +3734,11 @@ impl UiPlatform for Win32Ui {
         // SAFETY: `dock_dialogs` is alive while `Win32Ui` is in scope
         // and is UI-thread-only — see the field doc.
         let dialogs = unsafe { &*self.dock_dialogs };
-        // A registration outlives a window its plugin destroyed — §7.4
-        // tracks that — so a dead one is passed over rather than handed
-        // back as a handle Windows may since have given another window.
+        // Only a registration that stands. One whose window was
+        // destroyed, or taken out of the host's containers, has ended
+        // and waits for the reconciler to drop it; handing its handle
+        // back would name a window that is the plugin's own again, or
+        // one Windows has since given the handle to.
         dialogs
             .iter()
             .find(|entry| {
@@ -3658,7 +3747,7 @@ impl UiPlatform for Win32Ui {
                     &entry.name,
                     module_name,
                     window_name,
-                ) && unsafe { IsWindow(Some(entry.h_client)) }.as_bool()
+                ) && dock_panels::registration_stands(entry.h_client)
             })
             .map_or(core::ptr::null_mut(), |entry| entry.h_client.0)
     }
@@ -23464,7 +23553,107 @@ unsafe fn dock_close_panel(main_hwnd: HWND, panel: DockPanel) {
     }
 }
 
-/// The panel a registered `h_client` belongs to.
+/// A second `NPPM_DMMREGASDCKDLG` for a window whose registration
+/// stands: take what the plugin says now, and leave the panel as it
+/// is.
+///
+/// What is taken is everything the registration holds of the plugin's:
+/// the `tTbData` pointer `NPPM_DMMUPDATEDISPINFO` re-reads, the two
+/// names `NPPM_DMMGETPLUGINHWNDBYNAME` and `NPPM_DMMVIEWOTHERTAB` find
+/// the panel by, the command that reopens it (`dlgID`, which the shell
+/// records again, signed or not, once this has answered), the mask, and
+/// the tab's icon. What is kept is the panel: its identity, and with it
+/// its caption and its place in `session.xml`, as for a rename through
+/// `NPPM_DMMUPDATEDISPINFO`; whether it is shown; and where it is.
+///
+/// With `tell_again` the plugin is told its panel's container once
+/// more, by the reconcile that follows: what it was last told is
+/// forgotten, so `container_notices` sends `DMN_DOCK` or `DMN_FLOAT` as
+/// it does after a first registration. Notepad++ sends that notice on
+/// every registration, a repeated one included (measured in 8.9.8.1).
+/// The caller passes `false` from inside the delivery of such a
+/// notice.
+///
+/// `false`, with nothing changed, in two cases. Both are a plugin
+/// registering a docked window that is not its own — a stale handle,
+/// the wrong variable — where taking it would hand that plugin's
+/// `tTbData` and command to another's panel, and refusing it says so
+/// in the log (DESIGN.md §6.5):
+///
+/// * The module named now is not the one the registration has,
+///   compared regardless of ASCII case as the lookup compares it.
+/// * The host took the first registration for one plugin and takes
+///   this one for another ([`DockEntry::caller`]). That is the check
+///   with something behind it, since a plugin chooses the module name
+///   it gives; but on Windows the host knows the sender only while it
+///   is calling into a plugin, so a registration from a plugin's own
+///   window procedure or timer is not told apart, and one from a timer
+///   that fires inside another plugin's modal loop is taken for that
+///   plugin and can be refused wrongly — which leaves the registration
+///   as it was, as every repeated registration was left until this
+///   existed.
+///
+/// Notepad++ 8.9.8.1 answers TRUE for a docked window registered again
+/// under another name, and under another module too, and afterwards
+/// finds the window by the old name as well as the new (measured);
+/// this replaces the old name.
+///
+/// # Safety
+///
+/// UI thread only. `params.h_icon_tab` must be an icon handle, or
+/// anything at all with `DWS_ICONTAB` clear, as for a first
+/// registration.
+unsafe fn refresh_dock_registration(
+    entry: &mut DockEntry,
+    params: codepp_plugin_host::DockDialogParams,
+    tell_again: bool,
+) -> bool {
+    if !entry.module_name.eq_ignore_ascii_case(&params.module_name) {
+        tracing::warn!(
+            panel = entry.panel.title(),
+            module = codepp_shell::sanitize_str_for_display(&params.module_name),
+            "NPPM_DMMREGASDCKDLG: h_client is a docked panel of another module"
+        );
+        return false;
+    }
+    if let (Some(first), Some(now)) = (entry.caller, params.caller) {
+        if first != now {
+            tracing::warn!(
+                panel = entry.panel.title(),
+                registered_by = first,
+                sent_by = now,
+                "NPPM_DMMREGASDCKDLG: h_client is a docked panel another plugin registered"
+            );
+            return false;
+        }
+    }
+    let tab_icon = if params.u_mask & codepp_plugin_host::DWS_ICONTAB != 0 {
+        unsafe { icon_to_tab_bitmap(HICON(params.h_icon_tab)) }
+    } else {
+        None
+    };
+    if let Some(old) = std::mem::replace(&mut entry.tab_icon, tab_icon) {
+        let _ = unsafe { DeleteObject(old.into()) };
+    }
+    entry.tb_data = params.tb_data;
+    entry.name = params.name;
+    entry.module_name = params.module_name;
+    entry.dlg_id = params.dlg_id;
+    entry.u_mask = params.u_mask;
+    if tell_again {
+        entry.dmn_container = None;
+    }
+    true
+}
+
+/// The panel a registered `h_client` belongs to, while its
+/// registration stands.
+///
+/// `None` for a window its plugin has destroyed or taken out of the
+/// host's containers (`dock_panels::registration_stands`): the
+/// registration has ended, so `NPPM_DMMSHOW` and `NPPM_DMMHIDE` do
+/// nothing for it, as for a window never registered. Showing it would
+/// open a panel with nothing to put in it.
 ///
 /// A free function rather than a `Win32Ui` method because the trait
 /// impl is the only `impl` block that type has here, and a helper is
@@ -23479,7 +23668,7 @@ unsafe fn panel_for_client(
     h_client: codepp_plugin_host::Hwnd,
 ) -> Option<DockPanel> {
     let h = HWND(h_client);
-    if h.is_invalid() {
+    if !dock_panels::registration_stands(h) {
         return None;
     }
     unsafe { &*dialogs }
@@ -23517,6 +23706,9 @@ unsafe fn hide_plugin_panel(main_hwnd: HWND, panel: DockPanel) {
             .find(|e| e.panel == panel)
             .map(|e| e.h_client)
     });
+    // Only a window whose registration stands is told: one its plugin
+    // has taken out of the host's containers is no longer this panel.
+    let target = target.filter(|h| dock_panels::registration_stands(*h));
     if let Some(h_client) = target {
         // `_guard` bounds the round trip: a plugin's handler may close
         // the panel again, and without the latch that recurses until
@@ -28032,6 +28224,13 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                 // here. See `request_quit`.
                 LRESULT(0)
             }
+            WM_APP_DOCK_SWEEP => {
+                // A dock group found a plugin panel's window gone.
+                // Reconciles only if a registration no longer stands,
+                // so a stray message costs a look and nothing else.
+                dock_panels::sweep_departed_plugin_panels(hwnd);
+                LRESULT(0)
+            }
             WM_DESTROY => {
                 // Persist the session before tearing down. Pull live
                 // text/cursor through the editor while it still
@@ -28176,8 +28375,12 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                     // gave us; these bitmaps are the host's own copy
                     // (see `DockEntry::tab_icon`), so they are ours
                     // to delete — same rationale as the two above.
-                    for entry in &*state.dock_dialogs {
-                        if let Some(bmp) = entry.tab_icon {
+                    // Taken out of each entry as it goes: the entries
+                    // stay in the list, and nothing that drops one
+                    // later may delete its bitmap a second time, by
+                    // when the handle may name another GDI object.
+                    for entry in &mut state.dock_dialogs {
+                        if let Some(bmp) = entry.tab_icon.take() {
                             let _ = DeleteObject(bmp.into());
                         }
                     }
