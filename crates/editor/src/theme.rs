@@ -456,11 +456,12 @@ pub fn apply_default_styles(editor: &EditorHandle) {
 /// width made redundant (the numbers right-align to the margin edge,
 /// and the edge *is* the shared rightmost column).
 ///
-/// Width comes from [`EditorHandle::update_line_number_width`]: a fixed
-/// minimum that holds steady for typical files and grows only for ones
-/// past the digit budget, so the bar neither jiggles during ordinary
-/// editing nor clips a very large file's numbers. A future "show line
-/// numbers" view toggle becomes
+/// Width comes from [`EditorHandle::update_line_number_width`]: room for
+/// the largest line number on screen, and for three digits at least,
+/// measured in the font this call may just have changed. Each backend
+/// keeps it that way as the view scrolls, zooms and is edited, by calling
+/// [`EditorHandle::fit_line_number_width`] after every paint. A future
+/// "show line numbers" view toggle becomes
 /// `editor.set_margin_width(LINE_NUMBER_MARGIN, 0)` to hide (Scintilla
 /// hides a margin via width-zero without resetting its type or styles).
 pub fn apply_line_number_margin(editor: &EditorHandle) {

@@ -87,24 +87,24 @@ use codepp_scintilla_sys::{
     SCI_GETDOCPOINTER, SCI_GETENDSTYLED, SCI_GETEOLMODE, SCI_GETFIRSTVISIBLELINE, SCI_GETFOLDLEVEL,
     SCI_GETLENGTH, SCI_GETLINECOUNT, SCI_GETRANGEPOINTER, SCI_GETSCROLLWIDTH, SCI_GETSELECTIONEND,
     SCI_GETSELECTIONNEND, SCI_GETSELECTIONNSTART, SCI_GETSELECTIONS, SCI_GETSELECTIONSTART,
-    SCI_GETTARGETEND, SCI_GETTARGETSTART, SCI_GETWRAPMODE, SCI_GETXOFFSET, SCI_LINEFROMPOSITION,
-    SCI_LINELENGTH, SCI_LINESONSCREEN, SCI_MARKERDEFINE, SCI_MARKERENABLEHIGHLIGHT,
-    SCI_MARKERSETBACK, SCI_MARKERSETBACKSELECTED, SCI_MARKERSETFORE, SCI_POSITIONFROMLINE,
-    SCI_REPLACETARGET, SCI_REPLACETARGETRE, SCI_SEARCHANCHOR, SCI_SEARCHINTARGET, SCI_SEARCHNEXT,
-    SCI_SEARCHPREV, SCI_SELECTIONISRECTANGLE, SCI_SETAUTOMATICFOLD, SCI_SETCARETLINEBACK,
-    SCI_SETCARETLINEVISIBLE, SCI_SETCHANGEHISTORY, SCI_SETFIRSTVISIBLELINE, SCI_SETFOLDFLAGS,
-    SCI_SETFOLDMARGINCOLOUR, SCI_SETFOLDMARGINHICOLOUR, SCI_SETILEXER, SCI_SETKEYWORDS,
-    SCI_SETMARGINMASKN, SCI_SETMARGINSENSITIVEN, SCI_SETMARGINTYPEN, SCI_SETMARGINWIDTHN,
-    SCI_SETPROPERTY, SCI_SETSAVEPOINT, SCI_SETSEARCHFLAGS, SCI_SETSEL, SCI_SETSELECTIONEND,
-    SCI_SETSELECTIONSTART, SCI_SETSTYLING, SCI_SETTARGETRANGE, SCI_SETTEXT, SCI_SETXOFFSET,
-    SCI_STARTSTYLING, SCI_STYLECLEARALL, SCI_STYLESETBACK, SCI_STYLESETBOLD, SCI_STYLESETFONT,
-    SCI_STYLESETFORE, SCI_STYLESETITALIC, SCI_STYLESETSIZE, SCI_STYLESETUNDERLINE, SCI_TEXTWIDTH,
-    SCI_VISIBLEFROMDOCLINE, SCI_WORDENDPOSITION, SCI_WORDSTARTPOSITION, SCI_WRAPCOUNT,
-    SC_CHANGE_HISTORY_ENABLED, SC_CHANGE_HISTORY_MARKERS, SC_CP_UTF8, SC_EOL_CR, SC_EOL_CRLF,
-    SC_EOL_LF, SC_FOLDACTION_CONTRACT, SC_FOLDLEVELHEADERFLAG, SC_MARGIN_NUMBER, SC_MARGIN_SYMBOL,
-    SC_MARKNUM_HISTORY_MODIFIED, SC_MARKNUM_HISTORY_REVERTED_TO_MODIFIED,
-    SC_MARKNUM_HISTORY_REVERTED_TO_ORIGIN, SC_MARKNUM_HISTORY_SAVED, SC_MARK_FULLRECT,
-    SC_WRAP_NONE, STYLE_LINENUMBER,
+    SCI_GETTARGETEND, SCI_GETTARGETSTART, SCI_GETWRAPMODE, SCI_GETXOFFSET, SCI_GETZOOM,
+    SCI_LINEFROMPOSITION, SCI_LINELENGTH, SCI_LINESONSCREEN, SCI_MARKERDEFINE,
+    SCI_MARKERENABLEHIGHLIGHT, SCI_MARKERSETBACK, SCI_MARKERSETBACKSELECTED, SCI_MARKERSETFORE,
+    SCI_POSITIONFROMLINE, SCI_REPLACETARGET, SCI_REPLACETARGETRE, SCI_SEARCHANCHOR,
+    SCI_SEARCHINTARGET, SCI_SEARCHNEXT, SCI_SEARCHPREV, SCI_SELECTIONISRECTANGLE,
+    SCI_SETAUTOMATICFOLD, SCI_SETCARETLINEBACK, SCI_SETCARETLINEVISIBLE, SCI_SETCHANGEHISTORY,
+    SCI_SETFIRSTVISIBLELINE, SCI_SETFOLDFLAGS, SCI_SETFOLDMARGINCOLOUR, SCI_SETFOLDMARGINHICOLOUR,
+    SCI_SETILEXER, SCI_SETKEYWORDS, SCI_SETMARGINMASKN, SCI_SETMARGINSENSITIVEN,
+    SCI_SETMARGINTYPEN, SCI_SETMARGINWIDTHN, SCI_SETPROPERTY, SCI_SETSAVEPOINT, SCI_SETSEARCHFLAGS,
+    SCI_SETSEL, SCI_SETSELECTIONEND, SCI_SETSELECTIONSTART, SCI_SETSTYLING, SCI_SETTARGETRANGE,
+    SCI_SETTEXT, SCI_SETXOFFSET, SCI_STARTSTYLING, SCI_STYLECLEARALL, SCI_STYLESETBACK,
+    SCI_STYLESETBOLD, SCI_STYLESETFONT, SCI_STYLESETFORE, SCI_STYLESETITALIC, SCI_STYLESETSIZE,
+    SCI_STYLESETUNDERLINE, SCI_TEXTWIDTH, SCI_VISIBLEFROMDOCLINE, SCI_WORDENDPOSITION,
+    SCI_WORDSTARTPOSITION, SCI_WRAPCOUNT, SC_CHANGE_HISTORY_ENABLED, SC_CHANGE_HISTORY_MARKERS,
+    SC_CP_UTF8, SC_EOL_CR, SC_EOL_CRLF, SC_EOL_LF, SC_FOLDACTION_CONTRACT, SC_FOLDLEVELHEADERFLAG,
+    SC_MARGIN_NUMBER, SC_MARGIN_SYMBOL, SC_MARKNUM_HISTORY_MODIFIED,
+    SC_MARKNUM_HISTORY_REVERTED_TO_MODIFIED, SC_MARKNUM_HISTORY_REVERTED_TO_ORIGIN,
+    SC_MARKNUM_HISTORY_SAVED, SC_MARK_FULLRECT, SC_WRAP_NONE, STYLE_LINENUMBER,
 };
 
 /// The change-history strip's colour for a line changed since the last
@@ -184,6 +184,96 @@ thread_local! {
     /// the UI thread only. An entry for a view that is never painted again
     /// stays, which costs nothing: a backend's views live as long as it does.
     static WRAPPED_TOPS: std::cell::RefCell<Vec<WrappedTop>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Where a view stands, for [`NumberMarginFit::after`]: the document line at
+/// its top, the document's line count, and whether lines wrap.
+///
+/// Only what the margin's own width cannot change belongs here. The lines
+/// that fit on screen do not: where the widest line is about as wide as the
+/// text area, a wider margin brings the horizontal scroll bar up, which takes
+/// a line off the screen, and a narrower one takes the bar away again.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct NumberMarginAt {
+    top: sptr_t,
+    lines: sptr_t,
+    wraps: bool,
+}
+
+/// What a view's line-number margin was last sized for. See
+/// [`EditorHandle::fit_line_number_width`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct NumberMarginFit {
+    /// The digits the margin has room for.
+    digits: u32,
+    /// The zoom its width was measured at.
+    zoom: sptr_t,
+    /// Where the view stood when the margin was last made narrower.
+    narrowed_at: Option<NumberMarginAt>,
+    /// Where a narrower margin was undone with the view still in the same
+    /// place: the margin is not made narrower there again.
+    bounced_at: Option<NumberMarginAt>,
+}
+
+impl NumberMarginFit {
+    /// A margin just measured for `digits` at `zoom`.
+    fn fresh(digits: u32, zoom: sptr_t) -> Self {
+        Self {
+            digits,
+            zoom,
+            narrowed_at: None,
+            bounced_at: None,
+        }
+    }
+
+    /// The fit to size the margin for now that the view, standing at `at`,
+    /// shows numbers of `digits` digits at `zoom`; `None` to leave the
+    /// margin as it is.
+    ///
+    /// A wider margin is always given. A narrower one is not given where one
+    /// was just undone, because the margin's width can decide which numbers
+    /// show, in two ways. While lines wrap, a narrower margin leaves the
+    /// text more room, so fewer lines wrap and more of the document fits on
+    /// screen. Without wrapping, it can leave the widest line just enough
+    /// room for the horizontal scroll bar to go, which puts one more line
+    /// on screen. Either way the last number shown can gain the digit back,
+    /// the paint after would narrow the margin again, and the two would take
+    /// turns for ever, a repaint each. So where a narrower margin was
+    /// followed by a wider one with the view in the same place, the margin
+    /// stays wide until the view moves, the line count changes or wrapping
+    /// is switched. A window resized with the view otherwise in place does
+    /// not count as a move, so the margin can stay a digit wide after one.
+    fn after(self, digits: u32, zoom: sptr_t, at: NumberMarginAt) -> Option<Self> {
+        if zoom != self.zoom {
+            return Some(Self::fresh(digits, zoom));
+        }
+        match digits.cmp(&self.digits) {
+            std::cmp::Ordering::Equal => None,
+            std::cmp::Ordering::Greater => Some(Self {
+                digits,
+                bounced_at: if self.narrowed_at == Some(at) {
+                    Some(at)
+                } else {
+                    self.bounced_at
+                },
+                ..self
+            }),
+            std::cmp::Ordering::Less if self.bounced_at == Some(at) => None,
+            std::cmp::Ordering::Less => Some(Self {
+                digits,
+                narrowed_at: Some(at),
+                ..self
+            }),
+        }
+    }
+}
+
+thread_local! {
+    /// What each view's line-number margin was last sized for, by the view's
+    /// direct-call instance pointer. Kept here for the reason
+    /// [`WRAPPED_TOPS`] is.
+    static NUMBER_MARGIN_FITS: std::cell::RefCell<Vec<(usize, NumberMarginFit)>> =
         const { std::cell::RefCell::new(Vec::new()) };
 }
 
@@ -1531,48 +1621,124 @@ impl EditorHandle {
 
     /// Turn `margin` into Scintilla's built-in line-number margin
     /// (`SC_MARGIN_NUMBER`, which auto-renders `STYLE_LINENUMBER`-styled
-    /// numbers with no per-line population) and size it to fit the current
-    /// document. Idempotent and cheap — `theme::apply_line_number_margin`
-    /// re-runs it after every `SCI_STYLECLEARALL`; call
-    /// [`Self::update_line_number_width`] alone whenever only the line
-    /// count may have changed.
+    /// numbers with no per-line population) and size it for the numbers the
+    /// view shows. Idempotent and cheap — `theme::apply_line_number_margin`
+    /// re-runs it after every `SCI_STYLECLEARALL`, which is also every
+    /// change of font.
     pub fn enable_line_number_margin(&self, margin: u32) {
         self.set_margin_type(margin, SC_MARGIN_NUMBER);
         self.update_line_number_width(margin);
     }
 
-    /// Size the line-number margin to hold `max(actual line-count digits,
-    /// LINE_NUMBER_MARGIN_DIGITS)` digits, measured in pixels via
-    /// `SCI_TEXTWIDTH` so it is font- and DPI-correct.
+    /// Size the line-number margin for the largest line number the view
+    /// shows now, measured with `SCI_TEXTWIDTH` in the line numbers' own
+    /// style, so it follows the font, the zoom and the DPI.
     ///
-    /// The `max` gives the gutter a **fixed minimum** width: within the
-    /// digit budget it never changes as the line count crosses 9→10 or
-    /// 99→100, so ordinary editing never shifts the gutter — but a file
-    /// large enough to need more digits (past 99 999 lines at the default
-    /// budget) grows to show its full numbers instead of clipping. All
-    /// three backends drive their line-number width through here, so the
-    /// behaviour is identical on every platform.
-    ///
-    /// Cheap (two direct-call reads plus a measurement), but a caller on
-    /// the keystroke hot path should still gate it on the clamped digit
-    /// count actually changing — see [`line_number_digits`].
+    /// The margin is as wide as the numbers on screen need, whatever the
+    /// document's length, and never narrower than
+    /// [`LINE_NUMBER_MARGIN_MIN_DIGITS`] digits: three digits until line
+    /// 1000 comes into view, four from there. It measures every time, so call
+    /// it where the font may have changed, and
+    /// [`Self::fit_line_number_width`] from the view's `SCN_PAINTED`, which
+    /// measures only when the digits or the zoom have changed.
     pub fn update_line_number_width(&self, margin: u32) {
-        let lines = self.send(SCI_GETLINECOUNT, 0, 0).max(1) as u64;
-        let digits = line_number_digits(lines).max(LINE_NUMBER_MARGIN_DIGITS) as usize;
-        // Sample = one underscore pad + `digits` nines + NUL. The pad is an
-        // underscore (a full character cell, wider than a space) so the
-        // measured column carries a little breathing room from the text,
-        // matching N++.
-        let mut sample = Vec::with_capacity(digits + 2);
-        sample.push(b'_');
-        sample.resize(sample.len() + digits, b'9');
-        sample.push(0);
-        let width = self.send(
-            SCI_TEXTWIDTH,
-            STYLE_LINENUMBER as uptr_t,
-            sample.as_ptr() as sptr_t,
+        let fit = NumberMarginFit::fresh(
+            self.shown_line_number_digits(),
+            self.send(SCI_GETZOOM, 0, 0),
         );
+        self.size_line_number_margin(margin, fit);
+    }
+
+    /// Keep the line-number margin as wide as the numbers on screen need.
+    /// Call it from the view's `SCN_PAINTED`: a paint follows everything
+    /// that changes which numbers show, or how wide they are — a scroll, an
+    /// edit, a fold, a resize of the view, a zoom — so this needs no hook of
+    /// its own for any of them. A margin that changes is painted again.
+    ///
+    /// A paint where nothing changed costs five direct calls and no
+    /// measurement. A narrower margin is not given where it would only be
+    /// undone by the next paint, which wrapping and the horizontal scroll
+    /// bar can each cause (`NumberMarginFit::after`).
+    pub fn fit_line_number_width(&self, margin: u32) {
+        let Some(sized) = self.number_margin_fit() else {
+            self.update_line_number_width(margin);
+            return;
+        };
+        let digits = self.shown_line_number_digits();
+        let zoom = self.send(SCI_GETZOOM, 0, 0);
+        if digits == sized.digits && zoom == sized.zoom {
+            return;
+        }
+        if let Some(fit) = sized.after(digits, zoom, self.number_margin_at()) {
+            self.size_line_number_margin(margin, fit);
+        }
+    }
+
+    /// Give the line-number margin room for `fit.digits` digits, and
+    /// remember what it was sized for.
+    fn size_line_number_margin(&self, margin: u32, fit: NumberMarginFit) {
+        // As many nines as the number has digits, and a NUL. Digits are as
+        // wide as one another in nearly every font.
+        let mut sample = vec![b'9'; fit.digits as usize];
+        sample.push(0);
+        let width = self
+            .send(
+                SCI_TEXTWIDTH,
+                STYLE_LINENUMBER as uptr_t,
+                sample.as_ptr() as sptr_t,
+            )
+            .saturating_add(LINE_NUMBER_MARGIN_PAD);
+        // Remembered before the width is set, so that a paint the new width
+        // causes finds what the margin is sized for now, however soon it
+        // comes.
+        let key = self.view_key();
+        NUMBER_MARGIN_FITS.with(|fits| {
+            let mut fits = fits.borrow_mut();
+            fits.retain(|(view, _)| *view != key);
+            fits.push((key, fit));
+        });
         self.set_margin_width(margin, i32::try_from(width).unwrap_or(0));
+    }
+
+    /// What this view's line-number margin was last sized for, if it was.
+    fn number_margin_fit(&self) -> Option<NumberMarginFit> {
+        let key = self.view_key();
+        NUMBER_MARGIN_FITS.with(|fits| {
+            fits.borrow()
+                .iter()
+                .find(|(view, _)| *view == key)
+                .map(|(_, fit)| *fit)
+        })
+    }
+
+    /// The digits the line-number margin is to have room for: those of the
+    /// largest line number the view shows, and at least
+    /// [`LINE_NUMBER_MARGIN_MIN_DIGITS`]. The largest number is that of the
+    /// line at the view's bottom edge, which may be cut off there, or of the
+    /// document's last line where the document ends above it.
+    fn shown_line_number_digits(&self) -> u32 {
+        let first = self.send(SCI_GETFIRSTVISIBLELINE, 0, 0).max(0);
+        let on_screen = self.send(SCI_LINESONSCREEN, 0, 0).max(0);
+        // Past the last display line this answers a line the document does
+        // not have, so the line count bounds it.
+        let bottom = self.send(
+            SCI_DOCLINEFROMVISIBLE,
+            first.saturating_add(on_screen) as uptr_t,
+            0,
+        );
+        let lines = self.send(SCI_GETLINECOUNT, 0, 0).max(1);
+        let number = bottom.saturating_add(1).clamp(1, lines);
+        line_number_digits(number as u64).max(LINE_NUMBER_MARGIN_MIN_DIGITS)
+    }
+
+    /// Where the view stands now, for [`NumberMarginFit::after`].
+    fn number_margin_at(&self) -> NumberMarginAt {
+        let first = self.send(SCI_GETFIRSTVISIBLELINE, 0, 0).max(0);
+        NumberMarginAt {
+            top: self.send(SCI_DOCLINEFROMVISIBLE, first as uptr_t, 0),
+            lines: self.send(SCI_GETLINECOUNT, 0, 0),
+            wraps: self.send(SCI_GETWRAPMODE, 0, 0) != SC_WRAP_NONE as sptr_t,
+        }
     }
 
     /// Reset every style index to the current `STYLE_DEFAULT`. The
@@ -1739,22 +1905,23 @@ impl EditorHandle {
     }
 }
 
-/// Fixed *minimum* digit budget the line-number margin is sized for. The
-/// margin holds at least this width regardless of the document's actual
-/// line count, so the left gutter never grows or shrinks while editing a
-/// typical file — the same deliberately-roomy bar the Win32 backend uses.
-/// Files whose line count needs *more* than this many digits (past 99 999
-/// lines) grow the margin to fit rather than clipping — see
-/// [`EditorHandle::update_line_number_width`]. All three backends clamp to
-/// this floor, so the behaviour is identical on every platform.
-pub const LINE_NUMBER_MARGIN_DIGITS: u32 = 5;
+/// What the line-number margin is wider than the numbers it shows, in
+/// Scintilla's units: pixels on Windows and Linux, points on macOS. Scintilla
+/// draws a number to end 3 short of the margin's right edge; the rest is the
+/// gap on its left. The same at every font size, so a large font does not
+/// widen the margin by more than its digits.
+const LINE_NUMBER_MARGIN_PAD: sptr_t = 8;
 
-/// Decimal digit count of `n`, floored at 1. The line-number margin only
-/// needs re-sizing when this (clamped to [`LINE_NUMBER_MARGIN_DIGITS`])
-/// changes — 99 999 → 100 000 gains a digit past the floor — so a caller on
-/// a hot path can compare the clamped value against a cached one and skip
-/// the `SCI_TEXTWIDTH` measurement in
-/// [`EditorHandle::update_line_number_width`] when it hasn't moved.
+/// The fewest digits the line-number margin has room for, as in Notepad++
+/// (measured in 8.9.8.1). With it the text does not move sideways until line
+/// 1000 comes into view, where without it the margin would widen at lines 10
+/// and 100 as well.
+const LINE_NUMBER_MARGIN_MIN_DIGITS: u32 = 3;
+
+/// Decimal digit count of `n`, floored at 1. The line-number margin is
+/// sized for this many digits of the largest line number on screen, or
+/// [`LINE_NUMBER_MARGIN_MIN_DIGITS`] if that is more
+/// ([`EditorHandle::fit_line_number_width`]).
 #[must_use]
 pub fn line_number_digits(n: u64) -> u32 {
     let mut digits: u32 = 1;
@@ -1881,11 +2048,11 @@ pub fn file_name_around(line: &str, caret: usize) -> Option<&str> {
 #[cfg(test)]
 mod tests {
     use super::{
-        cursor_answer, file_name_around, line_number_digits, sc_eol_mode, CURSOR_TEXT_MAX_UNITS,
-        LINE_NUMBER_MARGIN_DIGITS,
+        cursor_answer, file_name_around, line_number_digits, sc_eol_mode, NumberMarginAt,
+        NumberMarginFit, CURSOR_TEXT_MAX_UNITS,
     };
     use codepp_core::{Ending, Eol};
-    use codepp_scintilla_sys::{SC_EOL_CR, SC_EOL_CRLF, SC_EOL_LF};
+    use codepp_scintilla_sys::{sptr_t, SC_EOL_CR, SC_EOL_CRLF, SC_EOL_LF};
 
     #[test]
     fn a_mixed_buffer_takes_the_scintilla_mode_of_its_first_ending() {
@@ -1993,26 +2160,99 @@ mod tests {
         assert_eq!(line_number_digits(u64::from(u32::MAX)), 10);
     }
 
-    #[test]
-    fn margin_holds_the_minimum_within_budget_and_grows_past_it() {
-        // Within the budget the clamped width is pinned to the floor, so
-        // the gutter never shifts on ordinary line-count changes.
-        for lines in [0u64, 1, 9, 10, 99, 100, 1_000, 99_999] {
-            assert_eq!(
-                line_number_digits(lines).max(LINE_NUMBER_MARGIN_DIGITS),
-                LINE_NUMBER_MARGIN_DIGITS,
-                "{lines} lines should hold the minimum gutter width",
-            );
+    /// A view standing with document line `top` at its top, in a document
+    /// of 5000 lines that do not wrap.
+    fn at(top: sptr_t) -> NumberMarginAt {
+        NumberMarginAt {
+            top,
+            lines: 5000,
+            wraps: false,
         }
-        // Past the budget it grows to fit the real digit count.
+    }
+
+    #[test]
+    fn a_margin_follows_the_digits_on_screen_both_ways() {
+        let sized = NumberMarginFit::fresh(3, 0);
+        // Nothing changed: the margin is left alone.
+        assert_eq!(sized.after(3, 0, at(0)), None);
+        // Line 1000 scrolls into view, and out again.
+        let wider = sized.after(4, 0, at(970)).expect("a wider margin");
+        assert_eq!(wider.digits, 4);
+        let narrower = wider.after(3, 0, at(10)).expect("a narrower margin");
+        assert_eq!(narrower.digits, 3);
+        // And in again, further down. The view moved between the narrower
+        // margin and this wider one, so nothing was undone in place, and
+        // the margin is free to narrow here later, as when a fold above
+        // line 1000 is contracted with the view where it is.
+        let wider = narrower.after(4, 0, at(990)).expect("a wider margin");
+        assert_eq!(wider.bounced_at, None);
+        assert_eq!(wider.after(3, 0, at(990)).map(|fit| fit.digits), Some(3));
+    }
+
+    #[test]
+    fn a_zoom_measures_the_margin_again_for_the_same_digits() {
+        let sized = NumberMarginFit::fresh(2, 0);
         assert_eq!(
-            line_number_digits(100_000).max(LINE_NUMBER_MARGIN_DIGITS),
-            6,
-            "100 000 lines needs a sixth digit column",
+            sized.after(2, 3, at(0)),
+            Some(NumberMarginFit::fresh(2, 3)),
+            "the same digits are wider at another zoom"
         );
+        // A zoom forgets where the margin bounced: the widths are new.
+        let bounced = NumberMarginFit {
+            bounced_at: Some(at(0)),
+            ..sized
+        };
         assert_eq!(
-            line_number_digits(9_999_999).max(LINE_NUMBER_MARGIN_DIGITS),
-            7,
+            bounced.after(1, 3, at(0)),
+            Some(NumberMarginFit::fresh(1, 3))
         );
+    }
+
+    #[test]
+    fn a_narrower_margin_undone_in_place_is_not_tried_there_again() {
+        // The last number on screen can depend on the margin's own width:
+        // 999 with the wide margin, 1000 with the narrow.
+        let wide = NumberMarginFit::fresh(4, 0);
+        let narrow = wide.after(3, 0, at(960)).expect("narrowed once");
+        assert_eq!(narrow.narrowed_at, Some(at(960)));
+        let wide = narrow.after(4, 0, at(960)).expect("widened back");
+        assert_eq!(wide.bounced_at, Some(at(960)));
+        assert_eq!(
+            wide.after(3, 0, at(960)),
+            None,
+            "narrowing here again would repaint for ever"
+        );
+        // Once the view has moved, the margin narrows again.
+        assert_eq!(wide.after(3, 0, at(961)).map(|fit| fit.digits), Some(3));
+        // So it does once the line count has changed, or wrapping was
+        // switched: either can take away what made the margin bounce.
+        let edited = NumberMarginAt {
+            lines: 4999,
+            ..at(960)
+        };
+        assert_eq!(wide.after(3, 0, edited).map(|fit| fit.digits), Some(3));
+        let wrapping = NumberMarginAt {
+            wraps: true,
+            ..at(960)
+        };
+        assert_eq!(wide.after(3, 0, wrapping).map(|fit| fit.digits), Some(3));
+        // A wider margin is given wherever the view stands.
+        assert_eq!(wide.after(5, 0, at(960)).map(|fit| fit.digits), Some(5));
+    }
+
+    #[test]
+    fn a_bounce_is_remembered_across_a_visit_elsewhere() {
+        // Narrowed at line 960, widened somewhere else, back at 960 and
+        // widened there: only the last is a narrower margin undone in
+        // place, and it is still found.
+        let narrow = NumberMarginFit::fresh(4, 0)
+            .after(3, 0, at(960))
+            .expect("narrowed at 960");
+        let elsewhere = narrow.after(4, 0, at(2000)).expect("widened elsewhere");
+        assert_eq!(elsewhere.bounced_at, None);
+        let back = elsewhere.after(3, 0, at(960)).expect("narrowed at 960");
+        let bounced = back.after(4, 0, at(960)).expect("widened in place");
+        assert_eq!(bounced.bounced_at, Some(at(960)));
+        assert_eq!(bounced.after(3, 0, at(960)), None);
     }
 }

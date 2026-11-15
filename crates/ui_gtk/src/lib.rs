@@ -506,7 +506,9 @@ fn connect_session_persistence(window: &gtk::Window) {
 ///      once the paint has wrapped that line
 ///      (`EditorHandle::settle_wrapped_top`). It holds the handle rather
 ///      than reaching it through `with_state`, which would decline a paint
-///      made inside a borrow and leave the top unsettled.
+///      made inside a borrow and leave the top unsettled. The same handler
+///      fits the line-number margin to the numbers on screen
+///      (`EditorHandle::fit_line_number_width`).
 fn connect_sci_notify(sci_widget: &gtk::Widget, editor: EditorHandle) {
     sci_widget.connect_local("sci-notify", false, |values| {
         crate::at_callback_boundary("lib:sci_notify:chrome", None, || {
@@ -568,6 +570,11 @@ fn connect_sci_notify(sci_widget: &gtk::Widget, editor: EditorHandle) {
         crate::at_callback_boundary("lib:sci_notify:wrapped_top", None, || {
             if notification_code(values) == Some(codepp_scintilla_sys::SCN_PAINTED) {
                 editor.settle_wrapped_top();
+                // The line-number margin is as wide as the numbers on
+                // screen: a scroll, an edit, a fold, a resize or a zoom
+                // can change them, and each ends in a paint. Five direct
+                // calls when nothing changed.
+                editor.fit_line_number_width(platform::LINE_NUMBER_MARGIN);
             }
             None
         })
@@ -4549,6 +4556,30 @@ fn test_only_helper() {}
         for gone in ["early_tests", "fixture", "late_tests"] {
             assert!(!stripped.contains(gone), "kept test-module text `{gone}`");
         }
+    }
+}
+
+#[cfg(test)]
+mod line_number_margin_guard {
+    use super::source_scan::{block_after, code_only, fn_body};
+
+    /// Every paint of the editor fits the line-number margin to the
+    /// numbers on screen. Nothing else does on a scroll, a zoom or a
+    /// resize, so without the call the margin keeps the width it had when
+    /// the font was last applied, and clips larger numbers.
+    #[test]
+    fn every_paint_fits_the_line_number_margin() {
+        let notify: String = code_only(&fn_body(include_str!("lib.rs"), "connect_sci_notify"))
+            .split_whitespace()
+            .collect();
+        let paint = block_after(
+            &notify,
+            "ifnotification_code(values)==Some(codepp_scintilla_sys::SCN_PAINTED){",
+        );
+        assert!(
+            paint.contains("editor.fit_line_number_width(platform::LINE_NUMBER_MARGIN);"),
+            "the `SCN_PAINTED` handler no longer fits the line-number margin"
+        );
     }
 }
 

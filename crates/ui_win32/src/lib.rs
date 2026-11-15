@@ -2331,14 +2331,14 @@ impl UiPlatform for Win32Ui {
             // indent guides for 4-space-indented code.
             apply_tab_width(&self.editor);
         }
-        // Re-measure the line-number margin's width against the
-        // newly-bound doc: the built-in `SC_MARGIN_NUMBER` paints the
+        // Size the line-number margin for the newly-bound doc before
+        // its first paint: the built-in `SC_MARGIN_NUMBER` paints the
         // numbers itself, but its pixel width is view-level state and
-        // the doc just changed under it. Ungated on purpose — three
-        // direct calls on a non-hot path, and Scintilla short-circuits
-        // an unchanged `SCI_SETMARGINWIDTHN`. (Most callers follow up
-        // with `apply_lang`, which re-measures again via
-        // `apply_line_number_margin`; this covers any that don't.)
+        // the doc just changed under it. The `SCN_PAINTED` arm fits it
+        // again once the view stands where the tab left it; this keeps
+        // a short document from being painted once at the last one's
+        // width. (Most callers follow up with `apply_lang`, which
+        // measures again via `apply_line_number_margin`.)
         self.editor.update_line_number_width(LINE_NUMBER_MARGIN);
         // Rebind the Document Map's miniature view to the same
         // document in lockstep with the main view. This is the
@@ -4525,8 +4525,9 @@ fn update_brace_highlight(editor: &EditorHandle) {
 /// and the other two backends. The margin is Scintilla's built-in
 /// `SC_MARGIN_NUMBER` (configured through the shared
 /// `apply_line_number_margin`), which paints the numbers itself; the
-/// only per-event host work left is re-measuring the pixel width when
-/// the line count changes — see the `SCN_MODIFIED` arm.
+/// only per-event host work left is keeping its width fitted to the
+/// numbers on screen (`fit_line_number_width`) — see the `SCN_PAINTED`
+/// arm.
 const LINE_NUMBER_MARGIN: u32 = 0;
 
 /// Bring the caret line into view: if it's already in the visible
@@ -15844,14 +15845,9 @@ unsafe fn apply_fif_in_buffer_replace(
     // lines; `restore_view` clamps the position to the document and skips a
     // fold line that no longer heads a fold.
     state.editor.restore_view(&original_view);
-    // Re-measure the line-number margin's width against the restored
-    // doc: the loop above may have rewritten the *active* tab's buffer
-    // across a digit boundary, and the `SCN_MODIFIED` arm's re-measure
-    // was suppressed for the whole loop by `PluginCallGuard`
-    // (`state_from_hwnd` declines while it is held). Without this,
-    // the width would stay stale until the next edit, tab switch, or
-    // language change. Once per whole operation — off any hot path.
-    state.editor.update_line_number_width(LINE_NUMBER_MARGIN);
+    // No line-number work: the loop may have rewritten the active tab's
+    // buffer across a digit boundary, and the paint that follows fits the
+    // strip to the numbers then on screen (`fit_line_number_width`).
 
     (files_modified, total_replacements)
 }
@@ -18448,10 +18444,9 @@ pub fn run(initial_path: Option<PathBuf>, perf: codepp_core::perf::Perf) -> Resu
         // Line-number margin: configure once here so it appears on
         // the first paint, then `apply_default_styles` (called on
         // every language switch) re-applies `STYLE_LINENUMBER`
-        // colours that `SCI_STYLECLEARALL` clobbers. The margin's
-        // width is a fixed *minimum* (held steady for typical files,
-        // grown only for ones past the digit budget), re-measured
-        // against the current line count on each call.
+        // colours that `SCI_STYLECLEARALL` clobbers. The margin is
+        // as wide as the largest line number on screen, measured on
+        // each call and fitted again after every paint.
         apply_line_number_margin(&editor);
 
         // Caret-line highlight: paints the line containing the
@@ -28835,6 +28830,12 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                             // A tab's top partway into a wrapped line waits
                             // for the paint that wraps it.
                             editor.settle_wrapped_top();
+                            // The line-number strip is as wide as the
+                            // numbers on screen: a scroll, an edit, a
+                            // fold, a resize or a zoom can change them,
+                            // and each ends in a paint. Five direct
+                            // calls when nothing changed.
+                            editor.fit_line_number_width(LINE_NUMBER_MARGIN);
                             // The updater's worker starts once a frame is
                             // on screen, and not before (DESIGN.md §11.2):
                             // a paint outside the startup's plugin restore
@@ -28888,28 +28889,14 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                         if owns_source {
                             let sci = &*(lparam.0 as *const SCNotification);
                             let modtype = sci.modification_type;
-                            let lines_added = sci.lines_added;
                             if (modtype & (SC_MOD_INSERTTEXT | SC_MOD_DELETETEXT)) != 0 {
                                 if let Some(state) = state_from_hwnd(hwnd) {
                                     state.editor.send(SCI_SETSCROLLWIDTH, 1, 0);
-                                    // Line-number margin: the built-in
-                                    // `SC_MARGIN_NUMBER` renders the
-                                    // numbers itself; the host only
-                                    // maintains the margin's pixel
-                                    // width. Grow (or restore) it to
-                                    // the shared fixed-minimum: a
-                                    // no-op while the file stays
-                                    // within the digit budget
-                                    // (Scintilla short-circuits an
-                                    // unchanged SCI_SETMARGINWIDTHN),
-                                    // a genuine widen once it crosses
-                                    // past it. Only fires on a
-                                    // line-count change, never on
-                                    // plain typing, so no
-                                    // per-keystroke cost.
-                                    if lines_added != 0 {
-                                        state.editor.update_line_number_width(LINE_NUMBER_MARGIN);
-                                    }
+                                    // No line-number work here: the
+                                    // strip's width is fitted to the
+                                    // numbers on screen after the
+                                    // paint this edit ends in (the
+                                    // `SCN_PAINTED` arm above).
                                     // Length / lines refresh on
                                     // every text-modifying edit.
                                     // The SCN_UPDATEUI arm below
@@ -36299,7 +36286,7 @@ mod change_history_tests {
 
     /// A message number from the vendored `Scintilla.h`, for the few the
     /// tests send that the crate does not import.
-    fn sci(name: &str) -> u32 {
+    pub(super) fn sci(name: &str) -> u32 {
         include_str!("../../scintilla-sys/vendor/scintilla/include/Scintilla.h")
             .lines()
             .find(|l| l.split_whitespace().nth(1) == Some(name))
@@ -36454,6 +36441,222 @@ mod change_history_tests {
         assert_eq!(states(editor), [0, 0, 0, MODIFIED]);
         editor.send(SCI_SETSAVEPOINT, 0, 0);
         assert_eq!(states(editor), [0, 0, 0, SAVED]);
+    }
+}
+
+#[cfg(test)]
+mod line_number_margin_tests {
+    //! The line-number strip's width, against a real Scintilla control: it
+    //! has room for the largest line number on screen, whatever the
+    //! document's length, and for three digits at least, and follows a
+    //! scroll, a fold, a zoom and a change of font. The sizing is
+    //! `EditorHandle`'s, which every backend calls after each paint.
+
+    use std::fmt::Write as _;
+
+    use codepp_editor::EditorHandle;
+    use codepp_scintilla_sys::{
+        SCI_FOLDLINE, SCI_GETMARGINWIDTHN, SCI_LINESONSCREEN, SCI_SETFIRSTVISIBLELINE, SCI_SETZOOM,
+        SCI_STYLESETSIZE, SCI_TEXTWIDTH, SC_FOLDACTION_CONTRACT, STYLE_DEFAULT, STYLE_LINENUMBER,
+    };
+
+    use super::change_history_tests::sci;
+    use super::view_position_tests::{scintilla, Control};
+    use super::LINE_NUMBER_MARGIN;
+
+    /// A control 300 pixels high showing `lines` lines of text from the
+    /// top, its line-number margin set up as `apply_line_number_margin`
+    /// sets it up.
+    fn numbered(lines: usize) -> Control {
+        let mut text = String::new();
+        for n in 1..lines {
+            let _ = writeln!(text, "line {n}");
+        }
+        text.push_str("last");
+        let control = scintilla(400, 300, text.as_bytes());
+        control.editor.enable_line_number_margin(LINE_NUMBER_MARGIN);
+        control
+    }
+
+    fn margin_width(editor: &EditorHandle) -> isize {
+        editor.send(SCI_GETMARGINWIDTHN, LINE_NUMBER_MARGIN as usize, 0)
+    }
+
+    /// The width a margin for `digits` digits is to have: the digits as the
+    /// line numbers' style draws them now, and the padding, which is the
+    /// same for every count of digits.
+    fn width_for(editor: &EditorHandle, digits: usize) -> isize {
+        let text = |n: usize| {
+            let mut sample = vec![b'9'; n];
+            sample.push(0);
+            editor.send(SCI_TEXTWIDTH, STYLE_LINENUMBER, sample.as_ptr() as isize)
+        };
+        text(digits) + 8
+    }
+
+    /// The lines that fit on screen, which the tests' line counts are
+    /// chosen around.
+    fn on_screen(editor: &EditorHandle) -> usize {
+        let lines = usize::try_from(editor.send(SCI_LINESONSCREEN, 0, 0)).unwrap();
+        assert!(
+            (10..90).contains(&lines),
+            "precondition: between 10 and 90 lines fit on screen, not {lines}"
+        );
+        lines
+    }
+
+    #[test]
+    fn the_margin_has_room_for_three_digits_at_least() {
+        // One digit would do for five lines, and two for ten or for the
+        // lines a long document shows from its top. The margin has room for
+        // three, as Notepad++'s has, so the text does not move sideways
+        // before line 1000 comes into view.
+        for lines in [5, 10, 20_000] {
+            let control = numbered(lines);
+            let editor = &control.editor;
+            on_screen(editor);
+            assert!(width_for(editor, 3) > width_for(editor, 2));
+            assert!(width_for(editor, 2) > width_for(editor, 1));
+            assert_eq!(
+                margin_width(editor),
+                width_for(editor, 3),
+                "{lines} lines, shown from the top"
+            );
+        }
+    }
+
+    #[test]
+    fn the_last_line_shown_is_the_documents_last_where_it_ends_on_screen() {
+        // Scrolled as far as it goes, the document's last line is the last
+        // one shown, and no line after it counts: 999 needs three digits
+        // and 1000 four.
+        for (lines, digits) in [(999, 3), (1000, 4)] {
+            let control = numbered(lines);
+            let editor = &control.editor;
+            on_screen(editor);
+            assert_eq!(margin_width(editor), width_for(editor, 3));
+            editor.send(SCI_SETFIRSTVISIBLELINE, lines, 0);
+            editor.fit_line_number_width(LINE_NUMBER_MARGIN);
+            assert_eq!(
+                margin_width(editor),
+                width_for(editor, digits),
+                "{lines} lines, scrolled to the end"
+            );
+        }
+    }
+
+    #[test]
+    fn the_margin_follows_a_scroll_both_ways() {
+        let control = numbered(20_000);
+        let editor = &control.editor;
+        let fits = on_screen(editor);
+        assert_eq!(margin_width(editor), width_for(editor, 3));
+
+        // Line 1000 comes in at the bottom edge: display line 999, which is
+        // `fits` lines below the top one.
+        editor.send(SCI_SETFIRSTVISIBLELINE, 999 - fits, 0);
+        editor.fit_line_number_width(LINE_NUMBER_MARGIN);
+        assert_eq!(margin_width(editor), width_for(editor, 4));
+        // One line up, line 999 is the last shown.
+        editor.send(SCI_SETFIRSTVISIBLELINE, 998 - fits, 0);
+        editor.fit_line_number_width(LINE_NUMBER_MARGIN);
+        assert_eq!(margin_width(editor), width_for(editor, 3));
+
+        editor.send(SCI_SETFIRSTVISIBLELINE, 12_000, 0);
+        editor.fit_line_number_width(LINE_NUMBER_MARGIN);
+        assert_eq!(margin_width(editor), width_for(editor, 5));
+        editor.send(SCI_SETFIRSTVISIBLELINE, 0, 0);
+        editor.fit_line_number_width(LINE_NUMBER_MARGIN);
+        assert_eq!(margin_width(editor), width_for(editor, 3));
+    }
+
+    #[test]
+    fn a_contracted_fold_brings_larger_numbers_on_screen() {
+        let control = numbered(2000);
+        let editor = &control.editor;
+        on_screen(editor);
+        assert_eq!(margin_width(editor), width_for(editor, 3));
+        // Line 3 heads a fold over the 1500 lines after it. Fold levels as
+        // `Scintilla.h` gives them: the base, and the header flag.
+        let (base, header) = (0x400, 0x2000);
+        editor.send(sci("SCI_SETFOLDLEVEL"), 2, base | header);
+        for line in 3..1503 {
+            editor.send(sci("SCI_SETFOLDLEVEL"), line, base + 1);
+        }
+        editor.send(SCI_FOLDLINE, 2, SC_FOLDACTION_CONTRACT as isize);
+        editor.fit_line_number_width(LINE_NUMBER_MARGIN);
+        assert_eq!(
+            margin_width(editor),
+            width_for(editor, 4),
+            "the line after the fold is number 1504"
+        );
+    }
+
+    #[test]
+    fn the_margin_follows_a_zoom() {
+        let control = numbered(50);
+        let editor = &control.editor;
+        on_screen(editor);
+        let before = margin_width(editor);
+        assert_eq!(before, width_for(editor, 3));
+
+        // A zoom is noticed by the fit a paint runs: nothing else tells
+        // the host of one made with the mouse wheel.
+        editor.send(SCI_SETZOOM, 4, 0);
+        editor.fit_line_number_width(LINE_NUMBER_MARGIN);
+        on_screen(editor);
+        assert_eq!(margin_width(editor), width_for(editor, 3));
+        assert!(margin_width(editor) > before, "larger digits are wider");
+        editor.send(SCI_SETZOOM, 0, 0);
+        editor.fit_line_number_width(LINE_NUMBER_MARGIN);
+        assert_eq!(margin_width(editor), before);
+    }
+
+    #[test]
+    fn a_large_font_widens_the_margin_by_its_digits_alone() {
+        let control = numbered(5);
+        let editor = &control.editor;
+        let before = margin_width(editor);
+        assert_eq!(before, width_for(editor, 3));
+
+        // The font as the Style Configurator sets it: on the default
+        // style, which a style reset copies to the line numbers'. A change
+        // of font ends in `apply_line_number_margin`, which measures
+        // whether or not the digits changed.
+        editor.send(SCI_STYLESETSIZE, STYLE_DEFAULT, 72);
+        editor.style_clear_all();
+        editor.enable_line_number_margin(LINE_NUMBER_MARGIN);
+        let after = margin_width(editor);
+        assert_eq!(after, width_for(editor, 3));
+        // Three digits and the padding, where the margin used to hold six
+        // characters at any size.
+        let digit = (after - 8) / 3;
+        assert!(
+            digit > 5 * ((before - 8) / 3),
+            "a 72-point digit is {digit} wide"
+        );
+        assert!(after < 4 * digit, "the margin is {after} wide");
+    }
+
+    /// Every paint of the main editor fits the strip to the numbers on
+    /// screen. Nothing else does on a scroll, a zoom or a resize, so
+    /// without the call the strip keeps the width it had when the font was
+    /// last applied, and clips larger numbers. The `editor` it is called on
+    /// exists only for a paint of the main editor, not of a plugin's
+    /// Scintilla control.
+    #[test]
+    fn every_paint_fits_the_strip() {
+        use super::plugin_reentry_guards::{block_after, code_only, production_src};
+        let paint: String = code_only(&block_after(
+            production_src(),
+            "} else if nmhdr.code == SCN_PAINTED {",
+        ))
+        .split_whitespace()
+        .collect();
+        assert!(
+            paint.contains("editor.fit_line_number_width(LINE_NUMBER_MARGIN);"),
+            "the paint notification no longer fits the line-number strip"
+        );
     }
 }
 

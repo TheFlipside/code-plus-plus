@@ -890,6 +890,14 @@ unsafe fn on_sci_notify_inner(message: u32, lparam: usize) {
                 // paint that wraps it. A paint made inside a borrow, where
                 // this is declined, leaves it to the next paint.
                 st.editor.settle_wrapped_top();
+                // The line-number margin is as wide as the numbers on
+                // screen: a scroll, an edit, a fold, a resize or a zoom
+                // can change them, and each ends in a paint. Five direct
+                // calls when nothing changed. Declined with the rest of
+                // this closure for a paint made inside a borrow, which
+                // leaves the fit to the next paint.
+                st.editor
+                    .fit_line_number_width(platform::LINE_NUMBER_MARGIN);
             });
         }
         _ => {}
@@ -4472,6 +4480,22 @@ mod source_invariants {
             "`mark_first_draw` must run before the paint arm's \
              `with_state`, which is declined on a re-entrant call and \
              would silently drop the timestamp."
+        );
+    }
+
+    /// Every paint of the editor fits the line-number margin to the
+    /// numbers on screen. Nothing else does on a scroll, a zoom or a
+    /// resize, so without the call the margin keeps the width it had when
+    /// the font was last applied, and clips larger numbers.
+    #[test]
+    fn every_paint_fits_the_line_number_margin() {
+        let notify: String = code_only(&fn_body(production_src(), "on_sci_notify_inner"))
+            .split_whitespace()
+            .collect();
+        let paint = block_after(&notify, "codepp_scintilla_sys::SCN_PAINTED=>{");
+        assert!(
+            paint.contains("st.editor.fit_line_number_width(platform::LINE_NUMBER_MARGIN);"),
+            "the `SCN_PAINTED` arm no longer fits the line-number margin"
         );
     }
 

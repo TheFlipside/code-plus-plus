@@ -1278,12 +1278,11 @@ pub const STYLE_LINENUMBER: usize = 33;
 // Line numbers use the built-in `SC_MARGIN_NUMBER` on every backend
 // (via `EditorHandle::enable_line_number_margin`): Scintilla formats
 // and paints the numbers itself, right-aligned to the margin's edge,
-// styled by `STYLE_LINENUMBER`. Because the margin's pixel width is
-// measured to exactly fit the digit budget (`SCI_TEXTWIDTH` below),
-// `1`, `99`, and `100` all share the same rightmost column with no
-// host involvement. An earlier `ui_win32`-only scheme wrote per-line
-// margin text by hand for the same effect; it was retired when the
-// width became measured rather than fixed.
+// styled by `STYLE_LINENUMBER`. The host keeps only the margin's pixel
+// width, measured (`SCI_TEXTWIDTH` below) for the largest line number
+// on screen (`EditorHandle::fit_line_number_width`). An earlier
+// `ui_win32`-only scheme wrote per-line margin text by hand; it was
+// retired when the width became measured rather than fixed.
 pub const SCI_SETMARGINTYPEN: u32 = 2240;
 pub const SCI_SETMARGINWIDTHN: u32 = 2242;
 /// `SCI_TEXTWIDTH(int style, const char *text)` — pixel width of `text`
@@ -1361,8 +1360,8 @@ pub const SC_MARKNUM_HISTORY_REVERTED_TO_MODIFIED: u32 = 24;
 /// (right-aligned, styled `STYLE_LINENUMBER`). All three backends
 /// use it for margin 0 via
 /// `EditorHandle::enable_line_number_margin`; the margin's pixel
-/// width is measured via `SCI_TEXTWIDTH` so the numbers share a
-/// rightmost column at any digit count.
+/// width is measured via `SCI_TEXTWIDTH` for the largest line number
+/// on screen.
 pub const SC_MARGIN_NUMBER: u32 = 1;
 /// `SC_MARGIN_SYMBOL = 0` — type constant for a margin that
 /// renders only markers (the `SC_MARKNUM_*` family). Code++ uses

@@ -43,7 +43,7 @@ const SC_DOCUMENTOPTION_DEFAULT: isize = 0;
 const TAB_WIDTH_SPACES: usize = 4;
 
 /// Index of the line-number margin. Same slot the other backends use.
-const LINE_NUMBER_MARGIN: u32 = 0;
+pub(crate) const LINE_NUMBER_MARGIN: u32 = 0;
 /// Margin index for the change-history "edit indicator" strip. 4 sits to
 /// the right of the line-number margin (and a future fold margin), the
 /// same slot `ui_win32` and `ui_gtk` use so all three backends match.
@@ -55,12 +55,6 @@ const CHANGE_HISTORY_MARGIN_PX: i32 = 4;
 /// Pack an `(r, g, b)` triple into Scintilla's BGR colour word.
 const fn rgb_to_scintilla_colour((r, g, b): (u8, u8, u8)) -> u32 {
     (b as u32) << 16 | (g as u32) << 8 | (r as u32)
-}
-
-thread_local! {
-    /// Last clamped line-number digit count, so the margin is only
-    /// re-measured when it actually changes. See `refresh_dynamic_status`.
-    static LAST_LINE_NUMBER_DIGITS: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
 }
 
 impl CocoaUi {
@@ -218,18 +212,8 @@ impl CocoaUi {
         let overtype = self.editor.send(SCI_GETOVERTYPE, 0, 0) != 0;
         self.status
             .set_dynamic_parts(length, lines, caret_line, caret_col, pos, overtype);
-        // The line-number margin holds a fixed *minimum* width and only
-        // grows for files past the digit budget. This fires on every
-        // notification — caret moves included — so gate the actual
-        // `SCI_TEXTWIDTH` re-measure on the *clamped* digit count
-        // changing: within the budget the clamp pins it to the floor, so
-        // nothing re-measures on ordinary edits; only crossing
-        // 99 999 → 100 000 (or higher) moves it. Same shape as GTK's.
-        let digits = codepp_editor::line_number_digits(lines.max(1))
-            .max(codepp_editor::LINE_NUMBER_MARGIN_DIGITS);
-        if LAST_LINE_NUMBER_DIGITS.with(|c| c.replace(digits)) != digits {
-            self.editor.update_line_number_width(LINE_NUMBER_MARGIN);
-        }
+        // No line-number work here: the margin is fitted to the numbers
+        // on screen after each paint (`on_sci_notify`'s `SCN_PAINTED`).
     }
 }
 
@@ -238,8 +222,8 @@ impl CocoaUi {
 /// definitions, the brace-highlight pair, and the indent-guide colour.
 pub(crate) fn apply_predefined_styles(editor: &EditorHandle) {
     // Styles STYLE_LINENUMBER (fore/back) and configures margin 0 as
-    // Scintilla's built-in `SC_MARGIN_NUMBER` at the shared
-    // fixed-minimum width — identical on all three backends.
+    // Scintilla's built-in `SC_MARGIN_NUMBER`, as wide as the numbers
+    // on screen — identical on all three backends.
     codepp_editor::theme::apply_line_number_margin(editor);
     // The change-history "edit indicator" strip. Shared config, so it
     // looks and behaves identically on all three backends;
