@@ -4375,10 +4375,19 @@ mod source_invariants {
     /// Scintilla view.
     #[test]
     fn nothing_focuses_the_outer_scintilla_view() {
-        const ALLOWED: [&str; 2] = [
+        const ALLOWED: [&str; 4] = [
             // The Find/Replace panel's own fields (`search.rs`).
             "Some(&dialog.fif_directory)",
             "Some(&dialog.find_field)",
+            // A plugin panel's first view that accepts first responder
+            // (`dock::apply_requested_panel_focus`), never the outer
+            // `ScintillaView`, which does not accept.
+            "Some(responder)",
+            // The first responder a load pass found, given back by
+            // `dock::return_focus` once checked to be still in its
+            // window: what AppKit already had there, not a view this
+            // code chose.
+            "Some(&**responder)",
         ];
         let code = all_production_code();
         let mut calls = 0;

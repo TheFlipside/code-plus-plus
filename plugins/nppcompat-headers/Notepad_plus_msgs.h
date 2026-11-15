@@ -418,7 +418,9 @@ typedef struct sessionInfo_ {
  *     visible but behind another tab is brought to the front.
  *     On Windows `hClient` then takes keyboard focus, every time,
  *     even when the panel was already in front, as in Notepad++.
- *     On Linux and macOS focus stays where it was, for now.
+ *     On macOS the first view that accepts first responder, the
+ *     `NSView*` itself or one inside it, takes it. On Linux focus
+ *     stays where it was, for now.
  *     Returns 1 on success, 0 if the HWND isn't registered. */
 #define NPPM_DMMSHOW                      (NPPMSG + 30)
 /* v3: hide the panel previously registered for the `hClient`

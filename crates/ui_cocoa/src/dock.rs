@@ -2343,6 +2343,7 @@ pub(crate) fn show_plugin_panel(handle: *mut c_void) -> bool {
         d.layout.show(panel);
         d.layout.activate(panel);
         d.dirty = true;
+        request_panel_focus(panel);
         true
     })
     .unwrap_or(false)
@@ -2381,6 +2382,7 @@ pub(crate) fn view_plugin_panel(name: &str) -> bool {
         d.layout.show(panel);
         d.layout.activate(panel);
         d.dirty = true;
+        request_panel_focus(panel);
         true
     })
     .unwrap_or(false)
@@ -2441,6 +2443,213 @@ pub(crate) fn rename_plugin_panel(handle: *mut c_void, name: String, module_name
             entry.module_name = module_name;
         }
     });
+}
+
+thread_local! {
+    /// The plugin panel a `NPPM_DMMSHOW` or `NPPM_DMMVIEWOTHERTAB` asked
+    /// to give keyboard focus — see [`request_panel_focus`].
+    static PANEL_FOCUS: Cell<Option<DockPanel>> = const { Cell::new(None) };
+    /// Set while [`apply_requested_panel_focus`] is moving focus.
+    static PANEL_FOCUSING: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Ask for `panel`'s view to take keyboard focus once the dispatch's
+/// reconcile has put it on screen.
+///
+/// Notepad++ moves focus to a panel's `hClient` whenever a plugin shows
+/// it with `NPPM_DMMSHOW` or brings it forward with
+/// `NPPM_DMMVIEWOTHERTAB` (measured on Windows, DESIGN.md §7.4), and
+/// Win32 does the same through `dock_panels::request_panel_focus`. The
+/// handlers run inside the dispatch, before the tree has caught up, so
+/// they only record the request; the last one wins.
+fn request_panel_focus(panel: DockPanel) {
+    PANEL_FOCUS.with(|f| f.set(Some(panel)));
+}
+
+/// Give keyboard focus to the panel [`request_panel_focus`] named, if
+/// it is still registered and on screen, and forget the request either
+/// way. Runs after the NPPM dispatch's reconcile, with no borrow held:
+/// a focus change runs the outgoing and incoming responders'
+/// `resignFirstResponder` / `becomeFirstResponder`, which may be a
+/// plugin's view that sends `NPPM_*` from there. A request made while a
+/// move is under way is dropped, so a plugin answering
+/// `becomeFirstResponder` with `NPPM_DMMSHOW` cannot recurse — the latch
+/// Win32's `PanelFocusing` keeps.
+pub(crate) fn apply_requested_panel_focus() {
+    let Some(panel) = PANEL_FOCUS.with(Cell::take) else {
+        return;
+    };
+    if PANEL_FOCUSING.with(Cell::get) {
+        tracing::debug!(
+            panel = panel.persist_key(),
+            "panel focus requested during a focus move; dropped"
+        );
+        return;
+    }
+    let view = with_dock(|d| {
+        d.plugin_panels
+            .iter()
+            .find(|p| p.live() && p.panel == panel)
+            .map(|p| p.view.clone())
+    })
+    .flatten();
+    let Some(view) = view else {
+        tracing::debug!(
+            panel = panel.persist_key(),
+            "panel focus requested for a panel no longer registered; dropped"
+        );
+        return;
+    };
+    let Some(window) = view
+        .window()
+        .filter(|_| !view.isHiddenOrHasHiddenAncestor())
+    else {
+        tracing::debug!(
+            panel = panel.persist_key(),
+            "panel focus requested for a panel not on screen; dropped"
+        );
+        return;
+    };
+    // The plugin's view is often a container that takes no keys, and
+    // `makeFirstResponder:` does not ask: focus the first view, the
+    // panel's own or one inside it, that accepts. A Scintilla view the
+    // plugin put there resolves to its content view, which is the one
+    // that takes keys; the outer `ScintillaView` does not accept.
+    let Some(target) = first_key_taker(&view) else {
+        tracing::debug!(
+            panel = panel.persist_key(),
+            "panel has no view that takes keyboard focus"
+        );
+        return;
+    };
+    PANEL_FOCUSING.with(|f| f.set(true));
+    let _clear = PanelFocusing;
+    // A floating group's panel becomes key only when a view inside asks;
+    // this is such an ask. A key window stays as it is.
+    if !window.isKeyWindow() {
+        window.makeKeyWindow();
+    }
+    let responder: &NSResponder = &target;
+    window.makeFirstResponder(Some(responder));
+}
+
+/// Where keyboard focus was before a plugin load pass, for
+/// [`return_focus`].
+pub(crate) enum FocusBefore {
+    /// No window of the app was key — Code++ in the background — so the
+    /// editor is where focus belongs when the user comes back.
+    Editor,
+    /// The key window and its first responder.
+    Window(Retained<NSWindow>, Option<Retained<NSResponder>>),
+}
+
+/// Note where keyboard focus is, before a load pass runs any plugin.
+pub(crate) fn focus_now(mtm: MainThreadMarker) -> FocusBefore {
+    NSApplication::sharedApplication(mtm)
+        .keyWindow()
+        .map_or(FocusBefore::Editor, |w| {
+            let responder = w.firstResponder();
+            FocusBefore::Window(w, responder)
+        })
+}
+
+/// Put keyboard focus back where [`focus_now`] found it, if a plugin
+/// load pass moved it — Win32's `dock_panels::return_focus`, for the
+/// same reason: Notepad++ has focus back on the editor by `NPPN_READY`
+/// (measured on Windows), and a lazy load mid-session would otherwise
+/// leave what the user types next going into a panel a restored command
+/// or `NPPN_TBMODIFICATION` showed. A window that has been closed or
+/// hidden since, or a responder that has left it or been hidden, is left
+/// alone, and focus stays where the pass put it.
+///
+/// Runs with no borrow held: the change reaches the outgoing and
+/// incoming responders, which may be plugin views.
+pub(crate) fn return_focus(before: &FocusBefore) {
+    let (window, responder) = match before {
+        // No window was key, so there is none to make key again: the app
+        // was in the background, and the editor gets focus for when the
+        // user comes back.
+        FocusBefore::Editor => {
+            crate::focus_editor();
+            return;
+        }
+        FocusBefore::Window(window, responder) => (window, responder),
+    };
+    if !window.isVisible() {
+        return;
+    }
+    if !window.isKeyWindow() {
+        window.makeKeyWindow();
+    }
+    let Some(responder) = responder else {
+        return;
+    };
+    let unchanged = window
+        .firstResponder()
+        .is_some_and(|now| std::ptr::eq(Retained::as_ptr(&now), Retained::as_ptr(responder)));
+    if unchanged {
+        return;
+    }
+    // The window itself, or a view still in it and on screen.
+    let in_place = match responder.downcast_ref::<NSView>() {
+        Some(view) => {
+            // shortcut: a text field's field editor is not put back — it
+            // would be orphaned without its field; only a plugin panel's
+            // own text field in the same window as the panel the pass
+            // focused meets this. Upgrade by restoring the editor's
+            // delegate if that ever matters.
+            let field_editor = view
+                .downcast_ref::<objc2_app_kit::NSTextView>()
+                .is_some_and(objc2_app_kit::NSTextView::isFieldEditor);
+            !field_editor
+                && view
+                    .window()
+                    .is_some_and(|w| std::ptr::eq(Retained::as_ptr(&w), Retained::as_ptr(window)))
+                && !view.isHiddenOrHasHiddenAncestor()
+        }
+        None => std::ptr::eq(
+            Retained::as_ptr(responder).cast::<()>(),
+            Retained::as_ptr(window).cast::<()>(),
+        ),
+    };
+    if in_place {
+        window.makeFirstResponder(Some(&**responder));
+    }
+}
+
+/// Clears [`PANEL_FOCUSING`] on drop, the unwinding path included.
+struct PanelFocusing;
+
+impl Drop for PanelFocusing {
+    fn drop(&mut self) {
+        PANEL_FOCUSING.with(|f| f.set(false));
+    }
+}
+
+/// `view` if it accepts first responder, else the first of its
+/// descendants, depth first and passing over hidden subtrees, that
+/// does. Looks at no more than `MAX_VIEWS` views, on a stack of its
+/// own rather than the call stack, so a plugin's view tree, however
+/// deep, costs a bounded walk.
+fn first_key_taker(view: &NSView) -> Option<Retained<NSView>> {
+    const MAX_VIEWS: usize = 4096;
+    let mut stack = vec![view.retain()];
+    for _ in 0..MAX_VIEWS {
+        let next = stack.pop()?;
+        // A hidden subtree cannot take focus: `makeFirstResponder:`
+        // would refuse it and the panel would take none.
+        if next.isHidden() {
+            continue;
+        }
+        if next.acceptsFirstResponder() {
+            return Some(next);
+        }
+        // Reversed, so the first subview is looked at first.
+        let mut subs: Vec<_> = next.subviews().iter().collect();
+        subs.reverse();
+        stack.extend(subs);
+    }
+    None
 }
 
 /// Whether a `NPPM_DMM*` handler changed the model since the last

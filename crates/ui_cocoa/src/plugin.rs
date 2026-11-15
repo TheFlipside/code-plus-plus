@@ -476,6 +476,9 @@ fn dispatch_nppm(msg: u32, wparam: usize, lparam: isize) -> isize {
     if crate::dock::take_dirty() {
         crate::dock::apply_layout();
     }
+    // `NPPM_DMMSHOW` / `NPPM_DMMVIEWOTHERTAB` focus their panel once it
+    // is on screen, as Notepad++ does; see `dock::request_panel_focus`.
+    crate::dock::apply_requested_panel_focus();
     // `Some` means the dispatch ran on the main thread with the borrow
     // now dropped, so a prompt it queued — the export Save-As, or
     // `NPPM_RELOADBUFFERID`'s reload confirmation — can be presented
@@ -1488,6 +1491,31 @@ pub mod smoke_support {
             "two panels asking for one container are not tabs of one group"
         );
 
+        // Brought forward by name, it takes keyboard focus, as in
+        // Notepad++ — on the first view inside it that takes keys, since
+        // the plugin's own view is a container that does not.
+        let field = objc2_app_kit::NSTextField::initWithFrame(
+            <objc2_app_kit::NSTextField as objc2::MainThreadOnly>::alloc(mtm),
+            objc2_foundation::NSRect::new(
+                objc2_foundation::NSPoint::new(0.0, 0.0),
+                objc2_foundation::NSSize::new(100.0, 20.0),
+            ),
+        );
+        notes.addSubview(&field);
+        assert!(crate::dock::show_plugin_panel(handle));
+        panel_scenario::reconcile();
+        assert!(crate::dock::view_plugin_panel("Smoke Notes"));
+        panel_scenario::reconcile();
+        // A text field hands the keys to the window's field editor.
+        let focused = rig.window.firstResponder().is_some_and(|r| {
+            let r = Retained::as_ptr(&r).cast::<()>();
+            std::ptr::eq(r, Retained::as_ptr(&field).cast::<()>())
+                || field
+                    .currentEditor()
+                    .is_some_and(|e| std::ptr::eq(r, Retained::as_ptr(&e).cast::<()>()))
+        });
+        assert!(focused, "NPPM_DMMVIEWOTHERTAB did not focus the panel");
+
         // Hidden: its container goes to parking — not left in the slot it
         // shares, where the group's layout would size it over the tab in
         // front — and the registration stays.
@@ -2345,6 +2373,7 @@ pub mod smoke_support {
             );
             crate::dock::apply_layout();
             crate::dock::layout_area(1000.0, 700.0);
+            crate::dock::apply_requested_panel_focus();
         }
 
         /// Not a view, a view already in a view (every one of the host's
@@ -2982,12 +3011,26 @@ fn load_plugins_where(scope: LoadScope) {
     // ends before that plugin runs. Delivered even if a step above lost
     // the state: these plugins are loaded, and a plugin that never hears
     // READY never finishes its own initialisation.
+    // A restored panel's command shows its panel, and a shown panel
+    // takes focus; once the restore is over, focus goes back where it was
+    // before the pass, which is where Notepad++ has it by READY — see
+    // `dock::return_focus`.
     let mut withheld: Vec<DockPanel> = Vec::new();
+    let focus_before = MainThreadMarker::new().map(crate::dock::focus_now);
     let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         notices.deliver(
             data.npp_handle,
             || with_state(|st| st.shell.active_buffer_id()).flatten(),
-            || restore_plugin_panels(&restore, &mut withheld),
+            || {
+                // A panic in the restore is contained here, not by
+                // `deliver`, so that focus still goes back.
+                let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    restore_plugin_panels(&restore, &mut withheld);
+                }));
+                if let Some(before) = &focus_before {
+                    crate::dock::return_focus(before);
+                }
+            },
         );
     }));
     // Only now, after READY: a plugin may register its panel from there,
@@ -3958,5 +4001,39 @@ mod shortcut_tests {
         // Plain ⌘ and a named key.
         assert_eq!(chord_menu_suffix(true, false, false, 0x31), "\u{2318}1");
         assert_eq!(chord_menu_suffix(true, false, false, 0x2E), "\u{2318}Del");
+    }
+}
+
+#[cfg(test)]
+mod focus_return_guard {
+    /// The load pass hands focus back inside the restore slot, after the
+    /// restore and outside the restore's own panic boundary, so a
+    /// panicking command still gives it back, and before
+    /// `NPPN_BUFFERACTIVATED` and `NPPN_READY`, which is where Notepad++
+    /// has it back — Win32's `load_plugins_where` does the same. Nothing
+    /// short of a plugin load can drive this, hence a source check.
+    #[test]
+    fn the_load_pass_hands_focus_back_after_the_restore() {
+        let src = include_str!("plugin.rs");
+        let start = src.find("fn load_plugins_where(").expect("the load pass");
+        let body: String = src[start..]
+            .split("\n}\n")
+            .next()
+            .unwrap_or("")
+            .chars()
+            .filter(|c| !c.is_whitespace())
+            .collect();
+        assert!(
+            body.contains("letfocus_before=MainThreadMarker::new().map(crate::dock::focus_now);"),
+            "focus must be noted before any plugin of the pass is told anything"
+        );
+        assert!(
+            body.contains(
+                "restore_plugin_panels(&restore,&mutwithheld);}));\
+                 ifletSome(before)=&focus_before{crate::dock::return_focus(before);}},"
+            ),
+            "focus must go back as the last step of the restore slot, outside \
+             the restore's panic boundary"
+        );
     }
 }
