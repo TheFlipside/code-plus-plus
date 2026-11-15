@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle">
+  <channel>
+    <title>Code++ for Windows</title>
+    <item>
+      <title>Code++ 0.2.0</title>
+      <sparkle:version>0.2.0</sparkle:version>
+      <enclosure url="https://git.fiedler.live/tux/code-plus-plus/releases/download/v0.2.0/codepp-windows-x64-0.2.0.msi" sparkle:edSignature="Ma7hUKa+fsGcZheQ5hpat8DvDU16SQdDn8Nr9pnq3+CVocK95qpxHPXeDRdjlGFatz0/lzbbs+fa0w3qGomlDQ==" length="4157440" type="application/octet-stream" sparkle:os="windows"/>
+    </item>
+  </channel>
+</rss>
