@@ -4,6 +4,7 @@
     update_feed.py check
     update_feed.py sign <installer> <feed-file>
     update_feed.py publish <installer> <feed-file>
+    update_feed.py served <feed-file>...
 
 An installed Code++ that updates itself asks one file for the newest
 version: its feed on the repository's `appcast` branch, which holds the
@@ -53,8 +54,20 @@ of files, command lines and messages.
 through the server's API. First it downloads the installer from the
 address the feed names, without a token, and requires the bytes to be
 <installer>'s: a feed must never name a file that is not there. It
-refuses to replace a feed that offers a newer version, and does nothing
-when the branch already holds exactly this feed.
+refuses to replace a feed that offers a newer version, and writes
+nothing when the branch already holds exactly this feed. Either way it
+then reads the feed back from the address an installed Code++ asks,
+without a token, and stops unless that serves <feed-file>'s bytes: the
+server's word that it took a commit is not taken for the feed being
+there.
+
+`served` is that last check alone, for each <feed-file>, whose name
+says which feed is meant, after a wait. The workflow runs it once every
+feed is written, because a server can take a commit and undo it a
+moment later: with a push mirror set up as Forgejo 14 sets one up, a
+mirror push still under way writes the branch back to where it was
+when it started. Two releases lost their third feed that way while
+`publish` reported it written (docs/DESIGN.md, section 11.11).
 
 The rest comes from the environment, where the workflow puts it, so that
 neither the token nor the key appears on a command line:
@@ -64,7 +77,7 @@ neither the token nor the key appears on a command line:
     TAG                 the release's tag (sign, publish)
     VERSION             the release's version, x.y.z (sign, publish)
     TOKEN               a token that may write to the repository
-                        (check, publish)
+                        (check, publish; `served` takes none)
     UPDATE_SIGNING_KEY  the private key: 32 bytes in base64, the form
                         `winsparkle-tool generate-key` writes (sign)
 
@@ -99,6 +112,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -117,6 +131,11 @@ PUBLIC_KEY = "CODEPP_UPDATE_PUBLIC_KEY"
 FEED_URL = "CODEPP_UPDATE_FEED_URL"
 SPARKLE_NS = "http://www.andymatuschak.org/xml-namespaces/sparkle"
 OPENSSL_SECONDS = 120
+# How long `served` waits before it looks: a mirror push that was under
+# way when the last feed was written has to finish before the branch
+# shows what it will keep. The two lost writes were undone within a
+# second of being taken.
+SETTLE_SECONDS = 15
 
 # An Ed25519 key is 32 bytes and a signature 64. `openssl` reads a key
 # in its standard wrapping, which for this algorithm is a fixed prefix
@@ -575,6 +594,15 @@ def sign(installer: Path, feed_file: Path) -> str:
     return text
 
 
+def _shown(text: str) -> str:
+    """Return text a server had a hand in, as a message may show it.
+
+    A header's value, or an error's text that quotes a certificate: on
+    one line, with nothing that restyles or reorders the log.
+    """
+    return shared.shown(text.encode("utf-8", errors="replace"))
+
+
 def _download(url: str, most: int) -> bytes:
     """Fetch `url` without a token; return at most `most` + 1 bytes.
 
@@ -588,13 +616,13 @@ def _download(url: str, most: int) -> bytes:
             announced = answer.headers.get("Content-Length")
             data: bytes = answer.read(most + 1)
         if announced is not None and announced.strip() != str(len(data)):
-            what = f"announces {announced.strip()[:20]} bytes"
+            what = f"announces {_shown(announced.strip())[:20]} bytes"
             raise PublishError(f"{url} {what} and sends {len(data)}")
         return data
     except urllib.error.HTTPError as error:
         raise PublishError(f"{url} answers HTTP {error.code}") from error
     except (urllib.error.URLError, OSError) as error:
-        raise PublishError(f"{url}: {error}") from error
+        raise PublishError(f"{url}: {_shown(str(error))}") from error
     except http.client.HTTPException as error:
         # A body shorter than the server announced, among others.
         what = type(error).__name__
@@ -609,6 +637,29 @@ def _require_served(url: str, content: bytes) -> None:
             f"{url} does not serve the installer that was signed "
             f"({len(served)} bytes against {len(content)}); "
             "the feed is not published"
+        )
+
+
+def _require_feed_served(offered: Feed, feed: bytes) -> None:
+    """Stop unless the server serves `feed` where installed copies ask.
+
+    Asked without a token, as an installed Code++ asks. The caller has
+    checked FORGEJO_URL and REPO (`repo_parts`). What this establishes
+    is that a write was not lost or undone, as seen from the runner; a
+    server set on serving the runner one thing and an installed copy
+    another is not caught by it.
+    """
+    url = feed_url(shared.env("FORGEJO_URL"), shared.env("REPO"), offered)
+    try:
+        served = _download(url, len(feed))
+    except PublishError as error:
+        what = f"{offered.name} is not served where installed copies ask"
+        raise PublishError(f"{what} for it: {error}") from error
+    if served != feed:
+        raise PublishError(
+            f"{url} does not serve {offered.name} as this release wrote it "
+            f"({len(served)} bytes against {len(feed)}); installed copies "
+            "are not offered the release (docs/RELEASING.md)"
         )
 
 
@@ -652,6 +703,7 @@ def publish(installer: Path, feed_file: Path) -> str:
         )
     existing = forgejo.file_on_branch(name, FEED_BRANCH)
     if existing is not None and existing[1] == feed:
+        _require_feed_served(offered, feed)
         return f"{name} on {FEED_BRANCH} already offers {version}"
     if existing is not None:
         _require_not_newer(existing[1], version, name)
@@ -662,7 +714,31 @@ def publish(installer: Path, feed_file: Path) -> str:
         f"Code++ {version} for {offered.platform}",
         None if existing is None else existing[0],
     )
+    _require_feed_served(offered, feed)
     return f"{name} on {FEED_BRANCH} now offers {version}"
+
+
+def feeds_served(feed_files: List[Path]) -> str:
+    """Stop unless every feed in `feed_files` is served as it was written.
+
+    After a wait, so that a commit the server took and then undid is
+    seen as undone.
+    """
+    # Before the wait, and before anything is fetched.
+    shared.repo_parts(shared.env("FORGEJO_URL"), shared.env("REPO"))
+    feeds: List[Tuple[Feed, bytes]] = []
+    for path in feed_files:
+        offered = next((f for f in FEEDS if f.name == path.name), None)
+        if offered is None:
+            names = ", ".join(feed.name for feed in FEEDS)
+            what = f"a feed file must be one of {names}"
+            raise PublishError(f"{what}, not {path.name}")
+        feeds.append((offered, shared.release_file(path, offered.name)))
+    time.sleep(SETTLE_SECONDS)
+    for offered, feed in feeds:
+        _require_feed_served(offered, feed)
+    names = ", ".join(offered.name for offered, _ in feeds)
+    return f"served where installed copies ask: {names}"
 
 
 def check() -> str:
@@ -696,6 +772,8 @@ def _run(argv: List[str]) -> int:
         print(f"signed {Path(argv[2]).name}: {signature}")
     elif len(argv) == 4 and argv[1] == "publish":
         print(publish(Path(argv[2]), Path(argv[3])))
+    elif len(argv) >= 3 and argv[1] == "served":
+        print(feeds_served([Path(arg) for arg in argv[2:]]))
     else:
         print(__doc__, file=sys.stderr)
         return 2

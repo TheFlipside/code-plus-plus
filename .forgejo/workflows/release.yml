@@ -488,7 +488,8 @@ jobs:
       # installed copies are offered the release. For each feed the
       # script first downloads the file from the address the feed names
       # and requires it to be the file that was signed, so a feed never
-      # names a file that is not there.
+      # names a file that is not there. After writing a feed it reads it
+      # back from the address installed copies ask.
       - name: Publish the update feeds
         env:
           TOKEN: ${{ secrets.RELEASE_TOKEN }}
@@ -497,3 +498,12 @@ jobs:
           python3 .forgejo/scripts/update_feed.py publish "release-files/codepp-windows-x64-$VERSION.msi" update-feeds/windows-x64.xml
           python3 .forgejo/scripts/update_feed.py publish "release-files/codepp-macos-arm64-$VERSION.zip" update-feeds/macos-arm64.xml
           python3 .forgejo/scripts/update_feed.py publish "release-files/codepp-macos-x64-$VERSION.zip" update-feeds/macos-x64.xml
+
+      # And once more, a little later and with no token: a server can
+      # take a commit and undo it a moment afterwards, which is how the
+      # releases of 0.2.0 and 0.2.1 each lost their third feed while the
+      # step above reported it written (docs/DESIGN.md §11.11). If this
+      # fails, run this job again, and only this job (docs/RELEASING.md
+      # §4).
+      - name: Check the update feeds are served
+        run: python3 .forgejo/scripts/update_feed.py served update-feeds/windows-x64.xml update-feeds/macos-arm64.xml update-feeds/macos-x64.xml
