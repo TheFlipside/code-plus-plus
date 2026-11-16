@@ -3,9 +3,9 @@
   <channel>
     <title>Code++ for Windows</title>
     <item>
-      <title>Code++ 0.2.0</title>
-      <sparkle:version>0.2.0</sparkle:version>
-      <enclosure url="https://git.fiedler.live/tux/code-plus-plus/releases/download/v0.2.0/codepp-windows-x64-0.2.0.msi" sparkle:edSignature="Ma7hUKa+fsGcZheQ5hpat8DvDU16SQdDn8Nr9pnq3+CVocK95qpxHPXeDRdjlGFatz0/lzbbs+fa0w3qGomlDQ==" length="4157440" type="application/octet-stream" sparkle:os="windows"/>
+      <title>Code++ 0.2.1</title>
+      <sparkle:version>0.2.1</sparkle:version>
+      <enclosure url="https://git.fiedler.live/tux/code-plus-plus/releases/download/v0.2.1/codepp-windows-x64-0.2.1.msi" sparkle:edSignature="AiXYpGQ1BATtJxTWLfNpWve7soKwC3b1emWf+rJXdidhv2LJN0oAZQpEt9T/ckB5Yf2tcvSAxmcAuLZ0Lo4tBQ==" length="4157440" type="application/octet-stream" sparkle:os="windows"/>
     </item>
   </channel>
 </rss>
