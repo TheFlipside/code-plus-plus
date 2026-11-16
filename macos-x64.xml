@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle">
+  <channel>
+    <title>Code++ for macOS on Intel</title>
+    <item>
+      <title>Code++ 0.2.1</title>
+      <sparkle:version>0.2.1</sparkle:version>
+      <enclosure url="https://git.fiedler.live/tux/code-plus-plus/releases/download/v0.2.1/codepp-macos-x64-0.2.1.zip" sparkle:edSignature="y8NE1BklYna7NwpM4REV3FPEH3YFz/0L5guZ7ztgqQ7RYj17byQEyiCVhtThT3Ix3QAlyl4pfO4GWt65+aHeDw==" length="5812300" type="application/octet-stream"/>
+    </item>
+  </channel>
+</rss>
+<!-- sparkle-signatures:
+edSignature: 4rrVDU9tEkwwOUrM3Dojn8G3vnfijcP1TT5kCU8AICylCkIx39P96HvorUXexq5EDa/Fe3EiN7t/5i+GhZ4bAw==
+length: 589
+-->
