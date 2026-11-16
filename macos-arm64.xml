@@ -3,13 +3,13 @@
   <channel>
     <title>Code++ for macOS on Apple silicon</title>
     <item>
-      <title>Code++ 0.2.0</title>
-      <sparkle:version>0.2.0</sparkle:version>
-      <enclosure url="https://git.fiedler.live/tux/code-plus-plus/releases/download/v0.2.0/codepp-macos-arm64-0.2.0.zip" sparkle:edSignature="ODeMDQR84TBhC8lMSEMEIGhfgVv8sxHIm6veYcFxo9Q8qqsGjdf8uM21RS3hkN0A2k473D6ZVI7m9rlAIgxyDw==" length="5446282" type="application/octet-stream"/>
+      <title>Code++ 0.2.1</title>
+      <sparkle:version>0.2.1</sparkle:version>
+      <enclosure url="https://git.fiedler.live/tux/code-plus-plus/releases/download/v0.2.1/codepp-macos-arm64-0.2.1.zip" sparkle:edSignature="1WEVa2kIYL4oh4qBuBLrKgGTFFLy1GQnz7E9e0SAZ/GWFkhFjhq8uXl5hNNx9vO7snXMNd1QW1j+NM+emQfEDw==" length="5445763" type="application/octet-stream"/>
     </item>
   </channel>
 </rss>
 <!-- sparkle-signatures:
-edSignature: Nk3tXqDgBAHlmBEEg8n8G0AhNkOrcHS5C+SJelYGMU7OVmtGImcrc99m0T8wYbBZcPKG+ybjnmL8m9mD1tpqCw==
+edSignature: +6+rDQbde1QLUjezDQrUVuwo3PPDhHAelu659ggp7CPxS2KkKG8nFQXPst2sWSg9QF6VAPiN6UJHyaz6FEuBDA==
 length: 599
 -->
