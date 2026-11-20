@@ -4779,6 +4779,51 @@ unsafe fn save_announced(
     Some(finished.unwrap_or_else(|_| Err(panicked())))
 }
 
+/// File → Save All: each buffer [`codepp_shell::Shell::save_all_targets`]
+/// lists, through [`save_announced`], with what its save queued delivered
+/// before the next begins. So the plugins hear `NPPN_FILEBEFORESAVE` and
+/// then `NPPN_FILESAVED` for one buffer before the next buffer's, in tab
+/// order, and the tab in front stays the current buffer throughout, as in
+/// Notepad++ (measured, 8.9.8.1; DESIGN.md §7.4). Returns the saves that
+/// failed.
+///
+/// A handler can close a buffer further down the list, or start its
+/// reload; such a buffer is passed over, as Save All passes over one that
+/// is loading when it starts. A Save All asked for from inside this one,
+/// by a handler, is not made ([`codepp_shell::SaveAllUnderWay`]), and
+/// each delivery here counts toward the depth at which saves stop being
+/// announced ([`codepp_shell::deliver_after_save`]).
+///
+/// # Safety
+///
+/// As for [`save_announced`].
+unsafe fn save_all_announced(hwnd: HWND) -> Vec<(i32, codepp_shell::ShellError)> {
+    let Some(_under_way) = codepp_shell::SaveAllUnderWay::enter() else {
+        return Vec::new();
+    };
+    // SAFETY: caller's contract. The borrow ends with the statement.
+    let targets = unsafe { state_from_hwnd(hwnd) }
+        .map(|state| state.shell.save_all_targets())
+        .unwrap_or_default();
+    let mut failures = Vec::new();
+    for id in targets {
+        // SAFETY: caller's contract.
+        match unsafe { save_announced(hwnd, &codepp_shell::SaveRequest::Tab(id)) } {
+            // The window's state is out of reach, for this buffer and for the
+            // rest.
+            None => break,
+            Some(Ok(())) => {}
+            Some(Err(e)) if codepp_shell::Shell::save_all_passes_over(&e) => {}
+            Some(Err(e)) => failures.push((id, e)),
+        }
+        // This buffer's `NPPN_FILESAVED`, before the next buffer's
+        // `NPPN_FILEBEFORESAVE`.
+        // SAFETY: caller's contract; no borrow is held here.
+        codepp_shell::deliver_after_save(|| unsafe { fire_queued_notifications(hwnd) });
+    }
+    failures
+}
+
 /// Present every dialog a plugin call queued on `Shell::deferred_dialogs`
 /// — the export Save-As, the `NPPM_RELOADBUFFERID` reload prompt — now,
 /// rather than at the next worker wake. Plugin calls post no wake, so
@@ -26580,7 +26625,13 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                         // tab behind another, where only the strip's
                         // repaint shows it clean.
                         refresh_tab_chrome(hwnd);
-                        fire_queued_notifications(hwnd);
+                        // Counted as part of the save
+                        // (`deliver_after_save`): a plugin can send
+                        // this command from its `NPPN_FILESAVED`
+                        // handler, and uncounted that is a save inside
+                        // a handler inside a save until the stack
+                        // runs out.
+                        codepp_shell::deliver_after_save(|| fire_queued_notifications(hwnd));
                     }
                     ID_FILE_NEW => {
                         // File→New: synchronous untitled-buffer
@@ -26982,7 +27033,8 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                         // The save clears the dirty glyph via
                         // UiPlatform::mark_saved on success and
                         // run_save_as_flow refreshes the tab strip.
-                        fire_queued_notifications(hwnd);
+                        // Counted, as File → Save's is.
+                        codepp_shell::deliver_after_save(|| fire_queued_notifications(hwnd));
                     }
                     ID_FILE_RENAME => {
                         // Two-branch behaviour:
@@ -27036,7 +27088,10 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                             RenameAction::None => {}
                             RenameAction::RouteToSaveAs => {
                                 run_save_as_flow(hwnd);
-                                fire_queued_notifications(hwnd);
+                                // Counted, as File → Save's is.
+                                codepp_shell::deliver_after_save(|| {
+                                    fire_queued_notifications(hwnd);
+                                });
                             }
                             RenameAction::ShowDialog {
                                 current_name,
@@ -27059,33 +27114,13 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                         }
                     }
                     ID_FILE_SAVE_ALL => {
-                        // Iterate every titled tab, save each, then
-                        // restore the original active. Errors are
-                        // collected per-tab; if any fired, surface
-                        // a summary in a single error dialog after
-                        // the borrow ends.
-                        let errors: Vec<(i32, codepp_shell::ShellError)> =
-                            if let Some(state) = state_from_hwnd(hwnd) {
-                                let (shell, mut ui) = state.split();
-                                let result =
-                                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                                        shell.save_all(&mut ui)
-                                    }));
-                                // Each successful per-tab save already
-                                // cleared its dirty glyph via
-                                // `UiPlatform::mark_saved` inside
-                                // `save_current_to_disk` — no batch-
-                                // level save-point fold needed (and
-                                // the old one was wrong: it left
-                                // successfully-saved tabs dirty
-                                // whenever any sibling failed). On
-                                // a wholesale catch_unwind catch we
-                                // just report no errors and let the
-                                // higher-level panic handler log it.
-                                result.unwrap_or_default()
-                            } else {
-                                Vec::new()
-                            };
+                        // Every titled tab, buffer by buffer, each
+                        // announced to the plugins before it is read
+                        // (`save_all_announced`). Each save that
+                        // succeeds clears its own dirty glyph; the
+                        // failures are collected and surfaced in a
+                        // single dialog below.
+                        let errors = save_all_announced(hwnd);
                         if !errors.is_empty() {
                             // One line per failed buffer; `lines` sanitizes
                             // each before joining, so a `ShellError` naming
@@ -27095,11 +27130,12 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                             );
                             show_error_dialog(hwnd, "Save All — some files failed", &summary);
                         }
-                        // Save All flips the active tab during the
-                        // loop and restores it; the tab strip
-                        // selection needs to follow.
+                        // The glyphs of the tabs just saved, and the
+                        // strip's selection if a handler moved the
+                        // front.
                         refresh_tab_chrome(hwnd);
-                        fire_queued_notifications(hwnd);
+                        // Counted, as File → Save's is.
+                        codepp_shell::deliver_after_save(|| fire_queued_notifications(hwnd));
                     }
                     ID_FILE_CLOSE_ALL => {
                         // Loop the single-tab close path until no
@@ -33162,10 +33198,86 @@ mod drain_freeze_guards {
         );
     }
 
+    /// Save All goes buffer by buffer: the list under a borrow of its
+    /// own, each buffer through `save_announced`, and what that save
+    /// queued delivered before the next buffer's begins. Delivered once
+    /// after the loop instead, every `NPPN_FILESAVED` would follow every
+    /// `NPPN_FILEBEFORESAVE`, where Notepad++ pairs them buffer by buffer.
+    /// The whole loop runs as the one Save All under way, and each
+    /// delivery is counted (`deliver_after_save`): without the first a
+    /// handler's own Save All runs a loop inside every step of this one,
+    /// and without the second a plugin that saves from `NPPN_FILESAVED`
+    /// recurses until the stack runs out.
+    /// The body is pinned whole: a check for one call is met by that call
+    /// beside a direct `save_all`.
+    #[test]
+    fn save_all_announces_buffer_by_buffer() {
+        let body: String = code_only(&fn_body(production_src(), "save_all_announced"))
+            .split_whitespace()
+            .collect();
+        assert_eq!(
+            body,
+            "{letSome(_under_way)=codepp_shell::SaveAllUnderWay::enter()else{returnVec::new();};\
+             lettargets=unsafe{state_from_hwnd(hwnd)}\
+             .map(|state|state.shell.save_all_targets()).unwrap_or_default();\
+             letmutfailures=Vec::new();\
+             foridintargets{\
+             matchunsafe{save_announced(hwnd,&codepp_shell::SaveRequest::Tab(id))}{\
+             None=>break,Some(Ok(()))=>{}\
+             Some(Err(e))ifcodepp_shell::Shell::save_all_passes_over(&e)=>{}\
+             Some(Err(e))=>failures.push((id,e)),}\
+             codepp_shell::deliver_after_save(||unsafe{fire_queued_notifications(hwnd)});}\
+             failures}",
+            "`save_all_announced` no longer saves buffer by buffer, delivering after each"
+        );
+        let src: String = code_only(production_src()).split_whitespace().collect();
+        assert!(
+            src.contains("ID_FILE_SAVE_ALL=>{leterrors=save_all_announced(hwnd);"),
+            "File > Save All no longer saves through `save_all_announced`"
+        );
+    }
+
+    /// A plugin can send this window a save command from its
+    /// `NPPN_FILESAVED` handler, and the command ends by delivering what
+    /// its save queued, to that handler among others. Each of the four
+    /// save commands delivers through `deliver_after_save`, which counts
+    /// the delivery and stops making it eight deep. Delivered plainly, the
+    /// count never rises and the saves nest until the stack runs out.
+    #[test]
+    fn the_save_commands_count_what_they_deliver() {
+        let src: String = code_only(production_src()).split_whitespace().collect();
+        let counted = "codepp_shell::deliver_after_save(||fire_queued_notifications(hwnd));";
+        for (command, ending) in [
+            (
+                "File > Save",
+                format!("refresh_tab_chrome(hwnd);{counted}}}ID_FILE_NEW=>{{"),
+            ),
+            (
+                "File > Save As",
+                format!("ID_FILE_SAVE_AS=>{{run_save_as_flow(hwnd);{counted}}}"),
+            ),
+            (
+                "Rename's Save As",
+                "RenameAction::RouteToSaveAs=>{run_save_as_flow(hwnd);\
+                 codepp_shell::deliver_after_save(||{fire_queued_notifications(hwnd);});}"
+                    .to_string(),
+            ),
+            (
+                "File > Save All",
+                format!("refresh_tab_chrome(hwnd);{counted}}}ID_FILE_CLOSE_ALL=>{{"),
+            ),
+        ] {
+            assert!(
+                src.contains(&ending),
+                "{command} no longer ends in a counted delivery of what its save queued"
+            );
+        }
+    }
+
     /// Every save a command makes on this backend goes through
-    /// `save_announced`. A direct `shell.save_current_to_disk` or
-    /// `shell.save_buffer_as` would be the save that tells the plugins
-    /// after its write.
+    /// `save_announced`. A direct `shell.save_current_to_disk`,
+    /// `shell.save_buffer_as` or `shell.save_all` would be the save that
+    /// tells the plugins after its write.
     #[test]
     fn no_command_saves_without_announcing() {
         // Every source file of the crate, so that a file added later is
@@ -33188,7 +33300,7 @@ mod drain_freeze_guards {
             "the crate's production code was not read from {}",
             dir.display()
         );
-        for direct in [".save_current_to_disk(", ".save_buffer_as("] {
+        for direct in [".save_current_to_disk(", ".save_buffer_as(", ".save_all("] {
             assert!(
                 !src.contains(direct),
                 "`{direct}` in production code is a save announced after its write"

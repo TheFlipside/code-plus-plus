@@ -2084,29 +2084,99 @@ pub enum SaveRequest {
     /// The tab in front, to this path, which becomes its file: Save As.
     ActiveAs(PathBuf),
     /// The tab with this buffer id, to its own file, wherever it is in
-    /// the strip. It is not brought to the front for it.
+    /// the strip: one step of Save All. It is not brought to the front
+    /// for it.
     Tab(i32),
 }
 
-/// How many saves may be announced from inside one another's
-/// `NPPN_FILEBEFORESAVE` handlers on one thread. A plugin may save from
-/// its handler, and Notepad++ announces that save too (measured, 8.9.8.1:
-/// the nested save's own BEFORESAVE and FILESAVED arrive inside the outer
-/// handler). A plugin that does it for every announcement would recurse
-/// until the stack ran out, so past this depth a save's BEFORESAVE goes
-/// onto the queue instead and its handlers run after the write, as every
-/// save's did until Phase 5. Notepad++ has no such bound that its source
-/// shows (`Notepad_plus::doSave`, read, not tried).
+/// How many saves may be announced from inside one another's handlers on
+/// one thread. A plugin may save from its `NPPN_FILEBEFORESAVE` handler,
+/// and Notepad++ announces that save too (measured, 8.9.8.1: the nested
+/// save's own BEFORESAVE and FILESAVED arrive inside the outer handler).
+/// A plugin that does it for every announcement would recurse until the
+/// stack ran out, and so would one that saves from every
+/// `NPPN_FILESAVED` a save delivers ([`deliver_after_save`]). So past this
+/// depth a save's BEFORESAVE goes onto the queue instead, with its
+/// FILESAVED, and their handlers run after the write, at a later
+/// delivery, as every save's did until Phase 5. Notepad++ has no
+/// such bound that its source shows (`Notepad_plus::doSave`, read, not
+/// tried).
 const MAX_NESTED_SAVE_ANNOUNCEMENTS: usize = 8;
 
 thread_local! {
-    /// The `NPPN_FILEBEFORESAVE` deliveries under way on this thread, one
-    /// inside the other. See [`MAX_NESTED_SAVE_ANNOUNCEMENTS`].
+    /// The deliveries a save makes that are under way on this thread, one
+    /// inside the other: its `NPPN_FILEBEFORESAVE`
+    /// ([`AnnouncedSave::deliver`]) and what it queued
+    /// ([`deliver_after_save`]). See [`MAX_NESTED_SAVE_ANNOUNCEMENTS`].
     static SAVE_ANNOUNCEMENTS_UNDER_WAY: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// Whether a Save All is under way on this thread
+    /// ([`SaveAllUnderWay`]).
+    static SAVE_ALL_UNDER_WAY: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
-/// Counts one `NPPN_FILEBEFORESAVE` delivery as under way until dropped,
-/// an unwind out of the delivery included.
+/// Run `deliver`, a backend's delivery of what a save has just queued (its
+/// `NPPN_FILESAVED`), where a handler it runs can reach a save again
+/// before it returns: after one buffer of a Save All, so that the plugins
+/// hear of it before the next buffer, and at the end of a save command,
+/// which a plugin can run from a handler on every backend.
+///
+/// The delivery is counted with the `NPPN_FILEBEFORESAVE` deliveries, and
+/// past [`MAX_NESTED_SAVE_ANNOUNCEMENTS`] it is not made: what the save
+/// queued stays queued for a later delivery. That is what stops a plugin
+/// that saves from every `NPPN_FILESAVED` it hears, which would otherwise
+/// run a save inside a handler inside a save until the stack ran out. It
+/// stops it only where every delivery such a save ends in is made through
+/// here: one made plainly raises no count, and the saves under it nest
+/// without end. A save begun that deep was not announced either
+/// ([`Shell::begin_save`]), so both of its notifications go out together,
+/// later. Where `deliver` is a backend's whole drain, everything the drain
+/// would have done waits with them.
+///
+/// Call it with **no** `Shell` borrow held, as for
+/// [`AnnouncedSave::deliver`].
+pub fn deliver_after_save(deliver: impl FnOnce()) {
+    let nested = SAVE_ANNOUNCEMENTS_UNDER_WAY.with(std::cell::Cell::get);
+    if nested >= MAX_NESTED_SAVE_ANNOUNCEMENTS {
+        tracing::warn!(
+            nested,
+            "what a save queued from inside that many save handlers is delivered later"
+        );
+        return;
+    }
+    let _under_way = SaveAnnouncementUnderWay::enter();
+    deliver();
+}
+
+/// Marks a Save All as under way on this thread until dropped, an unwind
+/// included. [`Self::enter`] answers `None` while one is.
+///
+/// A backend's Save All takes it for the whole of its loop. Plugin code
+/// runs twice for every buffer there, and a handler that asks for a Save
+/// All of its own would start a loop over every buffer inside each step
+/// of this one: bounded in depth by [`MAX_NESTED_SAVE_ANNOUNCEMENTS`] and
+/// not in breadth. The Save All under way is saving every buffer already,
+/// so one asked for from inside it is not made.
+#[must_use = "hold it for the whole Save All"]
+pub struct SaveAllUnderWay(());
+
+impl SaveAllUnderWay {
+    /// Mark a Save All as under way, or `None` if one already is.
+    #[must_use = "hold it for the whole Save All"]
+    pub fn enter() -> Option<Self> {
+        SAVE_ALL_UNDER_WAY
+            .with(|under_way| !under_way.replace(true))
+            .then_some(Self(()))
+    }
+}
+
+impl Drop for SaveAllUnderWay {
+    fn drop(&mut self) {
+        SAVE_ALL_UNDER_WAY.with(|under_way| under_way.set(false));
+    }
+}
+
+/// Counts one delivery a save makes as under way until dropped, an unwind
+/// out of the delivery included.
 struct SaveAnnouncementUnderWay;
 
 impl SaveAnnouncementUnderWay {
@@ -4758,11 +4828,52 @@ impl Shell {
         self.queue_buffer_activated();
     }
 
-    /// Save every titled, non-loading tab to disk in tab order.
+    /// The buffers a Save All saves, in tab order: every tab that has a
+    /// file and is not waiting on a load. An untitled buffer needs Save
+    /// As, and a tab whose load is in flight has nothing of its file yet.
+    ///
+    /// A backend's Save All saves each through [`Self::begin_save`] and
+    /// [`Self::finish_save`] with [`SaveRequest::Tab`], delivering what
+    /// the save queued before it goes on to the next. So the plugins hear
+    /// `NPPN_FILEBEFORESAVE` and then `NPPN_FILESAVED` for one buffer
+    /// before the next buffer's, in tab order, with the tab in front
+    /// still the current buffer throughout, as in Notepad++ (measured,
+    /// 8.9.8.1). A handler can close a buffer further down the list or
+    /// start its reload; see [`Self::save_all_passes_over`].
+    #[must_use]
+    pub fn save_all_targets(&self) -> Vec<i32> {
+        self.tabs
+            .iter()
+            .filter(|t| t.path.is_some() && t.pending_load.is_none())
+            .map(|t| t.id)
+            .collect()
+    }
+
+    /// Whether a Save All passes over a buffer whose save was refused
+    /// with `error`, rather than reporting it as a failure: the buffer was
+    /// closed, or began loading, after [`Self::save_all_targets`] listed
+    /// it, which only a plugin's handler between two saves can do, or it
+    /// has no file, which nothing does to a listed buffer today. Save All
+    /// never listed such a buffer to begin with. The buffer is left as it
+    /// is: one that is reloading keeps its edits or loses them by the
+    /// reload's own rules, and reads unsaved afterwards if it kept them.
+    #[must_use]
+    pub fn save_all_passes_over(error: &ShellError) -> bool {
+        matches!(
+            error,
+            ShellError::NoSuchTab | ShellError::LoadInFlight | ShellError::NoActivePath
+        )
+    }
+
+    /// Save every titled, non-loading tab to disk in tab order, without
+    /// announcing any of the saves: each queues its `NPPN_FILEBEFORESAVE`,
+    /// so plugins hear of it after the write. A backend's Save All goes
+    /// buffer by buffer instead ([`Self::save_all_targets`]).
+    ///
     /// Returns one `(buffer_id, error)` pair for each tab whose
     /// save failed; an empty `Vec` means everything saved cleanly.
     ///
-    /// Phase 4 m8: drives File→Save All. Untitled buffers (no
+    /// Phase 4 m8: drove File→Save All. Untitled buffers (no
     /// path) and tabs still waiting on their loader (`pending_load`
     /// is `Some`) are skipped silently — both are inappropriate
     /// targets for Save All (the former needs Save As, the latter
@@ -7474,7 +7585,12 @@ impl Shell {
         // handlers ran in between, and a switch the backend did not follow
         // with a rebind would have this write another tab's text.
         if self.active_tab == Some(idx) && ui.bound_doc() == self.tabs[idx].scintilla_doc {
-            return save(self, ui);
+            // A panic is this save's failure here too, so that a Save All
+            // goes on to its next buffer, as `save_all` does.
+            return std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                save(&mut *self, &mut *ui)
+            }))
+            .unwrap_or_else(|_| Err(ShellError::Io(String::from("internal panic during save"))));
         }
         // Not in the view: Save All's visit, or a handler moved the front
         // or the view.
@@ -13677,6 +13793,9 @@ mod tests {
         /// increasing fake "doc pointers" so each tab gets a
         /// distinct value.
         next_fake_doc: isize,
+        /// Makes `get_buffer_text` panic, as a host-internal bug in the
+        /// middle of a save would.
+        panic_reading_the_buffer: bool,
         apply_lang_calls: Vec<LangType>,
         apply_default_style_calls: Vec<codepp_core::styles::Styles>,
         search_calls: Vec<(String, SearchFlags, String)>,
@@ -13973,6 +14092,10 @@ mod tests {
             self.set_text_calls.push((text.to_string(), cursor));
         }
         fn get_buffer_text(&mut self) -> String {
+            assert!(
+                !self.panic_reading_the_buffer,
+                "the fixture was told to panic reading the buffer"
+            );
             self.buffer_text.clone()
         }
         fn bound_doc(&mut self) -> isize {
@@ -17980,6 +18103,48 @@ mod tests {
         (result, heard)
     }
 
+    /// What [`save_all_as_a_backend_does`] reports: the failures, what the
+    /// handler heard, and what each buffer's save queued, in order.
+    type SaveAllRun = (Vec<(i32, ShellError)>, Vec<Heard>, Vec<Vec<Notification>>);
+
+    /// Save All as a backend makes it: each of [`Shell::save_all_targets`]
+    /// through an announced save, with what the save queued taken after
+    /// each, where a backend delivers it.
+    fn save_all_as_a_backend_does(
+        shell: &mut Shell,
+        ui: &mut FakeUi,
+        on_before_save: OnBeforeSave,
+    ) -> SaveAllRun {
+        let targets = shell.save_all_targets();
+        let (shell, ui): (*mut Shell, *mut FakeUi) = (shell, ui);
+        SAVE_RIG.with(|rig| {
+            *rig.borrow_mut() = Some(SaveRig {
+                shell,
+                ui,
+                on_before_save,
+                heard: Vec::new(),
+            });
+        });
+        let mut failures = Vec::new();
+        let mut queued = Vec::new();
+        for id in targets {
+            // SAFETY: both come from live `&mut`s this function holds and
+            // does not use until the saves have returned.
+            match unsafe { save_as_a_backend_does(shell, ui, &SaveRequest::Tab(id)) } {
+                Ok(()) => {}
+                Err(e) if Shell::save_all_passes_over(&e) => {}
+                Err(e) => failures.push((id, e)),
+            }
+            // What the save queued, taken where a backend delivers it.
+            deliver_after_save(|| {
+                // SAFETY: as above; no delivery is running.
+                queued.push(unsafe { (*shell).take_notifications() });
+            });
+        }
+        let heard = SAVE_RIG.with(|rig| rig.borrow_mut().take().expect("the rig").heard);
+        (failures, heard, queued)
+    }
+
     /// Two files open and landed, the second in front, each tab with its
     /// document, and the notification queue empty.
     fn shell_with_two_files() -> (Shell, FakeUi, tempfile::TempDir, PathBuf, PathBuf) {
@@ -18265,6 +18430,321 @@ mod tests {
         );
         assert!(ui.apply_lang_calls.contains(&saved_lang));
         ui.assert_documents_accounted_for(&shell);
+    }
+
+    #[test]
+    fn save_all_targets_are_the_titled_tabs_that_are_not_loading() {
+        let (mut shell, mut ui, dir, _a, _b) = shell_with_two_files();
+        let (a_id, b_id) = (shell.tabs[0].id, shell.tabs[1].id);
+        shell.new_untitled(&mut ui);
+        let loading = dir.path().join("c.txt");
+        std::fs::write(&loading, "C\n").unwrap();
+        shell.open_file(loading);
+        assert!(shell.tabs[3].pending_load.is_some());
+
+        assert_eq!(shell.save_all_targets(), [a_id, b_id]);
+
+        // A tab that is reloading has its file and a load in flight both;
+        // a fresh open, above, has no file yet.
+        assert!(shell.request_reload_tab(a_id, ReloadConsent::Unconfirmed));
+        assert!(shell.tabs[0].path.is_some() && shell.tabs[0].pending_load.is_some());
+        assert_eq!(shell.save_all_targets(), [b_id]);
+
+        // What a handler can do to a buffer further down the list is
+        // passed over; a write that failed is not.
+        for passed_over in [
+            ShellError::NoSuchTab,
+            ShellError::LoadInFlight,
+            ShellError::NoActivePath,
+        ] {
+            assert!(Shell::save_all_passes_over(&passed_over), "{passed_over:?}");
+        }
+        for reported in [
+            ShellError::Io(String::from("disk full")),
+            ShellError::AlreadyOpen,
+        ] {
+            assert!(!Shell::save_all_passes_over(&reported), "{reported:?}");
+        }
+    }
+
+    #[test]
+    fn an_announced_save_all_tells_of_each_buffer_in_turn_with_the_front_still_current() {
+        // Notepad++ announces a Save All buffer by buffer, in tab order,
+        // FILESAVED for one before BEFORESAVE for the next, and never
+        // brings a buffer to the front for it (measured, 8.9.8.1). So a
+        // handler that edits "the current view" edits the buffer in front,
+        // whichever buffer it was told about.
+        let (mut shell, mut ui, _dir, a, b) = shell_with_two_files();
+        let (a_id, b_id) = (shell.tabs[0].id as isize, shell.tabs[1].id as isize);
+        shell.switch_to_tab(0);
+        shell.bind_active_view(&mut ui);
+        ui.buffer_text = "new A\n".to_string();
+        shell.switch_to_tab(1);
+        shell.bind_active_view(&mut ui);
+        ui.buffer_text = "new B\n".to_string();
+        shell.tabs[0].dirty = true;
+        let _ = shell.take_notifications();
+
+        let (failures, heard, queued) =
+            save_all_as_a_backend_does(&mut shell, &mut ui, OnBeforeSave::Append("[m]"));
+
+        assert!(failures.is_empty(), "{failures:?}");
+        // Told of `a` and then of `b`, with `b` in front both times.
+        assert_eq!(heard, [(a_id, b_id, 1), (b_id, b_id, 1)]);
+        // Each buffer's own text is in its own file. Both markers went
+        // into the buffer in front, so `b` has them and `a` has none.
+        assert_eq!(std::fs::read_to_string(&a).unwrap(), "new A\n");
+        assert_eq!(std::fs::read_to_string(&b).unwrap(), "new B\n[m][m]");
+        // FILESAVED for one buffer is queued before the next buffer is
+        // told, and no BEFORESAVE is queued at all.
+        assert_eq!(queued.len(), 2);
+        for (saved, id) in queued.iter().zip([a_id, b_id]) {
+            assert!(
+                matches!(
+                    saved.as_slice(),
+                    [Notification::FileSaved { buffer_id }] if *buffer_id == id
+                ),
+                "{saved:?}"
+            );
+        }
+        // `b` is still in front, with the view on its document, and the
+        // tab behind it reads clean.
+        assert_eq!(shell.active_tab, Some(1));
+        assert_eq!(ui.current_doc, shell.tabs[1].scintilla_doc);
+        assert!(!shell.tabs[0].dirty);
+        ui.assert_documents_accounted_for(&shell);
+    }
+
+    #[test]
+    fn an_announced_save_all_passes_over_a_buffer_a_handler_closed() {
+        // The first buffer's handler closes the tab in front, which is
+        // the second buffer on the list. Its save finds no such tab, and
+        // that is no failure of Save All's.
+        let (mut shell, mut ui, _dir, a, b) = shell_with_two_files();
+        let a_id = shell.tabs[0].id as isize;
+        let b_id = shell.tabs[1].id as isize;
+
+        let (failures, heard, queued) =
+            save_all_as_a_backend_does(&mut shell, &mut ui, OnBeforeSave::CloseFront);
+
+        assert!(failures.is_empty(), "{failures:?}");
+        assert_eq!(
+            heard,
+            [(a_id, b_id, 1)],
+            "the closed buffer is not announced"
+        );
+        assert_eq!(std::fs::read_to_string(&a).unwrap(), "old A\n");
+        assert_eq!(std::fs::read_to_string(&b).unwrap(), "old B\n");
+        assert_eq!(shell.tabs.len(), 1);
+        // `a` was saved, and said so; `b` was not.
+        assert!(
+            queued[0]
+                .iter()
+                .any(|n| matches!(n, Notification::FileSaved { buffer_id } if *buffer_id == a_id)),
+            "{:?}",
+            queued[0]
+        );
+        assert!(queued[1]
+            .iter()
+            .all(|n| !matches!(n, Notification::FileSaved { .. })));
+        ui.assert_documents_accounted_for(&shell);
+    }
+
+    #[test]
+    fn an_announced_save_all_fills_a_tab_never_shown_before_it_writes_it() {
+        // A file that landed behind the front has its text in `Tab::text`
+        // and no document. Saved by id, it must be given its text first:
+        // a bare bind hands back an empty document, which the save would
+        // write over the file.
+        let dir = tempfile::tempdir().unwrap();
+        let (a, b) = (dir.path().join("a.txt"), dir.path().join("b.txt"));
+        std::fs::write(&a, "old A\n").unwrap();
+        std::fs::write(&b, "old B\n").unwrap();
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+        shell.open_file(a.clone());
+        shell.open_file(b.clone());
+        drain_until_loads_settle(&mut shell, &mut ui);
+        assert_eq!(shell.tabs[0].scintilla_doc, 0, "`a` was never shown");
+        let _ = shell.take_notifications();
+
+        std::fs::remove_file(&a).unwrap();
+        let (failures, heard, queued) =
+            save_all_as_a_backend_does(&mut shell, &mut ui, OnBeforeSave::Append(""));
+
+        assert!(failures.is_empty(), "{failures:?}");
+        assert_eq!(heard.len(), 2);
+        // The file was gone, so what is there now is what the save wrote.
+        assert_eq!(std::fs::read_to_string(&a).unwrap(), "old A\n");
+        assert_eq!(std::fs::read_to_string(&b).unwrap(), "old B\n");
+        assert!(queued
+            .iter()
+            .all(|saved| matches!(saved.as_slice(), [Notification::FileSaved { .. }])));
+        assert_eq!(shell.active_tab, Some(1));
+        assert_eq!(ui.current_doc, shell.tabs[1].scintilla_doc);
+        ui.assert_documents_accounted_for(&shell);
+    }
+
+    /// One counted delivery inside another, as deep as they will go, with
+    /// the count seen from inside each.
+    fn nest_deliveries(depths: &mut Vec<usize>) {
+        deliver_after_save(|| {
+            depths.push(SAVE_ANNOUNCEMENTS_UNDER_WAY.with(std::cell::Cell::get));
+            nest_deliveries(depths);
+        });
+    }
+
+    /// Run `at_the_bottom` inside `left` counted deliveries.
+    fn inside_deliveries(left: usize, at_the_bottom: &mut dyn FnMut()) {
+        if left == 0 {
+            at_the_bottom();
+        } else {
+            deliver_after_save(|| inside_deliveries(left - 1, at_the_bottom));
+        }
+    }
+
+    #[test]
+    fn what_a_save_queued_is_delivered_counted_and_not_past_the_depth() {
+        // A plugin that saves from every `NPPN_FILESAVED` it hears would
+        // otherwise run a save inside a handler inside a save without end.
+        assert_eq!(SAVE_ANNOUNCEMENTS_UNDER_WAY.with(std::cell::Cell::get), 0);
+        let mut seen = Vec::new();
+        deliver_after_save(|| seen.push(SAVE_ANNOUNCEMENTS_UNDER_WAY.with(std::cell::Cell::get)));
+        assert_eq!(seen, [1], "the delivery counts as under way while it runs");
+        assert_eq!(SAVE_ANNOUNCEMENTS_UNDER_WAY.with(std::cell::Cell::get), 0);
+
+        // One delivery inside another, as deep as they will go.
+        let mut depths = Vec::new();
+        nest_deliveries(&mut depths);
+        assert_eq!(
+            depths,
+            (1..=MAX_NESTED_SAVE_ANNOUNCEMENTS).collect::<Vec<_>>(),
+            "the delivery past the depth is not made"
+        );
+        assert_eq!(SAVE_ANNOUNCEMENTS_UNDER_WAY.with(std::cell::Cell::get), 0);
+
+        // Counted with the announcements: a save begun inside the deepest
+        // delivery is not announced.
+        let (shell, _ui, _dir, _a, _b) = shell_with_two_files();
+        let mut announced_at_the_bottom = None;
+        inside_deliveries(MAX_NESTED_SAVE_ANNOUNCEMENTS, &mut || {
+            announced_at_the_bottom = Some(
+                shell
+                    .begin_save(&SaveRequest::Active)
+                    .unwrap()
+                    .is_synchronous(),
+            );
+        });
+        assert_eq!(announced_at_the_bottom, Some(false));
+        assert!(shell
+            .begin_save(&SaveRequest::Active)
+            .unwrap()
+            .is_synchronous());
+
+        // An unwind out of a delivery releases its count.
+        let unwound = std::panic::catch_unwind(|| deliver_after_save(|| panic!("a delivery")));
+        assert!(unwound.is_err());
+        assert_eq!(SAVE_ANNOUNCEMENTS_UNDER_WAY.with(std::cell::Cell::get), 0);
+    }
+
+    /// File → Save as a backend's command makes it, for a plugin whose
+    /// `NPPN_FILESAVED` handler runs the command again: begin, write, and
+    /// the counted delivery of what the save queued, in which the handler
+    /// runs. Records whether each save was announced.
+    fn save_command_rerun_from_every_filesaved(
+        shell: &mut Shell,
+        ui: &mut FakeUi,
+        announced: &mut Vec<bool>,
+    ) {
+        let save = shell.begin_save(&SaveRequest::Active).unwrap();
+        announced.push(save.is_synchronous());
+        shell.finish_save(ui, &save).unwrap();
+        deliver_after_save(|| {
+            let heard = shell.take_notifications();
+            if heard
+                .iter()
+                .any(|note| matches!(note, Notification::FileSaved { .. }))
+            {
+                save_command_rerun_from_every_filesaved(shell, ui, announced);
+            }
+        });
+    }
+
+    #[test]
+    fn a_plugin_that_saves_from_every_filesaved_stops_nine_saves_down() {
+        // Each save's delivery reaches the handler, which saves again
+        // inside it. Uncounted, that never ends; counted, the ninth save
+        // is neither announced nor followed by a delivery.
+        let (mut shell, mut ui, _dir, _a, _b) = shell_with_two_files();
+        let mut announced = Vec::new();
+        save_command_rerun_from_every_filesaved(&mut shell, &mut ui, &mut announced);
+
+        let mut expected = vec![true; MAX_NESTED_SAVE_ANNOUNCEMENTS];
+        expected.push(false);
+        assert_eq!(announced, expected);
+        // What the ninth queued is still there, for a later delivery.
+        let left = shell.take_notifications();
+        assert!(
+            matches!(
+                left.as_slice(),
+                [
+                    Notification::FileBeforeSave { .. },
+                    Notification::FileSaved { .. }
+                ]
+            ),
+            "{left:?}"
+        );
+        assert_eq!(SAVE_ANNOUNCEMENTS_UNDER_WAY.with(std::cell::Cell::get), 0);
+    }
+
+    #[test]
+    fn a_panic_in_a_save_is_that_saves_failure() {
+        // A Save All goes on to its next buffer after one whose save
+        // panicked, as `save_all` does, and the tab in front is still the
+        // one the user left there.
+        let (mut shell, mut ui, _dir, a, b) = shell_with_two_files();
+        let (a_id, b_id) = (shell.tabs[0].id, shell.tabs[1].id);
+        ui.panic_reading_the_buffer = true;
+
+        // The tab in front, saved directly, and a tab behind it, bound for
+        // its save.
+        for id in [b_id, a_id] {
+            let announced = shell.begin_save(&SaveRequest::Tab(id)).unwrap();
+            let result = shell.finish_save(&mut ui, &announced);
+            assert!(
+                matches!(&result, Err(ShellError::Io(what)) if what.contains("panic")),
+                "{result:?}"
+            );
+            assert_eq!(shell.active_tab, Some(1));
+            assert_eq!(ui.current_doc, shell.tabs[1].scintilla_doc);
+        }
+
+        ui.panic_reading_the_buffer = false;
+        assert_eq!(std::fs::read_to_string(&a).unwrap(), "old A\n");
+        assert_eq!(std::fs::read_to_string(&b).unwrap(), "old B\n");
+        ui.assert_documents_accounted_for(&shell);
+    }
+
+    #[test]
+    fn one_save_all_at_a_time() {
+        let outer = SaveAllUnderWay::enter().expect("no Save All is under way");
+        assert!(
+            SaveAllUnderWay::enter().is_none(),
+            "a Save All asked for from inside one is not made"
+        );
+        drop(outer);
+        let again = SaveAllUnderWay::enter();
+        assert!(again.is_some(), "the mark goes with the Save All");
+        drop(again);
+
+        // An unwind out of a Save All releases the mark.
+        let unwound = std::panic::catch_unwind(|| {
+            let _under_way = SaveAllUnderWay::enter().expect("no Save All is under way");
+            panic!("a Save All");
+        });
+        assert!(unwound.is_err());
+        assert!(SaveAllUnderWay::enter().is_some());
     }
 
     #[test]

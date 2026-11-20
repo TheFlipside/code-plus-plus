@@ -3507,7 +3507,12 @@ fn choose_paths_to_open() -> Vec<PathBuf> {
 /// about a buffer since closed.
 pub(crate) fn action_save_file() {
     save_active_file();
-    drain_shell();
+    // Counted as part of the save (`deliver_after_save`). A plugin can
+    // send this action from its `NPPN_FILESAVED` handler, and the drain
+    // then reaches that handler again: uncounted, that is a save inside a
+    // handler inside a save until the stack runs out. Eight saves deep
+    // the drain is not made, and what is queued waits for the next one.
+    codepp_shell::deliver_after_save(drain_shell);
 }
 
 /// Save through the shell's two-phase protocol
@@ -3593,7 +3598,8 @@ fn save_active_file() {
 /// wake that arrived while it was up, and this replays it.
 pub(crate) fn action_save_file_as() {
     save_active_file_as();
-    drain_shell();
+    // Counted, as `action_save_file`'s is.
+    codepp_shell::deliver_after_save(drain_shell);
 }
 
 /// Save the active buffer to a path the user picks, and report a failure.
@@ -3683,24 +3689,69 @@ fn report_save_as_refused(for_tab: i32, name: &str, path: &std::path::Path) {
     alert.runModal();
 }
 
+/// File → Save All: each buffer [`codepp_shell::Shell::save_all_targets`]
+/// lists, through [`save_announced`], with what its save queued delivered
+/// before the next begins. So the plugins hear `NPPN_FILEBEFORESAVE` and
+/// then `NPPN_FILESAVED` for one buffer before the next buffer's, in tab
+/// order, and the tab in front stays the current buffer throughout, as in
+/// Notepad++ (measured, 8.9.8.1; DESIGN.md §7.4). Returns the saves that
+/// failed.
+///
+/// A handler can close a buffer further down the list, or start its
+/// reload; such a buffer is passed over, as Save All passes over one that
+/// is loading when it starts. A Save All asked for from inside this one,
+/// by a handler, is not made ([`codepp_shell::SaveAllUnderWay`]), and
+/// each delivery here counts toward the depth at which saves stop being
+/// announced ([`codepp_shell::deliver_after_save`]).
+fn save_all_announced() -> Vec<(i32, codepp_shell::ShellError)> {
+    let Some(_under_way) = codepp_shell::SaveAllUnderWay::enter() else {
+        return Vec::new();
+    };
+    let targets = with_state(|st| st.shell.save_all_targets()).unwrap_or_default();
+    let mut failures = Vec::new();
+    for id in targets {
+        match save_announced(&codepp_shell::SaveRequest::Tab(id)) {
+            // The state is out of reach, for this buffer and for the
+            // rest.
+            None => break,
+            Some(Ok(())) => {}
+            Some(Err(e)) if codepp_shell::Shell::save_all_passes_over(&e) => {}
+            Some(Err(e)) => failures.push((id, e)),
+        }
+        // This buffer's `NPPN_FILESAVED`, before the next buffer's
+        // `NPPN_FILEBEFORESAVE`.
+        codepp_shell::deliver_after_save(deliver_queued);
+    }
+    failures
+}
+
+/// Deliver the notifications the shell has queued, and nothing else: no
+/// worker results applied, no chrome refreshed. It holds off where
+/// [`drain_shell`] does: while a nested loop holds the [`DrainFreeze`],
+/// whose holder drains when it lets go, and for good once the quit has
+/// begun.
+fn deliver_queued() {
+    if DrainFreeze::active() {
+        return;
+    }
+    if QUITTING.with(Cell::get) {
+        return;
+    }
+    plugin::deliver_notifications();
+}
+
 pub(crate) fn action_save_all() {
-    let failures = with_state(|st| {
-        let (shell, mut ui) = st.split();
-        shell.save_all(&mut ui)
-    })
-    .unwrap_or_default();
-    // `save_all` already clears the cached `Tab.dirty` for each tab it
-    // saves — it is authoritative precisely because its
-    // `SCN_SAVEPOINTREACHED` notifications land inside its own borrow
-    // and every backend declines them. What is still missing is the
-    // *repaint*: nothing has redrawn the strip against those cleared
+    let failures = save_all_announced();
+    // The shell clears the cached `Tab.dirty` of each tab saved behind
+    // the front, and the one in front is polled; what is still missing is
+    // the *repaint*: nothing has redrawn the strip against those cleared
     // flags. That is what this call is for.
     refresh_tab_chrome();
-    // Each saved buffer's `NPPN_FILEBEFORESAVE` and `NPPN_FILESAVED`,
-    // delivered before the command returns — see `action_save_file`.
-    // Ahead of the failure alert, so a modal on screen does not hold back
-    // the news of what did save.
-    drain_shell();
+    // Whatever is still queued, and what the workers brought meanwhile,
+    // before the command returns — see `action_save_file`. Ahead of the
+    // failure alert, so a modal on screen does not hold back the news of
+    // what did save. Counted, as `action_save_file`'s is.
+    codepp_shell::deliver_after_save(drain_shell);
     if let Some((_, e)) = failures.first() {
         error_alert(
             "Save All failed",
@@ -4795,14 +4846,20 @@ mod source_invariants {
     #[test]
     fn user_gestures_deliver_what_they_queue() {
         let lib = production_src();
-        for (name, work) in [
-            ("action_new_file", "new_untitled("),
-            ("action_save_file", "save_active_file();"),
-            ("action_save_file_as", "save_active_file_as();"),
-            ("action_save_all", "save_all("),
-            ("action_open_file", "open_path(path);"),
-            ("open_all_recent", "open_path(path);"),
-            ("toggle_pin_by_id", "set_pinned("),
+        // A save command's drain is counted with the save's own
+        // deliveries: a plugin can send the action from its
+        // `NPPN_FILESAVED` handler, and an uncounted drain there nests
+        // saves until the stack runs out.
+        let counted = "codepp_shell::deliver_after_save(drain_shell);";
+        let plain = "drain_shell();";
+        for (name, work, drain) in [
+            ("action_new_file", "new_untitled(", plain),
+            ("action_save_file", "save_active_file();", counted),
+            ("action_save_file_as", "save_active_file_as();", counted),
+            ("action_save_all", "save_all_announced();", counted),
+            ("action_open_file", "open_path(path);", plain),
+            ("open_all_recent", "open_path(path);", plain),
+            ("toggle_pin_by_id", "set_pinned(", plain),
         ] {
             let body = code_only(&fn_body(lib, name));
             let worked = body
@@ -4810,8 +4867,12 @@ mod source_invariants {
                 .unwrap_or_else(|| panic!("`{name}` no longer calls `{work}`"));
             let drained = statement_at(
                 &body,
-                "drain_shell();",
+                drain,
                 &format!("`{name}` no longer delivers what it queued before returning"),
+            );
+            assert!(
+                drain == plain || !body.contains(plain),
+                "`{name}` drains outside the count of its save's deliveries"
             );
             assert!(worked < drained, "`{name}` drains before it works");
             assert!(
@@ -4830,7 +4891,7 @@ mod source_invariants {
         // Save All delivers what did save before it reports what did not:
         // the alert is a modal, and plugins should not wait on it.
         let all = code_only(&fn_body(lib, "action_save_all"));
-        let drained = statement_at(&all, "drain_shell();", "Save All no longer delivers");
+        let drained = statement_at(&all, counted, "Save All no longer delivers");
         let reported = all
             .find("error_alert(")
             .expect("Save All no longer reports its failures");
@@ -5130,9 +5191,48 @@ mod source_invariants {
         );
     }
 
+    /// Save All goes buffer by buffer: the list under a borrow of its
+    /// own, each buffer through `save_announced`, and what that save
+    /// queued delivered before the next buffer's begins. Delivered once
+    /// after the loop instead, every `NPPN_FILESAVED` would follow every
+    /// `NPPN_FILEBEFORESAVE`, where Notepad++ pairs them buffer by buffer.
+    /// The whole loop runs as the one Save All under way, and each
+    /// delivery is counted (`deliver_after_save`): without the first a
+    /// handler's own Save All runs a loop inside every step of this one,
+    /// and without the second a plugin that saves from `NPPN_FILESAVED`
+    /// recurses until the stack runs out.
+    /// Bodies are pinned whole: a check for one call is met by that call
+    /// beside a direct `save_all`, and `deliver_queued` must do nothing
+    /// but deliver, behind the freeze and the quit.
+    #[test]
+    fn save_all_announces_buffer_by_buffer() {
+        let squash = |s: &str| s.split_whitespace().collect::<String>();
+        let lib = production_src();
+        assert_eq!(
+            squash(&code_only(&fn_body(lib, "save_all_announced"))),
+            "{letSome(_under_way)=codepp_shell::SaveAllUnderWay::enter()else{returnVec::new();};\
+             lettargets=with_state(|st|st.shell.save_all_targets()).unwrap_or_default();\
+             letmutfailures=Vec::new();\
+             foridintargets{\
+             matchsave_announced(&codepp_shell::SaveRequest::Tab(id)){\
+             None=>break,Some(Ok(()))=>{}\
+             Some(Err(e))ifcodepp_shell::Shell::save_all_passes_over(&e)=>{}\
+             Some(Err(e))=>failures.push((id,e)),}\
+             codepp_shell::deliver_after_save(deliver_queued);}failures}",
+            "`save_all_announced` no longer saves buffer by buffer, delivering after each"
+        );
+        assert_eq!(
+            squash(&code_only(&fn_body(lib, "deliver_queued"))),
+            "{ifDrainFreeze::active(){return;}ifQUITTING.with(Cell::get){return;}\
+             plugin::deliver_notifications();}",
+            "`deliver_queued` does more than deliver, or delivers under a freeze or after \
+             the quit has begun"
+        );
+    }
+
     /// Every save a command makes goes through the announced save. A
-    /// direct `save_current_to_disk` or `save_buffer_as` would be the save
-    /// that tells the plugins after its write.
+    /// direct `save_current_to_disk`, `save_buffer_as` or `save_all` would
+    /// be the save that tells the plugins after its write.
     #[test]
     fn no_command_saves_without_announcing() {
         // Every source file of the crate, so that a file added later is
@@ -5142,7 +5242,7 @@ mod source_invariants {
             src.contains("shell.finish_save(&mutui,&announced)"),
             "the crate's production code was not read"
         );
-        for direct in [".save_current_to_disk(", ".save_buffer_as("] {
+        for direct in [".save_current_to_disk(", ".save_buffer_as(", ".save_all("] {
             assert!(
                 !src.contains(direct),
                 "`{direct}` in production code is a save announced after its write"

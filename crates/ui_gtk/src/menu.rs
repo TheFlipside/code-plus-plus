@@ -2804,9 +2804,16 @@ pub(crate) fn open_paths(paths: Vec<PathBuf>) {
 /// returning, as Win32 does from inside the command. A save posts no
 /// worker wake of its own, so left to the next drain the plugins could
 /// hear of it much later, about a buffer since closed.
+///
+/// The drain is counted as part of the save (`deliver_after_save`). A
+/// plugin can run this command from its `NPPN_FILESAVED` handler, by
+/// activating the host's accelerator, and the drain then reaches that
+/// handler again: uncounted, that is a save inside a handler inside a
+/// save until the stack runs out. Eight saves deep the drain is not made,
+/// and what is queued waits for the next one.
 pub(crate) fn on_save() {
     save_active();
-    drain_shell();
+    codepp_shell::deliver_after_save(drain_shell);
 }
 
 /// Save through the shell's two-phase protocol
@@ -2883,7 +2890,8 @@ pub(crate) fn save_active() {
 /// see [`on_save`].
 fn on_save_as() {
     save_active_as();
-    drain_shell();
+    // Counted, as `on_save`'s is.
+    codepp_shell::deliver_after_save(drain_shell);
 }
 
 /// Save the active buffer to a path the user picks, and report a failure.
@@ -3108,18 +3116,50 @@ pub(crate) fn on_close() {
     close_active_tab();
 }
 
+/// File → Save All: each buffer [`codepp_shell::Shell::save_all_targets`]
+/// lists, through [`save_announced`], with what its save queued delivered
+/// before the next begins. So the plugins hear `NPPN_FILEBEFORESAVE` and
+/// then `NPPN_FILESAVED` for one buffer before the next buffer's, in tab
+/// order, and the tab in front stays the current buffer throughout, as in
+/// Notepad++ (measured, 8.9.8.1; DESIGN.md §7.4). Returns the saves that
+/// failed.
+///
+/// A handler can close a buffer further down the list, or start its
+/// reload; such a buffer is passed over, as Save All passes over one that
+/// is loading when it starts. A Save All asked for from inside this one,
+/// by a handler, is not made ([`codepp_shell::SaveAllUnderWay`]), and
+/// each delivery here counts toward the depth at which saves stop being
+/// announced ([`codepp_shell::deliver_after_save`]).
+fn save_all_announced() -> Vec<(i32, codepp_shell::ShellError)> {
+    let Some(_under_way) = codepp_shell::SaveAllUnderWay::enter() else {
+        return Vec::new();
+    };
+    let targets = with_state(|st| st.shell.save_all_targets()).unwrap_or_default();
+    let mut failures = Vec::new();
+    for id in targets {
+        match save_announced(&codepp_shell::SaveRequest::Tab(id)) {
+            // The state is out of reach, for this buffer and for the
+            // rest.
+            None => break,
+            Some(Ok(())) => {}
+            Some(Err(e)) if codepp_shell::Shell::save_all_passes_over(&e) => {}
+            Some(Err(e)) => failures.push((id, e)),
+        }
+        // This buffer's `NPPN_FILESAVED`, before the next buffer's
+        // `NPPN_FILEBEFORESAVE`.
+        codepp_shell::deliver_after_save(crate::deliver_queued);
+    }
+    failures
+}
+
 pub(crate) fn on_save_all() {
-    let errors = with_state(|st| {
-        let (shell, mut ui) = st.split();
-        shell.save_all(&mut ui)
-    })
-    .unwrap_or_default();
+    let errors = save_all_announced();
     refresh_tab_chrome();
-    // Each saved buffer's `NPPN_FILEBEFORESAVE` and `NPPN_FILESAVED`,
-    // delivered before the command returns — see `on_save`. Ahead of the
-    // error summary, so a modal on screen does not hold back the news of
-    // what did save.
-    drain_shell();
+    // Whatever is still queued, and what the workers brought meanwhile,
+    // before the command returns — see `on_save`. Ahead of the error
+    // summary, so a modal on screen does not hold back the news of what
+    // did save. Counted, as `on_save`'s is.
+    codepp_shell::deliver_after_save(drain_shell);
     if errors.is_empty() {
         return;
     }

@@ -809,7 +809,7 @@ fn deliver_after_signal() {
 /// [`DrainFreeze`] the notifications stay queued, and the freeze's holder
 /// drains when it lets go. Once the quit has begun nothing more is
 /// delivered at all.
-fn deliver_queued() {
+pub(crate) fn deliver_queued() {
     if DrainFreeze::active() {
         return;
     }
@@ -1556,11 +1556,16 @@ mod gesture_delivery_guard {
     #[test]
     fn user_gestures_deliver_what_they_queue() {
         let menu = source(include_str!("menu.rs"));
-        for (name, work) in [
-            ("on_new", "new_untitled("),
-            ("on_save", "save_active();"),
-            ("on_save_as", "save_active_as();"),
-            ("on_save_all", "save_all("),
+        // A save command's drain is counted with the save's own
+        // deliveries: a plugin can run the command from its
+        // `NPPN_FILESAVED` handler, and an uncounted drain there nests
+        // saves until the stack runs out.
+        let counted = "codepp_shell::deliver_after_save(drain_shell);";
+        for (name, work, drain) in [
+            ("on_new", "new_untitled(", "drain_shell();"),
+            ("on_save", "save_active();", counted),
+            ("on_save_as", "save_active_as();", counted),
+            ("on_save_all", "save_all_announced();", counted),
         ] {
             let body = fn_body(&menu, name);
             let worked = body
@@ -1568,8 +1573,12 @@ mod gesture_delivery_guard {
                 .unwrap_or_else(|| panic!("`{name}` no longer calls `{work}`"));
             let drained = statement_at(
                 &body,
-                "drain_shell();",
+                drain,
                 &format!("`{name}` no longer delivers what it queued before returning"),
+            );
+            assert!(
+                drain == "drain_shell();" || !body.contains("drain_shell();"),
+                "`{name}` drains outside the count of its save's deliveries"
             );
             assert!(worked < drained, "`{name}` drains before it works");
             assert!(
@@ -1580,7 +1589,7 @@ mod gesture_delivery_guard {
         // Save All delivers what did save before it reports what did not:
         // the report is a modal, and plugins should not wait on it.
         let all = fn_body(&menu, "on_save_all");
-        let drained = statement_at(&all, "drain_shell();", "Save All no longer delivers");
+        let drained = statement_at(&all, counted, "Save All no longer delivers");
         let gated = all
             .find("if errors.is_empty() {")
             .expect("Save All no longer skips the report when nothing failed");
@@ -1758,9 +1767,42 @@ mod gesture_delivery_guard {
         );
     }
 
+    /// Save All goes buffer by buffer: the list under a borrow of its
+    /// own, each buffer through `save_announced`, and what that save
+    /// queued delivered before the next buffer's begins. Delivered once
+    /// after the loop instead, every `NPPN_FILESAVED` would follow every
+    /// `NPPN_FILEBEFORESAVE`, where Notepad++ pairs them buffer by buffer.
+    /// The whole loop runs as the one Save All under way, and each
+    /// delivery is counted (`deliver_after_save`): without the first a
+    /// handler's own Save All runs a loop inside every step of this one,
+    /// and without the second a plugin that saves from `NPPN_FILESAVED`
+    /// recurses until the stack runs out.
+    /// The body is pinned whole: a check for one call is met by that call
+    /// beside a direct `save_all`.
+    #[test]
+    fn save_all_announces_buffer_by_buffer() {
+        let menu = source(include_str!("menu.rs"));
+        let body: String = fn_body(&menu, "save_all_announced")
+            .split_whitespace()
+            .collect();
+        assert_eq!(
+            body,
+            "{letSome(_under_way)=codepp_shell::SaveAllUnderWay::enter()else{returnVec::new();};\
+             lettargets=with_state(|st|st.shell.save_all_targets()).unwrap_or_default();\
+             letmutfailures=Vec::new();\
+             foridintargets{\
+             matchsave_announced(&codepp_shell::SaveRequest::Tab(id)){\
+             None=>break,Some(Ok(()))=>{}\
+             Some(Err(e))ifcodepp_shell::Shell::save_all_passes_over(&e)=>{}\
+             Some(Err(e))=>failures.push((id,e)),}\
+             codepp_shell::deliver_after_save(crate::deliver_queued);}failures}",
+            "`save_all_announced` no longer saves buffer by buffer, delivering after each"
+        );
+    }
+
     /// Every save a command makes goes through the announced save. A
-    /// direct `save_current_to_disk` or `save_buffer_as` would be the save
-    /// that tells the plugins after its write.
+    /// direct `save_current_to_disk`, `save_buffer_as` or `save_all` would
+    /// be the save that tells the plugins after its write.
     #[test]
     fn no_command_saves_without_announcing() {
         // Every source file of the crate, so that a file added later is
@@ -1772,7 +1814,7 @@ mod gesture_delivery_guard {
             src.contains("shell.finish_save(&mutui,&announced)"),
             "the crate's production code was not read"
         );
-        for direct in [".save_current_to_disk(", ".save_buffer_as("] {
+        for direct in [".save_current_to_disk(", ".save_buffer_as(", ".save_all("] {
             assert!(
                 !src.contains(direct),
                 "`{direct}` in production code is a save announced after its write"

@@ -1307,17 +1307,19 @@ typedef enum LangType_ {
 #define NPPN_FILEBEFOREOPEN        (NPPN_FIRST + 6)
 /* v2: a buffer is about to be saved; nmhdr.idFrom is its id. Pairs
  *     with NPPN_FILESAVED.
- *     File > Save and Save As send it before the host reads the
- *     buffer, and answer NPPM_* and SCI_* sent from the handler. So an
- *     edit made from the handler is in the file, and the buffer is
+ *     File > Save, Save As and Save All send it before the host reads
+ *     the buffer, and answer NPPM_* and SCI_* sent from the handler. So
+ *     an edit made from the handler is in the file, and the buffer is
  *     clean afterwards, as in Notepad++.
  *     The buffer is not brought to the front for it: compare idFrom
- *     with NPPM_GETCURRENTBUFFERID before editing the current view. At
+ *     with NPPM_GETCURRENTBUFFERID before editing the current view.
+ *     Save All sends it for each buffer in tab order, and that buffer's
+ *     NPPN_FILESAVED before the next buffer's NPPN_FILEBEFORESAVE. At
  *     a Save As the buffer still answers its old path. A save the host
  *     refuses is not announced.
- *     Save All, and a save a plugin asks for (NPPM_SAVECURRENTFILE,
- *     NPPM_SAVECURRENTFILEAS, NPPM_SAVEFILE, NPPM_SAVEALLFILES), still
- *     send it after the write. */
+ *     A save a plugin asks for (NPPM_SAVECURRENTFILE,
+ *     NPPM_SAVECURRENTFILEAS, NPPM_SAVEFILE, NPPM_SAVEALLFILES) still
+ *     sends it after the write. */
 #define NPPN_FILEBEFORESAVE        (NPPN_FIRST + 7)
 /* v1: a file was saved. */
 #define NPPN_FILESAVED             (NPPN_FIRST + 8)
