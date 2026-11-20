@@ -3701,6 +3701,19 @@ pub(crate) fn deliver_sync(announced: &codepp_shell::SyncNotification) {
     crate::present_deferred_dialogs();
 }
 
+/// Tell the plugins `NPPN_FILEBEFORESAVE` for a save about to be made
+/// ([`codepp_shell::AnnouncedSave`]), with no `with_state` borrow held, so
+/// that a handler's `NPPM_*` and its `SCI_*` edits are answered and the
+/// edits are in the buffer when the save reads it.
+pub(crate) fn deliver_save(announced: &codepp_shell::AnnouncedSave) {
+    // Nothing once the quit has begun: the plugins are hearing, or have
+    // heard, that the host is shutting down. The save itself goes on.
+    if crate::quitting() {
+        return;
+    }
+    announced.deliver(npp_sentinel());
+}
+
 /// Decode a `FuncItem`'s NUL-terminated UTF-16 `item_name` to a String,
 /// sanitized for display.
 fn funcitem_label(f: &codepp_plugin_host::FuncItem) -> String {

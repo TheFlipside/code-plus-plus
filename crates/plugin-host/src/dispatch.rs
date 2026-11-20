@@ -921,6 +921,23 @@ impl NotifyTargets {
         Self { targets }
     }
 
+    /// Targets that are `handlers` and no plugin's, numbered as registry
+    /// indices from 0, so that a test in another crate can run code of its
+    /// own where a plugin's `beNotified` runs. Each handler is called as a
+    /// plugin's is, with a pointer to an `SCNotification` that is valid
+    /// for the call.
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    #[must_use]
+    pub fn of_handlers(handlers: &[crate::ffi::BeNotifiedFn]) -> Self {
+        let targets = handlers
+            .iter()
+            .enumerate()
+            .map(|(idx, &handler)| (idx, format!("test handler {idx}"), handler))
+            .collect();
+        Self { targets }
+    }
+
     /// Number of plugins a delivery will reach.
     #[must_use]
     pub fn len(&self) -> usize {

@@ -4724,6 +4724,61 @@ unsafe fn deliver_queued_notifications(hwnd: HWND) {
     }
 }
 
+/// Save through the shell's two-phase protocol
+/// ([`codepp_shell::AnnouncedSave`]), so the plugins hear
+/// `NPPN_FILEBEFORESAVE` before the buffer is read: check the save under
+/// one borrow, deliver with none, write under another. `None` when the
+/// window's state cannot be reached; the save's own error otherwise,
+/// [`codepp_shell::ShellError::NoActivePath`] for an untitled buffer
+/// among them.
+///
+/// The delivery runs with **no `WindowState` borrow held and no
+/// `PluginCallGuard` armed**, as [`fire_queued_notifications`] does and
+/// for its reason: a handler that trims the buffer sends `SCI_*` to the
+/// view and `NPPM_*` to this window, and both must be answered. So this
+/// runs plugin code, which may pump messages, move the tab in front or
+/// close it. The shell saves the buffer it announced, by its id, wherever
+/// that is by then; a caller that goes on to act on "the tab in front"
+/// must look again.
+///
+/// Queues `NPPN_FILESAVED`; the caller delivers it once it is done.
+///
+/// # Safety
+///
+/// Caller must invoke from the UI thread that owns `hwnd`, with no
+/// `WindowState` borrow held.
+unsafe fn save_announced(
+    hwnd: HWND,
+    request: &codepp_shell::SaveRequest,
+) -> Option<std::result::Result<(), codepp_shell::ShellError>> {
+    // A host-internal panic in either half of the save must not unwind
+    // across the `extern "system"` window procedure this is called from;
+    // it is the save's failure.
+    let panicked = || codepp_shell::ShellError::Io("internal panic during save".to_string());
+    let begun = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        // SAFETY: caller's contract. The borrow ends with the statement.
+        Some(unsafe { state_from_hwnd(hwnd) }?.shell.begin_save(request))
+    }));
+    let announced = match begun {
+        Ok(Some(Ok(announced))) => announced,
+        Ok(Some(Err(e))) => return Some(Err(e)),
+        Ok(None) => return None,
+        Err(_) => return Some(Err(panicked())),
+    };
+    // Not once the quit has begun: the plugins have heard, or are
+    // hearing, that the host is shutting down. The save itself goes on.
+    if !quitting() {
+        announced.deliver(hwnd.0);
+    }
+    // SAFETY: caller's contract; the delivery's borrows have all ended.
+    let state = unsafe { state_from_hwnd(hwnd) }?;
+    let (shell, mut ui) = state.split();
+    let finished = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        shell.finish_save(&mut ui, &announced)
+    }));
+    Some(finished.unwrap_or_else(|_| Err(panicked())))
+}
+
 /// Present every dialog a plugin call queued on `Shell::deferred_dialogs`
 /// — the export Save-As, the `NPPM_RELOADBUFFERID` reload prompt — now,
 /// rather than at the next worker wake. Plugin calls post no wake, so
@@ -5122,8 +5177,7 @@ unsafe fn handle_close_active_tab_inner(hwnd: HWND) -> CloseOutcome {
                 // and the `active_tab_is` re-check above refuses
                 // the answer if a plugin's nested close moved
                 // `active_tab` by the other route. Defence in
-                // depth if either ever changes:
-                // `save_current_to_disk` returns
+                // depth if either ever changes: the save is
                 // `ShellError::NoActivePath` on a pathless tab
                 // and the error dialog below surfaces it.
                 if has_path {
@@ -5144,17 +5198,29 @@ unsafe fn handle_close_active_tab_inner(hwnd: HWND) -> CloseOutcome {
                     // the close is better than mutating
                     // `WindowState` while a plugin call is
                     // alive.
-                    let save_error = if let Some(state) = unsafe { state_from_hwnd(hwnd) } {
-                        let (shell, mut ui) = state.split();
-                        match shell.save_current_to_disk(&mut ui) {
-                            Ok(()) => None,
-                            Err(e) => Some(e.to_string()),
-                        }
-                    } else {
-                        return CloseOutcome::Aborted;
-                    };
+                    //
+                    // The save tells the plugins `NPPN_FILEBEFORESAVE`
+                    // first (`save_announced`), with no borrow held.
+                    let save_error =
+                        match unsafe { save_announced(hwnd, &codepp_shell::SaveRequest::Active) } {
+                            Some(Ok(())) => None,
+                            Some(Err(e)) => Some(e.to_string()),
+                            None => return CloseOutcome::Aborted,
+                        };
                     if let Some(msg) = save_error {
                         show_error_dialog(hwnd, "Save failed", &DialogText::sanitized(&msg));
+                        return CloseOutcome::Aborted;
+                    }
+                    // A `NPPN_FILEBEFORESAVE` handler ran inside that
+                    // save, and may have brought another tab to the
+                    // front. The save followed its buffer; the close
+                    // below takes whatever is in front, so look again,
+                    // as after the prompt.
+                    if !unsafe { active_tab_is(hwnd, prompted_id) } {
+                        tracing::warn!(
+                            prompted_id,
+                            "close: the prompted tab is no longer active after its save; refusing"
+                        );
                         return CloseOutcome::Aborted;
                     }
                 } else {
@@ -5710,8 +5776,8 @@ unsafe fn update_window_title(hwnd: HWND, shell: &Shell) {
 /// sends synchronous TCM_* messages but doesn't re-enter `wnd_proc`
 /// for them).
 /// Run the Save As flow: prompt for a destination path (pre-filled
-/// with the active tab's current basename), then route through
-/// `Shell::save_buffer_as`. Used by both the explicit File→Save As
+/// with the active tab's current basename), then save through
+/// [`save_announced`]. Used by both the explicit File→Save As
 /// menu path and the File→Save fallback when the active tab has no
 /// path (an untitled buffer can't Ctrl+S to "the active path"
 /// because there isn't one — we redirect to Save As instead of
@@ -5751,27 +5817,21 @@ unsafe fn run_save_as_flow(hwnd: HWND) {
         );
         return;
     }
-    let save_error: Option<String> = if let Some(p) = new_path {
-        if let Some(state) = unsafe { state_from_hwnd(hwnd) } {
-            let (shell, mut ui) = state.split();
-            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                shell.save_buffer_as(&mut ui, p)
-            }));
-            match result {
-                Ok(Ok(())) => None,
-                Ok(Err(e)) => Some(e.to_string()),
-                Err(_) => Some("internal panic during save".to_string()),
-            }
-        } else {
-            None
+    // Through `save_announced`, so the plugins hear
+    // `NPPN_FILEBEFORESAVE` while the buffer still has its old name and
+    // before it is read. The request is for the tab in front, which the
+    // check above has just found to be the one the chooser was for; the
+    // save then follows that buffer by its id.
+    let save_error: Option<String> = new_path.and_then(|p| {
+        match unsafe { save_announced(hwnd, &codepp_shell::SaveRequest::ActiveAs(p)) } {
+            Some(Err(e)) => Some(e.to_string()),
+            Some(Ok(())) | None => None,
         }
-    } else {
-        None
-    };
+    });
     if let Some(msg) = save_error {
         show_error_dialog(hwnd, "Save As failed", &DialogText::sanitized(&msg));
     }
-    // save_buffer_as updates the tab's path on success — refresh
+    // The save updates the tab's path on success — refresh
     // the strip so the label switches from "new N" (or the old
     // basename) to the new file's basename.
     unsafe { refresh_tab_chrome(hwnd) };
@@ -26474,18 +26534,12 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                 let cmd_i32 = i32::from(cmd_u16);
                 match cmd_u16 {
                     ID_FILE_SAVE => {
-                        // Save inside the borrow; if it fails, capture
-                        // the error message and show the dialog AFTER
-                        // the borrow is dropped (same UB rule as
-                        // WM_APP_WAKE).
-                        //
-                        // The save call is wrapped in catch_unwind so
-                        // a host-internal panic — e.g. a `Vec::push`
-                        // OOM in the notification queue, or a
-                        // tracing-subscriber misbehaviour — doesn't
-                        // unwind across the `extern "system"`
-                        // wnd_proc frame (UB at the FFI boundary).
-                        // Three save outcomes:
+                        // The plugins hear `NPPN_FILEBEFORESAVE` before
+                        // the buffer is read, and with no borrow held
+                        // (`save_announced`), so a handler's edit is in
+                        // the file. A failure is shown once the save's
+                        // borrows have ended (same UB rule as
+                        // WM_APP_WAKE). Three save outcomes:
                         //   * Ok — written; nothing to surface.
                         //   * Err(NoActivePath) — the active tab is
                         //     untitled. Redirect to Save As so
@@ -26500,24 +26554,13 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                             RedirectSaveAs,
                             Failed(String),
                         }
-                        let outcome = if let Some(state) = state_from_hwnd(hwnd) {
-                            let (shell, mut ui) = state.split();
-                            let result =
-                                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                                    shell.save_current_to_disk(&mut ui)
-                                }));
-                            match result {
-                                Ok(Ok(())) => SaveOutcome::Ok,
-                                Ok(Err(codepp_shell::ShellError::NoActivePath)) => {
-                                    SaveOutcome::RedirectSaveAs
-                                }
-                                Ok(Err(e)) => SaveOutcome::Failed(e.to_string()),
-                                Err(_) => {
-                                    SaveOutcome::Failed("internal panic during save".to_string())
-                                }
+                        let outcome = match save_announced(hwnd, &codepp_shell::SaveRequest::Active)
+                        {
+                            Some(Ok(())) | None => SaveOutcome::Ok,
+                            Some(Err(codepp_shell::ShellError::NoActivePath)) => {
+                                SaveOutcome::RedirectSaveAs
                             }
-                        } else {
-                            SaveOutcome::Ok
+                            Some(Err(e)) => SaveOutcome::Failed(e.to_string()),
                         };
                         match outcome {
                             SaveOutcome::Ok => {}
@@ -26530,10 +26573,13 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                                 );
                             }
                         }
-                        // On a successful save, save_current_to_disk
-                        // queues NPPN_FILESAVED and clears the dirty
-                        // glyph via `UiPlatform::mark_saved`; on
-                        // failure both are no-ops.
+                        // On a successful save the shell queued
+                        // NPPN_FILESAVED and cleared the dirty glyph
+                        // via `UiPlatform::mark_saved`; on failure both
+                        // are no-ops. A handler may have left the saved
+                        // tab behind another, where only the strip's
+                        // repaint shows it clean.
+                        refresh_tab_chrome(hwnd);
                         fire_queued_notifications(hwnd);
                     }
                     ID_FILE_NEW => {
@@ -26933,7 +26979,7 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                     }
                     ID_FILE_SAVE_AS => {
                         run_save_as_flow(hwnd);
-                        // save_buffer_as clears the dirty glyph via
+                        // The save clears the dirty glyph via
                         // UiPlatform::mark_saved on success and
                         // run_save_as_flow refreshes the tab strip.
                         fire_queued_notifications(hwnd);
@@ -32964,16 +33010,18 @@ mod drain_freeze_guards {
         );
         // And inside Save As itself, whichever menu or close path reached
         // it: the write is gated on the tab sampled before the chooser.
-        let flow = code_only(&fn_body(production_src(), "run_save_as_flow"));
+        let flow: String = code_only(&fn_body(production_src(), "run_save_as_flow"))
+            .split_whitespace()
+            .collect();
         let chooser = flow
             .find("prompt_save_path(hwnd")
             .expect("`run_save_as_flow` no longer opens the chooser");
         let gate = flow
-            .find("active_tab_is(hwnd, saving_id)")
+            .find("active_tab_is(hwnd,saving_id)")
             .expect("`run_save_as_flow` no longer re-checks the tab it is saving");
         let write = flow
-            .find("shell.save_buffer_as(&mut ui, p)")
-            .expect("`run_save_as_flow` no longer writes through `save_buffer_as`");
+            .find("save_announced(hwnd,&codepp_shell::SaveRequest::ActiveAs(p))")
+            .expect("`run_save_as_flow` no longer writes through `save_announced`");
         assert!(
             chooser < gate && gate < write,
             "`run_save_as_flow` must re-check the sampled tab between its chooser and its \
@@ -33031,26 +33079,121 @@ mod drain_freeze_guards {
     /// and for one restored from its recovery backup the only copy of
     /// the recovered text. The error is carried out of the save, shown,
     /// and ends the close, pinned whole.
+    ///
+    /// The save runs the plugins' `NPPN_FILEBEFORESAVE` handlers, which
+    /// can bring another tab to the front, and the close below takes
+    /// whatever is in front. So the close looks again straight after the
+    /// save, pinned with it: without that a handler's switch would have a
+    /// tab closed that never passed the prompt.
     #[test]
     fn the_close_stops_when_a_titled_tab_fails_to_save() {
         let body =
             code_without_strings(&fn_body(production_src(), "handle_close_active_tab_inner"));
         let squashed: String = body.split_whitespace().collect();
-        assert!(
-            squashed.contains(
-                "matchshell.save_current_to_disk(&mutui){Ok(())=>None,\
-                 Err(e)=>Some(e.to_string()),}"
-            ),
-            "the close no longer carries a failed in-place save's error out of the save"
+        let after_save = "letsave_error=matchunsafe{\
+             save_announced(hwnd,&codepp_shell::SaveRequest::Active)}{\
+             Some(Ok(()))=>None,\
+             Some(Err(e))=>Some(e.to_string()),\
+             None=>returnCloseOutcome::Aborted,};\
+             ifletSome(msg)=save_error{\
+             show_error_dialog(hwnd,,&DialogText::sanitized(&msg));\
+             returnCloseOutcome::Aborted;}\
+             if!unsafe{active_tab_is(hwnd,prompted_id)}{\
+             tracing::warn!(prompted_id,);\
+             returnCloseOutcome::Aborted;}";
+        let save = squashed.find(after_save).expect(
+            "the close no longer carries a failed in-place save's error out of the save, stops \
+             on it, and looks again at which tab is in front",
         );
+        let announce = squashed
+            .find("begin_close_active_tab()")
+            .expect("the close no longer announces itself");
         assert!(
-            squashed.contains(
-                "ifletSome(msg)=save_error{\
-                 show_error_dialog(hwnd,,&DialogText::sanitized(&msg));\
-                 returnCloseOutcome::Aborted;}"
-            ),
-            "the close goes on after a titled tab's save failed"
+            save < announce,
+            "the save, and the look at the front after it, must come before the close is announced"
         );
+    }
+
+    /// The two-phase save on this backend: the save is checked under one
+    /// borrow, the plugins are told with none held and no
+    /// `PluginCallGuard` armed, and the buffer is read under another. Told
+    /// under a borrow, a handler's `NPPM_*` and its `SCI_*` edit would be
+    /// declined, and the plugin would be told of a save it cannot act on;
+    /// told after the write, its edit misses the file. Pinned by shape,
+    /// since both wrong orders compile and read naturally.
+    #[test]
+    fn the_announced_save_tells_the_plugins_between_its_two_borrows() {
+        let body: String = code_only(&fn_body(production_src(), "save_announced"))
+            .split_whitespace()
+            .collect();
+        assert!(
+            !body.contains("PluginCallGuard"),
+            "`save_announced` arms a `PluginCallGuard`, which declines every `NPPM_*` a \
+             handler sends"
+        );
+        // Phase 1's borrow is a temporary of its own statement, inside the
+        // panic boundary, bound to no name that could outlive it.
+        let begin = body
+            .find(
+                "letbegun=std::panic::catch_unwind(std::panic::AssertUnwindSafe(||{\
+                 Some(unsafe{state_from_hwnd(hwnd)}?.shell.begin_save(request))}));",
+            )
+            .expect("`save_announced` no longer begins the save under a borrow of its own");
+        let deliver = body
+            .find("if!quitting(){announced.deliver(hwnd.0);}")
+            .expect("`save_announced` no longer delivers, or delivers once the quit has begun");
+        let second_borrow = body
+            .find("letstate=unsafe{state_from_hwnd(hwnd)}?;")
+            .expect("`save_announced` no longer takes a fresh borrow for the write");
+        let finish = body
+            .find(
+                "letfinished=std::panic::catch_unwind(std::panic::AssertUnwindSafe(||{\
+                 shell.finish_save(&mutui,&announced)}));",
+            )
+            .expect("`save_announced` no longer finishes its save inside a panic boundary");
+        assert!(
+            begin < deliver && deliver < second_borrow && second_borrow < finish,
+            "begin, deliver, borrow again, finish: in that order"
+        );
+        assert_eq!(
+            body.matches("state_from_hwnd(hwnd)").count(),
+            2,
+            "a third borrow in `save_announced` could be held across the delivery"
+        );
+    }
+
+    /// Every save a command makes on this backend goes through
+    /// `save_announced`. A direct `shell.save_current_to_disk` or
+    /// `shell.save_buffer_as` would be the save that tells the plugins
+    /// after its write.
+    #[test]
+    fn no_command_saves_without_announcing() {
+        // Every source file of the crate, so that a file added later is
+        // read too: this file's production code, and each other file
+        // whole, its tests included, since none of them saves at all.
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut src: String = code_only(production_src()).split_whitespace().collect();
+        let mut others = 0;
+        for entry in std::fs::read_dir(&dir).expect("the crate's src folder") {
+            let path = entry.expect("a src entry").path();
+            if path.extension().is_none_or(|ext| ext != "rs") || path.ends_with("lib.rs") {
+                continue;
+            }
+            let text = std::fs::read_to_string(&path).expect("a readable source");
+            src.extend(code_only(&text).split_whitespace());
+            others += 1;
+        }
+        assert!(
+            others > 0 && src.contains("shell.finish_save(&mutui,&announced)"),
+            "the crate's production code was not read from {}",
+            dir.display()
+        );
+        for direct in [".save_current_to_disk(", ".save_buffer_as("] {
+            assert!(
+                !src.contains(direct),
+                "`{direct}` in production code is a save announced after its write"
+            );
+        }
     }
 
     /// There is exactly one place the shell is drained on this backend,

@@ -45,7 +45,7 @@ const fn make_plugin_name() -> [u16; 14] {
 /// host indexes the array with the number we report — so a literal
 /// left stale after adding an item is an out-of-bounds read on the
 /// host's side.
-const FUNCS_COUNT: usize = 6;
+const FUNCS_COUNT: usize = 7;
 
 /// Index of "Show Dock Panel" in [`FUNCS`] — the first panel's
 /// `tTbData.dlgID`.
@@ -62,6 +62,10 @@ pub(crate) const CMD_SHOW_DOCK_PANEL: i32 = 1;
 /// Index of "Show Second Dock Panel" in [`FUNCS`] — the second
 /// panel's `tTbData.dlgID`. See [`CMD_SHOW_DOCK_PANEL`].
 pub(crate) const CMD_SHOW_SECOND_DOCK_PANEL: i32 = 3;
+
+/// Index of "Trim Trailing Spaces on Save" in [`FUNCS`], whose item is
+/// ticked while the plugin trims ([`crate::trim`]).
+pub(crate) const CMD_TRIM_ON_SAVE: i32 = 6;
 
 /// The command id the host gave the item at `index` in [`FUNCS`] when it
 /// loaded the plugin — what `NPPM_SETMENUITEMCHECK` and
@@ -132,6 +136,13 @@ static FUNCS: SyncCell<[FuncItem; FUNCS_COUNT]> = SyncCell::new([
         init2_check: 0,
         p_sh_key: core::ptr::null_mut(),
     },
+    FuncItem {
+        item_name: sdk::menu_label(b"Trim Trailing Spaces on Save"),
+        p_func: Some(plugin_cmd_trim_on_save),
+        cmd_id: 0,
+        init2_check: 0,
+        p_sh_key: core::ptr::null_mut(),
+    },
 ]);
 
 #[no_mangle]
@@ -163,6 +174,11 @@ pub extern "C" fn getFuncsArray(nb: *mut i32) -> *mut FuncItem {
 /// Dock Panel" gets its toolbar button. `NPPN_SHUTDOWN` unregisters the
 /// modeless dialog ([`crate::dialog`]).
 ///
+/// `NPPN_FILEBEFORESAVE` is where "Trim Trailing Spaces on Save" does its
+/// work, when the user has ticked it: the host tells the plugin before it
+/// reads the buffer, so the trimmed text is what the save writes
+/// ([`crate::trim`]).
+///
 /// The other event example-hello handles is `NPPN_FILEBEFORECLOSE`,
 /// and it handles it the way real Notepad++ plugins do — by calling
 /// **back into the host from inside the notification** to resolve
@@ -190,6 +206,7 @@ pub extern "C" fn beNotified(notification: *const SCNotification) {
             crate::dock::add_toolbar_button();
         }
         sdk::NPPN_SHUTDOWN => crate::dialog::shutdown(),
+        sdk::NPPN_FILEBEFORESAVE => crate::trim::before_save(header.id_from),
         sdk::NPPN_FILEBEFORECLOSE => match sdk::buffer_path(header.id_from) {
             Some(path) => sdk::set_status(&format!("Closing: {path}")),
             None => sdk::set_status("Closing: (unknown buffer)"),
@@ -271,6 +288,11 @@ extern "C" fn plugin_cmd_show_modeless_dialog() {
     crate::dialog::show();
 }
 
+/// Menu callback: turn "trim trailing spaces before each save" on or off.
+extern "C" fn plugin_cmd_trim_on_save() {
+    crate::trim::toggle();
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -293,5 +315,11 @@ mod tests {
             name_at(CMD_SHOW_SECOND_DOCK_PANEL),
             "Show Second Dock Panel"
         );
+    }
+
+    /// The item the trim command ticks is found by its index.
+    #[test]
+    fn the_trim_command_ticks_its_own_item() {
+        assert_eq!(name_at(CMD_TRIM_ON_SAVE), "Trim Trailing Spaces on Save");
     }
 }

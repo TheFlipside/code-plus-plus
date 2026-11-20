@@ -3124,6 +3124,19 @@ pub(crate) fn deliver_sync(announced: &codepp_shell::SyncNotification) {
     crate::present_deferred_dialogs();
 }
 
+/// Tell the plugins `NPPN_FILEBEFORESAVE` for a save about to be made
+/// ([`codepp_shell::AnnouncedSave`]), with no `with_state` borrow held, so
+/// that a handler's `NPPM_*` and its `SCI_*` edits are answered and the
+/// edits are in the buffer when the save reads it.
+pub(crate) fn deliver_save(announced: &codepp_shell::AnnouncedSave) {
+    // Nothing once the quit has begun, as for `deliver_sync`. The save
+    // itself goes on.
+    if crate::quitting() {
+        return;
+    }
+    announced.deliver(npp_sentinel());
+}
+
 /// The cross-thread `SCI_*` marshal (DESIGN.md §7.4).
 ///
 /// Display-gated for the same reason every other GTK test here is:
@@ -3477,6 +3490,8 @@ mod menu_load_guards {
         "deliver_notifications",
         "deliver_queued",
         "deliver_sync",
+        "deliver_save",
+        "save_announced",
         "present_deferred_dialogs",
         "notify_shutdown",
         "on_plugin_command",

@@ -97,6 +97,16 @@ pub use codepp_plugin_host::dispatch::{
 };
 pub use codepp_plugin_host::ffi::ToolbarIcons;
 
+/// `NPPN_FILEBEFORESAVE`: a buffer is about to be saved, and
+/// `nmhdr.idFrom` carries its id. File → Save and Save As deliver it
+/// before the host reads the buffer, so an edit made from the handler is
+/// in the file. The buffer is not brought to the front for it: compare
+/// the id with [`current_buffer_id`] before editing "the current
+/// Scintilla".
+/// `NPPM_GETCURRENTBUFFERID` is the message behind that helper.
+/// Re-exported from the dispatcher, as the block above is.
+pub use codepp_plugin_host::dispatch::{NPPM_GETCURRENTBUFFERID, NPPN_FILEBEFORESAVE};
+
 // ---- SendMessageW transport -------------------------------------
 //
 // On Windows this is the Win32 `#[link(name = "user32")]` import; the
@@ -685,6 +695,24 @@ pub fn buffer_path(id: usize) -> Option<String> {
         return None;
     }
     Some(String::from_utf16_lossy(&buf[..end]))
+}
+
+/// The id of the buffer in front (`NPPM_GETCURRENTBUFFERID`), the one the
+/// current Scintilla view shows. `None` before `setInfo` has run, and
+/// when the host has no buffer.
+///
+/// What a handler of a per-buffer notification compares `nmhdr.idFrom`
+/// with before it touches the view: a notification about a buffer names
+/// that buffer, which need not be the one in front.
+#[must_use]
+pub fn current_buffer_id() -> Option<usize> {
+    let npp = NPP_HANDLE.load(Ordering::Acquire);
+    if npp.is_null() {
+        return None;
+    }
+    // SAFETY: the message takes no pointers.
+    let id = unsafe { SendMessageW(npp, NPPM_GETCURRENTBUFFERID, 0, 0) };
+    usize::try_from(id).ok().filter(|&id| id != 0)
 }
 
 /// Set the host status bar's "doc-type" pane (slot 0) to the given

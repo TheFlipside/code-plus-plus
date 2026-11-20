@@ -35,6 +35,12 @@ tracing  = { workspace = true }
 [target.'cfg(unix)'.dependencies]
 libc = { workspace = true }
 
+# The save tests deliver `NPPN_FILEBEFORESAVE` to a handler of their own
+# (`NotifyTargets::of_handlers`), since what the save protocol promises
+# is about what a plugin's handler does between its two halves.
+[dev-dependencies]
+codepp-plugin-host = { workspace = true, features = ["test-support"] }
+
 # The updater's tests sign the packages they verify. Windows only, as
 # the updater's worker is; the crate is `codepp-platform`'s already.
 [target.'cfg(target_os = "windows")'.dev-dependencies]

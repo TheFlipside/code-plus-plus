@@ -7,7 +7,10 @@
 //! exercises the host's `NPPM_DMM*` / `DMN_*` surface (see
 //! [`dock`]). On Linux and macOS it also asks the host for a Scintilla
 //! widget of its own, a toolbar button and a modeless-dialog
-//! registration (see [`dock`] and [`dialog`]). The insertion path
+//! registration (see [`dock`] and [`dialog`]). An opt-in command trims
+//! trailing spaces from the buffer on `NPPN_FILEBEFORESAVE`, which shows
+//! that the host announces a save before it reads the buffer (see
+//! [`trim`]). The insertion path
 //! exercises both the inbound NPPM dispatcher (the plugin queries
 //! `NPPM_GETCURRENTSCINTILLA` to learn which view is active) and direct
 //! Scintilla messaging (`SCI_INSERTTEXT` against the returned view's
@@ -39,3 +42,5 @@ mod gtk;
 mod imp;
 #[cfg(target_os = "macos")]
 mod objc;
+#[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
+mod trim;

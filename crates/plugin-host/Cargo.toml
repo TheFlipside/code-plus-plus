@@ -14,6 +14,12 @@ workspace = true
 [lib]
 name = "codepp_plugin_host"
 
+[features]
+# `NotifyTargets::of_handlers`, which lets another crate's tests deliver
+# a notification to a handler of their own without loading a plugin.
+# Enabled from a dev-dependency only, so no shipped build has it.
+test-support = []
+
 [dependencies]
 codepp-core     = { workspace = true }
 codepp-editor   = { workspace = true }

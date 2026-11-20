@@ -2076,6 +2076,132 @@ impl SyncNotification {
     }
 }
 
+/// What a save is asked to write, for [`Shell::begin_save`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SaveRequest {
+    /// The tab in front, to its own file: File → Save.
+    Active,
+    /// The tab in front, to this path, which becomes its file: Save As.
+    ActiveAs(PathBuf),
+    /// The tab with this buffer id, to its own file, wherever it is in
+    /// the strip. It is not brought to the front for it.
+    Tab(i32),
+}
+
+/// How many saves may be announced from inside one another's
+/// `NPPN_FILEBEFORESAVE` handlers on one thread. A plugin may save from
+/// its handler, and Notepad++ announces that save too (measured, 8.9.8.1:
+/// the nested save's own BEFORESAVE and FILESAVED arrive inside the outer
+/// handler). A plugin that does it for every announcement would recurse
+/// until the stack ran out, so past this depth a save's BEFORESAVE goes
+/// onto the queue instead and its handlers run after the write, as every
+/// save's did until Phase 5. Notepad++ has no such bound that its source
+/// shows (`Notepad_plus::doSave`, read, not tried).
+const MAX_NESTED_SAVE_ANNOUNCEMENTS: usize = 8;
+
+thread_local! {
+    /// The `NPPN_FILEBEFORESAVE` deliveries under way on this thread, one
+    /// inside the other. See [`MAX_NESTED_SAVE_ANNOUNCEMENTS`].
+    static SAVE_ANNOUNCEMENTS_UNDER_WAY: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Counts one `NPPN_FILEBEFORESAVE` delivery as under way until dropped,
+/// an unwind out of the delivery included.
+struct SaveAnnouncementUnderWay;
+
+impl SaveAnnouncementUnderWay {
+    fn enter() -> Self {
+        SAVE_ANNOUNCEMENTS_UNDER_WAY.with(|n| n.set(n.get() + 1));
+        Self
+    }
+}
+
+impl Drop for SaveAnnouncementUnderWay {
+    fn drop(&mut self) {
+        SAVE_ANNOUNCEMENTS_UNDER_WAY.with(|n| n.set(n.get().saturating_sub(1)));
+    }
+}
+
+/// A save that has been checked and is about to be made: phase 1 of the
+/// save protocol, produced by [`Shell::begin_save`].
+///
+/// Notepad++ tells plugins `NPPN_FILEBEFORESAVE` before it reads the
+/// buffer, so a plugin that edits the buffer from its handler (one that
+/// trims trailing whitespace, say) has its edit in the file and leaves
+/// the buffer clean. The deferred queue cannot do that: its notifications
+/// go out once the save has returned. So a save is two calls with a
+/// delivery between them, as a close is (see [`SyncNotification`]):
+///
+/// ```text
+/// borrow  →  shell.begin_save(&request)      →  drop borrow
+///                     ↓
+///           announced.deliver(npp_hwnd)       (plugins re-enter NPPM_* freely)
+///                     ↓
+/// borrow  →  shell.finish_save(ui, &announced) →  drop borrow
+/// ```
+///
+/// The buffer is named by its id, here and in the notification, and
+/// [`Shell::finish_save`] saves that buffer wherever it is by then: a
+/// handler that brings another tab to the front does not redirect the
+/// save, as it does not in Notepad++ (measured).
+///
+/// Nothing is recorded on the shell, for the reason [`SyncNotification`]
+/// gives: a handler can run a whole save of its own.
+///
+/// A backend that skips the delivery, as each does once the quit has begun,
+/// still finishes the save: the plugins have heard `NPPN_SHUTDOWN` by then,
+/// so the notification is neither sent nor queued.
+#[must_use = "deliver it with no shell borrow held, then finish the save"]
+pub struct AnnouncedSave {
+    /// `None` when too many announcements are already under way on this
+    /// thread ([`MAX_NESTED_SAVE_ANNOUNCEMENTS`]); the save then queues its
+    /// `NPPN_FILEBEFORESAVE` instead.
+    announcement: Option<SyncNotification>,
+    buffer_id: i32,
+    /// The path a Save As writes to and gives the tab.
+    save_as: Option<PathBuf>,
+}
+
+impl AnnouncedSave {
+    /// The buffer the save writes.
+    #[must_use]
+    pub fn buffer_id(&self) -> i32 {
+        self.buffer_id
+    }
+
+    /// Whether [`Self::deliver`] tells the plugins, as opposed to the save
+    /// queuing its notification for later.
+    #[must_use]
+    pub fn is_synchronous(&self) -> bool {
+        self.announcement.is_some()
+    }
+
+    /// Tell every loaded plugin `NPPN_FILEBEFORESAVE` for the buffer.
+    /// `npp_hwnd` becomes `nmhdr.hwndFrom`.
+    ///
+    /// Call this with **no** `Shell` borrow held, as for
+    /// [`SyncNotification::deliver`], so that a handler's `NPPM_*` and
+    /// `SCI_*` are answered and its edits reach the buffer before
+    /// [`Shell::finish_save`] reads it.
+    pub fn deliver(&self, npp_hwnd: Hwnd) {
+        if let Some(announcement) = &self.announcement {
+            let _under_way = SaveAnnouncementUnderWay::enter();
+            announcement.deliver(npp_hwnd);
+        }
+    }
+}
+
+/// Whether a save's `NPPN_FILEBEFORESAVE` is still to be queued, or was
+/// delivered before the save began ([`AnnouncedSave`]).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum BeforeSave {
+    /// Queue it: the save was not announced. Its handlers run after the
+    /// write.
+    Queue,
+    /// Already delivered.
+    Delivered,
+}
+
 /// Counts from a [`Shell::load_npp_session`] run, for the UI to surface to
 /// the user (a dialog) and the log.
 #[derive(Clone, Copy, Debug, Default)]
@@ -4787,10 +4913,26 @@ impl Shell {
     /// [`ShellError::AlreadyOpen`] refuses a path another tab holds or
     /// is loading, which would leave two tabs on one file (see
     /// `tab_for_path`); nothing is written then.
+    ///
+    /// This is the Save As that was not announced: it queues
+    /// `NPPN_FILEBEFORESAVE`, so plugins hear of it after the write. A
+    /// backend's Save As goes through [`Self::begin_save`] and
+    /// [`Self::finish_save`], which tell them before.
     pub fn save_buffer_as<U: UiPlatform>(
         &mut self,
         ui: &mut U,
         new_path: PathBuf,
+    ) -> Result<(), ShellError> {
+        self.save_buffer_as_impl(ui, new_path, BeforeSave::Queue)
+    }
+
+    /// [`Self::save_buffer_as`], with the `NPPN_FILEBEFORESAVE` queued or
+    /// already delivered.
+    fn save_buffer_as_impl<U: UiPlatform>(
+        &mut self,
+        ui: &mut U,
+        new_path: PathBuf,
+        before: BeforeSave,
     ) -> Result<(), ShellError> {
         // Refuse while a load is still in flight for this tab. The
         // view is not bound to it yet — `open_file` sets `active_tab`
@@ -4822,12 +4964,14 @@ impl Shell {
             let tab = self.active().ok_or(ShellError::NoActivePath)?;
             (tab.path.clone(), tab.encoding.clone(), tab.id as isize)
         };
-        // NPPN_FILEBEFORESAVE, as `save_current_to_disk` queues it: after
+        // NPPN_FILEBEFORESAVE, as `save_current_impl` queues it: after
         // the refusals and before the buffer is read, so a refused Save As
         // announces nothing and a failed write still pairs with no
         // FILESAVED, as there.
-        self.pending_notifications
-            .push(Notification::FileBeforeSave { buffer_id });
+        if before == BeforeSave::Queue {
+            self.pending_notifications
+                .push(Notification::FileBeforeSave { buffer_id });
+        }
         let text = ui.get_buffer_text();
         // Encode BEFORE the unwatch below — if encoding fails we
         // return early and the unwatch never happens, so the old
@@ -7206,7 +7350,186 @@ impl Shell {
     /// another process during this same window is silently missed.
     /// Phase 3+ may switch to inode/serial-number tracking instead of
     /// unwatch/rewatch.
+    ///
+    /// This is the save that was not announced: it queues
+    /// `NPPN_FILEBEFORESAVE`, so plugins hear of it after the write. A
+    /// backend's Save goes through [`Self::begin_save`] and
+    /// [`Self::finish_save`], which tell them before.
     pub fn save_current_to_disk<U: UiPlatform>(&mut self, ui: &mut U) -> Result<(), ShellError> {
+        self.save_current_impl(ui, BeforeSave::Queue)
+    }
+
+    /// Phase 1 of a save: check that it can be made, and hand back the
+    /// `NPPN_FILEBEFORESAVE` to deliver first. See [`AnnouncedSave`] for
+    /// the protocol.
+    ///
+    /// The errors are the save's own, so a caller treats them as it treats
+    /// a failed save: [`ShellError::NoActivePath`] for an untitled buffer
+    /// (File → Save answers it with Save As), [`ShellError::LoadInFlight`],
+    /// [`ShellError::AlreadyOpen`] for a Save As onto a file another tab
+    /// holds, [`ShellError::NoSuchTab`] for a [`SaveRequest::Tab`] that
+    /// names none. A refused save announces nothing, as Notepad++'s does
+    /// not. [`Self::finish_save`] makes every check again, since a handler
+    /// may have changed the answer.
+    pub fn begin_save(&self, request: &SaveRequest) -> Result<AnnouncedSave, ShellError> {
+        let tab = match request {
+            SaveRequest::Active | SaveRequest::ActiveAs(_) => {
+                self.active().ok_or(ShellError::NoActivePath)?
+            }
+            SaveRequest::Tab(id) => self
+                .tabs
+                .iter()
+                .find(|t| t.id == *id)
+                .ok_or(ShellError::NoSuchTab)?,
+        };
+        if tab.pending_load.is_some() {
+            return Err(ShellError::LoadInFlight);
+        }
+        let save_as = match request {
+            SaveRequest::ActiveAs(new_path) => {
+                if self
+                    .tab_for_path(new_path)
+                    .is_some_and(|idx| Some(idx) != self.active_tab)
+                {
+                    return Err(ShellError::AlreadyOpen);
+                }
+                Some(new_path.clone())
+            }
+            SaveRequest::Active | SaveRequest::Tab(_) => {
+                if tab.path.is_none() {
+                    return Err(ShellError::NoActivePath);
+                }
+                None
+            }
+        };
+        let buffer_id = tab.id;
+        let nested = SAVE_ANNOUNCEMENTS_UNDER_WAY.with(std::cell::Cell::get);
+        let announcement = if nested < MAX_NESTED_SAVE_ANNOUNCEMENTS {
+            Some(SyncNotification {
+                targets: self.notify_targets(),
+                notification: Notification::FileBeforeSave {
+                    buffer_id: buffer_id as isize,
+                },
+                buffer_id,
+            })
+        } else {
+            tracing::warn!(
+                buffer_id,
+                nested,
+                "a save asked for from inside that many NPPN_FILEBEFORESAVE handlers is announced after its write"
+            );
+            None
+        };
+        Ok(AnnouncedSave {
+            announcement,
+            buffer_id,
+            save_as,
+        })
+    }
+
+    /// Phase 2 of a save: write the buffer [`Self::begin_save`] announced,
+    /// as it is now, the handlers' edits included.
+    ///
+    /// The buffer is found again by its id. Brought behind another tab by
+    /// a handler, it is still the one saved, as in Notepad++ (measured,
+    /// 8.9.8.1), and the tab in front stays in front: the view is bound to
+    /// the saved tab's document for the write and put back, as
+    /// [`Self::save_all`] does for each tab it writes. The same is done
+    /// when the tab is in front and the view shows another document.
+    /// Closed by a handler, it is [`ShellError::NoSuchTab`]; with a load
+    /// in flight, [`ShellError::LoadInFlight`], and the view is left alone.
+    ///
+    /// Queues `NPPN_FILESAVED` on success, for the caller to deliver once
+    /// its borrow has ended, and no second `NPPN_FILEBEFORESAVE`, unless
+    /// the announcement was not synchronous
+    /// ([`AnnouncedSave::is_synchronous`]).
+    pub fn finish_save<U: UiPlatform>(
+        &mut self,
+        ui: &mut U,
+        announced: &AnnouncedSave,
+    ) -> Result<(), ShellError> {
+        let before = if announced.is_synchronous() {
+            BeforeSave::Delivered
+        } else {
+            BeforeSave::Queue
+        };
+        let id = announced.buffer_id;
+        let idx = self
+            .tabs
+            .iter()
+            .position(|t| t.id == id)
+            .ok_or(ShellError::NoSuchTab)?;
+        // Refused here as well as in the save itself, so that a tab a
+        // handler started reloading is not bound on the way to the refusal.
+        if self.tabs[idx].pending_load.is_some() {
+            return Err(ShellError::LoadInFlight);
+        }
+        let save = |shell: &mut Self, ui: &mut U| match &announced.save_as {
+            Some(new_path) => shell.save_buffer_as_impl(ui, new_path.clone(), before),
+            None => shell.save_current_impl(ui, before),
+        };
+        // The save takes its path from the tab in front and its text from
+        // the view, so it is made directly only while the view shows the
+        // announced tab's own document. Being in front is not enough: the
+        // handlers ran in between, and a switch the backend did not follow
+        // with a rebind would have this write another tab's text.
+        if self.active_tab == Some(idx) && ui.bound_doc() == self.tabs[idx].scintilla_doc {
+            return save(self, ui);
+        }
+        // Not in the view: Save All's visit, or a handler moved the front
+        // or the view.
+        let front_id = self.active().map(|t| t.id);
+        // Whether binding the tab in front again puts text into its
+        // document, which drops the lexer's styling (see `save_all`). A
+        // Save As applies the saved tab's language to the view, so the
+        // front's goes on again after that too. So it does when the tab
+        // in front is the saved one and the view showed another document:
+        // nothing says whose language the view was left in.
+        let front_restyles = announced.save_as.is_some()
+            || self.active_tab == Some(idx)
+            || self
+                .active()
+                .is_some_and(|t| t.scintilla_doc == 0 || t.doc_needs_text);
+        // Through `bind_and_fill`, never a bare `activate_tab`: the save
+        // reads this document straight back out and writes it to disk.
+        self.bind_and_fill(ui, idx);
+        self.active_tab = Some(idx);
+        // A panic in the save must not leave the wrong tab in front, where
+        // the next Ctrl+S would write it; it is this save's failure.
+        let result =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| save(&mut *self, &mut *ui)))
+                .unwrap_or_else(|_| {
+                    Err(ShellError::Io(String::from("internal panic during save")))
+                });
+        if result.is_ok() {
+            // The saved tab is not in front, so no backend's dirty poll
+            // reaches it: the shell clears the cached bit itself, as
+            // `save_all` does.
+            if let Some(tab) = self.tabs.iter_mut().find(|t| t.id == id) {
+                tab.dirty = false;
+            }
+        }
+        // Found again by id, as `save_all` finds it: a wrong tab left in
+        // front is what the next Ctrl+S would write.
+        let front = front_id.and_then(|fid| self.tabs.iter().position(|t| t.id == fid));
+        self.active_tab = front;
+        if let Some(front_idx) = front {
+            self.bind_and_fill(ui, front_idx);
+            if front_restyles {
+                self.show_language(ui, front_idx);
+            }
+            self.show_kept_view(ui, front_idx);
+        }
+        result
+    }
+
+    /// [`Self::save_current_to_disk`], with the `NPPN_FILEBEFORESAVE`
+    /// queued or already delivered.
+    fn save_current_impl<U: UiPlatform>(
+        &mut self,
+        ui: &mut U,
+        before: BeforeSave,
+    ) -> Result<(), ShellError> {
         // Snapshot what we need from the active tab so we can release
         // its borrow before calling the watcher and the I/O helpers
         // (which take their own &mut self). `buffer_id` is captured
@@ -7243,18 +7566,16 @@ impl Shell {
             )
         };
 
-        // Queue NPPN_FILEBEFORESAVE for the loaded plugins. Fired
-        // *before* the encoding pass so plugins observing the
-        // notification still see the buffer in its pre-save state
-        // (relevant for plugins that snapshot the buffer text on
-        // BEFORE_SAVE and compare against FILESAVED). Code++'s
-        // notifications are queue-deferred — by the time the plugin
-        // runs, the save has already happened — but the BEFORE-pair
-        // ordering matches Notepad++'s ABI and lets a future
-        // synchronous-delivery wiring (DESIGN.md §7.4) honour the
-        // contract correctly without rearranging this code.
-        self.pending_notifications
-            .push(Notification::FileBeforeSave { buffer_id });
+        // NPPN_FILEBEFORESAVE, when the save was not announced
+        // (`AnnouncedSave`): queued ahead of FILESAVED, so the pair
+        // arrives in Notepad++'s order, though both after the write.
+        // After the refusals above, so a refused save announces nothing,
+        // and before the buffer is read, where an announced save's was
+        // delivered.
+        if before == BeforeSave::Queue {
+            self.pending_notifications
+                .push(Notification::FileBeforeSave { buffer_id });
+        }
 
         let text = ui.get_buffer_text();
         let bytes = codepp_core::encoding::encode(&text, &encoding)
@@ -11007,6 +11328,10 @@ pub enum ShellError {
     /// would leave two tabs on one path, and every lookup by path acts on
     /// the first of them. Notepad++'s Save As refuses the same file.
     AlreadyOpen,
+    /// The tab a save was announced for, or asked for by its buffer id,
+    /// is not open: closed from a plugin's `NPPN_FILEBEFORESAVE` handler,
+    /// say. Nothing is written.
+    NoSuchTab,
     Encoding(String),
     Io(String),
     Session(String),
@@ -11019,6 +11344,7 @@ impl std::fmt::Display for ShellError {
             ShellError::NoActivePath => write!(f, "no active file path"),
             ShellError::LoadInFlight => write!(f, "the file is still loading"),
             ShellError::AlreadyOpen => write!(f, "the file is already open in another tab"),
+            ShellError::NoSuchTab => write!(f, "the tab is no longer open"),
             ShellError::Encoding(s) => write!(f, "encoding error: {s}"),
             ShellError::Io(s) => write!(f, "I/O error: {s}"),
             ShellError::Session(s) => write!(f, "session error: {s}"),
@@ -17500,6 +17826,562 @@ mod tests {
             .save_buffer_as(&mut ui, dir.path().join("saved-as.txt"))
             .is_err());
         assert!(shell.take_notifications().is_empty());
+    }
+
+    // -- The announced save: NPPN_FILEBEFORESAVE before the write ------
+
+    /// What the stand-in plugin's `NPPN_FILEBEFORESAVE` handler does.
+    #[derive(Clone)]
+    enum OnBeforeSave {
+        /// Append to the view's text, as a plugin that edits "the current
+        /// Scintilla" does.
+        Append(&'static str),
+        /// Bring the tab at this index to the front and bind the view, as
+        /// `NPPM_ACTIVATEDOC` and the backend's rebind after it do.
+        BringToFront(usize),
+        /// Bring the tab at this index to the front with the view, then put
+        /// the tab that was in front back there and leave the view where
+        /// it is: a switch no rebind followed.
+        LeaveTheViewOn(usize),
+        /// Close the tab in front.
+        CloseFront,
+        /// Start a reload of the notified buffer.
+        Reload,
+        /// Open this path, in a tab of its own.
+        Open(PathBuf),
+        /// Save the tab in front again, from inside the handler, every
+        /// time.
+        SaveAgain,
+    }
+
+    /// The shell and view the stand-in handler works on, and what it saw.
+    struct SaveRig {
+        shell: *mut Shell,
+        ui: *mut FakeUi,
+        on_before_save: OnBeforeSave,
+        /// One entry per `NPPN_FILEBEFORESAVE` the handler heard.
+        heard: Vec<Heard>,
+    }
+
+    /// What the stand-in handler saw when it was told of a save: the
+    /// notified buffer, the buffer in front, and how many announcements
+    /// were under way on the thread.
+    type Heard = (isize, isize, usize);
+
+    thread_local! {
+        static SAVE_RIG: std::cell::RefCell<Option<SaveRig>> =
+            const { std::cell::RefCell::new(None) };
+    }
+
+    /// Stands in for a plugin's `beNotified`. Runs with no borrow of the
+    /// shell held, as a backend's delivery does, which is what lets it
+    /// work on the shell at all.
+    unsafe extern "C" fn before_save_handler(sc: *const codepp_plugin_host::ffi::SCNotification) {
+        // SAFETY: `NotifyTargets::deliver` passes a notification that is
+        // valid for the call.
+        let nmhdr = unsafe { &(*sc).nmhdr };
+        assert_eq!(
+            nmhdr.code,
+            codepp_plugin_host::dispatch::NPPN_FILEBEFORESAVE
+        );
+        let (shell, ui, action) = SAVE_RIG.with(|rig| {
+            let rig = rig.borrow();
+            let rig = rig.as_ref().expect("a save rig is installed");
+            (rig.shell, rig.ui, rig.on_before_save.clone())
+        });
+        // SAFETY: the test that installed the rig owns both and touches
+        // neither while a delivery runs.
+        let (shell, ui) = unsafe { (&mut *shell, &mut *ui) };
+        let front = shell.active().map_or(0, |t| t.id as isize);
+        let under_way = SAVE_ANNOUNCEMENTS_UNDER_WAY.with(std::cell::Cell::get);
+        SAVE_RIG.with(|rig| {
+            if let Some(rig) = rig.borrow_mut().as_mut() {
+                rig.heard.push((nmhdr.id_from as isize, front, under_way));
+            }
+        });
+        match action {
+            OnBeforeSave::Append(text) => ui.buffer_text.push_str(text),
+            OnBeforeSave::BringToFront(idx) => {
+                shell.switch_to_tab(idx);
+                shell.bind_active_view(ui);
+            }
+            OnBeforeSave::LeaveTheViewOn(idx) => {
+                let was_in_front = shell.active_tab.expect("a tab in front");
+                shell.switch_to_tab(idx);
+                shell.bind_active_view(ui);
+                shell.switch_to_tab(was_in_front);
+                assert_eq!(ui.current_doc, shell.tabs[idx].scintilla_doc);
+                assert_ne!(ui.current_doc, shell.tabs[was_in_front].scintilla_doc);
+            }
+            OnBeforeSave::CloseFront => {
+                let closed = shell.close_active_tab().expect("a tab to close");
+                finish_close(shell, ui, &closed);
+            }
+            OnBeforeSave::Reload => {
+                let id = i32::try_from(nmhdr.id_from).unwrap();
+                shell.request_reload_tab(id, ReloadConsent::Unconfirmed);
+            }
+            OnBeforeSave::Open(path) => {
+                shell.open_file(path);
+            }
+            OnBeforeSave::SaveAgain => {
+                let (shell, ui): (*mut Shell, *mut FakeUi) = (shell, ui);
+                // SAFETY: as above; the nested save is the only user.
+                let saved = unsafe { save_as_a_backend_does(shell, ui, &SaveRequest::Active) };
+                saved.expect("the nested save");
+            }
+        }
+    }
+
+    /// The three steps of an announced save, as a backend makes them:
+    /// begin under a borrow, deliver with none, finish under a borrow. The
+    /// announcement goes to [`before_save_handler`] instead of a plugin.
+    ///
+    /// # Safety
+    ///
+    /// `shell` and `ui` must be valid and not otherwise borrowed for the
+    /// call.
+    unsafe fn save_as_a_backend_does(
+        shell: *mut Shell,
+        ui: *mut FakeUi,
+        request: &SaveRequest,
+    ) -> Result<(), ShellError> {
+        // SAFETY: the caller's contract; each borrow ends with its statement.
+        let mut announced = unsafe { (*shell).begin_save(request) }?;
+        if let Some(announcement) = announced.announcement.as_mut() {
+            announcement.targets = NotifyTargets::of_handlers(&[before_save_handler]);
+        }
+        announced.deliver(std::ptr::null_mut());
+        // SAFETY: as above.
+        unsafe { (*shell).finish_save(&mut *ui, &announced) }
+    }
+
+    /// Save through [`save_as_a_backend_does`] with a handler that does
+    /// `on_before_save`, and return the result with what the handler heard.
+    fn announced_save(
+        shell: &mut Shell,
+        ui: &mut FakeUi,
+        request: &SaveRequest,
+        on_before_save: OnBeforeSave,
+    ) -> (Result<(), ShellError>, Vec<Heard>) {
+        let (shell, ui): (*mut Shell, *mut FakeUi) = (shell, ui);
+        SAVE_RIG.with(|rig| {
+            *rig.borrow_mut() = Some(SaveRig {
+                shell,
+                ui,
+                on_before_save,
+                heard: Vec::new(),
+            });
+        });
+        // SAFETY: both come from live `&mut`s this function holds and does
+        // not use until the save has returned.
+        let result = unsafe { save_as_a_backend_does(shell, ui, request) };
+        let heard = SAVE_RIG.with(|rig| rig.borrow_mut().take().expect("the rig").heard);
+        (result, heard)
+    }
+
+    /// Two files open and landed, the second in front, each tab with its
+    /// document, and the notification queue empty.
+    fn shell_with_two_files() -> (Shell, FakeUi, tempfile::TempDir, PathBuf, PathBuf) {
+        let dir = tempfile::tempdir().unwrap();
+        let (a, b) = (dir.path().join("a.txt"), dir.path().join("b.txt"));
+        std::fs::write(&a, "old A\n").unwrap();
+        std::fs::write(&b, "old B\n").unwrap();
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+        shell.open_file(a.clone());
+        shell.open_file(b.clone());
+        drain_until_loads_settle(&mut shell, &mut ui);
+        // Show each once, so both have a document; `b` ends in front.
+        shell.switch_to_tab(0);
+        shell.bind_active_view(&mut ui);
+        shell.switch_to_tab(1);
+        shell.bind_active_view(&mut ui);
+        assert_eq!(ui.buffer_text, "old B\n");
+        let _ = shell.take_notifications();
+        (shell, ui, dir, a, b)
+    }
+
+    #[test]
+    fn an_announced_save_writes_what_the_handler_left_in_the_buffer() {
+        let (mut shell, mut ui, _dir, a, b) = shell_with_two_files();
+        let b_id = shell.tabs[1].id as isize;
+        ui.buffer_text = "new B\n".to_string();
+        let saved_before = ui.mark_saved_calls;
+
+        let (result, heard) = announced_save(
+            &mut shell,
+            &mut ui,
+            &SaveRequest::Active,
+            OnBeforeSave::Append("[trimmed]"),
+        );
+        result.unwrap();
+
+        // Told once, about the buffer in front, with the announcement
+        // counted as under way while the handler ran and not after.
+        assert_eq!(heard, [(b_id, b_id, 1)]);
+        assert_eq!(SAVE_ANNOUNCEMENTS_UNDER_WAY.with(std::cell::Cell::get), 0);
+        // The handler's edit is in the file and in the tab's text, and the
+        // save point was set after it, so the buffer is clean.
+        assert_eq!(std::fs::read_to_string(&b).unwrap(), "new B\n[trimmed]");
+        assert_eq!(shell.tabs[1].text, "new B\n[trimmed]");
+        assert_eq!(ui.mark_saved_calls, saved_before + 1);
+        assert_eq!(std::fs::read_to_string(&a).unwrap(), "old A\n");
+        // FILESAVED is queued for the caller to deliver, and no second
+        // BEFORESAVE: the handler has heard it.
+        let queued = shell.take_notifications();
+        assert!(
+            matches!(queued[..], [Notification::FileSaved { buffer_id }] if buffer_id == b_id),
+            "{queued:?}"
+        );
+        ui.assert_documents_accounted_for(&shell);
+    }
+
+    #[test]
+    fn begin_save_refuses_what_the_save_refuses() {
+        let (mut shell, mut ui, dir, a, _b) = shell_with_two_files();
+        // A Save As onto the file another tab holds.
+        assert!(matches!(
+            shell.begin_save(&SaveRequest::ActiveAs(a.clone())),
+            Err(ShellError::AlreadyOpen)
+        ));
+        // Onto the tab's own file, and onto a new one, it goes ahead.
+        let own = shell.tabs[1].path.clone().unwrap();
+        assert!(shell.begin_save(&SaveRequest::ActiveAs(own)).is_ok());
+        assert!(shell
+            .begin_save(&SaveRequest::ActiveAs(dir.path().join("c.txt")))
+            .is_ok());
+        // A buffer id no tab has.
+        assert!(matches!(
+            shell.begin_save(&SaveRequest::Tab(i32::MAX - 1)),
+            Err(ShellError::NoSuchTab)
+        ));
+        // A tab by its id, in front or not.
+        let (a_id, b_id) = (shell.tabs[0].id, shell.tabs[1].id);
+        assert_eq!(
+            shell
+                .begin_save(&SaveRequest::Tab(a_id))
+                .unwrap()
+                .buffer_id(),
+            a_id
+        );
+        assert_eq!(
+            shell.begin_save(&SaveRequest::Active).unwrap().buffer_id(),
+            b_id
+        );
+        // A file still loading: in front for a Save, and by its id.
+        let late = dir.path().join("late.txt");
+        std::fs::write(&late, "late\n").unwrap();
+        shell.open_file(late);
+        let late_id = shell.active().unwrap().id;
+        assert!(shell.active().unwrap().pending_load.is_some());
+        for request in [SaveRequest::Active, SaveRequest::Tab(late_id)] {
+            assert!(
+                matches!(shell.begin_save(&request), Err(ShellError::LoadInFlight)),
+                "{request:?}"
+            );
+        }
+        drain_until_loads_settle(&mut shell, &mut ui);
+        // An untitled buffer has no file to save to, in front or by id;
+        // Save As is what it takes.
+        shell.new_untitled(&mut ui);
+        let untitled = shell.active().unwrap().id;
+        for request in [SaveRequest::Active, SaveRequest::Tab(untitled)] {
+            assert!(
+                matches!(shell.begin_save(&request), Err(ShellError::NoActivePath)),
+                "{request:?}"
+            );
+        }
+        // And nothing was announced or queued by any of it.
+        let _ = shell.take_notifications();
+        assert!(shell.take_notifications().is_empty());
+    }
+
+    #[test]
+    fn begin_save_with_no_tab_has_nothing_to_save() {
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let shell = Shell::new(wake).unwrap();
+        for request in [
+            SaveRequest::Active,
+            SaveRequest::ActiveAs(PathBuf::from("nowhere.txt")),
+        ] {
+            assert!(
+                matches!(shell.begin_save(&request), Err(ShellError::NoActivePath)),
+                "{request:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_announced_save_as_is_heard_before_the_buffer_has_its_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("saved-as.txt");
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+        shell.new_untitled(&mut ui);
+        let _ = shell.take_notifications();
+        let id = shell.active().unwrap().id as isize;
+        ui.buffer_text = "text".to_string();
+
+        let (result, heard) = announced_save(
+            &mut shell,
+            &mut ui,
+            &SaveRequest::ActiveAs(target.clone()),
+            OnBeforeSave::Append("[trimmed]"),
+        );
+        result.unwrap();
+
+        assert_eq!(heard, [(id, id, 1)]);
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "text[trimmed]");
+        assert_eq!(
+            shell.active().unwrap().path.as_deref(),
+            Some(target.as_path())
+        );
+        let queued = shell.take_notifications();
+        assert!(
+            matches!(queued[..], [Notification::FileSaved { buffer_id }] if buffer_id == id),
+            "{queued:?}"
+        );
+    }
+
+    #[test]
+    fn an_announced_save_follows_its_buffer_when_a_handler_moves_the_front() {
+        // Notepad++ saves the buffer it announced, whatever its handler
+        // brought to the front meanwhile (measured, 8.9.8.1), and leaves
+        // that other buffer in front.
+        let (mut shell, mut ui, _dir, a, b) = shell_with_two_files();
+        let (a_id, b_id) = (shell.tabs[0].id as isize, shell.tabs[1].id as isize);
+        ui.buffer_text = "new B\n".to_string();
+        ui.doc_dirty.insert(shell.tabs[1].scintilla_doc, true);
+        shell.tabs[1].dirty = true;
+
+        let (result, heard) = announced_save(
+            &mut shell,
+            &mut ui,
+            &SaveRequest::Active,
+            OnBeforeSave::BringToFront(0),
+        );
+        result.unwrap();
+
+        assert_eq!(heard, [(b_id, b_id, 1)]);
+        assert_eq!(std::fs::read_to_string(&b).unwrap(), "new B\n");
+        assert_eq!(std::fs::read_to_string(&a).unwrap(), "old A\n");
+        // `a` is in front, as the handler left it, and the view is back on
+        // its document.
+        assert_eq!(shell.active().unwrap().id as isize, a_id);
+        assert_eq!(ui.current_doc, shell.tabs[0].scintilla_doc);
+        assert_eq!(ui.buffer_text, "old A\n");
+        // The saved tab is behind it, so no backend's dirty poll reaches
+        // it: the shell cleared its cached bit.
+        assert!(!shell.tabs[1].dirty);
+        assert_eq!(shell.tabs[1].text, "new B\n");
+        let queued = shell.take_notifications();
+        assert!(
+            queued
+                .iter()
+                .any(|n| matches!(n, Notification::FileSaved { buffer_id } if *buffer_id == b_id)),
+            "{queued:?}"
+        );
+        assert!(
+            !queued
+                .iter()
+                .any(|n| matches!(n, Notification::FileBeforeSave { .. })),
+            "{queued:?}"
+        );
+        ui.assert_documents_accounted_for(&shell);
+    }
+
+    #[test]
+    fn an_announced_save_writes_its_own_tab_when_the_view_shows_another() {
+        // The save takes its path from the tab in front and its text from
+        // the view. A handler that leaves the announced tab in front and
+        // the view on another tab's document must not have that text
+        // written to the announced tab's file.
+        let (mut shell, mut ui, _dir, a, b) = shell_with_two_files();
+        let b_doc = shell.tabs[1].scintilla_doc;
+        // Another language for the tab the view is left on, so that the
+        // view's language afterwards says whose it is.
+        shell.tabs[0].lang = codepp_core::lang::L_CPP;
+        assert_ne!(shell.tabs[1].lang, shell.tabs[0].lang);
+
+        let (result, heard) = announced_save(
+            &mut shell,
+            &mut ui,
+            &SaveRequest::Active,
+            OnBeforeSave::LeaveTheViewOn(0),
+        );
+        result.unwrap();
+
+        assert_eq!(heard.len(), 1);
+        assert_eq!(std::fs::read_to_string(&b).unwrap(), "old B\n");
+        assert_eq!(std::fs::read_to_string(&a).unwrap(), "old A\n");
+        assert_eq!(shell.active_tab, Some(1));
+        assert_eq!(
+            ui.current_doc, b_doc,
+            "the view is back on the tab in front"
+        );
+        // The handler's bind put the view in the other tab's language, so
+        // the saved tab's own goes on again.
+        assert_eq!(
+            ui.apply_lang_calls.last(),
+            Some(&shell.tabs[1].lang),
+            "{:?}",
+            ui.apply_lang_calls
+        );
+        ui.assert_documents_accounted_for(&shell);
+    }
+
+    #[test]
+    fn an_announced_save_as_behind_the_front_leaves_the_view_in_the_fronts_language() {
+        // The lexer is the view's, not the document's. A Save As applies
+        // the saved tab's new language to the view; saved from behind
+        // another tab, the view must go back to that tab's language with
+        // its document, or the tab in front is styled as another file.
+        let (mut shell, mut ui, dir, _a, _b) = shell_with_two_files();
+        let target = dir.path().join("renamed.rs");
+        let front_lang = shell.tabs[0].lang;
+
+        let (result, _) = announced_save(
+            &mut shell,
+            &mut ui,
+            &SaveRequest::ActiveAs(target.clone()),
+            OnBeforeSave::BringToFront(0),
+        );
+        result.unwrap();
+
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "old B\n");
+        assert_eq!(shell.tabs[1].path.as_deref(), Some(target.as_path()));
+        let saved_lang = shell.tabs[1].lang;
+        assert_ne!(saved_lang, front_lang, "the .rs file is in Rust");
+        assert_eq!(shell.active_tab, Some(0));
+        assert_eq!(ui.current_doc, shell.tabs[0].scintilla_doc);
+        assert_eq!(
+            ui.apply_lang_calls.last(),
+            Some(&front_lang),
+            "{:?}",
+            ui.apply_lang_calls
+        );
+        assert!(ui.apply_lang_calls.contains(&saved_lang));
+        ui.assert_documents_accounted_for(&shell);
+    }
+
+    #[test]
+    fn an_announced_save_of_a_tab_its_handler_closed_writes_nothing() {
+        let (mut shell, mut ui, _dir, a, b) = shell_with_two_files();
+        ui.buffer_text = "new B\n".to_string();
+        let (result, heard) = announced_save(
+            &mut shell,
+            &mut ui,
+            &SaveRequest::Active,
+            OnBeforeSave::CloseFront,
+        );
+        assert!(matches!(result, Err(ShellError::NoSuchTab)), "{result:?}");
+        assert_eq!(heard.len(), 1);
+        assert_eq!(std::fs::read_to_string(&b).unwrap(), "old B\n");
+        assert_eq!(std::fs::read_to_string(&a).unwrap(), "old A\n");
+        assert!(!shell
+            .take_notifications()
+            .iter()
+            .any(|n| matches!(n, Notification::FileSaved { .. })));
+        ui.assert_documents_accounted_for(&shell);
+    }
+
+    #[test]
+    fn an_announced_save_is_refused_once_its_handler_started_a_reload() {
+        // The view may not hold the tab's text while a load is in flight,
+        // which is why a save refuses one; the handler can start one
+        // between the two halves.
+        let (mut shell, mut ui, _dir, _a, b) = shell_with_two_files();
+        ui.buffer_text = "new B\n".to_string();
+        let (result, _) = announced_save(
+            &mut shell,
+            &mut ui,
+            &SaveRequest::Active,
+            OnBeforeSave::Reload,
+        );
+        assert!(
+            matches!(result, Err(ShellError::LoadInFlight)),
+            "{result:?}"
+        );
+        assert_eq!(std::fs::read_to_string(&b).unwrap(), "old B\n");
+        drain_until_loads_settle(&mut shell, &mut ui);
+    }
+
+    #[test]
+    fn an_announced_save_as_is_refused_once_its_handler_opened_the_target() {
+        let (mut shell, mut ui, dir, _a, _b) = shell_with_two_files();
+        let target = dir.path().join("target.txt");
+        std::fs::write(&target, "target\n").unwrap();
+        ui.buffer_text = "new B\n".to_string();
+        let (result, _) = announced_save(
+            &mut shell,
+            &mut ui,
+            &SaveRequest::ActiveAs(target.clone()),
+            OnBeforeSave::Open(target.clone()),
+        );
+        // The handler's open moved the front to the loading tab, so the
+        // announced buffer is saved from behind it, and refused there.
+        assert!(matches!(result, Err(ShellError::AlreadyOpen)), "{result:?}");
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "target\n");
+        drain_until_loads_settle(&mut shell, &mut ui);
+        ui.assert_documents_accounted_for(&shell);
+    }
+
+    #[test]
+    fn saves_from_inside_before_save_handlers_stop_being_announced_at_a_depth() {
+        // A handler that saves every time it is told of a save. Notepad++
+        // announces a save made from a handler too (measured), and has no
+        // bound; here the ninth save down is announced after its write.
+        let (mut shell, mut ui, _dir, _a, b) = shell_with_two_files();
+        let b_id = shell.tabs[1].id as isize;
+        ui.buffer_text = "new B\n".to_string();
+
+        let (result, heard) = announced_save(
+            &mut shell,
+            &mut ui,
+            &SaveRequest::Active,
+            OnBeforeSave::SaveAgain,
+        );
+        result.unwrap();
+
+        let depths: Vec<usize> = heard.iter().map(|&(_, _, under_way)| under_way).collect();
+        assert_eq!(
+            depths,
+            (1..=MAX_NESTED_SAVE_ANNOUNCEMENTS).collect::<Vec<_>>()
+        );
+        assert_eq!(SAVE_ANNOUNCEMENTS_UNDER_WAY.with(std::cell::Cell::get), 0);
+        assert_eq!(std::fs::read_to_string(&b).unwrap(), "new B\n");
+        // The innermost save queued its own BEFORESAVE, ahead of its
+        // FILESAVED; every save, announced or not, queued a FILESAVED.
+        let queued = shell.take_notifications();
+        assert!(
+            matches!(queued[0], Notification::FileBeforeSave { buffer_id } if buffer_id == b_id),
+            "{queued:?}"
+        );
+        assert_eq!(
+            queued.len(),
+            MAX_NESTED_SAVE_ANNOUNCEMENTS + 2,
+            "{queued:?}"
+        );
+        assert!(
+            queued[1..]
+                .iter()
+                .all(|n| matches!(n, Notification::FileSaved { buffer_id } if *buffer_id == b_id)),
+            "{queued:?}"
+        );
+    }
+
+    #[test]
+    fn a_save_announcement_is_no_longer_under_way_after_an_unwind() {
+        let caught = std::panic::catch_unwind(|| {
+            let _under_way = SaveAnnouncementUnderWay::enter();
+            assert_eq!(SAVE_ANNOUNCEMENTS_UNDER_WAY.with(std::cell::Cell::get), 1);
+            panic!("a handler's panic");
+        });
+        assert!(caught.is_err());
+        assert_eq!(SAVE_ANNOUNCEMENTS_UNDER_WAY.with(std::cell::Cell::get), 0);
     }
 
     // -- Multi-tab data model tests (milestone 6a) ------------------

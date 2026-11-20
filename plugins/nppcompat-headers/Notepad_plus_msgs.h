@@ -1305,10 +1305,19 @@ typedef enum LangType_ {
  *     the contract plugins gate on. Carries no buffer id (the tab
  *     hasn't been allocated yet); N++ uses the same convention. */
 #define NPPN_FILEBEFOREOPEN        (NPPN_FIRST + 6)
-/* v2: fired before the host writes a buffer to disk. Pairs with
- *     NPPN_FILESAVED so plugins observing the buffer's pre-save
- *     state on BEFORE_SAVE can compare against the post-save
- *     observation on FILESAVED. */
+/* v2: a buffer is about to be saved; nmhdr.idFrom is its id. Pairs
+ *     with NPPN_FILESAVED.
+ *     File > Save and Save As send it before the host reads the
+ *     buffer, and answer NPPM_* and SCI_* sent from the handler. So an
+ *     edit made from the handler is in the file, and the buffer is
+ *     clean afterwards, as in Notepad++.
+ *     The buffer is not brought to the front for it: compare idFrom
+ *     with NPPM_GETCURRENTBUFFERID before editing the current view. At
+ *     a Save As the buffer still answers its old path. A save the host
+ *     refuses is not announced.
+ *     Save All, and a save a plugin asks for (NPPM_SAVECURRENTFILE,
+ *     NPPM_SAVECURRENTFILEAS, NPPM_SAVEFILE, NPPM_SAVEALLFILES), still
+ *     send it after the write. */
 #define NPPN_FILEBEFORESAVE        (NPPN_FIRST + 7)
 /* v1: a file was saved. */
 #define NPPN_FILESAVED             (NPPN_FIRST + 8)

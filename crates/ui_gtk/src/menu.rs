@@ -2809,14 +2809,44 @@ pub(crate) fn on_save() {
     drain_shell();
 }
 
+/// Save through the shell's two-phase protocol
+/// ([`codepp_shell::AnnouncedSave`]), so the plugins hear
+/// `NPPN_FILEBEFORESAVE` before the buffer is read: check the save under
+/// one borrow, deliver with none, write under another. `None` when the
+/// state cannot be reached; the save's own error otherwise.
+///
+/// The delivery runs plugin code, which may spin a main loop, move the tab
+/// in front or close it. The shell saves the buffer it announced, by its
+/// id, wherever that is by then; a caller that goes on to act on "the tab
+/// in front" must look again, as the close prompt does after its Save.
+///
+/// Queues `NPPN_FILESAVED`, which the caller's drain delivers.
+pub(crate) fn save_announced(
+    request: &codepp_shell::SaveRequest,
+) -> Option<Result<(), codepp_shell::ShellError>> {
+    let announced = match with_state(|st| st.shell.begin_save(request))? {
+        Ok(announced) => announced,
+        Err(err) => return Some(Err(err)),
+    };
+    crate::plugin::deliver_save(&announced);
+    with_state(|st| {
+        let (shell, mut ui) = st.split();
+        shell.finish_save(&mut ui, &announced)
+    })
+}
+
 /// Save the active buffer — in place if it has a path, through Save As if
-/// it is untitled — and report a failure. Delivers nothing.
+/// it is untitled — and report a failure. Of what the save queues it
+/// delivers nothing; the plugins do hear `NPPN_FILEBEFORESAVE` from inside
+/// it, before the write ([`save_announced`]).
 ///
 /// `pub(crate)` because the close-confirm gate in `lib.rs` routes a dirty
 /// buffer's Save through this same path, so the two never diverge. The
-/// gate calls this and not [`on_save`]: plugin code run between its prompt
-/// and the close the prompt gates could move the focus, so what the save
-/// queued is delivered by the close's own flush instead.
+/// gate calls this and not [`on_save`], so that what the save queued
+/// (`NPPN_FILESAVED`) is delivered by the close's own flush. The
+/// `NPPN_FILEBEFORESAVE` handlers do run inside the save, between the
+/// gate's prompt and the close it gates, and can move the focus, which is
+/// why the gate looks at the tab in front again after this returns.
 pub(crate) fn save_active() {
     // An untitled buffer has no path to save to, so Save behaves as
     // Save As — same as Notepad++. A file still loading has no path yet
@@ -2833,10 +2863,7 @@ pub(crate) fn save_active() {
         save_active_as();
         return;
     }
-    let result = with_state(|st| {
-        let (shell, mut ui) = st.split();
-        shell.save_current_to_disk(&mut ui)
-    });
+    let result = save_announced(&codepp_shell::SaveRequest::Active);
     if let Some(Err(err)) = result {
         // Surface, don't just log: a silent Ctrl+S failure (permission
         // denied, disk full) leaves the user believing their work is on
@@ -2865,8 +2892,8 @@ fn on_save_as() {
 /// The chooser spins a nested main loop, and three things can move the
 /// active tab while it is up: a drain run by a worker's wake, a plugin's
 /// own handler, and a file dropped on the window, which still arrives
-/// under the modal chooser. `save_buffer_as` reads the active tab *after*
-/// the chooser returns, so any of them would put one buffer's text at the
+/// under the modal chooser. The Save As is of the tab in front once the
+/// chooser has returned, so any of them would put one buffer's text at the
 /// path the user chose for another. The [`crate::DrainFreeze`] stops the
 /// first, as Cocoa's Save As does; the other two are caught by checking
 /// that the tab in front is still the one the chooser was opened for, as
@@ -2896,10 +2923,10 @@ fn save_active_as() {
         report_save_as_refused(for_tab, &name, &path);
         return;
     }
-    let result = with_state(|st| {
-        let (shell, mut ui) = st.split();
-        shell.save_buffer_as(&mut ui, path)
-    });
+    // The request is for the tab in front, which the check above has just
+    // found to be the one the chooser was for; the save then follows that
+    // buffer by its id, whatever a plugin's handler brings to the front.
+    let result = save_announced(&codepp_shell::SaveRequest::ActiveAs(path));
     if let Some(Err(err)) = result {
         // Surface it rather than only logging: the standalone Save As
         // menu action and the close-confirm gate both need the user to

@@ -3510,16 +3510,46 @@ pub(crate) fn action_save_file() {
     drain_shell();
 }
 
+/// Save through the shell's two-phase protocol
+/// ([`codepp_shell::AnnouncedSave`]), so the plugins hear
+/// `NPPN_FILEBEFORESAVE` before the buffer is read: check the save under
+/// one borrow, deliver with none, write under another. `None` when the
+/// state cannot be reached; the save's own error otherwise.
+///
+/// The delivery runs plugin code, which may move the tab in front or
+/// close it. The shell saves the buffer it announced, by its id, wherever
+/// that is by then; a caller that goes on to act on "the tab in front"
+/// must look again, as the close prompt does after its Save.
+///
+/// Queues `NPPN_FILESAVED`, which the caller's drain delivers.
+pub(crate) fn save_announced(
+    request: &codepp_shell::SaveRequest,
+) -> Option<Result<(), codepp_shell::ShellError>> {
+    let announced = match with_state(|st| st.shell.begin_save(request))? {
+        Ok(announced) => announced,
+        Err(err) => return Some(Err(err)),
+    };
+    plugin::deliver_save(&announced);
+    with_state(|st| {
+        let (shell, mut ui) = st.split();
+        shell.finish_save(&mut ui, &announced)
+    })
+}
+
 /// Save the active buffer — in place if it has a path, through Save As if
-/// it is untitled — and report a failure. Delivers nothing.
+/// it is untitled — and report a failure. Of what the save queues it
+/// delivers nothing; the plugins do hear `NPPN_FILEBEFORESAVE` from inside
+/// it, before the write ([`save_announced`]).
 ///
 /// The close prompt's Save calls this and not [`action_save_file`], and
 /// that is load-bearing here: [`confirm_discard_active`] releases its
 /// freeze before saving, so a drain run from inside the save would apply
-/// worker results and run plugin code between the prompt and the close
-/// it gates — either can move the focus, and the close would then
-/// announce a tab the user was never asked about. The close's own flush
-/// delivers what the save queued instead.
+/// worker results and deliver the queue between the prompt and the close
+/// it gates. The close's own flush delivers what the save queued instead.
+/// The `NPPN_FILEBEFORESAVE` handlers do run in that gap and can move the
+/// focus, which is why the prompt looks at the tab in front again after
+/// this returns: the close would otherwise announce a tab the user was
+/// never asked about.
 fn save_active_file() {
     // An untitled buffer has no path to save to, so Save behaves as Save
     // As — same as Notepad++. Decided *before* attempting the save, not
@@ -3541,10 +3571,7 @@ fn save_active_file() {
         save_active_file_as();
         return;
     }
-    let result = with_state(|st| {
-        let (shell, mut ui) = st.split();
-        shell.save_current_to_disk(&mut ui)
-    });
+    let result = save_announced(&codepp_shell::SaveRequest::Active);
     if let Some(Err(e)) = result {
         error_alert(
             "Save failed",
@@ -3576,8 +3603,8 @@ fn save_active_file_as() {
     let Some(mtm) = MainThreadMarker::new() else {
         return;
     };
-    // Load-bearing here specifically: `save_buffer_as` reads the active
-    // tab *after* the panel returns, so a worker wake landing mid-panel
+    // Load-bearing here specifically: the Save As is of the tab in front
+    // once the panel has returned, so a worker wake landing mid-panel
     // could otherwise write a different buffer's text to the path the
     // user just chose. See [`DrainFreeze`].
     let _freeze = DrainFreeze::new();
@@ -3612,10 +3639,10 @@ fn save_active_file_as() {
         report_save_as_refused(for_tab, &name, &path);
         return;
     }
-    let result = with_state(|st| {
-        let (shell, mut ui) = st.split();
-        shell.save_buffer_as(&mut ui, path)
-    });
+    // The request is for the tab in front, which the check above has just
+    // found to be the one the panel was for; the save then follows that
+    // buffer by its id, whatever a plugin's handler brings to the front.
+    let result = save_announced(&codepp_shell::SaveRequest::ActiveAs(path));
     if let Some(Err(e)) = result {
         // `ShellError`'s `Display` can carry a path, which is
         // attacker-influenced; an alert renders bidi controls as real
@@ -3797,7 +3824,7 @@ fn confirm_discard_active() -> bool {
             // Re-read the **live** state, not the cached `Tab.dirty`.
             //
             // The save clears Scintilla's save point from inside a
-            // `with_state` borrow (`save_current_to_disk` calls
+            // `with_state` borrow (`finish_save` calls
             // `ui.mark_saved()` while `Shell::split` holds it), so the
             // resulting `SCN_SAVEPOINTREACHED` re-enters `on_sci_notify`
             // with the borrow live and is declined — exactly the
@@ -5047,8 +5074,8 @@ mod source_invariants {
             .find(recheck)
             .expect("Save As no longer looks the tab up again after its panel");
         let write = body
-            .find("save_buffer_as(")
-            .expect("Save As no longer writes through the shell");
+            .find("save_announced(&codepp_shell::SaveRequest::ActiveAs(path))")
+            .expect("Save As no longer writes through the announced save");
         assert!(
             freeze < panel && noted < panel && panel < checked && checked < write,
             "freeze and note the tab, run the panel, look again, then write"
@@ -5058,6 +5085,69 @@ mod source_invariants {
             "Save As writes even though another tab came to the front"
         );
         a_second_look_fails_closed();
+    }
+
+    /// The two-phase save on this backend: the save is checked under one
+    /// borrow, the plugins are told `NPPN_FILEBEFORESAVE` with none held,
+    /// and the buffer is read under another. Told under a borrow, a
+    /// handler's `NPPM_*` would be declined; told after the write, its
+    /// edit misses the file. Both wrong orders compile and read naturally,
+    /// so the shape is pinned.
+    #[test]
+    fn an_announced_save_tells_the_plugins_between_its_two_borrows() {
+        let squash = |s: &str| s.split_whitespace().collect::<String>();
+        let body = squash(&code_only(&fn_body(production_src(), "save_announced")));
+        let begin = body
+            .find(
+                "letannounced=matchwith_state(|st|st.shell.begin_save(request))?{\
+                 Ok(announced)=>announced,Err(err)=>returnSome(Err(err)),};",
+            )
+            .expect("the save no longer begins under a borrow of its own");
+        let deliver = body
+            .find("plugin::deliver_save(&announced);")
+            .expect("the save is no longer announced to the plugins");
+        let finish = body
+            .find(
+                "with_state(|st|{let(shell,mutui)=st.split();\
+                 shell.finish_save(&mutui,&announced)})",
+            )
+            .expect("the save no longer finishes what it announced, under a fresh borrow");
+        assert!(
+            begin < deliver && deliver < finish,
+            "begin, deliver, finish: in that order"
+        );
+        assert_eq!(
+            body.matches("with_state(").count(),
+            2,
+            "a third borrow in the announced save could be held across the delivery"
+        );
+        let plugin = include_str!("plugin.rs");
+        let plugin = plugin.split("#[cfg(test)]").next().unwrap_or(plugin);
+        assert_eq!(
+            squash(&code_only(&fn_body(plugin, "deliver_save"))),
+            "{ifcrate::quitting(){return;}announced.deliver(npp_sentinel());}",
+            "the delivery must hold no borrow and stop once the quit has begun"
+        );
+    }
+
+    /// Every save a command makes goes through the announced save. A
+    /// direct `save_current_to_disk` or `save_buffer_as` would be the save
+    /// that tells the plugins after its write.
+    #[test]
+    fn no_command_saves_without_announcing() {
+        // Every source file of the crate, so that a file added later is
+        // read too.
+        let src: String = all_production_code().split_whitespace().collect();
+        assert!(
+            src.contains("shell.finish_save(&mutui,&announced)"),
+            "the crate's production code was not read"
+        );
+        for direct in [".save_current_to_disk(", ".save_buffer_as("] {
+            assert!(
+                !src.contains(direct),
+                "`{direct}` in production code is a save announced after its write"
+            );
+        }
     }
 
     /// A refused Save As says so before it returns, in the shell's

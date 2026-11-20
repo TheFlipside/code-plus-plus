@@ -81,8 +81,8 @@ fn example_hello_loads_and_publishes_its_func_items() {
     let funcs = info.func_items().expect("loaded plugin has func items");
     assert_eq!(
         funcs.len(),
-        6,
-        "example-hello publishes the six commands listed below"
+        7,
+        "example-hello publishes the seven commands listed below"
     );
     assert_eq!(
         funcs[0].cmd_id, PLUGIN_CMD_ID_BASE,
@@ -95,6 +95,7 @@ fn example_hello_loads_and_publishes_its_func_items() {
     assert_eq!(funcs[3].cmd_id, PLUGIN_CMD_ID_BASE + 3);
     assert_eq!(funcs[4].cmd_id, PLUGIN_CMD_ID_BASE + 4);
     assert_eq!(funcs[5].cmd_id, PLUGIN_CMD_ID_BASE + 5);
+    assert_eq!(funcs[6].cmd_id, PLUGIN_CMD_ID_BASE + 6);
 
     // Every item is a command with a callback: the demo publishes no
     // separators, whose `p_func` would be null.
@@ -131,6 +132,7 @@ fn example_hello_loads_and_publishes_its_func_items() {
             "Show Second Dock Panel",
             "Switch To Other Dock Panel",
             "Show Modeless Dialog",
+            "Trim Trailing Spaces on Save",
         ]
     );
 }

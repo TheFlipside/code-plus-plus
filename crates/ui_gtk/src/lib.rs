@@ -1647,10 +1647,11 @@ mod gesture_delivery_guard {
         );
     }
 
-    /// A close prompt's Save goes through the core, which delivers
-    /// nothing: plugin code run between the prompt and the close it gates
-    /// could move the focus, and the close would then announce a tab the
-    /// user was never asked about. The close's own flush delivers it.
+    /// A close prompt's Save goes through the core, which delivers nothing
+    /// that is queued: a drain between the prompt and the close it gates
+    /// would run more plugin code there, and the close's own flush
+    /// delivers it. The core does tell the plugins `NPPN_FILEBEFORESAVE`,
+    /// so the close still looks at the tab in front again afterwards.
     #[test]
     fn the_close_prompt_saves_through_the_core() {
         let lib = source(include_str!("lib.rs"));
@@ -1701,8 +1702,8 @@ mod gesture_delivery_guard {
             .find(recheck)
             .expect("Save As no longer looks the tab up again after its chooser");
         let write = body
-            .find("save_buffer_as(")
-            .expect("Save As no longer writes through the shell");
+            .find("save_announced(&codepp_shell::SaveRequest::ActiveAs(path))")
+            .expect("Save As no longer writes through the announced save");
         assert!(
             freeze < chooser && noted < chooser && chooser < checked && checked < write,
             "freeze and note the tab, run the chooser, look again, then write"
@@ -1712,6 +1713,71 @@ mod gesture_delivery_guard {
             "Save As writes even though another tab came to the front"
         );
         a_second_look_fails_closed(&source(include_str!("lib.rs")));
+    }
+
+    /// The two-phase save on this backend: the save is checked under one
+    /// borrow, the plugins are told `NPPN_FILEBEFORESAVE` with none held,
+    /// and the buffer is read under another. Told under a borrow, a
+    /// handler's `NPPM_*` would be declined; told after the write, its
+    /// edit misses the file. Both wrong orders compile and read naturally,
+    /// so the shape is pinned.
+    #[test]
+    fn an_announced_save_tells_the_plugins_between_its_two_borrows() {
+        let squash = |s: &str| s.split_whitespace().collect::<String>();
+        let menu = source(include_str!("menu.rs"));
+        let body = squash(&fn_body(&menu, "save_announced"));
+        let begin = body
+            .find(
+                "letannounced=matchwith_state(|st|st.shell.begin_save(request))?{\
+                 Ok(announced)=>announced,Err(err)=>returnSome(Err(err)),};",
+            )
+            .expect("the save no longer begins under a borrow of its own");
+        let deliver = body
+            .find("crate::plugin::deliver_save(&announced);")
+            .expect("the save is no longer announced to the plugins");
+        let finish = body
+            .find(
+                "with_state(|st|{let(shell,mutui)=st.split();\
+                 shell.finish_save(&mutui,&announced)})",
+            )
+            .expect("the save no longer finishes what it announced, under a fresh borrow");
+        assert!(
+            begin < deliver && deliver < finish,
+            "begin, deliver, finish: in that order"
+        );
+        assert_eq!(
+            body.matches("with_state(").count(),
+            2,
+            "a third borrow in the announced save could be held across the delivery"
+        );
+        let plugin = source(include_str!("plugin.rs"));
+        assert_eq!(
+            squash(&fn_body(&plugin, "deliver_save")),
+            "{ifcrate::quitting(){return;}announced.deliver(npp_sentinel());}",
+            "the delivery must hold no borrow and stop once the quit has begun"
+        );
+    }
+
+    /// Every save a command makes goes through the announced save. A
+    /// direct `save_current_to_disk` or `save_buffer_as` would be the save
+    /// that tells the plugins after its write.
+    #[test]
+    fn no_command_saves_without_announcing() {
+        // Every source file of the crate, so that a file added later is
+        // read too.
+        let src: String = crate::source_scan::production_code()
+            .split_whitespace()
+            .collect();
+        assert!(
+            src.contains("shell.finish_save(&mutui,&announced)"),
+            "the crate's production code was not read"
+        );
+        for direct in [".save_current_to_disk(", ".save_buffer_as("] {
+            assert!(
+                !src.contains(direct),
+                "`{direct}` in production code is a save announced after its write"
+            );
+        }
     }
 
     /// A refused Save As says so before it returns: the user picked a
@@ -2804,15 +2870,15 @@ fn confirm_discard_active() -> bool {
             // a titled buffer in place, routes an untitled one through the
             // Save As chooser, and shows its own sanitized error dialog on
             // failure. The core, not the menu item, because the item then
-            // delivers what the save queued, and plugin code run here could
-            // move the focus between this prompt and the close it gates;
-            // the close delivers it instead. Then look at the buffer again:
-            // unsaved work still there means the save failed or its chooser
-            // was cancelled, and the close must abort so nothing is lost.
+            // delivers what the save queued, which would run more plugin
+            // code between this prompt and the close it gates; the close
+            // delivers it instead. Then look at the buffer again: unsaved
+            // work still there means the save failed or its chooser was
+            // cancelled, and the close must abort so nothing is lost.
             crate::menu::save_active();
-            // The save can run a chooser, whose loop runs plugin code too:
-            // look again before the reading below is taken to describe the
-            // prompted tab.
+            // The save tells the plugins `NPPN_FILEBEFORESAVE` and can run
+            // a chooser, whose loop runs plugin code too: look again before
+            // the reading below is taken to describe the prompted tab.
             if !active_tab_is(prompted) {
                 tracing::warn!(
                     prompted,
@@ -4286,7 +4352,7 @@ pub(crate) fn refresh_tab_chrome() {
     // the `sci-notify` handler this call is never re-entrant and the
     // borrow is always available. That is what makes the marker
     // correct after a save: the synchronous notification fired from
-    // inside `save_current_to_disk`'s borrow was skipped, so without
+    // inside the save's own borrow (`finish_save`) was skipped, so without
     // this the strip would repaint from a `Tab.dirty` that still said
     // "modified".
     let _ = refresh_active_dirty();
