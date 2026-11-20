@@ -10,12 +10,13 @@
 //! ships a one-thread loader; Phase 4's find-in-files moves to a thread
 //! pool when concurrent reads matter.
 
-use std::fs::File;
+use std::fs::{File, Metadata};
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
+use std::time::SystemTime;
 
 use crossbeam_channel::{unbounded, Receiver, Sender};
 
@@ -26,6 +27,49 @@ use crate::eol::{self, Eol};
 /// and echoed back in [`LoadResult`]. Lets the UI correlate a result
 /// with the originating action (e.g., dimming a tab while it loads).
 pub type RequestId = u64;
+
+/// What a file on disk looked like at one moment: when it was last
+/// written and how long it is. Two equal stamps are taken to mean the
+/// file's content has not changed in between.
+///
+/// It is what tells a change of the file's content from a change of
+/// anything else about it. A watcher reports both alike on Windows, where
+/// `ReadDirectoryChangesW` says "modified" for a changed attribute or
+/// access list too, and a file-sync client changes attributes on every
+/// file it has uploaded. Notepad++ goes by the last-write time alone
+/// (`Buffer::checkFileState`, read from its source at 8.9.8.1); the
+/// length is compared as well here, which catches a rewrite that kept the
+/// time.
+///
+/// A rewrite that keeps both the time and the length is not seen, as it
+/// is not in Notepad++.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DiskStamp {
+    /// The file's last-write time, as the file system reports it.
+    pub modified: SystemTime,
+    /// The file's length in bytes.
+    pub len: u64,
+}
+
+impl DiskStamp {
+    /// The stamp `metadata` describes, or `None` where the platform
+    /// reports no last-write time, which leaves nothing to compare.
+    #[must_use]
+    pub fn of(metadata: &Metadata) -> Option<Self> {
+        Some(Self {
+            modified: metadata.modified().ok()?,
+            len: metadata.len(),
+        })
+    }
+
+    /// The stamp of the file `path` names now, links followed, or `None`
+    /// when it cannot be had: no such file, no access, or no last-write
+    /// time.
+    #[must_use]
+    pub fn at(path: &Path) -> Option<Self> {
+        Self::of(&std::fs::metadata(path).ok()?)
+    }
+}
 
 /// A successfully loaded file.
 #[derive(Debug, Clone)]
@@ -42,6 +86,12 @@ pub struct LoadedFile {
     /// empty or one-line file. See [`eol::detect`].
     pub eol: Option<Eol>,
     pub byte_len: u64,
+    /// What the file looked like when it was read, taken from the opened
+    /// file before the read rather than by a second lookup of the path:
+    /// a file written to after that has another stamp than this one, so
+    /// the change is asked about rather than missed. `None` where the
+    /// platform reports no last-write time.
+    pub stamp: Option<DiskStamp>,
 }
 
 /// A load attempt that didn't produce a usable buffer.
@@ -286,6 +336,7 @@ fn read_and_decode_within(
     if reported > cap {
         return too_large(reported);
     }
+    let stamp = DiskStamp::of(&metadata);
     let bytes = match read_at_most(&mut file, reported, cap) {
         Ok(Some(b)) => b,
         Ok(None) => return too_large(cap.saturating_add(1)),
@@ -312,6 +363,7 @@ fn read_and_decode_within(
         encoding,
         eol,
         byte_len,
+        stamp,
     })
 }
 
@@ -372,6 +424,70 @@ mod tests {
         assert_eq!(loaded.encoding, Encoding::Utf8);
         assert_eq!(loaded.eol, Some(Eol::Lf));
         assert_eq!(loaded.byte_len, 12);
+    }
+
+    /// The stamp a load carries is the file's own, and it is what a later
+    /// look at the path gives for as long as the content stays: a change
+    /// of the file's attributes moves neither its time nor its length.
+    #[test]
+    fn a_load_carries_the_files_stamp_and_metadata_changes_leave_it() {
+        let f = write_temp(b"hello\nworld\n");
+        let (loader, results, _shutdown) = Loader::spawn(std_open);
+        loader.open(f.path()).unwrap();
+        let loaded = results
+            .recv_timeout(Duration::from_secs(2))
+            .unwrap()
+            .expect("load should succeed");
+
+        let stamp = loaded.stamp.expect("this platform reports a write time");
+        assert_eq!(stamp.len, 12);
+        assert_eq!(DiskStamp::at(f.path()), Some(stamp));
+
+        // Read-only on and off again: a metadata-only change on every
+        // platform, and what a watcher on Windows reports as "modified".
+        let mut permissions = std::fs::metadata(f.path()).unwrap().permissions();
+        permissions.set_readonly(true);
+        std::fs::set_permissions(f.path(), permissions.clone()).unwrap();
+        assert_eq!(DiskStamp::at(f.path()), Some(stamp));
+        #[allow(clippy::permissions_set_readonly_false)]
+        permissions.set_readonly(false);
+        std::fs::set_permissions(f.path(), permissions).unwrap();
+        assert_eq!(DiskStamp::at(f.path()), Some(stamp));
+    }
+
+    /// A rewrite shows in the stamp: by its length where that changed,
+    /// and by its time where the length is the same.
+    #[test]
+    fn a_rewrite_changes_the_stamp() {
+        let f = write_temp(b"hello\n");
+        let before = DiskStamp::at(f.path()).unwrap();
+
+        // Another length at the same time. The time is set rather than
+        // left to the write, so the length alone tells the two apart.
+        let set_time = |time| {
+            let file = std::fs::OpenOptions::new()
+                .write(true)
+                .open(f.path())
+                .unwrap();
+            file.set_modified(time).unwrap();
+        };
+        std::fs::write(f.path(), b"hello, world\n").unwrap();
+        set_time(before.modified);
+        let longer = DiskStamp::at(f.path()).unwrap();
+        assert_eq!(longer.modified, before.modified);
+        assert_ne!(longer, before);
+
+        // The same length at a later time.
+        set_time(longer.modified + Duration::from_secs(5));
+        let touched = DiskStamp::at(f.path()).unwrap();
+        assert_eq!(touched.len, longer.len);
+        assert_ne!(touched, longer);
+    }
+
+    #[test]
+    fn a_missing_file_has_no_stamp() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(DiskStamp::at(&dir.path().join("absent.txt")), None);
     }
 
     #[test]

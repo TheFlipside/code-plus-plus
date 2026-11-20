@@ -74,7 +74,7 @@ use std::thread;
 
 use crossbeam_channel::{unbounded, Receiver, Sender};
 
-use codepp_core::file::{Loader, LoaderShutdown};
+use codepp_core::file::{DiskStamp, Loader, LoaderShutdown};
 use codepp_core::lang::L_TEXT;
 use codepp_core::{
     kept_folds, Encoding, Eol, FindHistory, LangType, LoadResult, Preferences, RecentFiles,
@@ -1393,6 +1393,44 @@ pub struct Tab {
     /// until then. While it is set, what the view holds is not the tab's,
     /// so it is neither kept for the tab nor saved as its position.
     pub view_owed: bool,
+    /// What the tab's file looked like on disk when Code++ last read it,
+    /// wrote it, or asked the user about a change to it: its last-write
+    /// time and its length. `None` for a tab with no file, and where the
+    /// state is not known: the file is gone, or a look at it failed.
+    ///
+    /// It is what a change the watcher reports is held against
+    /// ([`Shell::apply_watched_change`]). A file whose stamp is still this
+    /// one has the content the tab was last reconciled with, so nothing is
+    /// asked: the watcher also reports changes that leave the content
+    /// alone, a changed attribute or access list on Windows, which is what
+    /// a file-sync client does to a file once it has uploaded it. Until
+    /// this was kept, every such change asked whether to reload a file
+    /// Code++ itself had just saved, and a Yes cost the change-history
+    /// marks.
+    ///
+    /// Set where the tab and the disk are brought together: a landing that
+    /// gives the tab the file's text; a save; and the moment a prompt asks
+    /// about a change, the watcher's or a restore's, so that one change is
+    /// asked about once, whatever the answer.
+    ///
+    /// Four places leave the tab without the file's present state, each so
+    /// that a change the user was not told of is still asked about:
+    ///
+    /// - A reload declined to keep unsaved work leaves the stamp as it was.
+    ///   The tab still stands on the file as it was before, and recording
+    ///   the file the declined load read would make every later event for
+    ///   it ask nothing, with the next save overwriting it unasked.
+    /// - A Yes to the prompt forgets the stamp ([`Shell::confirm_reload`]).
+    ///   The landing sets it again; a reload that is declined or fails
+    ///   leaves none, so the file's next event asks again.
+    /// - A buffer restored from its recovery backup has none. Its text came
+    ///   from the backup, and nothing records whether the file is as it
+    ///   was when the backup was made. The one exception is a restore that
+    ///   asks about the file itself, for one newer than its backup.
+    /// - A tab whose stale document keeps work over a reload that landed
+    ///   in the background forgets it (`Shell::bind_and_fill`): the tab
+    ///   never showed the file that landed.
+    pub disk_stamp: Option<DiskStamp>,
 }
 
 impl Default for Tab {
@@ -1419,6 +1457,7 @@ impl Default for Tab {
             view: ViewPosition::at(0),
             folds: Vec::new(),
             view_owed: false,
+            disk_stamp: None,
         }
     }
 }
@@ -2379,6 +2418,11 @@ pub struct Shell {
     /// grows past a soft-cap threshold. Entries stay valid past
     /// their deadline until pruned; a `contains_key` check
     /// alone means nothing, only the deadline value does.
+    ///
+    /// Not the only guard against a prompt for nothing: an event for
+    /// a file that still looks as its tab knows it never gets here
+    /// ([`Tab::disk_stamp`], [`Self::apply_watched_change`]). This
+    /// covers the bursts, in which the file's state is still moving.
     file_change_debounce: std::collections::HashMap<PathBuf, DebounceEntry>,
     /// Editor visual configuration persisted in `styles.xml` and
     /// edited via the Style Configurator dialog. Read at startup
@@ -4814,10 +4858,13 @@ impl Shell {
                 // Save As immediately gets Rust highlighting, and a
                 // .txt → .md gets the Markdown UDL, on the next paint.
                 let resolved_lang = Self::detect_lang(&new_path, &self.udl_registry);
+                // As in `save_current_to_disk`: the file as this save left it.
+                let written = DiskStamp::at(&new_path);
                 if let Some(tab) = self.active_mut() {
                     tab.path = Some(new_path.clone());
                     tab.text = text;
                     tab.byte_len = bytes.len() as u64;
+                    tab.disk_stamp = written;
                     tab.lang = resolved_lang;
                     // Same as `save_current_to_disk`: a save retires any
                     // reload outcome still waiting to be installed.
@@ -5389,47 +5436,7 @@ impl Shell {
                 .retain(|_, entry| now < entry.deadline);
         }
         for change in coalesce_file_changes(events) {
-            let effective = classify_change_by_existence(change, Path::try_exists);
-            let path_ref: &Path = match &effective {
-                FileChange::Modified(p) | FileChange::Removed(p) => p,
-            };
-            // Debounce: suppress the dialog if this path's
-            // deadline hasn't elapsed. Two suppression sources
-            // land here (see `file_change_debounce` field doc):
-            // own-save echoes and cross-drain duplicates of one
-            // external save. Every event that hits this path —
-            // whether suppressed or surfaced — extends the
-            // deadline. Extending on suppress too matters
-            // because atomic-rename event bursts on a slow
-            // filesystem (antivirus scanning the temp file, a
-            // laggy network drive, ...) can span longer than
-            // the initial `FILE_CHANGE_DEBOUNCE` window; without
-            // this extension, the tail of such a burst would
-            // leak a spurious dialog past the original
-            // deadline. Any single new event resets the clock.
-            let debounced = is_path_debounced(&self.file_change_debounce, path_ref, now);
-            if debounced {
-                // Suppress branch: extend the sliding deadline
-                // so the tail of a slow burst stays quiet, but
-                // do NOT re-anchor `first_set` — the MAX-window
-                // ceiling must still fire on an adversarial
-                // cadence.
-                extend_debounce_deadline(&mut self.file_change_debounce, path_ref, now);
-                tracing::debug!(
-                    path = ?path_ref,
-                    "file-watcher: event suppressed by debounce"
-                );
-                continue;
-            }
-            // Surface branch: start a fresh window (re-anchor
-            // both `first_set` and `deadline`). Covers both the
-            // "first ever event" case and the "MAX ceiling just
-            // tripped after a suppress spree" case — either
-            // way, from here we owe the user 1s of quiet before
-            // a follow-up dialog, and MAX-window from now
-            // before we can force one past the sliding gate.
-            start_fresh_debounce(&mut self.file_change_debounce, path_ref.to_path_buf(), now);
-            self.apply_file_change(effective, &mut pending);
+            self.apply_watched_change(change, now, &mut pending);
         }
         // Stage FIF events for the UI to consume after the borrow
         // ends — same pattern as plugin notifications. Per active
@@ -5711,6 +5718,20 @@ impl Shell {
         } else {
             ReloadConsent::Unconfirmed
         };
+        // The prompt recorded the file it asked about as known
+        // (`Tab::disk_stamp`), and the answer is "give me that file".
+        // Until it lands the tab knows nothing of it: a reload that is then
+        // declined, to keep text typed meanwhile, or that fails, would
+        // otherwise leave a file the user asked for and never got, and no
+        // event for it asking again. Every tab on the path, as the prompt
+        // recorded it for every one (`Self::apply_watched_change`).
+        for tab in self
+            .tabs
+            .iter_mut()
+            .filter(|t| t.path.as_deref() == Some(path.as_path()))
+        {
+            tab.disk_stamp = None;
+        }
         let id = self.tabs[idx].id;
         self.request_reload_tab(id, consent);
     }
@@ -5998,6 +6019,10 @@ impl Shell {
                 path = ?self.tabs[idx].path,
                 "reloaded file not installed over work made since it landed; keeping the work"
             );
+            // The landing took the file for the tab's (`Tab::disk_stamp`),
+            // and the tab never showed it. Forgotten, so that the file's
+            // next event asks, as after a decline at the landing.
+            self.tabs[idx].disk_stamp = None;
         }
         let installs = existing_doc == 0 || (stale && !clobbers_edits);
         if installs {
@@ -6384,7 +6409,13 @@ impl Shell {
                         shadow = tab.shadow_unsaved,
                         "load onto a tab with unsaved work and no consent to discard it; keeping the work"
                     );
+                    // `Tab::disk_stamp` stays as it was: the tab does not
+                    // take this file, so a change since the state it stands
+                    // on is still to be asked about.
                 } else {
+                    // The tab takes the file as it was read, now or when
+                    // it is next shown (`Tab::disk_stamp`).
+                    tab.disk_stamp = loaded.stamp;
                     tab.encoding.clone_from(&loaded.encoding);
                     // A file with no ending to detect takes the
                     // new-document one, as Notepad++ gives it the New
@@ -6714,6 +6745,7 @@ impl Shell {
             encoding,
             eol,
             byte_len,
+            stamp,
             ..
         } = loaded;
         let new_idx = idx + 1;
@@ -6730,6 +6762,7 @@ impl Shell {
                 pinned,
                 view,
                 folds,
+                disk_stamp: stamp,
                 ..Tab::default()
             },
         );
@@ -6976,6 +7009,118 @@ impl Shell {
             .push(Notification::FileLoadFailed);
     }
 
+    /// One change the watcher reported, after the burst it came in was
+    /// folded to one per path ([`coalesce_file_changes`]): decide whether
+    /// the user is asked about it, as of `now`.
+    ///
+    /// **Nothing is asked while the file still looks as the tab knows
+    /// it** ([`Tab::disk_stamp`]): same last-write time, same length. The
+    /// watcher reports more than changes of content. On Windows a changed
+    /// attribute or access list arrives as the same "modified" a write
+    /// does, and a file-sync client changes attributes on a file some
+    /// seconds after it was saved, once it has uploaded it. Reported from
+    /// a desktop synced by `OneDrive`: every save was followed by "reload
+    /// from disk?" for a file whose content was what Code++ had written.
+    /// Notepad++ asks only when the last-write time differs from the one
+    /// it recorded (`Buffer::checkFileState`, read from its source at
+    /// 8.9.8.1). Such an event is dropped before the debounce and leaves
+    /// it alone: it says nothing about a burst.
+    ///
+    /// **A change that is asked about is asked about once.** The stamp
+    /// seen now becomes the tab's as the prompt is queued, so events that
+    /// follow for the same state of the file ask nothing more once the
+    /// user has the file or has kept the buffer; a Yes whose reload does
+    /// not land is asked again ([`Self::confirm_reload`]). An event the
+    /// debounce suppresses
+    /// leaves the stamp alone: if the file went on changing after the
+    /// prompt, or was changed right after a save of Code++'s own, the next
+    /// event past the window finds it differing and asks.
+    ///
+    /// One look at the file answers both questions, whether it is there
+    /// and what it looks like, where there was one for the first alone.
+    fn apply_watched_change(
+        &mut self,
+        change: FileChange,
+        now: std::time::Instant,
+        pending: &mut Vec<PendingDialog>,
+    ) {
+        let mut on_disk = None;
+        // `Path::try_exists`, keeping what the lookup found.
+        let effective =
+            classify_change_by_existence(change, |path| match std::fs::metadata(path) {
+                Ok(metadata) => {
+                    on_disk = DiskStamp::of(&metadata);
+                    Ok(true)
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(false),
+                Err(e) => Err(e),
+            });
+        let path_ref: &Path = match &effective {
+            FileChange::Modified(p) | FileChange::Removed(p) => p,
+        };
+        if on_disk.is_some()
+            && self
+                .tabs
+                .iter()
+                .any(|t| t.path.as_deref() == Some(path_ref) && t.disk_stamp == on_disk)
+        {
+            tracing::debug!(
+                path = ?path_ref,
+                "file-watcher: event ignored, the file's time and length are as known"
+            );
+            return;
+        }
+        // Debounce: suppress the dialog if this path's
+        // deadline hasn't elapsed. Two suppression sources
+        // land here (see `file_change_debounce` field doc):
+        // own-save echoes and cross-drain duplicates of one
+        // external save. Every event that hits this path —
+        // whether suppressed or surfaced — extends the
+        // deadline. Extending on suppress too matters
+        // because atomic-rename event bursts on a slow
+        // filesystem (antivirus scanning the temp file, a
+        // laggy network drive, ...) can span longer than
+        // the initial `FILE_CHANGE_DEBOUNCE` window; without
+        // this extension, the tail of such a burst would
+        // leak a spurious dialog past the original
+        // deadline. Any single new event resets the clock.
+        if is_path_debounced(&self.file_change_debounce, path_ref, now) {
+            // Suppress branch: extend the sliding deadline
+            // so the tail of a slow burst stays quiet, but
+            // do NOT re-anchor `first_set` — the MAX-window
+            // ceiling must still fire on an adversarial
+            // cadence.
+            extend_debounce_deadline(&mut self.file_change_debounce, path_ref, now);
+            tracing::debug!(
+                path = ?path_ref,
+                "file-watcher: event suppressed by debounce"
+            );
+            return;
+        }
+        // Surface branch: start a fresh window (re-anchor
+        // both `first_set` and `deadline`). Covers both the
+        // "first ever event" case and the "MAX ceiling just
+        // tripped after a suppress spree" case — either
+        // way, from here we owe the user 1s of quiet before
+        // a follow-up dialog, and MAX-window from now
+        // before we can force one past the sliding gate.
+        start_fresh_debounce(&mut self.file_change_debounce, path_ref.to_path_buf(), now);
+        // What the user is about to be asked about, or told is gone, is
+        // what the tab knows from here on. A file that is gone, or whose
+        // state could not be read, leaves no stamp, so its next event asks.
+        // Every tab on the path, as the check above goes by any of them:
+        // one tab holds a file (`Self::tab_for_path`), and should two ever,
+        // neither is left holding a state the other was asked about.
+        for tab in self
+            .tabs
+            .iter_mut()
+            .filter(|t| t.path.as_deref() == Some(path_ref))
+        {
+            tab.disk_stamp = on_disk;
+        }
+        self.apply_file_change(effective, pending);
+    }
+
     fn apply_file_change(&mut self, change: FileChange, pending: &mut Vec<PendingDialog>) {
         // Path comparison is by exact equality. Windows can spell
         // the same file as a long name, an 8.3 short name, or a
@@ -7009,31 +7154,29 @@ impl Shell {
                 // save-point), but the paint cache and the close-
                 // prompt gate both consult `Tab.dirty` — flipping
                 // it here is enough to close the data-loss hazard.
-                // Single mut-borrow walk: flip `Tab.dirty` inside
-                // the `find` closure and hand the id back out for
-                // the notification push below. At most one tab holds
-                // a path (see `tab_for_path` for what keeps it so).
-                // A second tab on the file used to be possible: it
-                // went unflagged here, and closed with no prompt.
-                let matched_id = self
+                // Single mut-borrow walk: flip `Tab.dirty` on the way
+                // and hand the ids back out for the notification
+                // pushes below. At most one tab holds a path (see
+                // `tab_for_path` for what keeps it so). A second tab
+                // on the file used to be possible: it went unflagged
+                // here, and closed with no prompt. Should one ever be
+                // there again, every tab on the path is flagged, as
+                // `apply_watched_change` forgets the file for every one.
+                let matched_ids: Vec<i32> = self
                     .tabs
                     .iter_mut()
-                    .find(|t| t.path.as_deref() == Some(path.as_path()))
+                    .filter(|t| t.path.as_deref() == Some(path.as_path()))
                     .map(|tab| {
                         tab.dirty = true;
                         tab.id
-                    });
-                if let Some(id) = matched_id {
-                    {
-                        let buffer_id = id as isize;
-                        self.pending_notifications
-                            .push(Notification::FileDeleted { buffer_id });
-                    }
-                    // Suppress unused-variable warnings on
-                    // non-Windows builds. Once the GTK / Cocoa
-                    // plugin host bridges land in Phase 5, the
-                    // notification push above moves out of the
-                    // cfg gate and `id` becomes used unconditionally.
+                    })
+                    .collect();
+                for id in &matched_ids {
+                    let buffer_id = *id as isize;
+                    self.pending_notifications
+                        .push(Notification::FileDeleted { buffer_id });
+                }
+                if !matched_ids.is_empty() {
                     pending.push(PendingDialog::Error {
                         title: "File removed".to_string(),
                         message: format!(
@@ -7151,14 +7294,22 @@ impl Shell {
         );
         write_result?;
 
-        // Use the byte count of what we just encoded — re-reading from
-        // disk would race with a process that swapped the file between
-        // our `persist` and the `metadata` call (TOCTOU), and produce
-        // a status-bar size that doesn't match the bytes we just
-        // wrote. We already know the size; use it.
+        // The file as this save left it, so that a change the watcher
+        // reports later is held against it (`Tab::disk_stamp`). Looked up
+        // by path once the write's handle is closed. Another program
+        // replacing the file between the write and this look would have its
+        // stamp recorded and its change not asked about; the debounce above
+        // already drops a change that close to a save.
+        let written = DiskStamp::at(&path);
         if let Some(tab) = self.active_mut() {
             tab.text = text;
+            // Use the byte count of what we just encoded — re-reading from
+            // disk would race with a process that swapped the file between
+            // our `persist` and the `metadata` call (TOCTOU), and produce
+            // a status-bar size that doesn't match the bytes we just
+            // wrote. We already know the size; use it.
             tab.byte_len = bytes.len() as u64;
+            tab.disk_stamp = written;
             // The document just became what is on disk, and the shadow
             // now equals it — so a reload that landed on this tab in the
             // background and was waiting to be installed is superseded.
@@ -9350,6 +9501,7 @@ impl Shell {
             view,
             folds: kept_folds(folds),
             view_owed: true,
+            disk_stamp: None,
         });
         self.active_tab = Some(new_idx);
         // Bind a fresh Scintilla document; matches `new_untitled`'s
@@ -9496,6 +9648,15 @@ impl Shell {
             view,
             folds: kept_folds(folds),
             view_owed: true,
+            // None: the text is the backup's, not the file's, and nothing
+            // records what the file looked like when the backup was made.
+            // The caller's `disk_changed_externally` sees only a file
+            // newer than the backup, so one put back with an older time
+            // meanwhile is not noticed there. Taking the file as it is
+            // now for known would make every later event for it ask
+            // nothing; with no stamp its next event asks, once
+            // (`Tab::disk_stamp`).
+            disk_stamp: None,
         });
         self.active_tab = Some(new_idx);
         let (new_doc, _) = self.bind_view(ui, new_idx, 0);
@@ -9543,6 +9704,13 @@ impl Shell {
             );
             self.deferred_dialogs
                 .push(PendingDialog::ConfirmReload(path.clone()));
+            // The file as the user is about to be asked about it, as
+            // the watcher's prompt records it (`Tab::disk_stamp`): an
+            // event for this same state of the file does not ask a
+            // second time. A Yes forgets it again.
+            if let Some(tab) = self.tabs.get_mut(new_idx) {
+                tab.disk_stamp = DiskStamp::at(&path);
+            }
         }
         // Independent: did the *backup file itself* get edited?
         // Even if `disk_changed_externally` already prompted, the
@@ -21365,7 +21533,7 @@ mod tests {
         // A holds an edit when the Yes arrives, so the Yes is consent...
         ui.doc_dirty.insert(doc_a, true);
         std::fs::write(&a, "A v1 (external)\n").unwrap();
-        shell.confirm_reload(&mut ui, a);
+        shell.confirm_reload(&mut ui, a.clone());
         assert!(shell.tabs[0].reload_confirmed, "precondition: consent");
         // ...but the edit is undone back to the save point before the
         // load lands, so the landing finds a clean document.
@@ -21389,9 +21557,17 @@ mod tests {
         // keeps it.
         ui.replace_doc_text(doc_a, "A v0\nafter the landing\n");
         ui.doc_dirty.insert(doc_a, true);
+        assert_eq!(
+            shell.tabs[0].disk_stamp,
+            DiskStamp::at(&a),
+            "precondition: the landing took the file for the tab's"
+        );
         assert!(shell.switch_to_tab(0));
         shell.bind_active_view(&mut ui);
         assert_eq!(ui.get_buffer_text(), "A v0\nafter the landing\n");
+        // The tab never showed the file that landed, so it does not count
+        // as known: the file's next event asks (`Tab::disk_stamp`).
+        assert_eq!(shell.tabs[0].disk_stamp, None);
     }
 
     /// A load that lands on a **background** tab which already owns a
@@ -22557,6 +22733,7 @@ mod tests {
             encoding: Encoding::Utf8,
             eol: Some(Eol::Lf),
             byte_len: text.len() as u64,
+            stamp: None,
         }
     }
 
@@ -23059,6 +23236,7 @@ mod tests {
                 encoding: Encoding::Utf8,
                 eol: Some(Eol::Lf),
                 byte_len: 0,
+                stamp: None,
             };
             shell.apply_load_result(ui, Ok(loaded), &mut Vec::new());
         }
@@ -23609,6 +23787,7 @@ mod tests {
             encoding: Encoding::Utf8,
             eol: Some(Eol::Lf),
             byte_len: 2,
+            stamp: None,
         };
         let mut pending = Vec::new();
 
@@ -23697,6 +23876,7 @@ mod tests {
             encoding: Encoding::Utf8,
             eol: Some(Eol::Lf),
             byte_len: 2,
+            stamp: None,
         };
 
         shell.apply_load_result(&mut ui, Ok(loaded), &mut Vec::new());
@@ -23730,6 +23910,7 @@ mod tests {
             encoding: Encoding::Utf8,
             eol: Some(Eol::Lf),
             byte_len: 2,
+            stamp: None,
         };
         let mut pending = Vec::new();
 
@@ -23870,6 +24051,7 @@ mod tests {
             encoding: Encoding::Utf8,
             eol: Some(Eol::Lf),
             byte_len: 2,
+            stamp: None,
         };
         shell.apply_load_result(&mut ui, Ok(loaded), &mut pending);
         assert_eq!(
@@ -26248,6 +26430,445 @@ mod tests {
         for (i, tab) in shell.tabs.iter().enumerate() {
             assert!(!tab.dirty, "tab {i} must stay clean on a stray Removed");
         }
+    }
+
+    /// A watcher event for `path`, as [`Shell::apply_watched_change`] gets
+    /// one from the drain, `secs` seconds from now: far enough apart, the
+    /// debounce plays no part. Returns what the user would be shown.
+    fn watched_change(shell: &mut Shell, path: &Path, secs: u64) -> Vec<PendingDialog> {
+        let mut pending = Vec::new();
+        shell.apply_watched_change(
+            FileChange::Modified(path.to_path_buf()),
+            Instant::now() + Duration::from_secs(secs),
+            &mut pending,
+        );
+        pending
+    }
+
+    /// Change something about `path` that is not its content: read-only
+    /// on and off again. On Windows the watcher reports that as the same
+    /// "modified" a write is, which is what a file-sync client's changes
+    /// to a file it has uploaded arrive as.
+    fn touch_metadata(path: &Path) {
+        let mut permissions = std::fs::metadata(path).unwrap().permissions();
+        permissions.set_readonly(true);
+        std::fs::set_permissions(path, permissions.clone()).unwrap();
+        #[allow(clippy::permissions_set_readonly_false)]
+        permissions.set_readonly(false);
+        std::fs::set_permissions(path, permissions).unwrap();
+    }
+
+    fn asks_to_reload(pending: &[PendingDialog], path: &Path) -> bool {
+        matches!(pending, [PendingDialog::ConfirmReload(p)] if p == path)
+    }
+
+    /// The report this is for: a file saved to a folder a sync client
+    /// watches got "reload from disk?" a few seconds later, when the client
+    /// changed the file's attributes. A change that leaves the file's time
+    /// and length alone asks nothing; a change of its content asks, once.
+    #[test]
+    fn a_change_that_leaves_the_files_content_alone_asks_nothing() {
+        let (mut shell, mut ui, _dir) = shell_with_a_loaded_file("one\n");
+        let path = shell.tabs[0].path.clone().unwrap();
+        let loaded = shell.tabs[0].disk_stamp;
+        assert!(loaded.is_some(), "precondition: the load recorded the file");
+        assert_eq!(loaded, DiskStamp::at(&path));
+
+        touch_metadata(&path);
+        assert!(watched_change(&mut shell, &path, 0).is_empty());
+        assert!(
+            !shell.file_change_debounce.contains_key(&path),
+            "an event that says nothing new starts no quiet period"
+        );
+        assert_eq!(shell.tabs[0].disk_stamp, loaded);
+
+        // The content changes: asked about, and the tab knows the file as
+        // it was asked about.
+        std::fs::write(&path, "one\ntwo\n").unwrap();
+        let pending = watched_change(&mut shell, &path, 10);
+        assert!(asks_to_reload(&pending, &path), "got {pending:?}");
+        assert_ne!(shell.tabs[0].disk_stamp, loaded);
+        assert_eq!(shell.tabs[0].disk_stamp, DiskStamp::at(&path));
+
+        // "Keep mine": nothing reloads. Events that follow for the same
+        // state of the file ask nothing more, a metadata change included.
+        assert!(watched_change(&mut shell, &path, 20).is_empty());
+        touch_metadata(&path);
+        assert!(watched_change(&mut shell, &path, 30).is_empty());
+
+        // A rewrite of the same length is seen by its time.
+        let stamp = DiskStamp::at(&path).unwrap();
+        let file = std::fs::OpenOptions::new().write(true).open(&path).unwrap();
+        file.set_modified(stamp.modified + Duration::from_secs(5))
+            .unwrap();
+        drop(file);
+        let pending = watched_change(&mut shell, &path, 40);
+        assert!(asks_to_reload(&pending, &path), "got {pending:?}");
+
+        // A Yes reloads, and the landing records the file as it was read.
+        shell.confirm_reload(&mut ui, path.clone());
+        drain_until_loads_settle(&mut shell, &mut ui);
+        assert_eq!(shell.tabs[0].disk_stamp, DiskStamp::at(&path));
+        touch_metadata(&path);
+        assert!(watched_change(&mut shell, &path, 50).is_empty());
+    }
+
+    /// The other half of the report: the file in question was one Code++
+    /// had just saved. A save records the file as it left it, so an event
+    /// long after the save's own quiet period asks nothing.
+    #[test]
+    fn a_file_code_plus_plus_saved_is_not_asked_about() {
+        let (mut shell, mut ui, dir) = shell_with_a_loaded_file("one\n");
+        let path = shell.tabs[0].path.clone().unwrap();
+        let loaded = shell.tabs[0].disk_stamp;
+
+        ui.buffer_text = "one\nand more\n".into();
+        shell.save_current_to_disk(&mut ui).unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), b"one\nand more\n");
+        assert_ne!(shell.tabs[0].disk_stamp, loaded);
+        assert_eq!(shell.tabs[0].disk_stamp, DiskStamp::at(&path));
+        touch_metadata(&path);
+        assert!(watched_change(&mut shell, &path, 10).is_empty());
+        // A change of the saved file's content still asks.
+        std::fs::write(&path, "someone else's\n").unwrap();
+        let pending = watched_change(&mut shell, &path, 15);
+        assert!(asks_to_reload(&pending, &path), "got {pending:?}");
+
+        // Save As: the tab knows the new file, and the old one is no
+        // longer its concern.
+        let copy = dir.path().join("saved-as.txt");
+        shell.save_buffer_as(&mut ui, copy.clone()).unwrap();
+        assert_eq!(shell.tabs[0].disk_stamp, DiskStamp::at(&copy));
+        touch_metadata(&copy);
+        assert!(watched_change(&mut shell, &copy, 20).is_empty());
+
+        // And a change of that file's content asks too.
+        std::fs::write(&copy, "someone else's, again\n").unwrap();
+        let pending = watched_change(&mut shell, &copy, 30);
+        assert!(asks_to_reload(&pending, &copy), "got {pending:?}");
+    }
+
+    /// An event the debounce suppresses leaves what the tab knows alone,
+    /// so a change of content that fell into a quiet period is asked about
+    /// at the next event past it, where it used to be dropped for good.
+    #[test]
+    fn a_change_the_debounce_suppressed_is_asked_about_at_the_next_event() {
+        let (mut shell, _ui, _dir) = shell_with_a_loaded_file("one\n");
+        let path = shell.tabs[0].path.clone().unwrap();
+        let loaded = shell.tabs[0].disk_stamp;
+        let t0 = Instant::now();
+        start_fresh_debounce(&mut shell.file_change_debounce, path.clone(), t0);
+
+        std::fs::write(&path, "one\ntwo\n").unwrap();
+        let mut pending = Vec::new();
+        shell.apply_watched_change(
+            FileChange::Modified(path.clone()),
+            t0 + Duration::from_millis(100),
+            &mut pending,
+        );
+        assert!(
+            pending.is_empty(),
+            "precondition: suppressed; got {pending:?}"
+        );
+        assert_eq!(shell.tabs[0].disk_stamp, loaded);
+
+        // Past the quiet period, an event that is itself about nothing.
+        touch_metadata(&path);
+        shell.apply_watched_change(
+            FileChange::Modified(path.clone()),
+            t0 + Duration::from_secs(10),
+            &mut pending,
+        );
+        assert!(asks_to_reload(&pending, &path), "got {pending:?}");
+    }
+
+    /// A file that is gone leaves the tab knowing nothing of it, so the
+    /// file coming back is asked about even when it comes back looking as
+    /// it did: same length, same time.
+    #[test]
+    fn a_file_that_came_back_is_asked_about() {
+        let (mut shell, _ui, _dir) = shell_with_a_loaded_file("one\n");
+        let path = shell.tabs[0].path.clone().unwrap();
+        let loaded = shell.tabs[0].disk_stamp.unwrap();
+
+        std::fs::remove_file(&path).unwrap();
+        let pending = watched_change(&mut shell, &path, 0);
+        assert!(
+            matches!(pending.as_slice(), [PendingDialog::Error { title, .. }] if title == "File removed"),
+            "got {pending:?}"
+        );
+        assert_eq!(shell.tabs[0].disk_stamp, None);
+
+        std::fs::write(&path, "two\n").unwrap();
+        let file = std::fs::OpenOptions::new().write(true).open(&path).unwrap();
+        file.set_modified(loaded.modified).unwrap();
+        drop(file);
+        assert_eq!(
+            DiskStamp::at(&path),
+            Some(loaded),
+            "precondition: the file looks as it did"
+        );
+        let pending = watched_change(&mut shell, &path, 10);
+        assert!(asks_to_reload(&pending, &path), "got {pending:?}");
+    }
+
+    /// A file is held against what its own tab knows, not against what
+    /// any tab knows: a file changed to look exactly as another open file
+    /// does, to the length and the time, is asked about.
+    #[test]
+    fn a_file_is_held_against_its_own_tab() {
+        // Each file holds its own name, so the two differ in length, and
+        // their stamps with it whatever the file system's clock gave them:
+        // written back to back, two files can get one time.
+        let (mut shell, _ui, _dir, paths) = open_settled(&["a.txt", "bb.txt"]);
+        let (a, b) = (&paths[0], &paths[1]);
+        let b_stamp = shell.tabs[1].disk_stamp.unwrap();
+
+        std::fs::write(a, "A.TXT!").unwrap();
+        let file = std::fs::OpenOptions::new().write(true).open(a).unwrap();
+        file.set_modified(b_stamp.modified).unwrap();
+        drop(file);
+        assert_eq!(
+            DiskStamp::at(a),
+            Some(b_stamp),
+            "precondition: a.txt now looks as b.txt does"
+        );
+        assert_ne!(shell.tabs[0].disk_stamp, Some(b_stamp));
+        let pending = watched_change(&mut shell, a, 0);
+        assert!(asks_to_reload(&pending, a), "got {pending:?}");
+        assert!(watched_change(&mut shell, b, 10).is_empty());
+    }
+
+    /// Stop the real watcher's events for `path`, so that a test which
+    /// changes the file and then drains decides by its own events alone:
+    /// a real one landing in that drain, before or after the load, would
+    /// ask or record on its own account. A landing watches the file
+    /// again, so this is called before each change a drain follows.
+    fn unwatched(shell: &mut Shell, path: &Path) {
+        shell
+            .file_watcher
+            .unwatch(path)
+            .expect("the file was watched");
+    }
+
+    /// Let the loads settle, and say whether an event of the real
+    /// watcher's asked about `path` meanwhile. [`unwatched`] stops the
+    /// events of a change the test makes, but a watcher can still deliver
+    /// one from before, late. One that asks has done what the test's own
+    /// event was about to show, and has recorded the file, so the caller
+    /// has nothing left to check.
+    fn settle_loads_and_see_whether_asked(shell: &mut Shell, ui: &mut FakeUi, path: &Path) -> bool {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let mut shown = Vec::new();
+        loop {
+            shown.extend(drain_checked(shell, ui));
+            if shell.tabs.iter().all(|t| t.pending_load.is_none()) {
+                break;
+            }
+            assert!(Instant::now() < deadline, "the loads did not settle");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        shown
+            .iter()
+            .any(|d| matches!(d, PendingDialog::ConfirmReload(p) if p == path))
+    }
+
+    /// A reload declined to keep unsaved work leaves what the tab knows of
+    /// its file as it was. The tab does not take the file the load read,
+    /// so a change of it is still news: recorded as known, no event for it
+    /// would ask, and the next save would overwrite it unasked.
+    #[test]
+    fn a_declined_reload_leaves_the_file_to_be_asked_about() {
+        let (mut shell, mut ui, _dir) = shell_with_a_loaded_file("one\n");
+        let path = shell.tabs[0].path.clone().unwrap();
+        let loaded = shell.tabs[0].disk_stamp;
+        assert!(loaded.is_some());
+        ui.dirty = true;
+        let texts = ui.set_text_calls.len();
+
+        // Of the file as it was: nothing changes, and nothing is news.
+        unwatched(&mut shell, &path);
+        shell.request_reload(path.clone(), ReloadConsent::Unconfirmed);
+        drain_until_loads_settle(&mut shell, &mut ui);
+        assert_eq!(shell.tabs[0].disk_stamp, loaded);
+        assert!(watched_change(&mut shell, &path, 0).is_empty());
+
+        // Of a file changed since: the tab still stands on the old one.
+        unwatched(&mut shell, &path);
+        std::fs::write(&path, "changed on disk\n").unwrap();
+        shell.request_reload(path.clone(), ReloadConsent::Unconfirmed);
+        let asked = settle_loads_and_see_whether_asked(&mut shell, &mut ui, &path);
+        assert_eq!(
+            ui.set_text_calls.len(),
+            texts,
+            "precondition: both reloads were declined"
+        );
+        if !asked {
+            assert_eq!(shell.tabs[0].disk_stamp, loaded);
+            let pending = watched_change(&mut shell, &path, 10);
+            assert!(asks_to_reload(&pending, &path), "got {pending:?}");
+        }
+    }
+
+    /// A Yes to the prompt asks for the file. When the reload is then
+    /// declined, to keep text typed before it landed, the user has the
+    /// file neither in the buffer nor on record as refused, so the file's
+    /// next event asks again.
+    #[test]
+    fn a_yes_whose_reload_does_not_land_is_asked_about_again() {
+        let (mut shell, mut ui, _dir) = shell_with_a_loaded_file("one\n");
+        let path = shell.tabs[0].path.clone().unwrap();
+        unwatched(&mut shell, &path);
+        std::fs::write(&path, "changed on disk\n").unwrap();
+        let pending = watched_change(&mut shell, &path, 0);
+        assert!(asks_to_reload(&pending, &path), "got {pending:?}");
+        assert_eq!(shell.tabs[0].disk_stamp, DiskStamp::at(&path));
+
+        // Yes, over a buffer with nothing unsaved, and then typing.
+        let texts = ui.set_text_calls.len();
+        shell.confirm_reload(&mut ui, path.clone());
+        assert_eq!(shell.tabs[0].disk_stamp, None);
+        ui.dirty = true;
+        let asked = settle_loads_and_see_whether_asked(&mut shell, &mut ui, &path);
+        assert_eq!(
+            ui.set_text_calls.len(),
+            texts,
+            "precondition: the reload was declined"
+        );
+        if !asked {
+            assert_eq!(shell.tabs[0].disk_stamp, None);
+            let pending = watched_change(&mut shell, &path, 10);
+            assert!(asks_to_reload(&pending, &path), "got {pending:?}");
+        }
+        assert_eq!(shell.tabs[0].disk_stamp, DiskStamp::at(&path));
+    }
+
+    /// A buffer restored from its recovery backup does not know its file:
+    /// its text is the backup's, and nothing records what the file looked
+    /// like when the backup was made. So the file's first event asks, and
+    /// only that one.
+    #[test]
+    fn a_restored_buffer_is_asked_about_its_file_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("recovered.txt");
+        std::fs::write(&path, "on disk\n").unwrap();
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+        restore_dirty(&mut shell, &mut ui, &path, "recovered, unsaved\n");
+        assert_eq!(shell.tabs[0].disk_stamp, None);
+
+        touch_metadata(&path);
+        let pending = watched_change(&mut shell, &path, 0);
+        assert!(asks_to_reload(&pending, &path), "got {pending:?}");
+        assert_eq!(shell.tabs[0].disk_stamp, DiskStamp::at(&path));
+        touch_metadata(&path);
+        assert!(watched_change(&mut shell, &path, 10).is_empty());
+    }
+
+    /// A restored buffer whose file is newer than its backup is asked
+    /// about the file at the restore. That question records the file as
+    /// the watcher's does, so an event for the same state of it does not
+    /// ask a second time, and a change of it after that does.
+    #[test]
+    fn a_restored_buffer_asked_at_the_restore_is_not_asked_again() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("newer.txt");
+        std::fs::write(&path, "newer on disk\n").unwrap();
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+        shell.restore_dirty_with_text(
+            &mut ui,
+            path.clone(),
+            "recovered, unsaved\n".into(),
+            ViewPosition::at(0),
+            Vec::new(),
+            Encoding::Utf8,
+            Eol::Lf,
+            true, // the file is newer than the backup
+            false,
+            None,
+            false,
+        );
+        assert!(shell.tabs[0].disk_stamp.is_some());
+        assert_eq!(shell.tabs[0].disk_stamp, DiskStamp::at(&path));
+        let asked = shell
+            .deferred_dialogs
+            .iter()
+            .filter(|d| matches!(d, PendingDialog::ConfirmReload(p) if p == &path))
+            .count();
+        assert_eq!(asked, 1, "precondition: the restore asks about the file");
+
+        touch_metadata(&path);
+        assert!(watched_change(&mut shell, &path, 0).is_empty());
+        std::fs::write(&path, "changed again\n").unwrap();
+        let pending = watched_change(&mut shell, &path, 10);
+        assert!(asks_to_reload(&pending, &path), "got {pending:?}");
+    }
+
+    /// Should two tabs ever hold one file, both are asked about a change
+    /// at once: the check goes by any tab on the path, so a tab left with
+    /// the old state would never be asked while the other knew the new.
+    #[test]
+    fn a_change_asked_about_is_known_to_every_tab_on_the_file() {
+        let (mut shell, mut ui, _dir, paths) = open_settled(&["a.txt", "bb.txt"]);
+        let a = paths[0].clone();
+        // By hand: one tab holds a file (`Shell::tab_for_path`).
+        shell.tabs[1].path = Some(a.clone());
+        shell.tabs[1].disk_stamp = shell.tabs[0].disk_stamp;
+
+        std::fs::write(&a, "a.txt, changed").unwrap();
+        let pending = watched_change(&mut shell, &a, 0);
+        assert!(asks_to_reload(&pending, &a), "got {pending:?}");
+        assert_eq!(shell.tabs[0].disk_stamp, DiskStamp::at(&a));
+        assert_eq!(shell.tabs[1].disk_stamp, DiskStamp::at(&a));
+
+        // A Yes forgets it for both, as the prompt recorded it for both.
+        shell.confirm_reload(&mut ui, a.clone());
+        assert_eq!(shell.tabs[0].disk_stamp, None);
+        assert_eq!(shell.tabs[1].disk_stamp, None);
+
+        // And a file that is gone is gone for both: each is flagged, so
+        // that neither closes without asking.
+        shell.tabs[0].disk_stamp = DiskStamp::at(&a);
+        shell.tabs[1].disk_stamp = DiskStamp::at(&a);
+        std::fs::remove_file(&a).unwrap();
+        let pending = watched_change(&mut shell, &a, 10);
+        assert!(
+            matches!(pending.as_slice(), [PendingDialog::Error { title, .. }] if title == "File removed"),
+            "got {pending:?}"
+        );
+        assert_eq!(shell.tabs[0].disk_stamp, None);
+        assert_eq!(shell.tabs[1].disk_stamp, None);
+        assert!(shell.tabs[0].dirty && shell.tabs[1].dirty);
+    }
+
+    /// A file that lands beside the work typed into its tab
+    /// (`divert_first_load`) is known to the tab it gets, and the work it
+    /// left behind, an untitled buffer, has no file to know.
+    #[test]
+    fn a_diverted_file_is_known_to_its_own_tab() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("late.txt");
+        std::fs::write(&path, "late file\n").unwrap();
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+        shell.new_untitled(&mut ui);
+        let scratch_doc = shell.tabs[0].scintilla_doc;
+        shell.open_file_replacing_scratch(path.clone(), true);
+        ui.buffer_text = "typed\n".into();
+        ui.doc_dirty.insert(scratch_doc, true);
+        drain_until_loads_settle(&mut shell, &mut ui);
+        assert_eq!(
+            shell.tabs.len(),
+            2,
+            "precondition: the file opened beside the work"
+        );
+        assert_eq!(shell.tabs[0].disk_stamp, None);
+        assert!(shell.tabs[1].disk_stamp.is_some());
+        assert_eq!(shell.tabs[1].disk_stamp, DiskStamp::at(&path));
     }
 
     #[test]
