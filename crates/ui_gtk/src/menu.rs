@@ -3116,6 +3116,59 @@ pub(crate) fn on_close() {
     close_active_tab();
 }
 
+/// Make the save a plugin asked for with an `NPPM_SAVE*` message
+/// ([`codepp_plugin_host::plugin_save`]) and answer the message: 1 when
+/// the buffer was written, 0 when it was not.
+///
+/// The save is the announced one, so the plugins hear
+/// `NPPN_FILEBEFORESAVE` before the buffer is read and `NPPN_FILESAVED`
+/// once it is written, both before the plugin's `SendMessage` returns, as
+/// in Notepad++ (measured, 8.9.8.1; DESIGN.md §7.4). That is why it is
+/// made here and not by the dispatcher: a dispatch holds the state for
+/// the whole of it, and the handlers call back into the host.
+///
+/// `NPPM_SAVEFILE` saves its buffer where it is, behind another tab too,
+/// and `NPPM_SAVEALLFILES` is this backend's Save All, which answers 1
+/// whatever was saved, as the dispatcher's does. A message sent where the
+/// state cannot be had is declined with 0, as every `NPPM_*` is there.
+///
+/// The delivery of what the save queued is counted with the save's other
+/// deliveries ([`codepp_shell::deliver_after_save`]): a plugin that saves
+/// from every notification it hears stops being told eight saves down.
+pub(crate) fn answer_plugin_save(save: &codepp_plugin_host::PluginSave) -> isize {
+    let Some(request) = with_state(|st| st.shell.plugin_save_request(save)) else {
+        return 0;
+    };
+    let saved = match (save, request) {
+        (codepp_plugin_host::PluginSave::All, _) => {
+            for (buffer_id, error) in save_all_announced() {
+                tracing::warn!(
+                    buffer_id,
+                    ?error,
+                    "a plugin's Save All: a buffer was not saved"
+                );
+            }
+            true
+        }
+        (_, Some(request)) => match save_announced(&request) {
+            Some(Ok(())) => true,
+            Some(Err(error)) => {
+                tracing::warn!(?error, "a plugin's save was not made");
+                false
+            }
+            None => false,
+        },
+        (_, None) => false,
+    };
+    // The saved tab's glyph and, after a Save As, its name.
+    refresh_tab_chrome();
+    codepp_shell::deliver_after_save(crate::deliver_queued);
+    // A dialog a handler queued, where the save queued nothing for the
+    // delivery to present it after: a save that failed, say.
+    crate::present_deferred_dialogs();
+    isize::from(saved)
+}
+
 /// File → Save All: each buffer [`codepp_shell::Shell::save_all_targets`]
 /// lists, through [`save_announced`], with what its save queued delivered
 /// before the next begins. So the plugins hear `NPPN_FILEBEFORESAVE` and

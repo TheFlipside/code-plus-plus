@@ -1800,6 +1800,58 @@ mod gesture_delivery_guard {
         );
     }
 
+    /// A plugin's `NPPM_SAVE*` message is answered before the dispatch
+    /// takes the state, by `answer_plugin_save`: the save tells the plugins
+    /// before it reads the buffer, and their handlers send messages that
+    /// need the state. Handed to the dispatcher, the save is made inside
+    /// its borrow and both notifications wait on the queue until after the
+    /// write.
+    ///
+    /// `answer_plugin_save` is pinned whole: it declines where the state
+    /// cannot be had, makes the save through `save_announced` or the Save
+    /// All loop, and delivers what the save queued, counted, before it
+    /// answers. And the queue's delivery marks itself as one delivery for
+    /// the whole batch, which is what counts the handlers' saves together.
+    #[test]
+    fn a_plugins_save_is_made_before_the_dispatch_and_announced() {
+        let squash = |s: &str| s.split_whitespace().collect::<String>();
+        let plugin = source(include_str!("plugin.rs"));
+        assert!(
+            squash(&fn_body(&plugin, "dispatch_nppm")).starts_with(
+                "{ifletSome(message)=unsafe{codepp_plugin_host::plugin_save(msg,wparam,lparam)}{\
+                  returncrate::menu::answer_plugin_save(message.save());}letrouted=with_state(|st|{"
+            ),
+            "`dispatch_nppm` no longer asks for a plugin's save before it takes the state"
+        );
+        let menu = source(include_str!("menu.rs"));
+        assert_eq!(
+            squash(&fn_body(&menu, "answer_plugin_save")),
+            "{letSome(request)=with_state(|st|st.shell.plugin_save_request(save))else{return0;};\
+             letsaved=match(save,request){\
+             (codepp_plugin_host::PluginSave::All,_)=>{\
+             for(buffer_id,error)insave_all_announced(){\
+             tracing::warn!(buffer_id,?error,);}true}\
+             (_,Some(request))=>matchsave_announced(&request){\
+             Some(Ok(()))=>true,\
+             Some(Err(error))=>{tracing::warn!(?error,);false}\
+             None=>false,},\
+             (_,None)=>false,};\
+             refresh_tab_chrome();\
+             codepp_shell::deliver_after_save(crate::deliver_queued);\
+             crate::present_deferred_dialogs();\
+             isize::from(saved)}",
+            "`answer_plugin_save` no longer makes the announced save and delivers what it queued"
+        );
+        assert!(
+            squash(&fn_body(&plugin, "deliver_notifications")).ends_with(
+                "{let_delivery=codepp_shell::QueueDeliveryUnderWay::enter();\
+                  fornotein&notes{targets.deliver(note,npp_sentinel());}}\
+                  crate::present_deferred_dialogs();}"
+            ),
+            "the queue is no longer delivered as one delivery for the whole batch"
+        );
+    }
+
     /// Every save a command makes goes through the announced save. A
     /// direct `save_current_to_disk`, `save_buffer_as` or `save_all` would
     /// be the save that tells the plugins after its write.

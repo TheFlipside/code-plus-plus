@@ -553,12 +553,28 @@ typedef struct sessionInfo_ {
  *     FALSE if the save was refused or failed: an untitled buffer, a
  *     file still loading, a write error. Notepad++ documents FALSE for
  *     a file that does not need saving as well; Code++ writes a buffer
- *     with no unsaved changes too, and answers TRUE. */
+ *     with no unsaved changes too, and answers TRUE.
+ *     The save is made before the message returns, and both of its
+ *     notifications arrive inside the call: NPPN_FILEBEFORESAVE before
+ *     the buffer is read, NPPN_FILESAVED once the file is written. So
+ *     a plugin's beNotified is entered while its own SendMessage is
+ *     still on the stack, as in Notepad++. A plugin that saves from
+ *     those handlers needs a guard of its own there; the host stops
+ *     announcing eight saves deep, and refuses a buffer's 17th save
+ *     from inside one delivery of notifications (FALSE).
+ *     Sent from a messageProc while another plugin's NPPM_MSGTOPLUGIN
+ *     is being answered, this and the three other save messages
+ *     answer FALSE and save nothing: save once that message has
+ *     returned. */
 #define NPPM_SAVECURRENTFILE              (NPPMSG + 38)
-/* v2: save every dirty titled buffer in one batch. Untitled tabs
- *     (no on-disk path) are skipped; per-tab errors are logged but
- *     don't abort the batch. Returns 1 unconditionally — per-file
- *     failures surface via the live error UI, not the ABI return. */
+/* v2: save every buffer that has a file, in tab order, before the
+ *     message returns. Each is announced as NPPM_SAVECURRENTFILE's is,
+ *     one buffer's NPPN_FILESAVED before the next buffer's
+ *     NPPN_FILEBEFORESAVE, and none is brought to the front for it.
+ *     Untitled buffers are skipped; a buffer that fails is logged and
+ *     the rest are saved. Returns 1 whatever was saved, and 0 only
+ *     where the message is declined (NPPM_SAVECURRENTFILE). Notepad++ saves
+ *     only the buffers with unsaved changes (read from its source). */
 #define NPPM_SAVEALLFILES                 (NPPMSG + 39)
 
 #define NPPM_SETMENUITEMCHECK             (NPPMSG + 40)
@@ -839,7 +855,11 @@ typedef struct CommunicationInfo_ {
  *             path and subsequent saves write there.
  *     lParam: TCHAR* destination path.
  *     Returns: 1 on success, 0 on I/O / encoding failure or when
- *             there is no active buffer. */
+ *             there is no active buffer.
+ *     With FALSE the save is made and announced before the message
+ *     returns, as NPPM_SAVECURRENTFILE's is; at NPPN_FILEBEFORESAVE
+ *     the buffer still answers its old path. A copy is not announced,
+ *     unless it is onto the buffer's own path, which saves in place. */
 #define NPPM_SAVECURRENTFILEAS            (NPPMSG + 78)
 #define NPPM_GETCURRENTNATIVELANGENCODING (NPPMSG + 79)
 /* v3: BOOL — `TRUE` when the host supports
@@ -911,11 +931,13 @@ typedef struct CommunicationInfo_ {
 /* v3: toggle the Scintilla view's `WS_EX_CLIENTEDGE` border.
  *     wParam: BOOL. Returns previous state. */
 #define NPPM_SETEDITORBORDEREDGE          (NPPMSG + 93)
-/* v3: save the buffer matching `lParam` (TCHAR* path) to disk.
- *     Returns 1 on success, 0 on bad args / unknown path / write
- *     failure. **Phase 4 limitation:** Code++ saves only the
- *     ACTIVE tab through this path; cross-tab save needs
- *     doc-pointer-swap UI cooperation tracked in DESIGN.md §7.4. */
+/* v3: save the open buffer whose file `lParam` (TCHAR* path) names,
+ *     wherever it is in the tab order. Returns 1 on success, 0 on bad
+ *     args / a path no buffer has / write failure.
+ *     The save is made and announced before the message returns, as
+ *     NPPM_SAVECURRENTFILE's is. A buffer behind another is not
+ *     brought to the front: in the handlers nmhdr.idFrom is the saved
+ *     buffer and the current buffer is still the one in front. */
 #define NPPM_SAVEFILE                     (NPPMSG + 94)
 /* v3: tell the host to suppress auto-update prompts.
  *     wParam / lParam: unused. Code++ has no auto-update; the
@@ -1318,8 +1340,10 @@ typedef enum LangType_ {
  *     a Save As the buffer still answers its old path. A save the host
  *     refuses is not announced.
  *     A save a plugin asks for (NPPM_SAVECURRENTFILE,
- *     NPPM_SAVECURRENTFILEAS, NPPM_SAVEFILE, NPPM_SAVEALLFILES) still
- *     sends it after the write. */
+ *     NPPM_SAVECURRENTFILEAS, NPPM_SAVEFILE, NPPM_SAVEALLFILES) sends
+ *     it the same way, from inside the plugin's SendMessage.
+ *     Sent after the write instead: for a save made more than eight
+ *     deep in other saves' handlers. */
 #define NPPN_FILEBEFORESAVE        (NPPN_FIRST + 7)
 /* v1: a file was saved. */
 #define NPPN_FILESAVED             (NPPN_FIRST + 8)

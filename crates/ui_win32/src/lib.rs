@@ -4719,6 +4719,10 @@ unsafe fn deliver_queued_notifications(hwnd: HWND) {
     if notifications.is_empty() || targets.is_empty() {
         return;
     }
+    // One delivery, for the whole batch: a handler that saves is saving
+    // from inside it, and its saves are counted together
+    // (`QueueDeliveryUnderWay`).
+    let _delivery = codepp_shell::QueueDeliveryUnderWay::enter();
     for notification in &notifications {
         targets.deliver(notification, hwnd.0);
     }
@@ -4728,9 +4732,10 @@ unsafe fn deliver_queued_notifications(hwnd: HWND) {
 /// ([`codepp_shell::AnnouncedSave`]), so the plugins hear
 /// `NPPN_FILEBEFORESAVE` before the buffer is read: check the save under
 /// one borrow, deliver with none, write under another. `None` when the
-/// window's state cannot be reached; the save's own error otherwise,
-/// [`codepp_shell::ShellError::NoActivePath`] for an untitled buffer
-/// among them.
+/// window's state cannot be reached, or is held by an `NPPM_*` dispatch
+/// under way on the thread ([`NppmDispatchUnderWay`]); the save's own
+/// error otherwise, [`codepp_shell::ShellError::NoActivePath`] for an
+/// untitled buffer among them.
 ///
 /// The delivery runs with **no `WindowState` borrow held and no
 /// `PluginCallGuard` armed**, as [`fire_queued_notifications`] does and
@@ -4751,6 +4756,13 @@ unsafe fn save_announced(
     hwnd: HWND,
     request: &codepp_shell::SaveRequest,
 ) -> Option<std::result::Result<(), codepp_shell::ShellError>> {
+    // Not from code an `NPPM_*` dispatch is running: the dispatch holds
+    // the state this would take again, and every plugin's handlers would
+    // run under it. Out of reach, as inside a guarded call.
+    if NppmDispatchUnderWay::active() {
+        tracing::warn!("a save asked for from inside an NPPM dispatch is not made");
+        return None;
+    }
     // A host-internal panic in either half of the save must not unwind
     // across the `extern "system"` window procedure this is called from;
     // it is the save's failure.
@@ -4777,6 +4789,119 @@ unsafe fn save_announced(
         shell.finish_save(&mut ui, &announced)
     }));
     Some(finished.unwrap_or_else(|_| Err(panicked())))
+}
+
+/// An `NPPM_*` dispatch under way on this thread, until dropped, an
+/// unwind included.
+///
+/// The dispatch holds the window's state, split, for the whole of it, and
+/// some messages run plugin code from inside it: `NPPM_MSGTOPLUGIN` runs
+/// the target's `messageProc`, and a message that moves a plugin's window
+/// runs that window's procedure. No `PluginCallGuard` is armed there, so
+/// that such code can still query the host. A save sent from it would be
+/// made, announced to every plugin and written, with the outer dispatch's
+/// state still borrowed. So no save is made from there: [`save_announced`]
+/// answers as it does where the state is out of reach, whichever command
+/// asked, File → Save sent to this window included, and
+/// [`answer_plugin_save`] declines a plugin's save message, as GTK and
+/// macOS decline every message sent from inside a dispatch.
+///
+/// This is bug containment for saves, which run every plugin's handlers
+/// (DESIGN.md §6.5). Any other message such code sends this window still
+/// takes the state a second time, as it always has.
+struct NppmDispatchUnderWay(());
+
+thread_local! {
+    static NPPM_DISPATCHES_UNDER_WAY: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+impl NppmDispatchUnderWay {
+    fn enter() -> Self {
+        NPPM_DISPATCHES_UNDER_WAY.with(|n| n.set(n.get() + 1));
+        Self(())
+    }
+
+    /// Whether a dispatch is under way on this thread.
+    fn active() -> bool {
+        NPPM_DISPATCHES_UNDER_WAY.with(std::cell::Cell::get) > 0
+    }
+}
+
+impl Drop for NppmDispatchUnderWay {
+    fn drop(&mut self) {
+        NPPM_DISPATCHES_UNDER_WAY.with(|n| n.set(n.get().saturating_sub(1)));
+    }
+}
+
+/// Make the save a plugin asked for with an `NPPM_SAVE*` message
+/// ([`codepp_plugin_host::plugin_save`]) and answer the message: 1 when
+/// the buffer was written, 0 when it was not.
+///
+/// The save is the announced one, so the plugins hear
+/// `NPPN_FILEBEFORESAVE` before the buffer is read and `NPPN_FILESAVED`
+/// once it is written, both before the plugin's `SendMessage` returns, as
+/// in Notepad++ (measured, 8.9.8.1; DESIGN.md §7.4). That is why it is
+/// made here and not by the dispatcher: a dispatch holds the state for
+/// the whole of it, and the handlers call back into the host.
+///
+/// `NPPM_SAVEFILE` saves its buffer where it is, behind another tab too,
+/// and `NPPM_SAVEALLFILES` is this backend's Save All, which answers 1
+/// whatever was saved, as the dispatcher's does. A message sent where the
+/// state cannot be had is declined with 0, as every `NPPM_*` is there.
+///
+/// The delivery of what the save queued is counted with the save's other
+/// deliveries ([`codepp_shell::deliver_after_save`]): a plugin that saves
+/// from every notification it hears stops being told eight saves down.
+///
+/// Declined too while an `NPPM_*` dispatch is under way on the thread
+/// ([`NppmDispatchUnderWay`]): the dispatch holds the window's state, and
+/// the message comes from plugin code it is running.
+///
+/// # Safety
+///
+/// `hwnd` must be the main window's handle, on its own thread. The caller
+/// itself holds no state borrow and arms no `PluginCallGuard`; where one
+/// is armed further up the stack, the state cannot be had and the message
+/// is declined.
+unsafe fn answer_plugin_save(hwnd: HWND, save: &codepp_plugin_host::PluginSave) -> isize {
+    if NppmDispatchUnderWay::active() {
+        return 0;
+    }
+    // SAFETY: caller's contract. The borrow ends with the statement.
+    let Some(request) =
+        unsafe { state_from_hwnd(hwnd) }.map(|state| state.shell.plugin_save_request(save))
+    else {
+        return 0;
+    };
+    let saved = match (save, request) {
+        (codepp_plugin_host::PluginSave::All, _) => {
+            // SAFETY: caller's contract.
+            for (buffer_id, error) in unsafe { save_all_announced(hwnd) } {
+                tracing::warn!(
+                    buffer_id,
+                    ?error,
+                    "a plugin's Save All: a buffer was not saved"
+                );
+            }
+            true
+        }
+        // SAFETY: caller's contract.
+        (_, Some(request)) => match unsafe { save_announced(hwnd, &request) } {
+            Some(Ok(())) => true,
+            Some(Err(error)) => {
+                tracing::warn!(?error, "a plugin's save was not made");
+                false
+            }
+            None => false,
+        },
+        (_, None) => false,
+    };
+    // The saved tab's glyph and, after a Save As, its name.
+    // SAFETY: caller's contract.
+    unsafe { refresh_tab_chrome(hwnd) };
+    // SAFETY: caller's contract.
+    codepp_shell::deliver_after_save(|| unsafe { fire_queued_notifications(hwnd) });
+    isize::from(saved)
 }
 
 /// File → Save All: each buffer [`codepp_shell::Shell::save_all_targets`]
@@ -28591,7 +28716,17 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                 || (RUNCOMMAND_USER..RUNCOMMAND_USER + RUNCOMMAND_RANGE).contains(&m)
                 || (CODEPPMSG..CODEPPMSG + CODEPPMSG_RANGE).contains(&m) =>
             {
-                if let Some(state) = state_from_hwnd(hwnd) {
+                // A save is made here, before the dispatch takes the
+                // state: it tells the plugins before it reads the
+                // buffer, and their handlers send this window messages
+                // of their own (`answer_plugin_save`).
+                //
+                // SAFETY: `(m, wparam, lparam)` are the plugin's message
+                // as this window received it, which is `plugin_save`'s
+                // contract.
+                if let Some(message) = codepp_plugin_host::plugin_save(m, wparam.0, lparam.0) {
+                    LRESULT(answer_plugin_save(hwnd, message.save()))
+                } else if let Some(state) = state_from_hwnd(hwnd) {
                     // Snapshot the active tab before dispatch so
                     // we can detect plugin-driven flips
                     // (`NPPM_SWITCHTOFILE`, `NPPM_DOOPEN` on a
@@ -28625,8 +28760,13 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                     // documented NPPM_* ABI in the compat headers.
                     // No nested `unsafe` block needed — the entire
                     // wnd_proc body runs inside one already.
-                    let routed =
-                        shell.dispatch_plugin_message(&mut ui, handles, m, wparam.0, lparam.0);
+                    let routed = {
+                        // Marked, so that a save a plugin sends from code
+                        // this dispatch runs is declined
+                        // (`NppmDispatchUnderWay`).
+                        let _dispatching = NppmDispatchUnderWay::enter();
+                        shell.dispatch_plugin_message(&mut ui, handles, m, wparam.0, lparam.0)
+                    };
                     // After the dispatch borrow ends, drain any
                     // FIF-launch prefill the plugin queued via
                     // NPPM_LAUNCHFINDINFILESDLG and open the dialog
@@ -33167,6 +33307,13 @@ mod drain_freeze_guards {
             "`save_announced` arms a `PluginCallGuard`, which declines every `NPPM_*` a \
              handler sends"
         );
+        // Before anything else, no save from code a dispatch is running:
+        // the dispatch holds the state both halves take.
+        assert!(
+            body.starts_with("{ifNppmDispatchUnderWay::active(){tracing::warn!(")
+                && body.contains(");returnNone;}letpanicked=||"),
+            "`save_announced` no longer declines a save asked for from inside an NPPM dispatch"
+        );
         // Phase 1's borrow is a temporary of its own statement, inside the
         // panic boundary, bound to no name that could outlive it.
         let begin = body
@@ -33234,6 +33381,107 @@ mod drain_freeze_guards {
         assert!(
             src.contains("ID_FILE_SAVE_ALL=>{leterrors=save_all_announced(hwnd);"),
             "File > Save All no longer saves through `save_all_announced`"
+        );
+    }
+
+    /// The mark `answer_plugin_save` declines by: up for as long as a
+    /// dispatch is on the stack, nested ones included, and down again
+    /// after an unwind.
+    #[test]
+    fn a_dispatch_under_way_is_marked_until_it_ends() {
+        use super::NppmDispatchUnderWay;
+
+        assert!(!NppmDispatchUnderWay::active());
+        {
+            let _outer = NppmDispatchUnderWay::enter();
+            assert!(NppmDispatchUnderWay::active());
+            {
+                let _nested = NppmDispatchUnderWay::enter();
+                assert!(NppmDispatchUnderWay::active());
+            }
+            assert!(
+                NppmDispatchUnderWay::active(),
+                "the outer dispatch is still under way"
+            );
+        }
+        assert!(!NppmDispatchUnderWay::active());
+
+        let unwound = std::panic::catch_unwind(|| {
+            let _dispatching = NppmDispatchUnderWay::enter();
+            panic!("a dispatch that panics");
+        });
+        assert!(unwound.is_err());
+        assert!(
+            !NppmDispatchUnderWay::active(),
+            "an unwind left the mark up"
+        );
+    }
+
+    /// A plugin's `NPPM_SAVE*` message is answered before the dispatch
+    /// takes the window's state, by `answer_plugin_save`: the save tells
+    /// the plugins before it reads the buffer, and their handlers send this
+    /// window messages that need the state. Handed to the dispatcher, the
+    /// save is made inside its borrow and both notifications wait on the
+    /// queue until after the write.
+    ///
+    /// `answer_plugin_save` is pinned whole: it declines where the state
+    /// cannot be had, makes the save through `save_announced` or the Save
+    /// All loop, and delivers what the save queued, counted, before it
+    /// answers. And the queue's delivery marks itself as one delivery for
+    /// the whole batch, which is what counts the handlers' saves together.
+    #[test]
+    fn a_plugins_save_is_made_before_the_dispatch_and_announced() {
+        let src: String = code_only(production_src()).split_whitespace().collect();
+        assert!(
+            src.contains(
+                "(CODEPPMSG..CODEPPMSG+CODEPPMSG_RANGE).contains(&m)=>{\
+                 ifletSome(message)=codepp_plugin_host::plugin_save(m,wparam.0,lparam.0){\
+                 LRESULT(answer_plugin_save(hwnd,message.save()))}\
+                 elseifletSome(state)=state_from_hwnd(hwnd){"
+            ),
+            "the NPPM arm no longer asks for a plugin's save before it takes the state"
+        );
+        let body: String = code_only(&fn_body(production_src(), "answer_plugin_save"))
+            .split_whitespace()
+            .collect();
+        assert_eq!(
+            body,
+            "{ifNppmDispatchUnderWay::active(){return0;}\
+             letSome(request)=unsafe{state_from_hwnd(hwnd)}\
+                   .map(|state|state.shell.plugin_save_request(save))else{return0;};\
+                   letsaved=match(save,request){\
+                   (codepp_plugin_host::PluginSave::All,_)=>{\
+                   for(buffer_id,error)inunsafe{save_all_announced(hwnd)}{\
+                   tracing::warn!(buffer_id,?error,\"aplugin'sSaveAll:abufferwasnotsaved\");}true}\
+                   (_,Some(request))=>matchunsafe{save_announced(hwnd,&request)}{\
+                   Some(Ok(()))=>true,\
+                   Some(Err(error))=>{tracing::warn!(?error,\"aplugin'ssavewasnotmade\");false}\
+                   None=>false,},\
+                   (_,None)=>false,};\
+                   unsafe{refresh_tab_chrome(hwnd)};\
+                   codepp_shell::deliver_after_save(||unsafe{fire_queued_notifications(hwnd)});\
+                   isize::from(saved)}",
+            "`answer_plugin_save` no longer makes the announced save and delivers what it queued"
+        );
+        let delivery: String =
+            code_only(&fn_body(production_src(), "deliver_queued_notifications"))
+                .split_whitespace()
+                .collect();
+        assert!(
+            delivery.ends_with(
+                "let_delivery=codepp_shell::QueueDeliveryUnderWay::enter();\
+                 fornotificationin&notifications{targets.deliver(notification,hwnd.0);}}"
+            ),
+            "the queue is no longer delivered as one delivery for the whole batch"
+        );
+        // The dispatch is marked for exactly its own length, which is
+        // what `answer_plugin_save` declines by.
+        assert!(
+            src.contains(
+                "letrouted={let_dispatching=NppmDispatchUnderWay::enter();\
+                 shell.dispatch_plugin_message(&mutui,handles,m,wparam.0,lparam.0)};"
+            ),
+            "the NPPM dispatch is no longer marked as under way while it runs"
         );
     }
 

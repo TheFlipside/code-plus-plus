@@ -98,11 +98,12 @@ pub use codepp_plugin_host::dispatch::{
 pub use codepp_plugin_host::ffi::ToolbarIcons;
 
 /// `NPPN_FILEBEFORESAVE`: a buffer is about to be saved, and
-/// `nmhdr.idFrom` carries its id. File → Save, Save As and Save All
-/// deliver it before the host reads the buffer, so an edit made from the
-/// handler is in the file. The buffer is not brought to the front for it:
-/// compare the id with [`current_buffer_id`] before editing "the current
-/// Scintilla".
+/// `nmhdr.idFrom` carries its id. The host delivers it before it reads
+/// the buffer, for its own Save, Save As and Save All and for a save a
+/// plugin asks for (`NPPM_SAVECURRENTFILE` and its siblings), so an edit
+/// made from the handler is in the file. The buffer is not brought to the
+/// front for it: compare the id with [`current_buffer_id`] before editing
+/// "the current Scintilla".
 /// `NPPM_GETCURRENTBUFFERID` is the message behind that helper.
 /// Re-exported from the dispatcher, as the block above is.
 pub use codepp_plugin_host::dispatch::{NPPM_GETCURRENTBUFFERID, NPPN_FILEBEFORESAVE};

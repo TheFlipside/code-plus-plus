@@ -83,7 +83,8 @@ use codepp_core::{
 use codepp_platform::watch::{FileChange, FileWatcher};
 use codepp_plugin_host::{
     dispatch_nppm, notify_all, BufferPathName, FuncItem, HostServices, Hwnd, Notification,
-    NotifyTargets, PendingLoad, PluginCmd, PluginHost, PluginReady, NPPMAINMENU, NPPPLUGINMENU,
+    NotifyTargets, PendingLoad, PluginCmd, PluginHost, PluginReady, PluginSave, NPPMAINMENU,
+    NPPPLUGINMENU,
 };
 
 pub mod fif;
@@ -2103,12 +2104,45 @@ pub enum SaveRequest {
 /// tried).
 const MAX_NESTED_SAVE_ANNOUNCEMENTS: usize = 8;
 
+/// How many times one buffer may be saved from inside one outermost
+/// delivery of notifications on one thread, however the saves nest.
+///
+/// [`MAX_NESTED_SAVE_ANNOUNCEMENTS`] bounds how deep saves nest, not how
+/// many there are. A save queues or delivers two notifications, so a
+/// plugin that saves from each of them makes two saves for every one it
+/// hears of, and one that saves several other buffers from each
+/// announcement, each of whose announcements it hears in turn, as many as
+/// that number to the power of the depth. In Notepad++ either recurses
+/// until the stack runs out (read from its source, not tried). Here the
+/// saves are synchronous too, since Phase 5, and the depth alone would
+/// leave the UI thread saving for as long as the plugin's arithmetic
+/// lasts. So a buffer's save past this many, counted from the moment the
+/// outermost delivery under way began, is refused
+/// ([`ShellError::SavedTooOften`]): nothing is written, nothing announced
+/// and nothing queued, and the plugin that asked is answered 0.
+///
+/// The count is of saves begun inside a delivery only, and starts afresh
+/// with each outermost one. A save the user asks for is not counted, nor
+/// is one a plugin makes from a menu command or a timer of its own,
+/// however many of them. The one exception is a save made while a handler
+/// is still running, from a message loop or a dialog the handler put up:
+/// that is inside the handler's delivery, whoever asked for it.
+const MAX_SAVES_OF_A_BUFFER_INSIDE_A_DELIVERY: usize = 16;
+
 thread_local! {
     /// The deliveries a save makes that are under way on this thread, one
     /// inside the other: its `NPPN_FILEBEFORESAVE`
     /// ([`AnnouncedSave::deliver`]) and what it queued
     /// ([`deliver_after_save`]). See [`MAX_NESTED_SAVE_ANNOUNCEMENTS`].
     static SAVE_ANNOUNCEMENTS_UNDER_WAY: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// The deliveries of queued notifications under way on this thread
+    /// ([`QueueDeliveryUnderWay`]).
+    static QUEUE_DELIVERIES_UNDER_WAY: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// How often each buffer's save was begun inside the outermost
+    /// delivery under way on this thread
+    /// ([`MAX_SAVES_OF_A_BUFFER_INSIDE_A_DELIVERY`]).
+    static SAVES_INSIDE_A_DELIVERY: std::cell::RefCell<HashMap<i32, usize>> =
+        std::cell::RefCell::new(HashMap::new());
     /// Whether a Save All is under way on this thread
     /// ([`SaveAllUnderWay`]).
     static SAVE_ALL_UNDER_WAY: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
@@ -2147,6 +2181,55 @@ pub fn deliver_after_save(deliver: impl FnOnce()) {
     deliver();
 }
 
+/// Whether plugin code is running on this thread from inside a delivery
+/// of notifications that the shell knows of: one a save makes, or a
+/// backend's delivery of the queue.
+fn inside_a_delivery() -> bool {
+    SAVE_ANNOUNCEMENTS_UNDER_WAY.with(std::cell::Cell::get) > 0
+        || QUEUE_DELIVERIES_UNDER_WAY.with(std::cell::Cell::get) > 0
+}
+
+/// A delivery is about to begin. The outermost one starts the count of
+/// the saves made inside it.
+fn entering_a_delivery() {
+    if !inside_a_delivery() {
+        SAVES_INSIDE_A_DELIVERY.with(|saves| saves.borrow_mut().clear());
+    }
+}
+
+/// Marks a delivery of queued notifications as under way on this thread
+/// until dropped, an unwind included.
+///
+/// Each backend's delivery of the queue holds one while the plugins'
+/// handlers run. A handler there that saves is then saving from inside a
+/// delivery, and its saves are counted against
+/// [`MAX_SAVES_OF_A_BUFFER_INSIDE_A_DELIVERY`] together, for the whole
+/// batch. Without it each handler's save would be an outermost save with
+/// a count of its own, and a plugin that saves from every notification
+/// would make sixteen times as many saves at each delivery as it was told
+/// of at the one before.
+///
+/// It does not count toward the depth at which saves stop being announced
+/// ([`deliver_after_save`] does that for the deliveries a save makes).
+#[must_use = "hold it while the handlers run"]
+pub struct QueueDeliveryUnderWay(());
+
+impl QueueDeliveryUnderWay {
+    /// Mark a delivery of queued notifications as under way.
+    #[must_use = "hold it while the handlers run"]
+    pub fn enter() -> Self {
+        entering_a_delivery();
+        QUEUE_DELIVERIES_UNDER_WAY.with(|n| n.set(n.get() + 1));
+        Self(())
+    }
+}
+
+impl Drop for QueueDeliveryUnderWay {
+    fn drop(&mut self) {
+        QUEUE_DELIVERIES_UNDER_WAY.with(|n| n.set(n.get().saturating_sub(1)));
+    }
+}
+
 /// Marks a Save All as under way on this thread until dropped, an unwind
 /// included. [`Self::enter`] answers `None` while one is.
 ///
@@ -2181,6 +2264,7 @@ struct SaveAnnouncementUnderWay;
 
 impl SaveAnnouncementUnderWay {
     fn enter() -> Self {
+        entering_a_delivery();
         SAVE_ANNOUNCEMENTS_UNDER_WAY.with(|n| n.set(n.get() + 1));
         Self
     }
@@ -4854,14 +4938,19 @@ impl Shell {
     /// closed, or began loading, after [`Self::save_all_targets`] listed
     /// it, which only a plugin's handler between two saves can do, or it
     /// has no file, which nothing does to a listed buffer today. Save All
-    /// never listed such a buffer to begin with. The buffer is left as it
+    /// never listed such a buffer to begin with. Or it was saved too often
+    /// already from inside the delivery this Save All was asked for in
+    /// ([`ShellError::SavedTooOften`]). The buffer is left as it
     /// is: one that is reloading keeps its edits or loses them by the
     /// reload's own rules, and reads unsaved afterwards if it kept them.
     #[must_use]
     pub fn save_all_passes_over(error: &ShellError) -> bool {
         matches!(
             error,
-            ShellError::NoSuchTab | ShellError::LoadInFlight | ShellError::NoActivePath
+            ShellError::NoSuchTab
+                | ShellError::LoadInFlight
+                | ShellError::NoActivePath
+                | ShellError::SavedTooOften
         )
     }
 
@@ -7470,6 +7559,47 @@ impl Shell {
         self.save_current_impl(ui, BeforeSave::Queue)
     }
 
+    /// The announced save a plugin's `NPPM_SAVE*` message asks for
+    /// ([`codepp_plugin_host::plugin_save`]), for a backend to make through
+    /// [`Self::begin_save`] and [`Self::finish_save`] before the plugin's
+    /// `SendMessage` returns.
+    ///
+    /// `None` when there is nothing to save that way, and the message
+    /// answers 0: `NPPM_SAVEFILE` with a path no tab has. And for
+    /// [`PluginSave::All`], which is not one save: a backend makes it as
+    /// its Save All.
+    ///
+    /// `NPPM_SAVEFILE` names its buffer by path. The tab is the one whose
+    /// file is exactly that path, or else the first in tab order whose
+    /// path is that one regardless of ASCII case, the comparison
+    /// `NPPM_SWITCHTOFILE` makes. It is saved where it is: behind another
+    /// tab it is not brought to the front, as in Notepad++ (measured,
+    /// 8.9.8.1).
+    #[must_use]
+    pub fn plugin_save_request(&self, save: &PluginSave) -> Option<SaveRequest> {
+        match save {
+            PluginSave::Current => Some(SaveRequest::Active),
+            PluginSave::CurrentAs(path) => Some(SaveRequest::ActiveAs(path.clone())),
+            PluginSave::File(path) => {
+                let named = |exact: bool| {
+                    self.tabs.iter().find(|t| {
+                        t.path.as_deref().is_some_and(|p| {
+                            if exact {
+                                p == path.as_path()
+                            } else {
+                                p.as_os_str().eq_ignore_ascii_case(path.as_os_str())
+                            }
+                        })
+                    })
+                };
+                named(true)
+                    .or_else(|| named(false))
+                    .map(|t| SaveRequest::Tab(t.id))
+            }
+            PluginSave::All => None,
+        }
+    }
+
     /// Phase 1 of a save: check that it can be made, and hand back the
     /// `NPPN_FILEBEFORESAVE` to deliver first. See [`AnnouncedSave`] for
     /// the protocol.
@@ -7514,6 +7644,21 @@ impl Shell {
             }
         };
         let buffer_id = tab.id;
+        if inside_a_delivery() {
+            let begun = SAVES_INSIDE_A_DELIVERY.with(|saves| {
+                let mut saves = saves.borrow_mut();
+                let begun = saves.entry(buffer_id).or_insert(0);
+                *begun += 1;
+                *begun
+            });
+            if begun > MAX_SAVES_OF_A_BUFFER_INSIDE_A_DELIVERY {
+                tracing::warn!(
+                    buffer_id,
+                    "a buffer saved that often from inside one delivery of notifications is not saved again"
+                );
+                return Err(ShellError::SavedTooOften);
+            }
+        }
         let nested = SAVE_ANNOUNCEMENTS_UNDER_WAY.with(std::cell::Cell::get);
         let announcement = if nested < MAX_NESTED_SAVE_ANNOUNCEMENTS {
             Some(SyncNotification {
@@ -7527,7 +7672,7 @@ impl Shell {
             tracing::warn!(
                 buffer_id,
                 nested,
-                "a save asked for from inside that many NPPN_FILEBEFORESAVE handlers is announced after its write"
+                "a save asked for from inside that many save handlers is announced after its write"
             );
             None
         };
@@ -11448,6 +11593,11 @@ pub enum ShellError {
     /// is not open: closed from a plugin's `NPPN_FILEBEFORESAVE` handler,
     /// say. Nothing is written.
     NoSuchTab,
+    /// The buffer's save was begun more often from inside one delivery
+    /// of notifications than a plugin's handlers may ask for: a plugin
+    /// that saves from the notifications of its own saves. Nothing is
+    /// written, announced or queued.
+    SavedTooOften,
     Encoding(String),
     Io(String),
     Session(String),
@@ -11461,6 +11611,10 @@ impl std::fmt::Display for ShellError {
             ShellError::LoadInFlight => write!(f, "the file is still loading"),
             ShellError::AlreadyOpen => write!(f, "the file is already open in another tab"),
             ShellError::NoSuchTab => write!(f, "the tab is no longer open"),
+            ShellError::SavedTooOften => write!(
+                f,
+                "the file was saved too often from inside one delivery of plugin notifications"
+            ),
             ShellError::Encoding(s) => write!(f, "encoding error: {s}"),
             ShellError::Io(s) => write!(f, "I/O error: {s}"),
             ShellError::Session(s) => write!(f, "session error: {s}"),
@@ -12200,11 +12354,12 @@ impl<U: UiPlatform> HostServices for HostBridge<'_, U> {
     }
 
     fn save_file(&mut self, path: PathBuf) -> bool {
-        // Phase 4 limitation: only the active tab can be saved
-        // through this path. Saving a background tab requires the
-        // doc-pointer-swap dance tracked in DESIGN.md §7.4. If the
-        // requested path matches the active tab, route through
-        // `save_current_to_disk`; otherwise log and report 0.
+        // The dispatcher's own route, which no backend takes: each
+        // makes a plugin's save itself, announced, wherever the buffer
+        // is (`plugin_save_request`). Through here only the active tab
+        // is saved, unannounced: if the requested path matches it,
+        // route through `save_current_to_disk`; otherwise log and
+        // report 0.
         let active_path = self.shell.active().and_then(|t| t.path.clone());
         if active_path.as_ref() == Some(&path) {
             match self.shell.save_current_to_disk(self.ui) {
@@ -18696,6 +18851,237 @@ mod tests {
             "{left:?}"
         );
         assert_eq!(SAVE_ANNOUNCEMENTS_UNDER_WAY.with(std::cell::Cell::get), 0);
+    }
+
+    #[test]
+    fn a_plugins_save_message_names_the_save_to_announce() {
+        let (mut shell, _ui, _dir, a, b) = shell_with_two_files();
+        let (a_id, b_id) = (shell.tabs[0].id, shell.tabs[1].id);
+        assert_eq!(
+            shell.plugin_save_request(&PluginSave::Current),
+            Some(SaveRequest::Active)
+        );
+        let target = a.with_file_name("c.txt");
+        assert_eq!(
+            shell.plugin_save_request(&PluginSave::CurrentAs(target.clone())),
+            Some(SaveRequest::ActiveAs(target.clone()))
+        );
+        // NPPM_SAVEFILE: the tab that has the file, in front or behind.
+        assert_eq!(
+            shell.plugin_save_request(&PluginSave::File(a.clone())),
+            Some(SaveRequest::Tab(a_id))
+        );
+        assert_eq!(
+            shell.plugin_save_request(&PluginSave::File(b.clone())),
+            Some(SaveRequest::Tab(b_id))
+        );
+        // Regardless of ASCII case, as NPPM_SWITCHTOFILE finds a buffer.
+        let shouted = PathBuf::from(a.to_str().unwrap().to_ascii_uppercase());
+        assert_ne!(shouted, a);
+        assert_eq!(
+            shell.plugin_save_request(&PluginSave::File(shouted.clone())),
+            Some(SaveRequest::Tab(a_id))
+        );
+        // The tab whose path is exactly the one named comes first.
+        shell.tabs[1].path = Some(shouted.clone());
+        assert_eq!(
+            shell.plugin_save_request(&PluginSave::File(shouted)),
+            Some(SaveRequest::Tab(b_id))
+        );
+        assert_eq!(
+            shell.plugin_save_request(&PluginSave::File(a)),
+            Some(SaveRequest::Tab(a_id))
+        );
+        // A file no tab has, and Save All, which is not one save.
+        assert_eq!(shell.plugin_save_request(&PluginSave::File(target)), None);
+        assert_eq!(shell.plugin_save_request(&PluginSave::All), None);
+    }
+
+    #[test]
+    fn a_plugins_save_of_a_file_behind_the_front_is_announced_where_it_is() {
+        // NPPM_SAVEFILE, as a backend answers it: the buffer the path
+        // names is announced and saved behind the front, which stays the
+        // current buffer for the handler, as in Notepad++.
+        let (mut shell, mut ui, _dir, a, b) = shell_with_two_files();
+        let (a_id, b_id) = (shell.tabs[0].id, shell.tabs[1].id);
+        let request = shell
+            .plugin_save_request(&PluginSave::File(a.clone()))
+            .unwrap();
+        // Gone, so what is there afterwards is what the save wrote.
+        std::fs::remove_file(&a).unwrap();
+        let (result, heard) =
+            announced_save(&mut shell, &mut ui, &request, OnBeforeSave::Append("+"));
+
+        result.unwrap();
+        assert_eq!(heard.len(), 1);
+        assert_eq!(
+            (heard[0].0, heard[0].1),
+            (a_id as isize, b_id as isize),
+            "the saved buffer is notified, and the one in front is current"
+        );
+        assert_eq!(std::fs::read_to_string(&a).unwrap(), "old A\n");
+        // The handler's edit went into the buffer in front, which was
+        // not saved.
+        assert_eq!(ui.buffer_text, "old B\n+");
+        assert_eq!(std::fs::read_to_string(&b).unwrap(), "old B\n");
+        assert_eq!(shell.active_tab, Some(1));
+        assert_eq!(ui.current_doc, shell.tabs[1].scintilla_doc);
+        assert!(matches!(
+            shell.take_notifications().as_slice(),
+            [Notification::FileSaved { buffer_id }] if *buffer_id == a_id as isize
+        ));
+        ui.assert_documents_accounted_for(&shell);
+    }
+
+    /// A save as a backend answers a plugin's, for a plugin that makes
+    /// `fan` more saves from every notification a save queues: begin,
+    /// write, then the counted delivery of the queue, as a backend's
+    /// delivery of it runs (one [`QueueDeliveryUnderWay`] for the batch).
+    /// Records how each save was begun.
+    fn save_and_save_again_from_every_notification(
+        shell: &mut Shell,
+        ui: &mut FakeUi,
+        fan: usize,
+        begun: &mut Vec<Result<bool, ShellError>>,
+    ) {
+        let save = match shell.begin_save(&SaveRequest::Active) {
+            Ok(save) => save,
+            Err(e) => {
+                begun.push(Err(e));
+                return;
+            }
+        };
+        begun.push(Ok(save.is_synchronous()));
+        // Fail, rather than save until the disk is full, should the saves
+        // ever stop being bounded.
+        assert!(begun.len() < 2_000, "the saves did not stop");
+        shell.finish_save(ui, &save).unwrap();
+        deliver_after_save(|| {
+            let heard = shell.take_notifications();
+            let _delivery = QueueDeliveryUnderWay::enter();
+            for _ in 0..heard.len() * fan {
+                save_and_save_again_from_every_notification(shell, ui, fan, begun);
+            }
+        });
+    }
+
+    #[test]
+    fn a_buffer_is_saved_only_so_often_from_inside_one_delivery() {
+        // A save that is not announced queues two notifications, so a
+        // plugin that saves from every one it hears doubles its saves at
+        // each delivery, and one that saves three times for each makes
+        // six times as many. The depth does not bound that; the count per
+        // buffer does, at every delivery.
+        let limit = MAX_SAVES_OF_A_BUFFER_INSIDE_A_DELIVERY;
+        let made = |begun: &[Result<bool, ShellError>]| begun.iter().filter(|b| b.is_ok()).count();
+        for fan in [1, 3] {
+            let (mut shell, mut ui, _dir, _a, _b) = shell_with_two_files();
+            let mut begun = Vec::new();
+            // The save asked for outside any delivery, and those the
+            // delivery after it allows.
+            save_and_save_again_from_every_notification(&mut shell, &mut ui, fan, &mut begun);
+            assert!(made(&begun) <= 1 + limit, "fan {fan}: {begun:?}");
+
+            // What is still queued goes out at later deliveries, as a
+            // backend's next drains make them, to the same plugin.
+            for _later in 0..4 {
+                let before = made(&begun);
+                let heard = shell.take_notifications();
+                {
+                    let _delivery = QueueDeliveryUnderWay::enter();
+                    for _ in 0..heard.len() * fan {
+                        save_and_save_again_from_every_notification(
+                            &mut shell, &mut ui, fan, &mut begun,
+                        );
+                    }
+                }
+                assert!(made(&begun) - before <= limit, "fan {fan}: {begun:?}");
+            }
+
+            assert!(
+                begun.iter().any(Result::is_err),
+                "fan {fan}: the count never refused a save"
+            );
+            assert!(
+                begun
+                    .iter()
+                    .filter_map(|b| b.as_ref().err())
+                    .all(|e| matches!(e, ShellError::SavedTooOften)),
+                "fan {fan}: {begun:?}"
+            );
+            assert_eq!(SAVE_ANNOUNCEMENTS_UNDER_WAY.with(std::cell::Cell::get), 0);
+            assert_eq!(QUEUE_DELIVERIES_UNDER_WAY.with(std::cell::Cell::get), 0);
+        }
+        assert!(Shell::save_all_passes_over(&ShellError::SavedTooOften));
+    }
+
+    #[test]
+    fn the_saves_of_one_delivery_are_counted_together() {
+        let (shell, _ui, _dir, _a, _b) = shell_with_two_files();
+        let (a_id, b_id) = (shell.tabs[0].id, shell.tabs[1].id);
+        let begin = |id| shell.begin_save(&SaveRequest::Tab(id)).map(|_| ());
+        let limit = MAX_SAVES_OF_A_BUFFER_INSIDE_A_DELIVERY;
+
+        // Outside any delivery nothing is counted: a plugin's command, or
+        // the user, may save as often as it likes.
+        for _ in 0..3 * limit {
+            begin(b_id).unwrap();
+        }
+
+        // Inside a backend's delivery of the queue, the handlers' saves
+        // of one buffer are counted together, whichever handler makes
+        // them, and each buffer has a count of its own.
+        {
+            let _delivery = QueueDeliveryUnderWay::enter();
+            for _ in 0..limit {
+                begin(b_id).unwrap();
+            }
+            assert!(matches!(begin(b_id), Err(ShellError::SavedTooOften)));
+            begin(a_id).unwrap();
+            // A delivery inside this one does not start the count again.
+            deliver_after_save(|| {
+                let _nested = QueueDeliveryUnderWay::enter();
+                assert!(matches!(begin(b_id), Err(ShellError::SavedTooOften)));
+            });
+        }
+        // The next outermost delivery does, of either kind.
+        {
+            let _delivery = QueueDeliveryUnderWay::enter();
+            begin(b_id).unwrap();
+        }
+        deliver_after_save(|| {
+            for _ in 0..limit {
+                begin(b_id).unwrap();
+            }
+            assert!(matches!(begin(b_id), Err(ShellError::SavedTooOften)));
+        });
+        // A save that is refused for another reason is not counted: one
+        // of a tab that is not open, and a Save As of the tab in front
+        // onto a file another tab has.
+        {
+            let _delivery = QueueDeliveryUnderWay::enter();
+            let taken = shell.tabs[0].path.clone().unwrap();
+            for _ in 0..2 * limit {
+                assert!(matches!(begin(i32::MAX - 7), Err(ShellError::NoSuchTab)));
+                assert!(matches!(
+                    shell.begin_save(&SaveRequest::ActiveAs(taken.clone())),
+                    Err(ShellError::AlreadyOpen)
+                ));
+            }
+            for _ in 0..limit {
+                begin(b_id).unwrap();
+            }
+        }
+        // An unwind out of a delivery releases its mark.
+        let unwound = std::panic::catch_unwind(|| {
+            let _delivery = QueueDeliveryUnderWay::enter();
+            panic!("a delivery");
+        });
+        assert!(unwound.is_err());
+        assert_eq!(QUEUE_DELIVERIES_UNDER_WAY.with(std::cell::Cell::get), 0);
+        for _ in 0..3 * limit {
+            begin(b_id).unwrap();
+        }
     }
 
     #[test]

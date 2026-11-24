@@ -1586,10 +1586,10 @@ pub trait HostServices {
     /// Save the buffer matching `path` to disk. Drives
     /// [`NPPM_SAVEFILE`]. Returns `true` on a successful write,
     /// `false` if the path does not match any open tab or the
-    /// write itself failed. **Phase 4 limitation:** only the
-    /// active tab can be saved through this path — saving a
-    /// background tab needs the doc-pointer-swap dance tracked in
-    /// DESIGN.md §7.4.
+    /// write itself failed. A host that hands the message to the
+    /// dispatcher saves only the active tab through this. Every backend
+    /// makes the save itself instead ([`plugin_save`]), wherever the
+    /// buffer is in the tab order.
     fn save_file(&mut self, path: PathBuf) -> bool;
 
     /// `true` when the doc-switcher panel is currently shown.
@@ -3999,6 +3999,93 @@ std::thread_local! {
     static FULL_PATH_PROBE: Cell<Option<FullPathProbe>> = const { Cell::new(None) };
 }
 
+/// A save a plugin asks for with one of the four `NPPM_SAVE*` messages,
+/// as [`plugin_save`] reads it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PluginSave {
+    /// `NPPM_SAVECURRENTFILE`: the current buffer, to its own file.
+    Current,
+    /// `NPPM_SAVECURRENTFILEAS` with `asCopy` FALSE: the current buffer,
+    /// to this path, which becomes its file.
+    CurrentAs(PathBuf),
+    /// `NPPM_SAVEFILE`: the open buffer whose file this path names,
+    /// wherever it is in the tab order.
+    File(PathBuf),
+    /// `NPPM_SAVEALLFILES`: every buffer that has a file.
+    All,
+}
+
+/// The save `(msg, wparam, lparam)` asks for, when it is one a host makes
+/// itself, before [`dispatch_nppm`] and outside the borrow of its state
+/// that a dispatch holds.
+///
+/// A save tells plugins `NPPN_FILEBEFORESAVE` before it reads the buffer,
+/// and their handlers call back into the host, so it cannot be made from
+/// inside a dispatch: the host's state is borrowed there for the whole of
+/// it. A host asks this first and, for `Some`, makes the save through its
+/// announced save path and answers the message itself, as Notepad++ does
+/// inside the plugin's `SendMessage` (measured, 8.9.8.1). Handed to
+/// [`dispatch_nppm`] instead, the four messages still save, through
+/// [`HostServices`], with both notifications queued for after the write.
+///
+/// `None` for every other message, and for what the dispatcher answers
+/// itself: `NPPM_SAVECURRENTFILEAS` with `asCopy` TRUE, which is a copy
+/// and is not announced (in Notepad++ neither, measured), and a path that
+/// cannot be read whole ([`plugin_path`]), which answers 0.
+///
+/// The host holds what this returns until it has answered the message
+/// ([`PluginSaveMessage`]).
+///
+/// # Safety
+///
+/// As for [`dispatch_nppm`]: `lparam` is the plugin's pointer for the
+/// message `msg`.
+#[must_use]
+pub unsafe fn plugin_save(msg: u32, wparam: usize, lparam: isize) -> Option<PluginSaveMessage> {
+    let save = match msg {
+        NPPM_SAVECURRENTFILE => PluginSave::Current,
+        NPPM_SAVEALLFILES => PluginSave::All,
+        // SAFETY: the caller's contract: lparam is the message's path.
+        NPPM_SAVECURRENTFILEAS if wparam == 0 => {
+            PluginSave::CurrentAs(unsafe { plugin_path(lparam) }?)
+        }
+        // SAFETY: as above.
+        NPPM_SAVEFILE => PluginSave::File(unsafe { plugin_path(lparam) }?),
+        _ => return None,
+    };
+    // As `dispatch_nppm` does for the messages it is handed: the probe
+    // before this message does not hold through it, and none is left
+    // when it ends.
+    FULL_PATH_PROBE.set(None);
+    Some(PluginSaveMessage {
+        save,
+        _ends_the_probe: NextProbe(None),
+    })
+}
+
+/// A plugin's save message while its host answers it: the save it asks
+/// for ([`plugin_save`]).
+///
+/// A save ends the `NPPM_GETFULLPATHFROMBUFFERID` probe on its thread, as
+/// every NPPM message does: a Save As can give the probed buffer another
+/// path. The probe is ended as the message arrives and again when this is
+/// dropped, however the save ends, since the save runs plugin code, and
+/// a probe sent from a notification handler there must not outlive the
+/// message. So a host keeps this until it has its answer.
+#[must_use = "hold it until the message is answered"]
+pub struct PluginSaveMessage {
+    save: PluginSave,
+    _ends_the_probe: NextProbe,
+}
+
+impl PluginSaveMessage {
+    /// The save the message asks for.
+    #[must_use]
+    pub fn save(&self) -> &PluginSave {
+        &self.save
+    }
+}
+
 /// The probe [`dispatch_nppm`] leaves for the next message, set as the
 /// message ends however it ends: none, unless the message is an
 /// `NPPM_GETFULLPATHFROMBUFFERID` probe. Setting it on the way out, rather
@@ -5477,6 +5564,93 @@ mod tests {
             Some(MAX_PATH_TCHARS as isize)
         );
         assert_eq!(wide_answer(&buf), long);
+    }
+
+    #[test]
+    fn plugin_save_reads_the_four_save_messages_and_nothing_else() {
+        let path = make_wide("D:/dir/a.txt");
+        let lparam = path.as_ptr() as isize;
+        let save = |msg, wparam, lparam| {
+            unsafe { plugin_save(msg, wparam, lparam) }.map(|message| message.save().clone())
+        };
+        assert_eq!(save(NPPM_SAVECURRENTFILE, 0, 0), Some(PluginSave::Current));
+        assert_eq!(save(NPPM_SAVEALLFILES, 0, 0), Some(PluginSave::All));
+        assert_eq!(
+            save(NPPM_SAVECURRENTFILEAS, 0, lparam),
+            Some(PluginSave::CurrentAs(PathBuf::from("D:/dir/a.txt")))
+        );
+        assert_eq!(
+            save(NPPM_SAVEFILE, 0, lparam),
+            Some(PluginSave::File(PathBuf::from("D:/dir/a.txt")))
+        );
+        // A copy is not announced, so the dispatcher makes it.
+        assert_eq!(save(NPPM_SAVECURRENTFILEAS, 1, lparam), None);
+        // A path that cannot be read is the dispatcher's to answer 0 for:
+        // NULL, a kernel-range pointer, the empty string, a string that
+        // does not decode.
+        let empty = make_wide("");
+        let surrogate: Vec<u16> = vec![0xD800, 0];
+        for msg in [NPPM_SAVECURRENTFILEAS, NPPM_SAVEFILE] {
+            for bad in [0, -8, empty.as_ptr() as isize, surrogate.as_ptr() as isize] {
+                assert_eq!(save(msg, 0, bad), None, "{msg} {bad}");
+            }
+        }
+        // And no other message is a save, whatever it carries.
+        for msg in [
+            NPPM_DOOPEN,
+            NPPM_RELOADFILE,
+            NPPM_MENUCOMMAND,
+            NPPM_SAVECURRENTSESSION,
+            NPPM_GETCURRENTBUFFERID,
+        ] {
+            assert_eq!(save(msg, 0, lparam), None, "{msg}");
+        }
+    }
+
+    #[test]
+    fn a_save_a_host_makes_itself_ends_the_full_path_probe() {
+        // A host that makes a plugin's save itself never hands the message
+        // to the dispatcher, which is where a probe is taken. A Save As
+        // can give the probed buffer another path, so the probe ends with
+        // the save as with any other message.
+        let long = "z".repeat(MAX_PATH_TCHARS);
+        let mut s = MockServices {
+            buffer_paths: vec![(7, PathBuf::from(&long))],
+            ..Default::default()
+        };
+        let probe =
+            |s: &mut MockServices| unsafe { dispatch_nppm(s, NPPM_GETFULLPATHFROMBUFFERID, 7, 0) };
+        let mut buf = vec![0xFFFFu16; 2 * MAX_PATH_TCHARS];
+        let path = make_wide("D:/dir/a.txt");
+        for (msg, lparam) in [
+            (NPPM_SAVECURRENTFILE, 0),
+            (NPPM_SAVEALLFILES, 0),
+            (NPPM_SAVECURRENTFILEAS, path.as_ptr() as isize),
+            (NPPM_SAVEFILE, path.as_ptr() as isize),
+        ] {
+            probe(&mut s);
+            // The probe from before the save does not hold inside it,
+            // where a notification handler may write, nor after it.
+            let message = unsafe { plugin_save(msg, 0, lparam) }.expect("a save");
+            assert_eq!(full_path_into(&mut s, 7, &mut buf), Some(-1), "{msg}");
+            drop(message);
+            assert_eq!(full_path_into(&mut s, 7, &mut buf), Some(-1), "{msg}");
+            assert!(buf.iter().all(|&u| u == 0xFFFF), "{msg}: nothing written");
+        }
+        // A probe sent from inside the save, by a notification handler,
+        // does not outlive the message either.
+        let message = unsafe { plugin_save(NPPM_SAVECURRENTFILE, 0, 0) }.expect("a save");
+        probe(&mut s);
+        drop(message);
+        assert_eq!(full_path_into(&mut s, 7, &mut buf), Some(-1));
+        assert!(buf.iter().all(|&u| u == 0xFFFF), "nothing written");
+        // A message that is no save leaves the probe to the dispatcher.
+        probe(&mut s);
+        assert!(unsafe { plugin_save(NPPM_GETCURRENTBUFFERID, 0, 0) }.is_none());
+        assert_eq!(
+            full_path_into(&mut s, 7, &mut buf),
+            Some(MAX_PATH_TCHARS as isize)
+        );
     }
 
     #[test]

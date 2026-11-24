@@ -383,6 +383,15 @@ extern "C" fn plugin_dispatch(hwnd: *mut c_void, msg: u32, wparam: usize, lparam
 /// teardown — which is the same "message declined" outcome Win32
 /// produces when a plugin re-enters during a guarded call.
 fn dispatch_nppm(msg: u32, wparam: usize, lparam: isize) -> isize {
+    // A save is made here, before the dispatch takes the state: it tells
+    // the plugins before it reads the buffer, and their handlers send
+    // messages of their own (`answer_plugin_save`).
+    //
+    // SAFETY: `(msg, wparam, lparam)` are the plugin's message as it sent
+    // it, which is `plugin_save`'s contract.
+    if let Some(message) = unsafe { codepp_plugin_host::plugin_save(msg, wparam, lparam) } {
+        return crate::answer_plugin_save(message.save());
+    }
     let routed = with_state(|st| {
         let handles = HostHandles {
             npp_hwnd: npp_sentinel(),
@@ -3663,8 +3672,14 @@ pub(crate) fn deliver_notifications() {
     if notes.is_empty() || targets.is_empty() {
         return;
     }
-    for note in &notes {
-        targets.deliver(note, npp_sentinel());
+    {
+        // One delivery, for the whole batch: a handler that saves is saving
+        // from inside it, and its saves are counted together
+        // (`QueueDeliveryUnderWay`).
+        let _delivery = codepp_shell::QueueDeliveryUnderWay::enter();
+        for note in &notes {
+            targets.deliver(note, npp_sentinel());
+        }
     }
     crate::present_deferred_dialogs();
 }

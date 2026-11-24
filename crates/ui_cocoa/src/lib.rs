@@ -3689,6 +3689,59 @@ fn report_save_as_refused(for_tab: i32, name: &str, path: &std::path::Path) {
     alert.runModal();
 }
 
+/// Make the save a plugin asked for with an `NPPM_SAVE*` message
+/// ([`codepp_plugin_host::plugin_save`]) and answer the message: 1 when
+/// the buffer was written, 0 when it was not.
+///
+/// The save is the announced one, so the plugins hear
+/// `NPPN_FILEBEFORESAVE` before the buffer is read and `NPPN_FILESAVED`
+/// once it is written, both before the plugin's `SendMessage` returns, as
+/// in Notepad++ (measured, 8.9.8.1; DESIGN.md §7.4). That is why it is
+/// made here and not by the dispatcher: a dispatch holds the state for
+/// the whole of it, and the handlers call back into the host.
+///
+/// `NPPM_SAVEFILE` saves its buffer where it is, behind another tab too,
+/// and `NPPM_SAVEALLFILES` is this backend's Save All, which answers 1
+/// whatever was saved, as the dispatcher's does. A message sent where the
+/// state cannot be had is declined with 0, as every `NPPM_*` is there.
+///
+/// The delivery of what the save queued is counted with the save's other
+/// deliveries ([`codepp_shell::deliver_after_save`]): a plugin that saves
+/// from every notification it hears stops being told eight saves down.
+pub(crate) fn answer_plugin_save(save: &codepp_plugin_host::PluginSave) -> isize {
+    let Some(request) = with_state(|st| st.shell.plugin_save_request(save)) else {
+        return 0;
+    };
+    let saved = match (save, request) {
+        (codepp_plugin_host::PluginSave::All, _) => {
+            for (buffer_id, error) in save_all_announced() {
+                tracing::warn!(
+                    buffer_id,
+                    ?error,
+                    "a plugin's Save All: a buffer was not saved"
+                );
+            }
+            true
+        }
+        (_, Some(request)) => match save_announced(&request) {
+            Some(Ok(())) => true,
+            Some(Err(error)) => {
+                tracing::warn!(?error, "a plugin's save was not made");
+                false
+            }
+            None => false,
+        },
+        (_, None) => false,
+    };
+    // The saved tab's glyph and, after a Save As, its name.
+    refresh_tab_chrome();
+    codepp_shell::deliver_after_save(deliver_queued);
+    // A dialog a handler queued, where the save queued nothing for the
+    // delivery to present it after: a save that failed, say.
+    present_deferred_dialogs();
+    isize::from(saved)
+}
+
 /// File → Save All: each buffer [`codepp_shell::Shell::save_all_targets`]
 /// lists, through [`save_announced`], with what its save queued delivered
 /// before the next begins. So the plugins hear `NPPN_FILEBEFORESAVE` and
@@ -5227,6 +5280,58 @@ mod source_invariants {
              plugin::deliver_notifications();}",
             "`deliver_queued` does more than deliver, or delivers under a freeze or after \
              the quit has begun"
+        );
+    }
+
+    /// A plugin's `NPPM_SAVE*` message is answered before the dispatch
+    /// takes the state, by `answer_plugin_save`: the save tells the plugins
+    /// before it reads the buffer, and their handlers send messages that
+    /// need the state. Handed to the dispatcher, the save is made inside
+    /// its borrow and both notifications wait on the queue until after the
+    /// write.
+    ///
+    /// `answer_plugin_save` is pinned whole: it declines where the state
+    /// cannot be had, makes the save through `save_announced` or the Save
+    /// All loop, and delivers what the save queued, counted, before it
+    /// answers. And the queue's delivery marks itself as one delivery for
+    /// the whole batch, which is what counts the handlers' saves together.
+    #[test]
+    fn a_plugins_save_is_made_before_the_dispatch_and_announced() {
+        let squash = |s: &str| s.split_whitespace().collect::<String>();
+        let plugin = include_str!("plugin.rs");
+        let plugin = plugin.split("#[cfg(test)]").next().unwrap_or(plugin);
+        assert!(
+            squash(&code_only(&fn_body(plugin, "dispatch_nppm"))).starts_with(
+                "{ifletSome(message)=unsafe{codepp_plugin_host::plugin_save(msg,wparam,lparam)}{\
+                  returncrate::answer_plugin_save(message.save());}letrouted=with_state(|st|{"
+            ),
+            "`dispatch_nppm` no longer asks for a plugin's save before it takes the state"
+        );
+        assert_eq!(
+            squash(&code_only(&fn_body(production_src(), "answer_plugin_save"))),
+            "{letSome(request)=with_state(|st|st.shell.plugin_save_request(save))else{return0;};\
+             letsaved=match(save,request){\
+             (codepp_plugin_host::PluginSave::All,_)=>{\
+             for(buffer_id,error)insave_all_announced(){\
+             tracing::warn!(buffer_id,?error,);}true}\
+             (_,Some(request))=>matchsave_announced(&request){\
+             Some(Ok(()))=>true,\
+             Some(Err(error))=>{tracing::warn!(?error,);false}\
+             None=>false,},\
+             (_,None)=>false,};\
+             refresh_tab_chrome();\
+             codepp_shell::deliver_after_save(deliver_queued);\
+             present_deferred_dialogs();\
+             isize::from(saved)}",
+            "`answer_plugin_save` no longer makes the announced save and delivers what it queued"
+        );
+        assert!(
+            squash(&code_only(&fn_body(plugin, "deliver_notifications"))).ends_with(
+                "{let_delivery=codepp_shell::QueueDeliveryUnderWay::enter();\
+                  fornotein&notes{targets.deliver(note,npp_sentinel());}}\
+                  crate::present_deferred_dialogs();}"
+            ),
+            "the queue is no longer delivered as one delivery for the whole batch"
         );
     }
 
