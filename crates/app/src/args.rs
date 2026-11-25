@@ -29,6 +29,11 @@ pub struct Args {
     /// first draw, keystroke latency). Implies [`Self::verbose`],
     /// since the measurements are delivered through the same sink.
     pub perf: bool,
+    /// `--new-instance`: start a guest instance that opens [`Self::path`]
+    /// only, restores and saves no session, and on Windows runs beside
+    /// the Code++ already running instead of handing the file to it. What
+    /// a tab's "Move to New Instance" and "Open in New Instance" start.
+    pub new_instance: bool,
 }
 
 /// What `main` should do after parsing.
@@ -59,6 +64,11 @@ OPTIONS:
     -v, --verbose    Log diagnostics to stderr at `info` level.
         --perf       Log the startup and keystroke-latency measurements
                      from DESIGN.md §8. Implies --verbose.
+        --new-instance
+                     Start a separate Code++ that opens FILE only. It
+                     does not restore or save the session and writes no
+                     crash backups; on Windows it runs beside the Code++
+                     already running instead of handing FILE to it.
     -h, --help       Print this help and exit.
         --           Treat every later argument as a path, so a file
                      whose name begins with `-` can still be opened.
@@ -98,6 +108,7 @@ pub fn parse<I: IntoIterator<Item = OsString>>(argv: I) -> Parsed {
             Some("--") => flags_ended = true,
             Some("-h" | "--help") => return Parsed::Exit(USAGE.to_string()),
             Some("-v" | "--verbose") => out.verbose = true,
+            Some("--new-instance") => out.new_instance = true,
             Some("--perf") => {
                 out.perf = true;
                 out.verbose = true;
@@ -171,6 +182,17 @@ mod tests {
             a.verbose,
             "--perf must turn the sink on; its output goes through it"
         );
+    }
+
+    /// What a tab's "Open in New Instance" starts the process with
+    /// (`codepp_shell::tab_menu::new_instance_args`): the flag, `--`, and
+    /// the path, which may begin with `-`.
+    #[test]
+    fn new_instance_is_a_flag_and_the_path_follows_it() {
+        let a = args(&["--new-instance", "--", "-notes.txt"]);
+        assert!(a.new_instance);
+        assert_eq!(a.path, Some(PathBuf::from("-notes.txt")));
+        assert!(!args(&["notes.txt"]).new_instance);
     }
 
     #[test]

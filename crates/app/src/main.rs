@@ -46,6 +46,9 @@ fn startup() -> Result<args::Args, ExitCode> {
     // Skip argv[0].
     match args::parse(std::env::args_os().skip(1)) {
         args::Parsed::Run(parsed) => {
+            if parsed.new_instance {
+                codepp_shell::set_guest_instance();
+            }
             let want_logs = parsed.verbose;
             let installed = logging::init(want_logs);
             if parsed.perf && !installed {

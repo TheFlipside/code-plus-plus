@@ -222,6 +222,13 @@ struct Installation {
 /// documentation for what that takes. Logs which part is missing, at
 /// `debug`, since most copies a developer runs lack all of them.
 fn establish() -> Option<Installation> {
+    // A guest instance runs beside the instance that owns the
+    // installation; an update it installed would replace `codepp.exe`
+    // under that instance, which §11.4's quit-then-install assumes away.
+    if crate::is_guest_instance() {
+        tracing::debug!("no updater: this is a guest instance (--new-instance)");
+        return None;
+    }
     let Some(config) = build_config(BUILD_FEED_URL, BUILD_PUBLIC_KEY) else {
         tracing::debug!("no updater: the build was given no feed and key it can use");
         return None;

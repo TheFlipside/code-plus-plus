@@ -171,6 +171,20 @@ pub struct Tab {
     /// tabs come back unpinned, matching pre-pin behaviour.
     #[serde(rename = "@pinned", default, skip_serializing_if = "is_false")]
     pub pinned: bool,
+    /// The number of the color the user gave this tab from its context
+    /// menu, 1 to 5 (`codepp_shell::TabColor`). Absent for a tab with no
+    /// color, and in a session written before colors were recorded. A
+    /// number no color has, as a hand-edited file can hold, is read back
+    /// as no color by the shell; anything that is not a number from 0 to
+    /// 255 is read as no color here ([`lenient_u8`]), so one bad value
+    /// never makes the whole session unreadable.
+    #[serde(
+        rename = "@color",
+        skip_serializing_if = "Option::is_none",
+        default,
+        deserialize_with = "lenient_u8"
+    )]
+    pub color: Option<u8>,
     /// The anchor end of the selection, when something was selected; the
     /// caret is [`Self::cursor`]. Absent reads as nothing selected, which
     /// is also how a session written before this was recorded reads.
@@ -193,6 +207,17 @@ pub struct Tab {
     /// child each. Read back through [`Self::fold_lines`], which bounds them.
     #[serde(rename = "fold", default, skip_serializing_if = "Vec::is_empty")]
     pub folds: Vec<Fold>,
+}
+
+/// An optional small number read from an attribute's text, `None` for
+/// text that is not one: a hand-edited or truncated `session.xml` must not
+/// lose every tab over one attribute.
+fn lenient_u8<'de, D>(deserializer: D) -> Result<Option<u8>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let text: Option<String> = Option::deserialize(deserializer)?;
+    Ok(text.and_then(|t| t.trim().parse().ok()))
 }
 
 /// A contracted fold in a [`Tab`]: the document line of its header.
@@ -1300,6 +1325,46 @@ mod tests {
         let loaded = read_file(&path).unwrap();
         assert_eq!(session, loaded);
         assert!(loaded.tabs[0].pinned, "pinned=true must round-trip");
+    }
+
+    /// A tab's color round-trips as `@color`, and a tab without one
+    /// writes no attribute, so a session written before colors reads
+    /// back as no color.
+    #[test]
+    fn round_trip_tab_color() {
+        let (_dir, path) = temp_session_path();
+        let session = Session {
+            tabs: vec![
+                Tab {
+                    path: Some(PathBuf::from("a.txt")),
+                    color: Some(3),
+                    ..Tab::default()
+                },
+                Tab {
+                    path: Some(PathBuf::from("b.txt")),
+                    ..Tab::default()
+                },
+            ],
+            ..Session::default()
+        };
+        session.save_to_xml(&path).unwrap();
+        let xml = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(xml.matches("color=").count(), 1, "{xml}");
+        let loaded = read_file(&path).unwrap();
+        assert_eq!(loaded.tabs[0].color, Some(3));
+        assert_eq!(loaded.tabs[1].color, None);
+    }
+
+    /// A `@color` that is no small number reads as no color, and the rest
+    /// of the session is read as written.
+    #[test]
+    fn a_bad_tab_color_reads_as_none() {
+        let (_dir, path) = temp_session_path();
+        let xml = r#"<session><tab path="a.txt" color="300"/><tab path="b.txt" color="abc"/><tab path="c.txt" color="-1"/><tab path="d.txt" color=" 2 "/></session>"#;
+        std::fs::write(&path, xml).unwrap();
+        let loaded = read_file(&path).unwrap();
+        let colors: Vec<Option<u8>> = loaded.tabs.iter().map(|t| t.color).collect();
+        assert_eq!(colors, [None, None, None, Some(2)]);
     }
 
     /// The `@pinned="false"` default is elided from the wire —

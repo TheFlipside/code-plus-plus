@@ -149,6 +149,7 @@ version = "0.2.1"
 dependencies = [
  "codepp-build-helpers",
  "codepp-core",
+ "codepp-shell",
  "codepp-ui-cocoa",
  "codepp-ui-gtk",
  "codepp-ui-win32",

@@ -88,6 +88,7 @@ use codepp_plugin_host::{
 };
 
 pub mod fif;
+pub mod tab_menu;
 #[cfg(target_os = "windows")]
 pub mod updater;
 #[cfg(any(target_os = "windows", target_os = "macos"))]
@@ -95,6 +96,11 @@ pub mod updater_state;
 pub use codepp_core::ViewPosition;
 pub use codepp_editor::CursorText;
 pub use fif::{FifError, FifEvent, FifJobId, FifRequest, FifStats, OpenBufferOutcome};
+pub use tab_menu::{
+    is_guest_instance, set_guest_instance, spawn_new_instance, tab_bar_rgb, ClipboardPart,
+    TabColor, TabCommand, TabMenuItem, DEFAULT_TAB_BAR_RGB, NEW_INSTANCE_FLAG,
+    RENAME_TAB_FIELD_LABEL, RENAME_TAB_TITLE,
+};
 
 /// Plugin-driven pre-fill for the next FIF dialog open. Populated
 /// by `NPPM_LAUNCHFINDINFILESDLG` and drained by the Win32 plugin
@@ -959,6 +965,9 @@ pub enum SessionRestoreEntry {
         /// tabs come back first, matching the on-disk order that
         /// `Shell::save_session` writes.
         pinned: bool,
+        /// Persisted tab color. The backend gives it to the restored tab
+        /// with [`Shell::set_tab_color`].
+        color: Option<TabColor>,
     },
     /// Re-create a tab that was bound to `path` but had unsaved
     /// edits at session-save time. The tab opens with `path`
@@ -1014,6 +1023,9 @@ pub enum SessionRestoreEntry {
         /// Same round-trip semantics as
         /// [`SessionRestoreEntry::UntitledFromBackup::pinned`].
         pinned: bool,
+        /// Persisted tab color, as
+        /// [`SessionRestoreEntry::UntitledFromBackup::color`].
+        color: Option<TabColor>,
     },
 }
 
@@ -1363,6 +1375,15 @@ pub struct Tab {
     /// for the file unless this names that load; a reload never changes
     /// the pin.
     pub pin_requested_during_load: Option<RequestId>,
+    /// The color the user gave the tab from its context menu
+    /// ([`Shell::set_tab_color`]): the color of its bar while it is the
+    /// active tab, and a light tint of it as its background while it is
+    /// not. `None` for the default look. Round-trips through
+    /// `session.xml` via [`codepp_core::Tab::color`], and a file's first
+    /// load applies the color the session recorded for it, as for the pin.
+    pub color: Option<TabColor>,
+    /// [`Self::pin_requested_during_load`] for the color.
+    pub color_requested_during_load: Option<RequestId>,
     /// Where the view stood in this tab's document when it last left it,
     /// or where a first load or a restore puts the caret: what the view is
     /// put back at when the tab's document is bound again, and what a
@@ -1455,10 +1476,53 @@ impl Default for Tab {
             custom_name: None,
             pinned: false,
             pin_requested_during_load: None,
+            color: None,
+            color_requested_during_load: None,
             view: ViewPosition::at(0),
             folds: Vec::new(),
             view_owed: false,
             disk_stamp: None,
+        }
+    }
+}
+
+impl Tab {
+    /// Set the language, pin and color a first load (request `load`) sets
+    /// ([`Shell::first_load_lang_and_pin`]), each unless one was requested
+    /// while that load was in flight.
+    fn apply_first_load_choices(
+        &mut self,
+        load: RequestId,
+        (lang, pinned, color): (LangType, bool, Option<TabColor>),
+    ) {
+        if self.lang_requested_during_load != Some(load) {
+            self.lang = lang;
+        }
+        if self.pin_requested_during_load != Some(load) {
+            self.pinned = pinned;
+        }
+        if self.color_requested_during_load != Some(load) {
+            self.color = color;
+        }
+    }
+
+    /// Whether a pin, and a color, were requested while load `load` was in
+    /// flight: what goes with the file when the load is diverted
+    /// ([`Shell::divert_first_load`]).
+    fn requested_during(&self, load: RequestId) -> (bool, bool) {
+        (
+            self.pin_requested_during_load == Some(load),
+            self.color_requested_during_load == Some(load),
+        )
+    }
+
+    /// Give up a pin and a color that went with a diverted file.
+    fn give_up_moved(&mut self, pin: bool, color: bool) {
+        if pin {
+            self.pinned = false;
+        }
+        if color {
+            self.color = None;
         }
     }
 }
@@ -6798,13 +6862,8 @@ impl Shell {
                 // because it's pinned). `repair_restored_pin_placement` below
                 // relocates it — a no-op in the restore case (see
                 // `pinned_restore_target`).
-                if let Some((lang, pinned)) = first_load {
-                    if tab.lang_requested_during_load != Some(loaded.id) {
-                        tab.lang = lang;
-                    }
-                    if tab.pin_requested_during_load != Some(loaded.id) {
-                        tab.pinned = pinned;
-                    }
+                if let Some(choices) = first_load {
+                    tab.apply_first_load_choices(loaded.id, choices);
                 }
                 let stored_doc = tab.scintilla_doc;
                 let buffer_id = tab.id as isize;
@@ -7022,7 +7081,7 @@ impl Shell {
         ui: &mut U,
         idx: usize,
         loaded: codepp_core::file::LoadedFile,
-        (lang, pinned): (LangType, bool),
+        (lang, pinned, color): (LangType, bool, Option<TabColor>),
         (view, folds): (ViewPosition, Vec<u64>),
         pending: &mut Vec<PendingDialog>,
     ) {
@@ -7043,8 +7102,10 @@ impl Shell {
         } else {
             lang
         };
-        let pin_moves = kept.pin_requested_during_load == Some(loaded.id);
+        // A pin or a color requested during the load goes with the file.
+        let (pin_moves, color_moves) = kept.requested_during(loaded.id);
         let pinned = if pin_moves { kept.pinned } else { pinned };
+        let color = if color_moves { kept.color } else { color };
         let kept_id = kept.id;
         if self.active_tab == Some(idx) {
             self.bind_active_view(ui);
@@ -7079,9 +7140,7 @@ impl Shell {
             path = ?loaded.path,
             "file landed on a tab holding unsaved work; keeping the work untitled and opening the file beside it"
         );
-        if pin_moves {
-            self.tabs[idx].pinned = false;
-        }
+        self.tabs[idx].give_up_moved(pin_moves, color_moves);
         let id = self.allocate_buffer_id();
         let codepp_core::file::LoadedFile {
             path,
@@ -7104,6 +7163,7 @@ impl Shell {
                 text,
                 lang,
                 pinned,
+                color,
                 view,
                 folds,
                 disk_stamp: stamp,
@@ -8183,10 +8243,23 @@ impl Shell {
         stored.map_or_else(Default::default, |t| (t.view_position(), t.fold_lines()))
     }
 
-    /// The language and pin a tab's first load of `path` sets: what the
-    /// session read at startup or by Load Session recorded for the file
+    /// A restored record's language, resolved as
+    /// [`Self::resolve_persisted_lang`] resolves it, and its color.
+    fn restored_lang_and_color(
+        t: &codepp_core::session::Tab,
+        registry: &codepp_udl::UdlRegistry,
+    ) -> (Option<i32>, Option<TabColor>) {
+        (
+            Self::resolve_persisted_lang(t.lang, t.udl.as_deref(), registry)
+                .map(LangType::as_npp_id),
+            t.color.and_then(TabColor::from_number),
+        )
+    }
+
+    /// The language, pin and color a tab's first load of `path` sets: what
+    /// the session read at startup or by Load Session recorded for the file
     /// (`stored`), or else, for the language, the extension
-    /// ([`Self::detect_lang`]). A reload sets neither; see
+    /// ([`Self::detect_lang`]). A reload sets none of them; see
     /// [`Self::apply_load_result`]. An associated function over the
     /// registry it reads, so the landing can call it while it holds a
     /// borrow of the session.
@@ -8194,11 +8267,15 @@ impl Shell {
         stored: Option<&codepp_core::session::Tab>,
         path: &Path,
         registry: &codepp_udl::UdlRegistry,
-    ) -> (LangType, bool) {
+    ) -> (LangType, bool, Option<TabColor>) {
         let lang = stored
             .and_then(|t| Self::resolve_persisted_lang(t.lang, t.udl.as_deref(), registry))
             .unwrap_or_else(|| Self::detect_lang(path, registry));
-        (lang, stored.is_some_and(|t| t.pinned))
+        (
+            lang,
+            stored.is_some_and(|t| t.pinned),
+            stored.and_then(|t| t.color).and_then(TabColor::from_number),
+        )
     }
 
     /// Set the **active** tab's syntax-highlighting language from a
@@ -9198,6 +9275,11 @@ impl Shell {
     /// written. The prune then keeps what the `session.xml` on disk names,
     /// and the backups this save wrote ([`Self::after_failed_save`]).
     pub fn save_session<U: UiPlatform>(&mut self, ui: &mut U) -> Result<(), ShellError> {
+        if is_guest_instance() {
+            // A guest instance saves no session and writes no backups: the
+            // instance it was started from owns both ([`set_guest_instance`]).
+            return Ok(());
+        }
         let Some(session_path) = codepp_platform::session_xml_path() else {
             // No config dir resolvable (sandboxed environment); skip
             // session save silently. Untitled buffers still die, but
@@ -9527,6 +9609,7 @@ impl Shell {
             // deserialize with `pinned = false` (unpinned), so
             // no migration is required.
             pinned: tab.pinned,
+            color: tab.color.map(TabColor::number),
             ..codepp_core::Tab::default()
         };
         // Where the view stood and which folds were contracted, so the
@@ -9564,6 +9647,8 @@ impl Shell {
         let tab = &self.tabs[idx];
         let load = tab.pending_load;
         let pin_moves = tab.pin_requested_during_load == load;
+        // `load` is `Some`: this runs only for a tab on its first load.
+        let color_moves = tab.color_requested_during_load == load;
         let work = if self.holds_unsaved_work(ui, idx) {
             let seq = tab
                 .untitled_seq
@@ -9591,6 +9676,8 @@ impl Shell {
                     // today, since an open never loads into a pinned tab, so
                     // this mirrors the landing rather than a path a test reaches.
                     pinned: tab.pinned && !pin_moves,
+                    // The color goes the way the pin goes.
+                    color: if color_moves { None } else { tab.color }.map(TabColor::number),
                     ..codepp_core::Tab::default()
                 };
                 record.set_view_position(view);
@@ -9619,6 +9706,11 @@ impl Shell {
                 tab.pinned
             } else {
                 stored.is_some_and(|t| t.pinned)
+            },
+            color: if color_moves {
+                tab.color.map(TabColor::number)
+            } else {
+                stored.and_then(|t| t.color)
             },
             ..codepp_core::Tab::default()
         };
@@ -9754,6 +9846,10 @@ impl Shell {
     /// every backup in the folder is kept for the run, since nothing
     /// then says which of them the session named.
     pub fn load_session_entries(&mut self) -> Vec<SessionRestoreEntry> {
+        if is_guest_instance() {
+            // A guest instance restores nothing ([`set_guest_instance`]).
+            return Vec::new();
+        }
         let Some(path) = codepp_platform::session_xml_path() else {
             return Vec::new();
         };
@@ -9876,6 +9972,7 @@ impl Shell {
                 // path; the filename portion is what
                 // `parse_backup_timestamp` operates on.
                 let backup_filename = t.backup.clone();
+                let (lang, color) = Self::restored_lang_and_color(t, registry);
                 if let Some(path) = &t.path {
                     if let Some((text, backup_path)) = backup_loaded {
                         // Detect external edits during the
@@ -9908,9 +10005,9 @@ impl Shell {
                             eol: t.eol,
                             disk_changed_externally,
                             backup_modified_externally,
-                            lang: Self::resolve_persisted_lang(t.lang, t.udl.as_deref(), registry)
-                                .map(LangType::as_npp_id),
+                            lang,
                             pinned: t.pinned,
+                            color,
                         })
                     } else {
                         opened_from_disk.insert(path.clone());
@@ -9940,9 +10037,9 @@ impl Shell {
                             eol: t.eol,
                             backup_modified_externally,
                             custom_name: t.custom_name.clone(),
-                            lang: Self::resolve_persisted_lang(t.lang, t.udl.as_deref(), registry)
-                                .map(LangType::as_npp_id),
+                            lang,
                             pinned: t.pinned,
+                            color,
                         }
                     })
                 }
@@ -10080,6 +10177,8 @@ impl Shell {
             custom_name,
             pinned,
             pin_requested_during_load: None,
+            color: None,
+            color_requested_during_load: None,
             view,
             folds: kept_folds(folds),
             view_owed: true,
@@ -10227,6 +10326,8 @@ impl Shell {
             custom_name: None,
             pinned,
             pin_requested_during_load: None,
+            color: None,
+            color_requested_during_load: None,
             view,
             folds: kept_folds(folds),
             view_owed: true,
@@ -12552,7 +12653,7 @@ impl<U: UiPlatform> HostServices for HostBridge<'_, U> {
         tracing::trace!(
             view,
             tab_idx,
-            "NPPM_TRIGGERTABBARCONTEXTMENU: no-op (Code++ has no tab context menu yet)"
+            "NPPM_TRIGGERTABBARCONTEXTMENU: no-op (it does not open the tab context menu yet)"
         );
         true
     }
@@ -24717,8 +24818,9 @@ mod tests {
                     backup_modified_externally,
                     lang,
                     pinned,
+                    color,
                 } => {
-                    shell.restore_dirty_with_text(
+                    let idx = shell.restore_dirty_with_text(
                         ui,
                         path,
                         text,
@@ -24731,6 +24833,7 @@ mod tests {
                         lang,
                         pinned,
                     );
+                    shell.set_tab_color(idx, color);
                 }
                 SessionRestoreEntry::UntitledFromBackup { .. } => {
                     panic!("these sessions name no untitled buffer")
@@ -26610,6 +26713,204 @@ mod tests {
             ),
             (Some(path.as_path()), 3, Some(L_PYTHON.0), true)
         );
+    }
+
+    /// A file's tab takes the color the session recorded for it when the
+    /// file lands, the next save records it, and a session record with a
+    /// number no color has gives no color.
+    #[test]
+    fn a_file_lands_with_the_color_the_session_recorded_for_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let (a, b) = (dir.path().join("a.txt"), dir.path().join("b.txt"));
+        std::fs::write(&a, "a\n").unwrap();
+        std::fs::write(&b, "b\n").unwrap();
+        let backups = tempfile::tempdir().unwrap();
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+        for (path, color) in [(&a, 4), (&b, 9)] {
+            shell.session.tabs.push(codepp_core::session::Tab {
+                path: Some(path.clone()),
+                color: Some(color),
+                ..codepp_core::session::Tab::default()
+            });
+        }
+        shell.open_file(a.clone());
+        shell.open_file(b.clone());
+        drain_until_loads_settle(&mut shell, &mut ui);
+        assert_eq!(shell.tabs[0].color, Some(TabColor::Orange));
+        assert_eq!(shell.tabs[1].color, None, "9 is no color");
+
+        let SavedSession { session, .. } =
+            shell.session_to_save(&mut ui, Some(backups.path()), "ts");
+        assert_eq!(session.tabs[0].color, Some(4));
+        assert_eq!(session.tabs[1].color, None);
+    }
+
+    /// A color given to a tab while a file loads into it goes with the file
+    /// when the load is diverted to a tab of its own, as the pin does: the
+    /// typed work gives it up.
+    #[test]
+    fn a_color_asked_for_while_a_file_loads_goes_with_it_when_diverted() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("late.txt");
+        std::fs::write(&path, "late\n").unwrap();
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+        shell.new_untitled(&mut ui);
+        let scratch_doc = shell.tabs[0].scintilla_doc;
+        shell.open_file_replacing_scratch(path.clone(), true);
+        assert!(shell.set_tab_color(0, Some(TabColor::Green)));
+        ui.buffer_text = "typed\n".to_string();
+        ui.doc_dirty.insert(scratch_doc, true);
+        drain_until_loads_settle(&mut shell, &mut ui);
+        assert_eq!(shell.tabs.len(), 2, "the file opened beside the work");
+        assert_eq!(shell.tabs[0].path, None);
+        assert_eq!(shell.tabs[0].color, None, "the work gave the color up");
+        assert_eq!(shell.tabs[1].path.as_deref(), Some(path.as_path()));
+        assert_eq!(shell.tabs[1].color, Some(TabColor::Green));
+    }
+
+    /// A session's `@color` reaches the backend with each buffer restored
+    /// from its backup, and a number no color has reaches it as none.
+    #[test]
+    fn restored_buffers_carry_their_recorded_color() {
+        let backups = tempfile::tempdir().unwrap();
+        std::fs::write(backups.path().join("new 1@ts"), "one").unwrap();
+        std::fs::write(backups.path().join("new 2@ts"), "two").unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("f.txt");
+        std::fs::write(&file, "disk").unwrap();
+        std::fs::write(backups.path().join("f.txt@ts"), "edited").unwrap();
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let session = Session {
+            tabs: vec![
+                codepp_core::session::Tab {
+                    untitled_seq: Some(1),
+                    backup: Some("new 1@ts".into()),
+                    color: Some(5),
+                    ..codepp_core::session::Tab::default()
+                },
+                codepp_core::session::Tab {
+                    untitled_seq: Some(2),
+                    backup: Some("new 2@ts".into()),
+                    color: Some(7),
+                    ..codepp_core::session::Tab::default()
+                },
+                codepp_core::session::Tab {
+                    path: Some(file.clone()),
+                    backup: Some("f.txt@ts".into()),
+                    color: Some(2),
+                    ..codepp_core::session::Tab::default()
+                },
+            ],
+            ..Session::default()
+        };
+        let colors: Vec<Option<TabColor>> = shell
+            .restore_entries(session, Some(backups.path()), MAX_RESTORED_BACKUP_BYTES)
+            .into_iter()
+            .map(|e| match e {
+                SessionRestoreEntry::UntitledFromBackup { color, .. }
+                | SessionRestoreEntry::DirtyFromBackup { color, .. } => color,
+                SessionRestoreEntry::OpenFile(_) => panic!("every record has a backup"),
+            })
+            .collect();
+        assert_eq!(colors, [Some(TabColor::Pink), None, Some(TabColor::Green)]);
+    }
+
+    /// A color given to a tab while its file loads is kept over the one
+    /// the session recorded for the file, and saved while it loads.
+    #[test]
+    fn a_color_given_while_a_file_loads_is_kept_at_its_landing() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("late.txt");
+        std::fs::write(&path, "late\n").unwrap();
+        let backups = tempfile::tempdir().unwrap();
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+        shell.session.tabs.push(codepp_core::session::Tab {
+            path: Some(path.clone()),
+            color: Some(1),
+            ..codepp_core::session::Tab::default()
+        });
+        shell.open_file(path.clone());
+        assert!(shell.set_tab_color(0, Some(TabColor::Pink)));
+        let SavedSession { session, .. } =
+            shell.session_to_save(&mut ui, Some(backups.path()), "ts");
+        assert_eq!(session.tabs[0].color, Some(5), "saved while it loads");
+        drain_until_loads_settle(&mut shell, &mut ui);
+        assert_eq!(shell.tabs[0].color, Some(TabColor::Pink));
+    }
+
+    /// A guest instance restores no session and saves none: the session
+    /// on disk is not read, and is left as it was.
+    ///
+    /// The flag is process-wide, so this runs the body below in a child
+    /// process, with the configuration folder moved to a temporary one.
+    #[test]
+    fn a_guest_instance_restores_and_saves_nothing() {
+        let base = tempfile::tempdir().unwrap();
+        let config = codepp_platform_config_under(base.path());
+        std::fs::create_dir_all(&config).unwrap();
+        let session = config.join("session.xml");
+        let before = r#"<session><tab path="/nowhere/a.txt"/></session>"#;
+        std::fs::write(&session, before).unwrap();
+        let status = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--ignored",
+                "--exact",
+                "tests::guest_instance_body",
+                "--test-threads=1",
+            ])
+            .env("APPDATA", base.path())
+            .env("XDG_CONFIG_HOME", base.path())
+            .env("HOME", base.path())
+            .env("CODEPP_GUEST_TEST_CONFIG", &config)
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&status.stdout);
+        assert!(status.status.success(), "the guest body failed:\n{stdout}");
+        // An `--exact` filter that matches nothing also exits 0.
+        assert!(
+            stdout.contains("1 passed"),
+            "the guest body did not run:\n{stdout}"
+        );
+        assert_eq!(std::fs::read_to_string(&session).unwrap(), before);
+    }
+
+    /// Where the configuration folder is under `base`, as
+    /// `codepp_platform::config_dir` puts it on this platform.
+    fn codepp_platform_config_under(base: &Path) -> PathBuf {
+        if cfg!(target_os = "macos") {
+            base.join("Library")
+                .join("Application Support")
+                .join("Code++")
+        } else {
+            base.join("Code++")
+        }
+    }
+
+    /// The child half of [`a_guest_instance_restores_and_saves_nothing`].
+    #[test]
+    #[ignore = "sets a process-wide flag; run by a_guest_instance_restores_and_saves_nothing"]
+    fn guest_instance_body() {
+        let config = std::env::var_os("CODEPP_GUEST_TEST_CONFIG").expect("run by its driver");
+        assert_eq!(
+            codepp_platform::config_dir().as_deref(),
+            Some(Path::new(&config)),
+            "the configuration folder was not moved"
+        );
+        crate::set_guest_instance();
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+        assert!(shell.load_session_entries().is_empty());
+        shell.new_untitled(&mut ui);
+        ui.buffer_text = "typed\n".to_string();
+        assert!(shell.save_session(&mut ui).is_ok());
     }
 
     /// A language and a pin asked for while the file loads go with the

@@ -960,6 +960,13 @@ fn send(instance: Running, payload: &[u8]) -> Reply {
 /// bytes written. A later start blocks until the instance answered,
 /// for at most [`WAIT`].
 pub(crate) fn start(path: Option<&Path>) -> Start {
+    // A guest instance (`--new-instance`) runs beside the instance that
+    // holds the lock: it takes none, so no start is ever handed to it,
+    // and it hands its own file to nobody.
+    if codepp_shell::is_guest_instance() {
+        tracing::info!("guest instance: no instance lock taken");
+        return Start::First;
+    }
     let Some(dir) = codepp_platform::config_dir() else {
         tracing::warn!("no configuration folder to keep the instance lock in; starting regardless");
         return Start::First;

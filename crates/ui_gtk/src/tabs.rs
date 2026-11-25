@@ -68,7 +68,7 @@ use gtk::gdk_pixbuf::Pixbuf;
 use gtk::glib;
 use gtk::prelude::*;
 
-use codepp_shell::{tab_display_name, Tab};
+use codepp_shell::{tab_bar_rgb, tab_display_name, Tab, TabColor};
 
 /// Tab icons, embedded rather than read from disk at runtime. The same
 /// PNGs the Win32 owner-draw strip blits (`ui_win32`'s `PNG_TAB_SAVE_*`),
@@ -93,6 +93,46 @@ const LABEL_MAX_CHARS: i32 = 24;
 
 /// X11/Wayland button number for the middle button.
 const MIDDLE_BUTTON: u32 = 2;
+
+/// X11/Wayland button number for the right button.
+const RIGHT_BUTTON: u32 = 3;
+
+/// The notebook's widget name, which [`TAB_STRIP_CSS`] selects it by.
+const NOTEBOOK_NAME: &str = "codepp-tab-strip";
+
+/// Height of the bar along the top of the active tab, in pixels.
+const TAB_BAR_PX: f64 = 3.0;
+
+/// The tab's padding, moved from the theme's `tab` node onto the label's
+/// own row ([`build_tab_label`]), so that the label's event box spans the
+/// whole tab and its draw handler can paint the tab's color edge to edge.
+const TAB_PAD_X: i32 = 12;
+/// The vertical half of the same padding.
+const TAB_PAD_Y: i32 = 3;
+
+/// Stylesheet for the strip's notebook: no padding on a tab, which the
+/// label carries instead, and no theme underline on the checked tab, whose
+/// bar the label paints along its top instead, as Win32 does.
+///
+/// The colors themselves are painted by the labels, not by CSS: GTK 3
+/// refused `:nth-of-type` there, and `:nth-child` counts the scroll arrows
+/// once they are shown, so no selector names a tab by its place for sure.
+pub(crate) const TAB_STRIP_CSS: &str = "\
+notebook#codepp-tab-strip > header > tabs > tab { padding: 0; }
+notebook#codepp-tab-strip > header > tabs > tab:checked { box-shadow: none; }
+";
+
+/// What a tab's label paints under its contents: the bar along the top of
+/// the active tab, in the tab's color or `codepp_shell::DEFAULT_TAB_BAR_RGB`,
+/// and the light tint of an inactive tab's color as its background. As
+/// `0xRRGGBB` values: `(bar, tint)`.
+pub(crate) fn tab_paint(active: bool, color: Option<TabColor>) -> (Option<u32>, Option<u32>) {
+    if active {
+        (Some(tab_bar_rgb(color)), None)
+    } else {
+        (None, color.map(TabColor::tint_rgb))
+    }
+}
 
 /// Logical size reserved for the per-tab pin glyph, mirroring Win32's
 /// `TAB_PIN_SIZE_PX`; drawn centred in a slightly larger relief-less button.
@@ -251,6 +291,18 @@ impl TabStrip {
         // Arrows once the tabs overflow, rather than squeezing them to
         // illegibility. Notepad++ scrolls too.
         notebook.set_scrollable(true);
+        notebook.set_widget_name(NOTEBOOK_NAME);
+        let provider = gtk::CssProvider::new();
+        if let Err(err) = provider.load_from_data(TAB_STRIP_CSS.as_bytes()) {
+            tracing::warn!(?err, "tab strip: the stylesheet was refused");
+        }
+        if let Some(screen) = gtk::gdk::Screen::default() {
+            gtk::StyleContext::add_provider_for_screen(
+                &screen,
+                &provider,
+                gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
+            );
+        }
         Self {
             notebook,
             order: Rc::new(RefCell::new(Vec::new())),
@@ -304,7 +356,7 @@ impl TabStrip {
                 let Some(page) = self.notebook.nth_page(Some(idx_u32)) else {
                     break;
                 };
-                let label = build_tab_label(tab, scale);
+                let label = build_tab_label(tab, scale, active == Some(idx));
                 self.notebook.set_tab_label(&page, Some(&label));
                 // Pinned tabs are fixed in place — disable their drag-reorder,
                 // mirroring Win32's "skip drag arming on pinned tabs". The
@@ -385,12 +437,17 @@ fn tab_icon_image(dirty: bool, scale: i32) -> Option<gtk::Image> {
 /// nowhere for middle-click-to-close to land. `set_visible_window(false)`
 /// keeps the box input-only, so it does not paint over the theme's own
 /// tab background.
-fn build_tab_label(tab: &Tab, scale: i32) -> gtk::Widget {
+fn build_tab_label(tab: &Tab, scale: i32, active: bool) -> gtk::Widget {
     let ebox = gtk::EventBox::new();
     ebox.set_visible_window(false);
     ebox.add_events(gtk::gdk::EventMask::BUTTON_PRESS_MASK);
 
     let row = gtk::Box::new(gtk::Orientation::Horizontal, 4);
+    // The tab's padding, which [`TAB_STRIP_CSS`] takes off the tab itself.
+    row.set_margin_start(TAB_PAD_X);
+    row.set_margin_end(TAB_PAD_X);
+    row.set_margin_top(TAB_PAD_Y);
+    row.set_margin_bottom(TAB_PAD_Y);
 
     if let Some(image) = tab_icon_image(tab.dirty, scale) {
         row.pack_start(&image, false, false, 0);
@@ -478,12 +535,49 @@ fn build_tab_label(tab: &Tab, scale: i32) -> gtk::Widget {
                     crate::close_tab_by_id(id);
                     return glib::Propagation::Stop;
                 }
+                // The tab's context menu, shown from an idle once GTK is
+                // done with this press (`crate::tab_menu`). Stopped here,
+                // so the notebook does not see it. A double or triple click
+                // also delivers a `2BUTTON_PRESS` / `3BUTTON_PRESS` after its
+                // presses; only the single press opens the menu, or the
+                // second click of a double would open it a second time.
+                if ev.button() == RIGHT_BUTTON {
+                    if ev.event_type() == gtk::gdk::EventType::ButtonPress {
+                        crate::tab_menu::request(id, ev.clone());
+                    }
+                    return glib::Propagation::Stop;
+                }
                 // Anything else falls through to the notebook, which turns a
                 // left-click into the `switch-page` that selects this tab.
                 glib::Propagation::Proceed
             },
         )
     });
+
+    // The tab's color (`tab_paint`), painted before the contents: the
+    // signal's own handler draws the children after this one returns.
+    let (bar, tint) = tab_paint(active, tab.color);
+    if bar.is_some() || tint.is_some() {
+        ebox.connect_draw(move |area, cr| {
+            crate::at_callback_boundary("tabs:ebox:draw", glib::Propagation::Proceed, || {
+                let width = f64::from(area.allocated_width());
+                let height = f64::from(area.allocated_height());
+                if let Some(tint) = tint {
+                    let (red, green, blue) = crate::tab_menu::rgb_f64(tint);
+                    cr.set_source_rgb(red, green, blue);
+                    cr.rectangle(0.0, 0.0, width, height);
+                    let _ = cr.fill();
+                }
+                if let Some(bar) = bar {
+                    let (red, green, blue) = crate::tab_menu::rgb_f64(bar);
+                    cr.set_source_rgb(red, green, blue);
+                    cr.rectangle(0.0, 0.0, width, TAB_BAR_PX);
+                    let _ = cr.fill();
+                }
+                glib::Propagation::Proceed
+            })
+        });
+    }
 
     ebox.add(&row);
     ebox.show_all();
@@ -521,5 +615,52 @@ pub(crate) mod icon_display_tests {
                 "the tab glyph is not drawn at the screen's pixels at scale {scale}"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod css_tests {
+    use super::{tab_paint, TAB_STRIP_CSS};
+    use codepp_shell::{TabColor, DEFAULT_TAB_BAR_RGB};
+
+    /// The active tab always has a bar, orange by default and the tab's
+    /// own color when it has one; an inactive tab has a tint only when it
+    /// has a color, and never a bar.
+    #[test]
+    fn a_tab_paints_a_bar_when_active_and_a_tint_when_not() {
+        assert_eq!(tab_paint(true, None), (Some(DEFAULT_TAB_BAR_RGB), None));
+        let blue = TabColor::Blue;
+        assert_eq!(tab_paint(true, Some(blue)), (Some(blue.bar_rgb()), None));
+        assert_eq!(tab_paint(false, Some(blue)), (None, Some(blue.tint_rgb())));
+        assert_eq!(tab_paint(false, None), (None, None));
+    }
+
+    /// The stylesheet names no tab by its place, which GTK cannot do
+    /// reliably here (see `TAB_STRIP_CSS`).
+    #[test]
+    fn the_stylesheet_names_no_tab_by_place() {
+        assert!(!TAB_STRIP_CSS.contains("nth-"));
+        assert!(TAB_STRIP_CSS.contains("tab { padding: 0; }"));
+    }
+
+    /// The tab colors are painted by each label's own draw handler, which
+    /// `build_tab_label` installs from the tab and whether it is active.
+    /// So `TabStrip::sync` must build every label afresh, every time: a
+    /// sync that kept an unchanged label would leave the old tab's paint
+    /// on it after a switch or an Apply Color.
+    #[test]
+    fn every_sync_builds_every_label_afresh() {
+        use crate::source_scan::{block_after, code_only, fn_body, occurs_at_depth_one};
+        let src = code_only(include_str!("tabs.rs"));
+        let sync = fn_body(&src, "sync");
+        let labels = block_after(&sync, "for (idx, tab) in tabs.iter().enumerate() {");
+        assert!(
+            occurs_at_depth_one(
+                &labels,
+                "let label = build_tab_label(tab, scale, active == Some(idx));"
+            ) && occurs_at_depth_one(&labels, "self.notebook.set_tab_label(&page, Some(&label));")
+                && !labels.contains("continue"),
+            "TabStrip::sync no longer rebuilds every label, so a tab's color can go stale"
+        );
     }
 }

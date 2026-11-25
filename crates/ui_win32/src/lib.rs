@@ -99,6 +99,7 @@ mod instance;
 mod preferences;
 mod print;
 mod print_preview;
+mod tab_menu;
 mod toolbar;
 mod udl_editor;
 mod updater;
@@ -14465,9 +14466,9 @@ unsafe fn read_rename_value(edit: HWND) -> Option<String> {
 /// Client-area size of the Rename dialog, in pixels.
 ///
 /// Tighter than the Goto dialog because this one has only four
-/// controls (label, edit, two buttons).
+/// controls (the framed edit, its frame, two buttons).
 const RENAME_CLIENT_W: i32 = 380;
-const RENAME_CLIENT_H: i32 = 120;
+const RENAME_CLIENT_H: i32 = 136;
 
 /// Create the Rename dialog's child controls, pre-fill the edit, and
 /// record the two HWNDs the dialog proc reads back.
@@ -14486,28 +14487,56 @@ unsafe fn build_rename_controls(dlg: HWND, state: &mut RenameDialogState) -> Opt
             RENAME_CLIENT_H,
         );
 
+        // The edit sits in a frame whose caption, "New name", is
+        // centred on its top line, which stops either side of the text.
+        // An etched frame and an opaque caption over it, as the About
+        // dialog does, rather than a `BS_GROUPBOX`, whose top line runs
+        // through its title on Win11 (see `SS_ETCHEDFRAME`).
         const X_PAD: i32 = 14;
-        const LABEL_Y: i32 = 12;
-        const EDIT_Y: i32 = 36;
-        const BTN_Y: i32 = 78;
-        const LABEL_W: i32 = RENAME_CLIENT_W - 2 * X_PAD;
-        const LABEL_H: i32 = 18;
-        const EDIT_W: i32 = RENAME_CLIENT_W - 2 * X_PAD;
+        const FRAME_Y: i32 = 14;
+        const CAPTION_W: i32 = 76;
+        const CAPTION_H: i32 = 16;
+        const FRAME_W: i32 = RENAME_CLIENT_W - 2 * X_PAD;
+        const FRAME_H: i32 = 66;
+        const EDIT_X: i32 = X_PAD + 12;
+        const EDIT_Y: i32 = FRAME_Y + 26;
+        const BTN_Y: i32 = FRAME_Y + FRAME_H + 14;
+        const EDIT_W: i32 = FRAME_W - 24;
         const EDIT_H: i32 = 24;
         const BTN_W: i32 = 90;
         const BTN_H: i32 = 26;
         const OK_X: i32 = RENAME_CLIENT_W - X_PAD - BTN_W * 2 - 8;
         const CANCEL_X: i32 = RENAME_CLIENT_W - X_PAD - BTN_W;
 
+        let frame = CreateWindowExW(
+            WINDOW_EX_STYLE::default(),
+            w!("STATIC"),
+            PCWSTR::null(),
+            WS_CHILD | WS_VISIBLE | style_bits(SS_ETCHEDFRAME as i32),
+            X_PAD,
+            FRAME_Y,
+            FRAME_W,
+            FRAME_H,
+            Some(dlg),
+            None,
+            Some(instance.into()),
+            None,
+        )
+        .ok()?;
+        // Created after the frame so it paints over the frame's top line;
+        // the dialog's background brush fills its rect.
+        // `&`: Alt+N focuses the edit, the next tab stop, as the old
+        // "&New name:" label did.
+        let caption = HSTRING::from(format!("&{}", codepp_shell::RENAME_TAB_FIELD_LABEL));
         let label = CreateWindowExW(
             WINDOW_EX_STYLE::default(),
             w!("STATIC"),
-            w!("&New name:"),
-            WS_CHILD | WS_VISIBLE,
-            X_PAD,
-            LABEL_Y,
-            LABEL_W,
-            LABEL_H,
+            &caption,
+            WS_CHILD | WS_VISIBLE | style_bits(SS_CENTER as i32),
+            (RENAME_CLIENT_W - CAPTION_W) / 2,
+            FRAME_Y - CAPTION_H / 2,
+            CAPTION_W,
+            CAPTION_H,
             Some(dlg),
             None,
             Some(instance.into()),
@@ -14519,7 +14548,7 @@ unsafe fn build_rename_controls(dlg: HWND, state: &mut RenameDialogState) -> Opt
             w!("EDIT"),
             PCWSTR::null(),
             WS_CHILD | WS_VISIBLE | WS_TABSTOP | style_bits(ES_AUTOHSCROLL),
-            X_PAD,
+            EDIT_X,
             EDIT_Y,
             EDIT_W,
             EDIT_H,
@@ -14580,7 +14609,7 @@ unsafe fn build_rename_controls(dlg: HWND, state: &mut RenameDialogState) -> Opt
         );
 
         let font = HFONT(GetStockObject(DEFAULT_GUI_FONT).0);
-        for child in [label, edit, ok_btn, cancel_btn] {
+        for child in [frame, label, edit, ok_btn, cancel_btn] {
             apply_dialog_font(child, font);
         }
 
@@ -14617,7 +14646,7 @@ fn show_rename_dialog(owner: HWND, current_name: &str) -> Option<String> {
         let state_ptr: *mut RenameDialogState = &raw mut *state;
 
         let template = dlgtemplate::DialogTemplate::new(
-            "Rename",
+            codepp_shell::RENAME_TAB_TITLE,
             dlgtemplate::dialog_style(),
             WS_EX_CONTROLPARENT.0,
             180,
@@ -18983,6 +19012,7 @@ pub fn run(initial_path: Option<PathBuf>, perf: codepp_core::perf::Perf) -> Resu
                         custom_name,
                         lang,
                         pinned,
+                        color,
                     } => {
                         // `restore_untitled_with_text` needs a
                         // `&mut UiPlatform` to allocate the Scintilla
@@ -18992,7 +19022,7 @@ pub fn run(initial_path: Option<PathBuf>, perf: codepp_core::perf::Perf) -> Resu
                         // does — avoids holding both a `&mut Shell`
                         // and a parallel `&mut WindowState` borrow.
                         let (shell, mut ui) = state.split();
-                        shell.restore_untitled_with_text(
+                        let idx = shell.restore_untitled_with_text(
                             &mut ui,
                             untitled_seq,
                             text,
@@ -19005,6 +19035,7 @@ pub fn run(initial_path: Option<PathBuf>, perf: codepp_core::perf::Perf) -> Resu
                             lang,
                             pinned,
                         );
+                        shell.set_tab_color(idx, color);
                     }
                     SessionRestoreEntry::DirtyFromBackup {
                         path,
@@ -19017,6 +19048,7 @@ pub fn run(initial_path: Option<PathBuf>, perf: codepp_core::perf::Perf) -> Resu
                         backup_modified_externally,
                         lang,
                         pinned,
+                        color,
                     } => {
                         // Same shape as the Untitled branch: split
                         // off a UiPlatform handle, seed the new
@@ -19032,7 +19064,7 @@ pub fn run(initial_path: Option<PathBuf>, perf: codepp_core::perf::Perf) -> Resu
                         // an Error dialog when the recovery file
                         // itself was edited.
                         let (shell, mut ui) = state.split();
-                        shell.restore_dirty_with_text(
+                        let idx = shell.restore_dirty_with_text(
                             &mut ui,
                             path,
                             text,
@@ -19045,6 +19077,7 @@ pub fn run(initial_path: Option<PathBuf>, perf: codepp_core::perf::Perf) -> Resu
                             lang,
                             pinned,
                         );
+                        shell.set_tab_color(idx, color);
                     }
                 }
             }
@@ -25223,6 +25256,22 @@ extern "system" fn tab_subclass_proc(
                 }
                 DefSubclassProc(hwnd, msg, wparam, lparam)
             }
+            WM_RBUTTONUP => {
+                // The tab's context menu (`tab_menu`). A right click on
+                // a tab brings it to the front first, as in Notepad++,
+                // so every entry acts on the active tab. Off a tab, the
+                // control does what it did before.
+                let x = i32::from((lparam.0 & 0xFFFF) as i16);
+                let y = i32::from(((lparam.0 >> 16) & 0xFFFF) as i16);
+                let Some(idx) = tab_hit_test(hwnd, x, y) else {
+                    return DefSubclassProc(hwnd, msg, wparam, lparam);
+                };
+                let parent = GetParent(hwnd).unwrap_or_default();
+                let mut pt = POINT { x, y };
+                let _ = ClientToScreen(hwnd, &raw mut pt);
+                tab_menu::show(parent, idx, pt);
+                LRESULT(0)
+            }
             WM_LBUTTONUP => {
                 let x = i32::from((lparam.0 & 0xFFFF) as i16);
                 let y = i32::from(((lparam.0 >> 16) & 0xFFFF) as i16);
@@ -26101,11 +26150,18 @@ unsafe fn paint_tab_item(state: &mut WindowState, dis: &DRAWITEMSTRUCT) {
     // edits count. Aligns Code++ with N++'s tab strip so muscle
     // memory carries across.
     let dirty = idx < state.shell.tabs.len() && state.shell.tabs[idx].dirty;
+    // The color the user gave the tab from its context menu: the bar of
+    // the active tab, and a light tint as the background of an inactive
+    // one. With none, the default look.
+    let color = state.shell.tabs.get(idx).and_then(|t| t.color);
 
     // Background fill: pick the right shade for active / inactive
-    // (with a subtle bump for inactive-hovered).
+    // (with a subtle bump for inactive-hovered). A colored inactive tab
+    // takes its tint, hovered or not.
     let bg_color = if active {
         TAB_BG_ACTIVE
+    } else if let Some(color) = color {
+        tab_menu::colorref(color.tint_rgb())
     } else if hovered {
         TAB_BG_INACTIVE_HOVER
     } else {
@@ -26160,7 +26216,9 @@ unsafe fn paint_tab_item(state: &mut WindowState, dis: &DRAWITEMSTRUCT) {
         // SAFETY: same WM_DRAWITEM lifetime contract as the bg
         // brush above; null-handle guard mirrored from there.
         unsafe {
-            let strip_brush = CreateSolidBrush(COLORREF(TAB_ACTIVE_INDICATOR));
+            // The tab's own color, else the default orange.
+            let strip = color.map_or(TAB_ACTIVE_INDICATOR, |c| tab_menu::colorref(c.bar_rgb()));
+            let strip_brush = CreateSolidBrush(COLORREF(strip));
             if !strip_brush.is_invalid() {
                 FillRect(dis.hDC, &raw const strip_rc, strip_brush);
                 let _ = DeleteObject(strip_brush.into());
@@ -28026,6 +28084,13 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                         }
                     }
                     _ => {
+                        // The tab context menu's own commands
+                        // (`tab_menu`): pin, copy, move, new
+                        // instance, color.
+                        if tab_menu::is_tab_command(cmd_u16) {
+                            tab_menu::run_command(hwnd, cmd_u16);
+                            return LRESULT(0);
+                        }
                         // Dynamic-range commands (Language menu,
                         // Window menu). These reach the `_` arm
                         // because their cmd ids carry a parameter

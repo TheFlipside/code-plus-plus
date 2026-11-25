@@ -61,8 +61,9 @@ use objc2::{define_class, msg_send, sel, AnyThread, DefinedClass, MainThreadOnly
 use objc2_app_kit::{
     NSApplication, NSAutoresizingMaskOptions, NSBezelStyle, NSBezierPath, NSBitmapImageRep,
     NSButton, NSButtonType, NSCellImagePosition, NSColor, NSEvent, NSEventMask,
-    NSEventTrackingRunLoopMode, NSEventType, NSFont, NSFontAttributeName, NSImage, NSImageRep,
-    NSLineBreakMode, NSStringDrawing, NSTextAlignment, NSView, NSWindowOrderingMode,
+    NSEventModifierFlags, NSEventTrackingRunLoopMode, NSEventType, NSFont, NSFontAttributeName,
+    NSImage, NSImageRep, NSLineBreakMode, NSStringDrawing, NSTextAlignment, NSView,
+    NSWindowOrderingMode,
 };
 use objc2_foundation::{
     MainThreadMarker, NSData, NSDate, NSDictionary, NSObjectProtocol, NSPoint, NSRect, NSSize,
@@ -282,7 +283,25 @@ define_class!(
         /// which is the machinery being bypassed on purpose.
         #[unsafe(method(mouseDown:))]
         fn mouse_down(&self, event: &NSEvent) {
-            crate::at_callback_boundary("TabButton::mouseDown:", (), || self.track(event));
+            crate::at_callback_boundary("TabButton::mouseDown:", (), || {
+                // Control-click is the Mac's right click.
+                if event
+                    .modifierFlags()
+                    .contains(NSEventModifierFlags::Control)
+                {
+                    self.context_click(event);
+                } else {
+                    self.track(event);
+                }
+            });
+        }
+
+        /// The tab's context menu (`tab_menu`).
+        #[unsafe(method(rightMouseDown:))]
+        fn tab_context_click(&self, event: &NSEvent) {
+            crate::at_callback_boundary("TabButton::rightMouseDown:", (), || {
+                self.context_click(event);
+            });
         }
 
         /// Middle-click closes the tab, matching `ui_gtk` and Notepad++.
@@ -312,6 +331,19 @@ define_class!(
 const MIDDLE_BUTTON: isize = 2;
 
 impl TabButton {
+    /// Bring this tab to the front and show its context menu.
+    ///
+    /// Holds a reference to itself for the call, as [`Self::track`] does:
+    /// bringing the tab to the front rebuilds the strip, which removes
+    /// this button while its handler is on the stack, and the command
+    /// chosen may close the tab, run a Save prompt or deliver to plugins.
+    /// The id is read before anything runs.
+    fn context_click(&self, event: &NSEvent) {
+        let _me = self.retain();
+        let id = self.ivars().id.get();
+        crate::tab_menu::show(id, event);
+    }
+
     fn new(frame: NSRect, id: i32, mtm: MainThreadMarker) -> Retained<Self> {
         let this = Self::alloc(mtm).set_ivars(TabButtonIvars { id: Cell::new(id) });
         // SAFETY: `NSButton`'s designated initialiser, on a freshly
@@ -927,6 +959,115 @@ impl TabBackdrop {
     }
 }
 
+/// Height of the bar along the top of the active tab, in points.
+const TAB_BAR_HEIGHT: f64 = 4.0;
+
+/// Per-instance state for [`ColorFill`]: the color it fills with, as
+/// `0xRRGGBB`.
+pub struct ColorFillIvars {
+    rgb: Cell<u32>,
+}
+
+define_class!(
+    // SAFETY: an `NSView` subclass that overrides only `drawRect:` and
+    // `hitTest:`, adding no state AppKit reads. Main-thread-only like
+    // every other view here.
+    #[unsafe(super(NSView))]
+    #[thread_kind = MainThreadOnly]
+    #[name = "CodeppTabColorFill"]
+    #[ivars = ColorFillIvars]
+    pub struct ColorFill;
+
+    unsafe impl NSObjectProtocol for ColorFill {}
+
+    impl ColorFill {
+        #[unsafe(method(drawRect:))]
+        fn draw_rect(&self, _dirty: NSRect) {
+            crate::at_callback_boundary("ColorFill::drawRect:", (), || {
+                rgb_color(self.ivars().rgb.get()).setFill();
+                NSBezierPath::fillRect(self.bounds());
+            });
+        }
+
+        /// Never the target of a click: the tab under it is. A bar or a
+        /// tint that took the mouse would make that part of the tab dead.
+        ///
+        /// No `at_callback_boundary`, like `PinView::isFlipped`: it
+        /// returns a literal and cannot panic, and AppKit calls it on
+        /// every hit test that reaches a tab.
+        #[unsafe(method_id(hitTest:))]
+        fn hit_test(&self, _point: NSPoint) -> Option<Retained<NSView>> {
+            None
+        }
+    }
+);
+
+impl ColorFill {
+    fn new(frame: NSRect, rgb: u32, mtm: MainThreadMarker) -> Retained<Self> {
+        let this = Self::alloc(mtm).set_ivars(ColorFillIvars {
+            rgb: Cell::new(rgb),
+        });
+        // SAFETY: `NSView`'s designated initialiser, on a freshly
+        // allocated instance whose ivars are already set.
+        unsafe { msg_send![super(this), initWithFrame: frame] }
+    }
+}
+
+/// An sRGB `NSColor` for `0xRRGGBB`.
+fn rgb_color(rgb: u32) -> Retained<NSColor> {
+    let [_, r, g, b] = rgb.to_be_bytes();
+    NSColor::colorWithSRGBRed_green_blue_alpha(
+        f64::from(r) / 255.0,
+        f64::from(g) / 255.0,
+        f64::from(b) / 255.0,
+        1.0,
+    )
+}
+
+/// Paint a tab's color, as Win32's strip does: the active tab gets a bar
+/// along its top edge in its color, or the default orange
+/// ([`codepp_shell::DEFAULT_TAB_BAR_RGB`]) when it has none; an inactive
+/// tab with a color takes the light tint as its background, with no bar.
+///
+/// The tint goes **below** the button's other subviews, as
+/// [`TabBackdrop`] does, so it backs the title, the pin and the close
+/// rather than covering them — resting on the same undocumented detail
+/// that note records. The bar goes on top, last.
+fn paint_tab_color(
+    button: &TabButton,
+    color: Option<codepp_shell::TabColor>,
+    selected: bool,
+    mtm: MainThreadMarker,
+) {
+    let bounds = button.bounds();
+    if selected {
+        // The top edge is y = 0 in a flipped view and the far end in an
+        // unflipped one.
+        let y = if button.isFlipped() {
+            0.0
+        } else {
+            bounds.size.height - TAB_BAR_HEIGHT
+        };
+        let bar = ColorFill::new(
+            NSRect::new(
+                NSPoint::new(0.0, y),
+                NSSize::new(bounds.size.width, TAB_BAR_HEIGHT),
+            ),
+            codepp_shell::tab_bar_rgb(color),
+            mtm,
+        );
+        button.addSubview(&bar);
+    } else if let Some(color) = color {
+        // Index 0, under everything. A drag of this (unselected) tab puts
+        // its [`TabBackdrop`] at index 0 as well, so the backdrop ends up
+        // under the tint, which is opaque and does the backdrop's job; if
+        // the tint were ever made translucent, the backdrop would have to
+        // go on top of it instead.
+        let tint = ColorFill::new(bounds, color.tint_rgb(), mtm);
+        button.addSubview_positioned_relativeTo(&tint, NSWindowOrderingMode::Below, None);
+    }
+}
+
 /// Stroke or fill the thumbtack centred in a `width`×`height` box.
 ///
 /// Runs inside `drawRect:`, so the current graphics context is already
@@ -1111,6 +1252,7 @@ impl TabStrip {
 
             let close = make_close_button(tab.id, TAB_WIDTH - CLOSE_WIDTH, actions, mtm);
             button.addSubview(&close);
+            paint_tab_color(&button, tab.color, selected, mtm);
 
             self.lane.addSubview(&button);
             x += TAB_WIDTH;

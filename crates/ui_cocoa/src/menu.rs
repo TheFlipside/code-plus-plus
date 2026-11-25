@@ -529,6 +529,18 @@ define_class!(
             });
         }
 
+        /// Every entry of a tab's context menu. Records the choice only;
+        /// `tab_menu::show` carries it out once the menu has returned.
+        /// Carries the command's index in `tab_menu`'s table as the tag.
+        #[unsafe(method(codeppTabMenuCommand:))]
+        fn tab_menu_command(&self, sender: Option<&NSMenuItem>) {
+            crate::at_callback_boundary("tabs:contextMenu", (), || {
+                if let Some(sender) = sender {
+                    crate::tab_menu::choose(sender.tag());
+                }
+            });
+        }
+
         /// The tab strip's overflow arrows.
         #[unsafe(method(codeppScrollTabsLeft:))]
         fn scroll_tabs_left(&self, _sender: Option<&NSObject>) {

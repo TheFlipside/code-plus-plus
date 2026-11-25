@@ -48,6 +48,7 @@ mod search;
 mod state;
 mod status;
 mod style_config;
+mod tab_menu;
 mod tabs;
 mod toolbar;
 mod udl;
@@ -2172,12 +2173,18 @@ mod gesture_delivery_guard {
         );
         // Unsaved work is the live modify bit, the cached one, or a
         // crash-recovered buffer, which sits at its save point: a reload
-        // over any of them asks first.
+        // over any of them asks first. The rule is `active_holds_unsaved`,
+        // which the tab menu shares.
+        let rule: String = fn_body(&lib, "active_holds_unsaved")
+            .chars()
+            .filter(|c| !c.is_whitespace())
+            .collect();
         assert!(
-            squashed.contains(
-                "letlive_dirty=st.editor.send(codepp_scintilla_sys::SCI_GETMODIFY,0,0)!=0;"
-            ) && squashed
-                .contains("letunsaved=live_dirty||t.dirty||st.shell.is_unsaved_restore(t.id);"),
+            squashed.contains("letunsaved=crate::active_holds_unsaved(st);")
+                && rule.contains(
+                    "letlive=st.editor.send(codepp_scintilla_sys::SCI_GETMODIFY,0,0)!=0;"
+                )
+                && rule.contains("live||t.dirty||st.shell.is_unsaved_restore(t.id)"),
             "File → Reload no longer counts every kind of unsaved work as unsaved"
         );
     }
@@ -2657,6 +2664,96 @@ fn centered_in(mon: (i32, i32, i32, i32), w: i32, h: i32) -> (i32, i32) {
     (mx + (mw - w).max(0) / 2, my + (mh - h).max(0) / 2)
 }
 
+/// Restore one entry of the saved session: open a file from disk, or
+/// re-create a buffer from its recovery backup, with its color.
+fn restore_entry(entry: SessionRestoreEntry) {
+    match entry {
+        SessionRestoreEntry::OpenFile(path) => {
+            // Fresh opens: each queues an async load whose completion
+            // rebinds the view. A duplicate path in session.xml would
+            // dedupe to `SwitchedToExisting`, with no load to wake, so
+            // rebind now — same as `on_open`.
+            if let Some(codepp_shell::OpenFileOutcome::SwitchedToExisting(_)) =
+                with_state(|st| st.shell.open_file(path))
+            {
+                rebind_active_view();
+            }
+        }
+        // Re-create an untitled buffer from its backup text, seeded
+        // synchronously into a fresh Scintilla document. Mirrors the
+        // Win32 restore loop; `Shell::restore_untitled_with_text`
+        // does the work and both backends share it.
+        SessionRestoreEntry::UntitledFromBackup {
+            untitled_seq,
+            text,
+            view,
+            folds,
+            encoding,
+            eol,
+            backup_modified_externally,
+            custom_name,
+            lang,
+            pinned,
+            color,
+        } => {
+            with_state(|st| {
+                let (shell, mut ui) = st.split();
+                let idx = shell.restore_untitled_with_text(
+                    &mut ui,
+                    untitled_seq,
+                    text,
+                    view,
+                    folds,
+                    encoding,
+                    eol,
+                    backup_modified_externally,
+                    custom_name,
+                    lang,
+                    pinned,
+                );
+                shell.set_tab_color(idx, color);
+            });
+        }
+        // Re-create a path-bound tab whose backup holds the user's
+        // last unsaved edits: the tab opens associated with `path`
+        // but seeded with the backup text and left dirty, so Save
+        // flushes the recovered edits. The two "changed externally"
+        // flags route their warnings through `deferred_dialogs`,
+        // surfaced by the `drain_shell` at the end of this function.
+        SessionRestoreEntry::DirtyFromBackup {
+            path,
+            text,
+            view,
+            folds,
+            encoding,
+            eol,
+            disk_changed_externally,
+            backup_modified_externally,
+            lang,
+            pinned,
+            color,
+        } => {
+            with_state(|st| {
+                let (shell, mut ui) = st.split();
+                let idx = shell.restore_dirty_with_text(
+                    &mut ui,
+                    path,
+                    text,
+                    view,
+                    folds,
+                    encoding,
+                    eol,
+                    disk_changed_externally,
+                    backup_modified_externally,
+                    lang,
+                    pinned,
+                );
+                shell.set_tab_color(idx, color);
+            });
+        }
+    }
+}
+
 /// Reopen last session's files, then the command-line path if given.
 ///
 /// A path on the command line is opened *after* the session so it ends
@@ -2665,87 +2762,7 @@ fn centered_in(mon: (i32, i32, i32, i32), w: i32, h: i32) -> (i32, i32) {
 fn restore_session(initial_path: Option<PathBuf>) {
     let entries = with_state(|st| st.shell.load_session_entries()).unwrap_or_default();
     for entry in entries {
-        match entry {
-            SessionRestoreEntry::OpenFile(path) => {
-                // Fresh opens: each queues an async load whose completion
-                // rebinds the view. A duplicate path in session.xml would
-                // dedupe to `SwitchedToExisting`, with no load to wake, so
-                // rebind now — same as `on_open`.
-                if let Some(codepp_shell::OpenFileOutcome::SwitchedToExisting(_)) =
-                    with_state(|st| st.shell.open_file(path))
-                {
-                    rebind_active_view();
-                }
-            }
-            // Re-create an untitled buffer from its backup text, seeded
-            // synchronously into a fresh Scintilla document. Mirrors the
-            // Win32 restore loop; `Shell::restore_untitled_with_text`
-            // does the work and both backends share it.
-            SessionRestoreEntry::UntitledFromBackup {
-                untitled_seq,
-                text,
-                view,
-                folds,
-                encoding,
-                eol,
-                backup_modified_externally,
-                custom_name,
-                lang,
-                pinned,
-            } => {
-                with_state(|st| {
-                    let (shell, mut ui) = st.split();
-                    shell.restore_untitled_with_text(
-                        &mut ui,
-                        untitled_seq,
-                        text,
-                        view,
-                        folds,
-                        encoding,
-                        eol,
-                        backup_modified_externally,
-                        custom_name,
-                        lang,
-                        pinned,
-                    );
-                });
-            }
-            // Re-create a path-bound tab whose backup holds the user's
-            // last unsaved edits: the tab opens associated with `path`
-            // but seeded with the backup text and left dirty, so Save
-            // flushes the recovered edits. The two "changed externally"
-            // flags route their warnings through `deferred_dialogs`,
-            // surfaced by the `drain_shell` at the end of this function.
-            SessionRestoreEntry::DirtyFromBackup {
-                path,
-                text,
-                view,
-                folds,
-                encoding,
-                eol,
-                disk_changed_externally,
-                backup_modified_externally,
-                lang,
-                pinned,
-            } => {
-                with_state(|st| {
-                    let (shell, mut ui) = st.split();
-                    shell.restore_dirty_with_text(
-                        &mut ui,
-                        path,
-                        text,
-                        view,
-                        folds,
-                        encoding,
-                        eol,
-                        disk_changed_externally,
-                        backup_modified_externally,
-                        lang,
-                        pinned,
-                    );
-                });
-            }
-        }
+        restore_entry(entry);
     }
     // Restore which tab was in front. Every entry now pushes exactly one
     // tab in session order — `OpenFile` synchronously (its load lands
@@ -4232,6 +4249,20 @@ fn refresh_active_dirty() -> DirtyPoll {
     .unwrap_or(DirtyPoll::Unavailable)
 }
 
+/// Whether the active tab holds unsaved work: the live modify bit of the
+/// bound document, the cached `Tab.dirty`, and the shell's record of a
+/// restored buffer that is not on disk. The rule File → Reload asks by,
+/// and the tab context menu greys Save and the New Instance entries by.
+/// [`refresh_active_dirty`] computes the cached flag itself, so it reads
+/// the live bit and the record but not the flag; the close prompt reads
+/// the live bit and the flag, and the record after its save.
+pub(crate) fn active_holds_unsaved(st: &state::GtkUiState) -> bool {
+    let live = st.editor.send(codepp_scintilla_sys::SCI_GETMODIFY, 0, 0) != 0;
+    st.shell
+        .active()
+        .is_some_and(|t| live || t.dirty || st.shell.is_unsaved_restore(t.id))
+}
+
 /// Outcome of [`refresh_active_dirty`]. See its docs for why
 /// "could not look" must not be conflated with "nothing moved".
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -5084,18 +5115,54 @@ widget.connect_destroy(move |_| {});
     /// `FileChooserNative` locals), and the failure direction of the
     /// limit is towards a spurious failure rather than a missed hazard
     /// for every name but those two.
+    ///
+    /// A third name, `popup`, is the tab strip's context menu, which
+    /// `tab_menu::show` builds for one popup and destroys once it is done
+    /// with. It is allowed in `tab_menu.rs` alone, and only bound from
+    /// `build_menu`, which makes menu items and nothing else; see
+    /// [`the_tab_menu_destroys_only_the_menu_it_built`].
     #[test]
     fn only_transient_dialogs_are_ever_destroyed() {
         let src = super::source_scan::production_code();
         let offenders: Vec<(String, String)> = destroy_calls(&src)
             .into_iter()
-            .filter(|(receiver, _)| !matches!(receiver.as_str(), "dialog" | "chooser"))
+            .filter(|(receiver, _)| !matches!(receiver.as_str(), "dialog" | "chooser" | "popup"))
             .collect();
         assert!(
             offenders.is_empty(),
-            "destroy called on {offenders:?}: only a transient `dialog` / `chooser` local may \
-             be destroyed; panel content, group containers and the two Scintilla views are \
-             reparented or hidden, never destroyed"
+            "destroy called on {offenders:?}: only a transient `dialog` / `chooser` local, or \
+             the tab menu's `popup`, may be destroyed; panel content, group containers and the \
+             two Scintilla views are reparented or hidden, never destroyed"
+        );
+    }
+
+    /// `popup` may be destroyed only in `tab_menu.rs`, where it is the
+    /// menu `build_menu` made for one popup.
+    #[test]
+    fn the_tab_menu_destroys_only_the_menu_it_built() {
+        let all = super::source_scan::production_code();
+        let menu = strip_test_modules(&code_only(include_str!("tab_menu.rs")));
+        let count = |src: &str| {
+            destroy_calls(src)
+                .into_iter()
+                .filter(|(receiver, _)| receiver == "popup")
+                .count()
+        };
+        assert_eq!(
+            count(&menu),
+            1,
+            "the tab menu no longer destroys its popup once"
+        );
+        assert_eq!(
+            count(&all),
+            1,
+            "`popup` is destroyed outside tab_menu.rs, where the allowlist does not cover it"
+        );
+        assert!(
+            menu.contains("let popup = build_menu(&items, id);")
+                && menu.contains("let popup = popup.clone();")
+                && menu.matches("let popup =").count() == 2,
+            "the destroyed `popup` is no longer the menu `build_menu` made"
         );
     }
 
@@ -5603,5 +5670,6 @@ mod display_tests {
         crate::plugin::host_made_tests::what_plugins_ask_the_host_to_make();
         crate::toolbar::icon_display_tests::built_in_icons_keep_their_cell();
         crate::tabs::icon_display_tests::tab_icons_keep_their_square();
+        crate::tab_menu::display_tests::the_menu_is_the_shells_tree();
     }
 }

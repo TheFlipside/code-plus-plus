@@ -380,7 +380,7 @@ fn insert_move_to_recycle_bin(menu: &gtk::Menu) {
 /// from under a file that never moved. A no-op for an untitled buffer (also
 /// greyed). The buffer's unsaved edits are discarded without a save prompt —
 /// the user's confirmation is that consent.
-fn on_move_to_recycle_bin() {
+pub(crate) fn on_move_to_recycle_bin() {
     // Snapshot the active buffer's stable id + on-disk path together.
     let Some((id, path)) = with_state(|st| {
         st.shell
@@ -531,7 +531,7 @@ fn insert_close_multiple_documents(menu: &gtk::Menu) {
 
 /// Which "Open Containing Folder" action to run on the active buffer.
 #[derive(Clone, Copy)]
-enum ContainingAction {
+pub(crate) enum ContainingAction {
     /// Show the file selected (and scrolled into view) in the desktop file
     /// manager.
     FileManager,
@@ -606,7 +606,7 @@ fn insert_open_containing_folder(menu: &gtk::Menu) {
 /// with no parent — the submenu is also greyed in that state. File Explorer
 /// acts on the file itself (to select it); Terminal and Folder as Workspace
 /// act on its parent directory.
-fn open_containing(action: ContainingAction) {
+pub(crate) fn open_containing(action: ContainingAction) {
     let file = with_state(|st| st.shell.active().and_then(|t| t.path.clone())).flatten();
     let Some(file) = file else {
         return;
@@ -763,7 +763,7 @@ fn insert_open_in_default_viewer(menu: &gtk::Menu) {
 /// shell metacharacters cannot inject anything (same envelope as Win32's
 /// `"open"` verb). A no-op for an untitled buffer (also greyed); a missing
 /// handler surfaces as a logged warning in `open_uri`.
-fn on_open_in_default_viewer() {
+pub(crate) fn on_open_in_default_viewer() {
     let Some((Some(path), window)) = with_state(|st| {
         (
             st.shell.active().and_then(|t| t.path.clone()),
@@ -1081,7 +1081,7 @@ fn empty_recent() {
 /// File → Rename. A saved buffer routes to Save As (a real on-disk move to
 /// the chosen path); an untitled buffer gets a display-name change through
 /// a small modal, matching Win32's two-branch behaviour.
-fn on_rename() {
+pub(crate) fn on_rename() {
     let has_path =
         with_state(|st| st.shell.active().is_some_and(|t| t.path.is_some())).unwrap_or(false);
     if has_path {
@@ -1102,18 +1102,20 @@ fn on_rename() {
     }
 }
 
-/// Modal name prompt for renaming an untitled buffer. Returns the entered
-/// text on OK (empty string clears the name back to `new N`), `None` on
-/// Cancel. Mirrors the Goto dialog's shape.
+/// Modal name prompt for renaming an untitled buffer, titled "Rename
+/// Current Tab" (`codepp_shell::RENAME_TAB_TITLE`), as on Win32: the
+/// entry sits in a frame whose caption, "New name", is centred on its top
+/// line. Returns the entered text on OK (empty string clears the name back
+/// to `new N`), `None` on Cancel.
 fn prompt_rename(current: &str) -> Option<String> {
     let parent = with_state(|st| st.window.clone());
     let dialog = gtk::Dialog::with_buttons(
-        Some("Rename"),
+        Some(codepp_shell::RENAME_TAB_TITLE),
         parent.as_ref(),
         gtk::DialogFlags::MODAL | gtk::DialogFlags::DESTROY_WITH_PARENT,
         &[
+            ("_OK", gtk::ResponseType::Accept),
             ("_Cancel", gtk::ResponseType::Cancel),
-            ("_Rename", gtk::ResponseType::Accept),
         ],
     );
     dialog.set_default_response(gtk::ResponseType::Accept);
@@ -1123,14 +1125,18 @@ fn prompt_rename(current: &str) -> Option<String> {
     content.set_margin_bottom(8);
     content.set_margin_start(8);
     content.set_margin_end(8);
-    let row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-    row.pack_start(&gtk::Label::new(Some("Name:")), false, false, 0);
+    let frame = gtk::Frame::new(Some(codepp_shell::RENAME_TAB_FIELD_LABEL));
+    frame.set_label_align(0.5, 0.5);
     let entry = gtk::Entry::new();
     entry.set_text(current);
     entry.set_activates_default(true);
-    entry.set_width_chars(28);
-    row.pack_start(&entry, true, true, 0);
-    content.pack_start(&row, false, false, 0);
+    entry.set_width_chars(32);
+    entry.set_margin_top(6);
+    entry.set_margin_bottom(10);
+    entry.set_margin_start(10);
+    entry.set_margin_end(10);
+    frame.add(&entry);
+    content.pack_start(&frame, false, false, 0);
     dialog.show_all();
 
     let result = if dialog.run() == gtk::ResponseType::Accept {
@@ -2888,7 +2894,7 @@ pub(crate) fn save_active() {
 /// File → Save As, and Rename on a buffer that has a path:
 /// [`save_active_as`], then deliver what it queued before returning —
 /// see [`on_save`].
-fn on_save_as() {
+pub(crate) fn on_save_as() {
     save_active_as();
     // Counted, as `on_save`'s is.
     codepp_shell::deliver_after_save(drain_shell);
@@ -3078,13 +3084,12 @@ fn on_load_session() {
 /// on another tab holding the same file. The freeze holds off a worker's
 /// drain while the dialog is up, as the close prompt's does, and the drain
 /// after it runs on a No as well, to replay what the freeze held back.
-fn on_reload() {
+pub(crate) fn on_reload() {
     let sample = with_state(|st| {
-        let live_dirty = st.editor.send(codepp_scintilla_sys::SCI_GETMODIFY, 0, 0) != 0;
-        st.shell.active().and_then(|t| {
-            let unsaved = live_dirty || t.dirty || st.shell.is_unsaved_restore(t.id);
-            t.path.is_some().then_some((t.id, unsaved))
-        })
+        let unsaved = crate::active_holds_unsaved(st);
+        st.shell
+            .active()
+            .and_then(|t| t.path.is_some().then_some((t.id, unsaved)))
     })
     .flatten();
     let Some((tab, unsaved)) = sample else {

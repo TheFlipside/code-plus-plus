@@ -55,6 +55,7 @@ mod search;
 mod state;
 mod status;
 mod style_config;
+mod tab_menu;
 mod tabs;
 mod toolbar;
 mod udl;
@@ -3128,10 +3129,11 @@ fn restore_session(initial_path: Option<PathBuf>) {
                 custom_name,
                 lang,
                 pinned,
+                color,
             } => {
                 with_state(|st| {
                     let (shell, mut ui) = st.split();
-                    shell.restore_untitled_with_text(
+                    let idx = shell.restore_untitled_with_text(
                         &mut ui,
                         untitled_seq,
                         text,
@@ -3144,6 +3146,7 @@ fn restore_session(initial_path: Option<PathBuf>) {
                         lang,
                         pinned,
                     );
+                    shell.set_tab_color(idx, color);
                 });
             }
             // A path-bound tab whose backup holds the user's last
@@ -3162,10 +3165,11 @@ fn restore_session(initial_path: Option<PathBuf>) {
                 backup_modified_externally,
                 lang,
                 pinned,
+                color,
             } => {
                 with_state(|st| {
                     let (shell, mut ui) = st.split();
-                    shell.restore_dirty_with_text(
+                    let idx = shell.restore_dirty_with_text(
                         &mut ui,
                         path,
                         text,
@@ -3178,6 +3182,7 @@ fn restore_session(initial_path: Option<PathBuf>) {
                         lang,
                         pinned,
                     );
+                    shell.set_tab_color(idx, color);
                 });
             }
         }
@@ -6075,6 +6080,188 @@ static E: Box<dyn Fn() -> Rc<ScrollFloor>> = todo();
         assert!(
             thawed < committed && committed < drained,
             "track() must release its freeze, commit the gesture, then deliver"
+        );
+    }
+
+    /// The tab context menu (`tab_menu`). Its menu runs a nested run loop
+    /// that sends the chosen entry's action from inside it, while the
+    /// tab's own handler is still on the stack and the drain is frozen;
+    /// most entries rebuild the strip, which removes that tab. So:
+    ///
+    /// - both entry points (right click, Control-click) go through
+    ///   `context_click`, which retains the receiver before anything runs
+    ///   and reads the id first;
+    /// - `show` brings the tab to the front and delivers that, pops the
+    ///   menu under a freeze, releases the freeze, and only then carries
+    ///   out the choice — on the tab the menu was about — and flushes;
+    /// - an entry's action records the choice and does nothing else;
+    /// - the menu turns automatic enabling off for itself, so the greying
+    ///   is the shell's.
+    ///
+    /// None of this can run without a window server. Matched with
+    /// whitespace removed, on code with comments and strings stripped.
+    #[test]
+    fn the_tab_context_menu_decides_inside_and_acts_outside() {
+        let squash = |s: &str| s.split_whitespace().collect::<String>();
+        // Bodies are cut from the code as written (`fn_body` looks for
+        // `fn name(`) and squashed afterwards.
+        let code_of = |src: &'static str| {
+            code_only(match src.find("#[cfg(test)]") {
+                Some(i) => &src[..i],
+                None => src,
+            })
+        };
+        let tabs = code_of(include_str!("tabs.rs"));
+        let button = &tabs[tabs
+            .find("pub struct TabButton;")
+            .expect("no TabButton class")..];
+        for handler in ["mouse_down", "tab_context_click"] {
+            assert!(
+                squash(&fn_body(button, handler)).contains("self.context_click(event);"),
+                "`{handler}` no longer opens the context menu through `context_click`"
+            );
+        }
+        let down = squash(&fn_body(button, "mouse_down"));
+        assert!(
+            down.contains("contains(NSEventModifierFlags::Control)"),
+            "a Control-click no longer opens the tab's context menu"
+        );
+        let click = squash(&fn_body(&tabs, "context_click"));
+        let retained = statement_at(&click, "let_me=self.retain();", "no retain");
+        let id = statement_at(&click, "letid=self.ivars().id.get();", "no id read");
+        let shown = statement_at(
+            &click,
+            "crate::tab_menu::show(id,event);",
+            "`context_click` no longer shows the menu",
+        );
+        assert!(
+            retained < id && id < shown,
+            "`context_click` must retain itself and read the id before the menu runs"
+        );
+
+        let menu = code_of(include_str!("tab_menu.rs"));
+        let show = squash(&fn_body(&menu, "show"));
+        let order = [
+            "crate::select_tab_by_id(id);",
+            "crate::drain_shell();",
+            "if!crate::active_tab_is(id){",
+            "CHOSEN.with(|c|c.set(None));",
+            "letfreeze=crate::DrainFreeze::new();",
+            "NSMenu::popUpContextMenu_withEvent_forView(&menu,event,&anchor);",
+            "drop(freeze);",
+            "letchosen=CHOSEN.with(Cell::take);",
+            "ifcrate::active_tab_is(id){run(command,id);",
+        ];
+        let mut at = 0;
+        for step in order {
+            let found = show[at..]
+                .find(step)
+                .unwrap_or_else(|| panic!("`show` lost, or reordered, `{step}`"));
+            at += found + step.len();
+        }
+        assert!(
+            show[at..].contains("crate::drain_shell();"),
+            "`show` no longer flushes after carrying out the choice"
+        );
+        assert_eq!(
+            show.matches("run(").count(),
+            1,
+            "`show` carries out a command somewhere other than after the menu"
+        );
+        let choose = squash(&fn_body(&menu, "choose"));
+        assert!(
+            choose.contains("CHOSEN.with(|c|c.set(command_of(tag)));")
+                && !choose.contains("run(")
+                && choose.matches(';').count() == 1,
+            "an entry's action must only record the choice: {choose}"
+        );
+        let actions = code_of(include_str!("menu.rs"));
+        let action = squash(&fn_body(&actions, "tab_menu_command"));
+        assert!(
+            action.contains("crate::tab_menu::choose(sender.tag());") && !action.contains("run("),
+            "the tab menu's action no longer only records the choice"
+        );
+    }
+
+    /// The rest of the tab menu's rules: its prompts hold their own freeze
+    /// around their modal, the rename reads a committed field, the Trash
+    /// is reached only past the confirmation and a look again at the tab,
+    /// a guest instance is given the tab's state as it is when the entry
+    /// runs, and no URL is built from a lossily decoded path.
+    #[test]
+    fn the_tab_menu_prompts_freeze_and_the_trash_waits_for_an_answer() {
+        let squash = |s: &str| s.split_whitespace().collect::<String>();
+        let src = include_str!("tab_menu.rs");
+        let menu = code_only(match src.find("#[cfg(test)]") {
+            Some(i) => &src[..i],
+            None => src,
+        });
+        // The prompts that run their own modal hold their own freeze,
+        // taken before the modal, and the Trash is reached only past the
+        // confirmation and the look again at the tab.
+        let rename = squash(&fn_body(&menu, "prompt_rename"));
+        let frozen = statement_at(
+            &rename,
+            "let_freeze=crate::DrainFreeze::new();",
+            "the rename prompt no longer freezes the drain",
+        );
+        let modal = rename
+            .find("runModal()")
+            .expect("the rename prompt runs no modal");
+        let committed = statement_at(
+            &rename,
+            "field.validateEditing();",
+            "the rename prompt no longer commits the field editor before reading",
+        );
+        let read = rename
+            .find("field.stringValue()")
+            .expect("the rename prompt no longer reads the field");
+        assert!(
+            frozen < modal && modal < committed && committed < read,
+            "the rename prompt must freeze, run its modal, commit the edit, then read"
+        );
+        // A guest instance gets the tab's state as it is when the entry
+        // runs, not as it was when the menu was built.
+        assert!(
+            squash(&fn_body(&menu, "new_instance"))
+                .starts_with("{letdirty=active_has_unsaved_work();"),
+            "Move/Open in New Instance no longer reads the dirty state at action time"
+        );
+        // URLs are made from the path's bytes, never a lossy decoding.
+        assert!(
+            !menu.contains("to_string_lossy()")
+                && menu.contains("fileURLWithFileSystemRepresentation"),
+            "tab_menu builds a URL from a lossily decoded path"
+        );
+        let trash = squash(&fn_body(&menu, "move_to_trash"));
+        let frozen = trash
+            .find("let_freeze=crate::DrainFreeze::new();")
+            .expect("the Trash confirmation no longer freezes the drain");
+        let asked = trash
+            .find("runModal()")
+            .expect("the Trash is reached unconfirmed");
+        let gate = trash
+            .find("if!confirmed||!crate::active_tab_is(id)")
+            .expect("the Trash no longer checks the answer and the tab before moving the file");
+        let trashed = trash
+            .find("trashItemAtURL_resultingItemURL_error(")
+            .expect("the file is no longer moved to the Trash");
+        let closed = trash
+            .find("crate::action_close_tab()")
+            .expect("the tab is no longer closed after the Trash");
+        assert!(
+            frozen < asked && asked < gate && gate < trashed && trashed < closed,
+            "the Trash must be confirmed under a freeze, gated, then done, then the tab closed"
+        );
+        assert!(
+            trash.contains("bound==tab.scintilla_doc")
+                && trash.contains("if!crate::active_tab_is(id)||!crate::action_close_tab()"),
+            "the save point must go only to the tab's own bound document, and the close              only to the tab whose file moved"
+        );
+        assert!(
+            squash(&fn_body(&menu, "build_menu")).contains("menu.setAutoenablesItems(false);"),
+            "the tab menu no longer turns automatic enabling off, so its greying \
+             would be `validateMenuItem:`'s guess rather than the shell's"
         );
     }
 

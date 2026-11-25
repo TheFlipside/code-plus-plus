@@ -182,6 +182,13 @@ fn framework_in_bundle() -> Option<PathBuf> {
 /// The `Info.plist` is in memory already, and the one thing asked of
 /// the disk is whether a file in the application's own bundle exists.
 fn start() {
+    // A guest instance (`--new-instance`) never updates itself: the
+    // instance it was started from does, and two Sparkles on one bundle
+    // would race over it. "Update Code++" stays greyed.
+    if codepp_shell::is_guest_instance() {
+        tracing::debug!("no updater: this is a guest instance");
+        return;
+    }
     let Some(framework) = framework_in_bundle().filter(|path| path.is_file()) else {
         tracing::debug!("no updater: this copy has no feed, no key or no Sparkle.framework");
         return;

@@ -47,6 +47,7 @@ codepp-ui-cocoa = { workspace = true, optional = true }
 
 [dependencies]
 codepp-core.workspace = true
+codepp-shell.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 
