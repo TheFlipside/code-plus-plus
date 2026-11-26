@@ -628,11 +628,114 @@ fn is_default_view(v: &ViewSettings) -> bool {
 /// comes to under 5 MiB, and the contracted folds the tabs record add at
 /// most [`crate::MAX_SESSION_FOLDS`] short children, under 3 MB. Only paths
 /// full of characters XML escapes, `&` or a line break at five or six bytes
-/// each, or names Code++ does not bound, a User Defined Language's or a
-/// rename label, could make a session that large, and
+/// each, or the longest names a session keeps ([`MAX_UDL_NAME_CHARS`],
+/// [`MAX_CUSTOM_NAME_CHARS`]) on every tab, could make a session that
+/// large, and
 /// [`Session::save_to_xml`] refuses to write one, so Code++ never writes a
 /// `session.xml` it would refuse.
 pub const MAX_SESSION_FILE_BYTES: u64 = 8 * 1024 * 1024;
+
+/// Longest path, in UTF-16 units, a session record keeps: Windows' longest
+/// path, `\\?\` paths included, and longer than any path Linux (4096 bytes)
+/// or macOS (1024) opens. A record naming a longer path names no file Code++
+/// could have had open; [`Session::clamp`] retires it as
+/// [`Session::retire_paths`] does.
+pub const MAX_SESSION_PATH_UNITS: usize = 32_767;
+
+/// Longest recovery-backup name, in UTF-16 units, a record keeps: the 255 a
+/// file name may take on Windows, which is no fewer than the 255 bytes it
+/// may take on Linux and macOS. Code++ makes names of at most 229 bytes, and
+/// a longer name names no file, so [`Session::clamp`] drops it, and the
+/// record restores as it would have with a backup it could not read.
+pub const MAX_BACKUP_NAME_UNITS: usize = 255;
+
+/// Longest label, in characters, a tab's [`Tab::custom_name`] keeps: as long
+/// as a file name may be, which a label is offered as by Save As. Longer
+/// labels are cut to it, on read by [`Session::clamp`] and on write by the
+/// shell's rename, so that what is saved is what is read back.
+pub const MAX_CUSTOM_NAME_CHARS: usize = 255;
+
+/// Longest User Defined Language name, in characters, a record's
+/// [`Tab::udl`] keeps. Generous against any real UDL's name. A longer one is
+/// dropped, never cut short, since a cut name could match another UDL; the
+/// tab then takes its extension's language, as for a UDL no longer
+/// installed. The shell writes no longer name.
+pub const MAX_UDL_NAME_CHARS: usize = 1024;
+
+/// What [`Session::retire_paths`] did with a path it retired.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RetiredPath {
+    /// The tab had a recovery backup, and is kept as an untitled buffer
+    /// named after its file, so its text comes back.
+    Untitled,
+    /// The tab had no backup and is left out: the file on disk holds what
+    /// it holds.
+    LeftOut,
+    /// The workspace folder, which is dropped.
+    Workspace,
+}
+
+/// Cut `text` to at most `max` characters, never inside one. Returns whether
+/// anything was cut.
+fn truncate_chars(text: &mut String, max: usize) -> bool {
+    match text.char_indices().nth(max) {
+        Some((cut, _)) => {
+            text.truncate(cut);
+            true
+        }
+        None => false,
+    }
+}
+
+/// Whether `path` is longer than [`MAX_SESSION_PATH_UNITS`].
+fn path_too_long(path: &Path) -> bool {
+    // A string never has more UTF-16 units than UTF-8 bytes, so a path of
+    // no more bytes than the cap is within it without counting.
+    let text = path.as_os_str().to_string_lossy();
+    text.len() > MAX_SESSION_PATH_UNITS && text.encode_utf16().count() > MAX_SESSION_PATH_UNITS
+}
+
+/// [`Session::clamp`]'s part for the dock layout; returns how many values
+/// it dropped or cleared. Each is one `dock::DockLayout::from_session`
+/// would skip anyway, so this frees their text without changing the
+/// layout.
+fn clamp_dock(dock: &mut DockSession) -> usize {
+    let usable_kind = |kind: &str| kind.len() <= crate::dock::MAX_PANEL_KEY_LEN;
+    // An empty side names nothing already, and is left as it is.
+    let clear_side = |side: &mut String| {
+        let names_a_side =
+            side == "float" || crate::dock::DockSide::from_persist_key(side).is_some();
+        let clear = !names_a_side && !side.is_empty();
+        if clear {
+            side.clear();
+        }
+        clear
+    };
+    let mut changed = 0;
+    for group in &mut dock.groups {
+        let before = group.panels.len();
+        group.panels.retain(|p| usable_kind(&p.kind));
+        changed += before - group.panels.len();
+        for panel in &mut group.panels {
+            if panel
+                .seal
+                .as_deref()
+                .is_some_and(|s| crate::dock::CommandSeal::from_hex(s).is_none())
+            {
+                panel.seal = None;
+                changed += 1;
+            }
+        }
+        changed += usize::from(clear_side(&mut group.side));
+    }
+    let before = dock.remembered.len();
+    dock.remembered.retain(|r| usable_kind(&r.kind));
+    changed += before - dock.remembered.len();
+    for remembered in &mut dock.remembered {
+        changed += usize::from(clear_side(&mut remembered.side));
+    }
+    changed
+}
 
 /// At most this many characters of a parse error are shown.
 const PARSE_ERROR_MAX_CHARS: usize = 300;
@@ -711,6 +814,135 @@ impl Session {
         dropped
     }
 
+    /// Take out of the session every path `retire` answers true for, and
+    /// return them with what became of each. A tab with a recovery backup is
+    /// kept as an untitled buffer named after its file, so its text comes
+    /// back; one with none is left out, the file on disk holding what it
+    /// holds; a workspace folder is dropped. [`Self::active`] follows its
+    /// tab, and is `None` when that tab was left out.
+    ///
+    /// The shell retires a path `session.xml` cannot hold before it saves;
+    /// [`Self::clamp`] retires one longer than any file system opens as it
+    /// reads.
+    pub fn retire_paths(&mut self, retire: impl Fn(&Path) -> bool) -> Vec<(PathBuf, RetiredPath)> {
+        let mut retired = Vec::new();
+        let active = self.active.take();
+        let tabs = std::mem::take(&mut self.tabs);
+        for (idx, mut tab) in tabs.into_iter().enumerate() {
+            if let Some(path) = tab.path.take_if(|p| retire(p)) {
+                if tab.backup.is_none() {
+                    retired.push((path, RetiredPath::LeftOut));
+                    continue;
+                }
+                let mut name = path.file_name().map(|n| n.to_string_lossy().into_owned());
+                if let Some(name) = &mut name {
+                    truncate_chars(name, MAX_CUSTOM_NAME_CHARS);
+                }
+                tab.custom_name = name;
+                retired.push((path, RetiredPath::Untitled));
+            }
+            if active == Some(idx) {
+                self.active = Some(self.tabs.len());
+            }
+            self.tabs.push(tab);
+        }
+        if let Some(workspace) = &mut self.workspace {
+            if let Some(root) = workspace.root.take_if(|r| retire(r)) {
+                retired.push((root, RetiredPath::Workspace));
+            }
+        }
+        retired
+    }
+
+    /// Bound the names and paths a session file carries, as [`Self::read_from`]
+    /// reads it, and log once when something did not survive as written.
+    /// `session.xml` is hand-editable and a crash can truncate it, and the
+    /// shell keeps the session it read for the rest of the run, so nothing
+    /// in it is trusted to be the size Code++ writes. Within the
+    /// [`MAX_SESSION_FILE_BYTES`] a read takes:
+    ///
+    ///   * a [`Tab::backup`] longer than [`MAX_BACKUP_NAME_UNITS`] is
+    ///     dropped, so at restore an untitled record holding one is left
+    ///     out and a file's record opens the file from disk, as with a
+    ///     backup that cannot be read;
+    ///   * a [`Tab::path`] or workspace folder longer than
+    ///     [`MAX_SESSION_PATH_UNITS`] is retired ([`Self::retire_paths`]);
+    ///   * a [`Tab::custom_name`] is cut to [`MAX_CUSTOM_NAME_CHARS`];
+    ///   * a [`Tab::udl`] longer than [`MAX_UDL_NAME_CHARS`] is dropped;
+    ///   * the contracted folds are limited to [`crate::MAX_SESSION_FOLDS`]
+    ///     ([`Self::limit_folds`]), as a save limits them;
+    ///   * in the dock layout, a panel whose key is longer than any panel's
+    ///     can be is dropped, a command seal that is not 64 hex digits is
+    ///     dropped, and a side that names no side is cleared. Each is what
+    ///     `dock::DockLayout::from_session` would make of it anyway.
+    ///
+    /// A path or a UDL name, which something is looked up by, is dropped
+    /// and never cut short: a cut one could name something else. Not
+    /// bounded here: an unknown [`Tab::encoding`] label, which saving
+    /// refuses as it would any unknown label, and the number of tabs: the restore notes the backups that
+    /// records past its cap name, and keeps them for the run, before it
+    /// drops those records.
+    pub fn clamp(&mut self) {
+        let mut backups = 0usize;
+        let mut labels = 0usize;
+        let mut udls = 0usize;
+        for tab in &mut self.tabs {
+            if tab
+                .backup
+                .as_deref()
+                .is_some_and(|b| b.encode_utf16().count() > MAX_BACKUP_NAME_UNITS)
+            {
+                tab.backup = None;
+                backups += 1;
+            }
+            if let Some(name) = &mut tab.custom_name {
+                if truncate_chars(name, MAX_CUSTOM_NAME_CHARS) {
+                    labels += 1;
+                }
+            }
+            if tab
+                .udl
+                .as_deref()
+                .is_some_and(|n| n.chars().count() > MAX_UDL_NAME_CHARS)
+            {
+                tab.udl = None;
+                udls += 1;
+            }
+        }
+        // After the backups: a record whose backup was dropped has nothing
+        // to keep as an untitled buffer.
+        // Only when there is something to retire: `retire_paths` rebuilds
+        // the active index, which would read a hand-edited one past the
+        // last tab as none, where the session as written is left alone.
+        let paths = if self
+            .tabs
+            .iter()
+            .any(|t| t.path.as_deref().is_some_and(path_too_long))
+            || self
+                .workspace
+                .as_ref()
+                .and_then(|w| w.root.as_deref())
+                .is_some_and(path_too_long)
+        {
+            self.retire_paths(path_too_long).len()
+        } else {
+            0
+        };
+        let folds = self.limit_folds(crate::MAX_SESSION_FOLDS);
+        let dock = self.dock.as_mut().map_or(0, clamp_dock);
+        if backups + labels + udls + paths + folds + dock > 0 {
+            tracing::warn!(
+                backups,
+                labels,
+                udls,
+                paths,
+                folds,
+                dock,
+                "session.xml held values past their bounds; they were not kept as written",
+            );
+        }
+    }
+
     /// Read a session in Code++'s own format from `reader`: `session.xml`,
     /// or a session file a plugin names. Opening the file is the caller's.
     /// The shell opens it with `codepp_platform::open_regular_file`, because
@@ -745,7 +977,10 @@ impl Session {
         if contents.trim().is_empty() {
             return Ok(Session::default());
         }
-        quick_xml::de::from_str(&contents).map_err(SessionError::Parse)
+        let mut session: Session =
+            quick_xml::de::from_str(&contents).map_err(SessionError::Parse)?;
+        session.clamp();
+        Ok(session)
     }
 
     /// Write `session.xml` atomically.
@@ -2149,5 +2384,433 @@ mod tests {
         let loaded = read_file(&path).unwrap();
         assert_eq!(loaded.view, ViewSettings::default());
         assert_eq!(loaded.tabs.len(), 1);
+    }
+
+    /// A path of exactly `units` UTF-16 units, made of `ch`.
+    fn path_of(units: usize, ch: char) -> PathBuf {
+        PathBuf::from(std::iter::repeat_n(ch, units / ch.len_utf16()).collect::<String>())
+    }
+
+    /// The string fields of a tab, each at its cap or one past it, through
+    /// a real read: past the cap is bounded, at the cap survives verbatim.
+    #[test]
+    fn read_from_bounds_each_tab_string_and_keeps_one_at_its_cap() {
+        let at = |n: usize| "a".repeat(n);
+        let session = Session {
+            active: Some(3),
+            tabs: vec![
+                // 0: untitled, a backup one unit past the cap: dropped.
+                Tab {
+                    untitled_seq: Some(1),
+                    backup: Some(at(MAX_BACKUP_NAME_UNITS + 1)),
+                    ..Tab::default()
+                },
+                // 1: untitled, a backup at the cap: kept.
+                Tab {
+                    untitled_seq: Some(2),
+                    backup: Some(at(MAX_BACKUP_NAME_UNITS)),
+                    custom_name: Some("é".repeat(MAX_CUSTOM_NAME_CHARS)),
+                    ..Tab::default()
+                },
+                // 2: a label past the cap, cut at a character; a UDL name
+                //    past the cap, dropped.
+                Tab {
+                    untitled_seq: Some(3),
+                    custom_name: Some("é".repeat(MAX_CUSTOM_NAME_CHARS + 5)),
+                    udl: Some(at(MAX_UDL_NAME_CHARS + 1)),
+                    ..Tab::default()
+                },
+                // 3 (active): a UDL name at its cap: kept.
+                Tab {
+                    path: Some(PathBuf::from("a.md")),
+                    udl: Some(at(MAX_UDL_NAME_CHARS)),
+                    ..Tab::default()
+                },
+            ],
+            ..Session::default()
+        };
+        let xml = crate::xml::to_document(&session).unwrap();
+        let read = Session::read_from(xml.as_bytes()).unwrap();
+
+        assert_eq!(read.tabs.len(), 4);
+        assert_eq!(read.tabs[0].backup, None);
+        assert_eq!(read.tabs[1].backup, Some(at(MAX_BACKUP_NAME_UNITS)));
+        assert_eq!(
+            read.tabs[1].custom_name,
+            Some("é".repeat(MAX_CUSTOM_NAME_CHARS))
+        );
+        assert_eq!(
+            read.tabs[2].custom_name,
+            Some("é".repeat(MAX_CUSTOM_NAME_CHARS))
+        );
+        assert_eq!(read.tabs[2].udl, None);
+        assert_eq!(read.tabs[3].udl, Some(at(MAX_UDL_NAME_CHARS)));
+        assert_eq!(read.active, Some(3));
+    }
+
+    /// A backup name is counted in UTF-16 units, as a file name is on
+    /// Windows: characters outside the BMP take two units each, so 128 of
+    /// them are past the cap, while 255 two-byte characters are within it.
+    #[test]
+    fn clamp_counts_a_backup_name_in_utf16_units() {
+        let astral = '\u{1F600}';
+        let mut session = Session {
+            tabs: vec![
+                Tab {
+                    untitled_seq: Some(1),
+                    backup: Some(astral.to_string().repeat(MAX_BACKUP_NAME_UNITS / 2 + 1)),
+                    ..Tab::default()
+                },
+                Tab {
+                    untitled_seq: Some(2),
+                    backup: Some("é".repeat(MAX_BACKUP_NAME_UNITS)),
+                    ..Tab::default()
+                },
+            ],
+            ..Session::default()
+        };
+        session.clamp();
+        assert_eq!(session.tabs[0].backup, None);
+        assert_eq!(
+            session.tabs[1].backup,
+            Some("é".repeat(MAX_BACKUP_NAME_UNITS))
+        );
+    }
+
+    /// A path past [`MAX_SESSION_PATH_UNITS`] is retired: a tab with a
+    /// backup becomes an untitled buffer named after its file, one without
+    /// is left out and the active index follows; a path at the cap, and one
+    /// of more bytes than the cap but no more units, are kept.
+    #[test]
+    fn clamp_retires_a_path_past_the_cap_and_keeps_one_at_it() {
+        let long = path_of(MAX_SESSION_PATH_UNITS + 1, 'a');
+        let mut with_name = long.clone();
+        with_name.push("notes.txt");
+        let at_cap = path_of(MAX_SESSION_PATH_UNITS, 'b');
+        // Two bytes of UTF-8 and one UTF-16 unit each.
+        let wide = path_of(MAX_SESSION_PATH_UNITS, 'é');
+        assert!(wide.as_os_str().len() > MAX_SESSION_PATH_UNITS);
+        let mut session = Session {
+            active: Some(4),
+            workspace: Some(WorkspaceSession {
+                root: Some(long.clone()),
+                visible: true,
+                width: None,
+            }),
+            tabs: vec![
+                Tab {
+                    path: Some(long.clone()),
+                    ..Tab::default()
+                },
+                Tab {
+                    path: Some(with_name),
+                    backup: Some("notes.txt@2026-01-01_000000".to_string()),
+                    ..Tab::default()
+                },
+                Tab {
+                    path: Some(at_cap.clone()),
+                    ..Tab::default()
+                },
+                Tab {
+                    path: Some(wide.clone()),
+                    ..Tab::default()
+                },
+                Tab {
+                    path: Some(PathBuf::from("front.txt")),
+                    ..Tab::default()
+                },
+            ],
+            ..Session::default()
+        };
+        session.clamp();
+
+        assert_eq!(session.tabs.len(), 4, "the tab with no backup is left out");
+        assert_eq!(session.tabs[0].path, None);
+        assert_eq!(session.tabs[0].custom_name.as_deref(), Some("notes.txt"));
+        assert!(session.tabs[0].backup.is_some());
+        assert_eq!(session.tabs[1].path, Some(at_cap));
+        assert_eq!(session.tabs[2].path, Some(wide));
+        assert_eq!(session.active, Some(3), "the active index follows its tab");
+        assert_eq!(
+            session.tabs[3].path.as_deref(),
+            Some(Path::new("front.txt"))
+        );
+        assert_eq!(session.workspace.unwrap().root, None);
+    }
+
+    /// A tab whose backup is past its cap and whose path is past its cap
+    /// has nothing left to restore, and is left out rather than kept as an
+    /// untitled buffer with no text.
+    #[test]
+    fn clamp_drops_the_backup_before_it_retires_the_path() {
+        let mut session = Session {
+            tabs: vec![Tab {
+                path: Some(path_of(MAX_SESSION_PATH_UNITS + 1, 'a')),
+                backup: Some("b".repeat(MAX_BACKUP_NAME_UNITS + 1)),
+                ..Tab::default()
+            }],
+            ..Session::default()
+        };
+        session.clamp();
+        assert!(session.tabs.is_empty());
+    }
+
+    /// The active tab left out leaves no tab recorded in front, rather
+    /// than another.
+    #[test]
+    fn clamp_leaving_out_the_active_tab_records_no_front() {
+        let mut session = Session {
+            active: Some(0),
+            tabs: vec![
+                Tab {
+                    path: Some(path_of(MAX_SESSION_PATH_UNITS + 1, 'a')),
+                    ..Tab::default()
+                },
+                Tab {
+                    path: Some(PathBuf::from("b.txt")),
+                    ..Tab::default()
+                },
+            ],
+            ..Session::default()
+        };
+        session.clamp();
+        assert_eq!(session.tabs.len(), 1);
+        assert_eq!(session.active, None);
+    }
+
+    /// A retired path's file name is cut to a label's cap when it becomes
+    /// one.
+    #[test]
+    fn retire_paths_cuts_a_file_name_to_a_label() {
+        let mut path = PathBuf::from("dir");
+        path.push("n".repeat(MAX_CUSTOM_NAME_CHARS + 10));
+        let mut session = Session {
+            tabs: vec![Tab {
+                path: Some(path.clone()),
+                backup: Some("b".to_string()),
+                ..Tab::default()
+            }],
+            ..Session::default()
+        };
+        let retired = session.retire_paths(|_| true);
+        assert_eq!(retired, vec![(path, RetiredPath::Untitled)]);
+        assert_eq!(
+            session.tabs[0].custom_name,
+            Some("n".repeat(MAX_CUSTOM_NAME_CHARS))
+        );
+    }
+
+    /// A session read with more folds than a save keeps is held to the same
+    /// budget, the first tabs' first.
+    #[test]
+    fn read_from_limits_the_folds_as_a_save_does() {
+        let folds: Vec<Fold> = (0..=crate::MAX_SESSION_FOLDS as u64)
+            .map(|line| Fold { line })
+            .collect();
+        let session = Session {
+            tabs: vec![
+                Tab {
+                    path: Some(PathBuf::from("a.rs")),
+                    folds,
+                    ..Tab::default()
+                },
+                Tab {
+                    path: Some(PathBuf::from("b.rs")),
+                    folds: vec![Fold { line: 1 }],
+                    ..Tab::default()
+                },
+            ],
+            ..Session::default()
+        };
+        let xml = crate::xml::to_document(&session).unwrap();
+        let read = Session::read_from(xml.as_bytes()).unwrap();
+        assert_eq!(read.tabs[0].folds.len(), crate::MAX_SESSION_FOLDS);
+        assert!(read.tabs[1].folds.is_empty());
+    }
+
+    /// In the dock layout, a key longer than any panel's, a seal that is
+    /// not 64 hex digits and a side that names none are dropped or cleared;
+    /// the values a layout can use are kept as written.
+    #[test]
+    fn clamp_bounds_the_dock_layout_to_what_it_can_use() {
+        let longest = format!(
+            "plugin:{}|{}",
+            "m".repeat(crate::dock::MAX_PLUGIN_PANEL_FIELD_LEN),
+            "n".repeat(crate::dock::MAX_PLUGIN_PANEL_FIELD_LEN)
+        );
+        assert_eq!(longest.len(), crate::dock::MAX_PANEL_KEY_LEN);
+        let too_long = format!("{longest}x");
+        let good_seal = "0".repeat(64);
+        let panel = |kind: &str, seal: Option<&str>| DockPanelSession {
+            kind: kind.to_string(),
+            cmd: Some(1),
+            seal: seal.map(str::to_string),
+        };
+        let mut session = Session {
+            dock: Some(DockSession {
+                groups: vec![
+                    DockGroupSession {
+                        side: "bottom".to_string(),
+                        panels: vec![
+                            panel(&too_long, None),
+                            panel(&longest, Some(&good_seal)),
+                            panel("workspace", Some(&"0".repeat(65))),
+                            panel("docmap", Some("ABCD")),
+                        ],
+                        ..DockGroupSession::default()
+                    },
+                    DockGroupSession {
+                        side: "float".to_string(),
+                        ..DockGroupSession::default()
+                    },
+                    DockGroupSession {
+                        side: "sideways".to_string(),
+                        ..DockGroupSession::default()
+                    },
+                ],
+                remembered: vec![
+                    DockRememberSession {
+                        kind: too_long.clone(),
+                        side: "left".to_string(),
+                        ..DockRememberSession::default()
+                    },
+                    DockRememberSession {
+                        kind: "docmap".to_string(),
+                        side: "x".repeat(100),
+                        ..DockRememberSession::default()
+                    },
+                ],
+                ..DockSession::default()
+            }),
+            ..Session::default()
+        };
+        session.clamp();
+        let dock = session.dock.unwrap();
+        let kinds: Vec<&str> = dock.groups[0]
+            .panels
+            .iter()
+            .map(|p| p.kind.as_str())
+            .collect();
+        assert_eq!(kinds, [longest.as_str(), "workspace", "docmap"]);
+        assert_eq!(dock.groups[0].panels[0].seal, Some(good_seal));
+        assert_eq!(dock.groups[0].panels[1].seal, None);
+        assert_eq!(dock.groups[0].panels[2].seal, None);
+        assert_eq!(dock.groups[0].side, "bottom");
+        assert_eq!(dock.groups[1].side, "float");
+        assert_eq!(dock.groups[2].side, "");
+        assert_eq!(dock.remembered.len(), 1);
+        assert_eq!(dock.remembered[0].kind, "docmap");
+        assert_eq!(dock.remembered[0].side, "");
+    }
+
+    /// A session within every bound comes back from the clamp as it was:
+    /// it changes nothing Code++ itself saves.
+    #[test]
+    fn clamp_leaves_a_session_within_its_bounds_alone() {
+        let mut session = Session {
+            active: Some(1),
+            tabs: vec![
+                Tab {
+                    untitled_seq: Some(1),
+                    backup: Some("new 1@2026-01-01_000000".to_string()),
+                    custom_name: Some("notes".to_string()),
+                    ..Tab::default()
+                },
+                Tab {
+                    path: Some(PathBuf::from("a.md")),
+                    udl: Some("Markdown (preinstalled)".to_string()),
+                    folds: vec![Fold { line: 3 }],
+                    ..Tab::default()
+                },
+            ],
+            dock: Some(DockSession {
+                groups: vec![DockGroupSession {
+                    side: "left".to_string(),
+                    panels: vec![DockPanelSession {
+                        kind: "workspace".to_string(),
+                        cmd: None,
+                        seal: None,
+                    }],
+                    ..DockGroupSession::default()
+                }],
+                ..DockSession::default()
+            }),
+            ..Session::default()
+        };
+        let before = session.clone();
+        session.clamp();
+        assert_eq!(session, before);
+    }
+
+    /// The clamp retires nothing when no path is too long, so an active
+    /// index past the last tab, as a hand edit can leave, is read as it
+    /// was written; the shell decides what it means.
+    #[test]
+    fn clamp_with_no_path_to_retire_leaves_the_active_index_alone() {
+        let mut session = Session {
+            active: Some(7),
+            tabs: vec![Tab {
+                path: Some(PathBuf::from("a.txt")),
+                ..Tab::default()
+            }],
+            ..Session::default()
+        };
+        session.clamp();
+        assert_eq!(session.active, Some(7));
+    }
+
+    /// What the clamp drops from a hostile dock layout is what the layout
+    /// skips anyway: the layout read from the clamped session is the one
+    /// read from the session as written, a group whose active tab follows a
+    /// dropped panel included.
+    #[test]
+    fn clamp_leaves_the_dock_layout_it_reads_unchanged() {
+        let too_long = format!(
+            "plugin:{}|x",
+            "m".repeat(crate::dock::MAX_PLUGIN_PANEL_FIELD_LEN + 1)
+        );
+        let panel = |kind: &str, seal: Option<&str>| DockPanelSession {
+            kind: kind.to_string(),
+            cmd: None,
+            seal: seal.map(str::to_string),
+        };
+        let raw = Session {
+            dock: Some(DockSession {
+                groups: vec![
+                    DockGroupSession {
+                        side: "right".to_string(),
+                        active: 2,
+                        panels: vec![
+                            panel(&too_long, None),
+                            panel("workspace", Some("not a seal")),
+                            panel("docmap", None),
+                        ],
+                        ..DockGroupSession::default()
+                    },
+                    DockGroupSession {
+                        side: "sideways".to_string(),
+                        panels: vec![panel("docmap", None)],
+                        ..DockGroupSession::default()
+                    },
+                ],
+                remembered: vec![DockRememberSession {
+                    kind: too_long.clone(),
+                    side: "left".to_string(),
+                    ..DockRememberSession::default()
+                }],
+                ..DockSession::default()
+            }),
+            ..Session::default()
+        };
+        let mut clamped = raw.clone();
+        clamped.clamp();
+        assert_ne!(
+            clamped.dock, raw.dock,
+            "the fixture must give the clamp work"
+        );
+        let layout = |s: &Session| {
+            crate::dock::DockLayout::from_session(s.dock.as_ref().unwrap()).to_session()
+        };
+        assert_eq!(layout(&clamped), layout(&raw));
     }
 }

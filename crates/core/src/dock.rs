@@ -316,6 +316,14 @@ const PLUGIN_PANEL_KEY_PREFIX: &str = "plugin:";
 /// unambiguous in both directions.
 const PLUGIN_PANEL_SEPARATOR: char = '|';
 
+/// Longest persisted key, in bytes, that can name a panel: a plugin
+/// panel's prefix, two halves of at most [`MAX_PLUGIN_PANEL_FIELD_LEN`]
+/// and the separator. A longer key interns nothing, so
+/// [`crate::session::Session::clamp`] drops it as it is read.
+pub(crate) const MAX_PANEL_KEY_LEN: usize = PLUGIN_PANEL_KEY_PREFIX.len()
+    + 2 * MAX_PLUGIN_PANEL_FIELD_LEN
+    + PLUGIN_PANEL_SEPARATOR.len_utf8();
+
 /// A dockable panel: the two built-in ones, or a plugin-registered
 /// panel identified by an interned [`PluginPanelIdent`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]

@@ -8133,7 +8133,18 @@ impl Shell {
             return (Some(id), None);
         }
         if let Some(entry) = registry.find_by_lang_type_id(id) {
-            (None, Some(entry.definition.name.clone()))
+            let name = &entry.definition.name;
+            if name.chars().count() > codepp_core::session::MAX_UDL_NAME_CHARS {
+                // `Session::clamp` would drop the name as it reads it back,
+                // and the tab would take its extension's language then;
+                // writing nothing says the same now.
+                tracing::debug!(
+                    lang = id,
+                    "a UDL name longer than a session keeps is not persisted"
+                );
+                return (None, None);
+            }
+            (None, Some(name.clone()))
         } else {
             tracing::debug!(
                 lang = id,
@@ -8507,10 +8518,16 @@ impl Shell {
             return false;
         };
         let trimmed = name.trim();
+        // Cut as [`Session::clamp`] cuts a label it reads back, so what is
+        // saved is what the next start shows.
         let new_name = if trimmed.is_empty() {
             None
         } else {
-            Some(trimmed.to_string())
+            let cut = trimmed
+                .char_indices()
+                .nth(codepp_core::session::MAX_CUSTOM_NAME_CHARS)
+                .map_or(trimmed, |(at, _)| trimmed[..at].trim_end());
+            Some(cut.to_string())
         };
         if tab.custom_name == new_name {
             return false;
@@ -10660,36 +10677,21 @@ impl BackupReads {
 /// none is left out, the file on disk holding what it holds; and a
 /// workspace folder is dropped. Each is logged.
 fn writable_paths_only(session: &mut Session) {
-    let active = session.active.take();
-    let tabs = std::mem::take(&mut session.tabs);
-    for (idx, mut tab) in tabs.into_iter().enumerate() {
-        if let Some(path) = tab.path.as_deref().filter(|p| p.to_str().is_none()) {
-            if tab.backup.is_none() {
-                tracing::warn!(
-                    path = ?path,
-                    "a path that is not valid Unicode cannot be saved; the tab is left out of the session",
-                );
-                continue;
-            }
-            tracing::warn!(
+    let retired = session.retire_paths(|p| p.to_str().is_none());
+    for (path, fate) in retired {
+        match fate {
+            codepp_core::session::RetiredPath::LeftOut => tracing::warn!(
+                path = ?path,
+                "a path that is not valid Unicode cannot be saved; the tab is left out of the session",
+            ),
+            codepp_core::session::RetiredPath::Untitled => tracing::warn!(
                 path = ?path,
                 "a path that is not valid Unicode cannot be saved; the tab is saved as an untitled buffer",
-            );
-            tab.custom_name = path.file_name().map(|n| n.to_string_lossy().into_owned());
-            tab.path = None;
-        }
-        if active == Some(idx) {
-            session.active = Some(session.tabs.len());
-        }
-        session.tabs.push(tab);
-    }
-    if let Some(workspace) = &mut session.workspace {
-        if let Some(root) = workspace.root.as_deref().filter(|r| r.to_str().is_none()) {
-            tracing::warn!(
-                path = ?root,
+            ),
+            codepp_core::session::RetiredPath::Workspace => tracing::warn!(
+                path = ?path,
                 "a workspace folder that is not valid Unicode cannot be saved; it is left out",
-            );
-            workspace.root = None;
+            ),
         }
     }
 }
@@ -15291,6 +15293,68 @@ mod tests {
             Shell::resolve_persisted_lang(Some(md_before.lang_type_id), None, &reg_after),
             None,
         );
+    }
+
+    /// A UDL whose name is longer than a session keeps is not persisted by
+    /// name, since `Session::clamp` would drop the name as it reads it back;
+    /// one at the cap is.
+    #[test]
+    fn persisted_lang_fields_writes_no_udl_name_longer_than_a_session_keeps() {
+        let named = |name: &str| {
+            let text = String::from_utf8(PREINSTALLED_MARKDOWN_UDL.to_vec())
+                .unwrap()
+                .replace(
+                    "UserLang name=\"Markdown (preinstalled)\"",
+                    &format!("UserLang name=\"{name}\""),
+                );
+            assert!(text.contains(name), "fixture rewrite must apply");
+            let dir = tempfile::tempdir().unwrap();
+            std::fs::write(dir.path().join("long.udl.xml"), text).unwrap();
+            let reg = codepp_udl::UdlRegistry::scan_dir(dir.path());
+            (dir, reg)
+        };
+        let max = codepp_core::session::MAX_UDL_NAME_CHARS;
+        let path = Some(Path::new("notes.txt"));
+
+        let at_cap = "u".repeat(max);
+        let (_dir, reg) = named(&at_cap);
+        let id = LangType(reg.find_by_name(&at_cap).unwrap().lang_type_id);
+        assert_eq!(
+            Shell::persisted_lang_fields(id, path, &reg),
+            (None, Some(at_cap.clone())),
+        );
+
+        let past = "u".repeat(max + 1);
+        let (_dir, reg) = named(&past);
+        let id = LangType(reg.find_by_name(&past).unwrap().lang_type_id);
+        assert_eq!(Shell::persisted_lang_fields(id, path, &reg), (None, None));
+    }
+
+    /// A rename is cut to the label a session keeps, at a character and
+    /// with no trailing space, so the next start shows what was saved.
+    #[test]
+    fn set_active_custom_name_cuts_to_the_label_a_session_keeps() {
+        let max = codepp_core::session::MAX_CUSTOM_NAME_CHARS;
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+        shell.new_untitled(&mut ui);
+
+        assert!(shell.set_active_custom_name(&"é".repeat(max + 3)));
+        assert_eq!(shell.active().unwrap().custom_name, Some("é".repeat(max)));
+
+        // A space where the cut falls is not kept at the end.
+        let spaced = format!("{} {}", "a".repeat(max - 1), "b".repeat(10));
+        assert!(shell.set_active_custom_name(&spaced));
+        assert_eq!(
+            shell.active().unwrap().custom_name,
+            Some("a".repeat(max - 1))
+        );
+
+        // At the cap, the name is kept as given.
+        let exact = "c".repeat(max);
+        assert!(shell.set_active_custom_name(&exact));
+        assert_eq!(shell.active().unwrap().custom_name, Some(exact));
     }
 
     #[test]
