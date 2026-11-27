@@ -41,6 +41,7 @@
     clippy::cast_sign_loss
 )]
 
+mod caret;
 mod delegate;
 mod dock;
 mod docmap;
@@ -313,6 +314,11 @@ pub fn run(initial_path: Option<PathBuf>, perf: Perf) -> Result<(), CocoaUiError
     unsafe {
         codepp_scintilla_sys::scintilla_cocoa_set_notify_callback(sci_ptr, on_sci_notify, 0);
     }
+
+    // The caret blinks as a layer of its own, so a blink redraws no view
+    // content (DESIGN.md §8, "macOS 27.0.1"). The layer is attached once
+    // the content view has its layer; see `caret`.
+    caret::install(editor, &sci_view);
 
     // --- The window ------------------------------------------------
     let content_rect = NSRect::new(
@@ -781,6 +787,12 @@ unsafe fn on_sci_notify_inner(message: u32, lparam: usize) {
                     p.text_modified();
                 }
             }
+            // The caret follows a move or a scroll. Not on `SCN_MODIFIED`,
+            // which arrives inside the edit; the paint that follows it
+            // syncs again.
+            if code == codepp_scintilla_sys::SCN_UPDATEUI {
+                caret::sync();
+            }
             with_state(|st| {
                 let (_, ui) = st.split();
                 ui.refresh_dynamic_status();
@@ -833,6 +845,8 @@ unsafe fn on_sci_notify_inner(message: u32, lparam: usize) {
                 udl::on_style_needed(target);
             }
         }
+        codepp_scintilla_sys::SCN_FOCUSIN => caret::focus_in(),
+        codepp_scintilla_sys::SCN_FOCUSOUT => caret::sync(),
         codepp_scintilla_sys::SCN_SAVEPOINTLEFT => {
             LAST_DIRTY.with(|c| c.set(true));
             refresh_tab_chrome();
@@ -875,6 +889,9 @@ unsafe fn on_sci_notify_inner(message: u32, lparam: usize) {
             // The updater starts once a frame is on screen, and not
             // before (DESIGN.md §11.2). This only queues its start.
             updater::after_paint();
+            // After a resize, a zoom or a margin change, which reach the
+            // caret's place only through a paint. No borrow taken.
+            caret::sync();
             with_state(|st| {
                 // Repair first, measure second. `clamp_scroll_width_to_viewport`
                 // reads the clip's width, and on a paint that follows a

@@ -72,6 +72,7 @@ fn main() {
     println!("cargo:rerun-if-changed=cxx/LexillaShim.cxx");
     println!("cargo:rerun-if-changed=cxx/CopySelectionRange.cxx");
     println!("cargo:rerun-if-changed=cxx/ScintillaCocoaShim.mm");
+    println!("cargo:rerun-if-changed=cxx/CodeppCaret.mm");
 
     let target_os = std::env::var("CARGO_CFG_TARGET_OS").expect("CARGO_CFG_TARGET_OS");
 
@@ -553,6 +554,9 @@ fn build_scintilla_cocoa(scintilla: &Path) {
     // it imports `ScintillaView.h` and hands out a `__bridge_retained`
     // reference to a `ScintillaView`.
     backend.file("cxx/ScintillaCocoaShim.mm");
+    // The caret's float x for `ui_cocoa::caret`: same configuration,
+    // since it includes `ScintillaCocoa.h`.
+    backend.file("cxx/CodeppCaret.mm");
     backend.compile("scintilla-cocoa");
 }
 

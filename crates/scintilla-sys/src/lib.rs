@@ -194,6 +194,16 @@ extern "C" {
     /// is exactly the property the fix depends on and is deterministic.
     /// Needs no window server, so it runs in an ordinary `cargo test`.
     pub fn scintilla_cocoa_ctline_cache_selftest() -> i32;
+
+    /// Write the x of `pos` in the view's client coordinates, as the
+    /// float Scintilla draws a caret from, to `*x` (`cxx/CodeppCaret.mm`).
+    /// `SCI_POINTXFROMPOSITION` gives the same value truncated.
+    ///
+    /// `direct_ptr` is the view's `SCI_GETDIRECTPOINTER`. Returns 1 on
+    /// success and 0, writing nothing, for a null pointer, a negative
+    /// position or an exception inside Scintilla. Main thread only; a
+    /// dangling pointer is undefined behaviour, as for the direct call.
+    pub fn scintilla_cocoa_location_x(direct_ptr: *mut c_void, pos: sptr_t, x: *mut f64) -> i32;
 }
 
 /// Scintilla's Cocoa notification callback signature
@@ -571,6 +581,45 @@ pub const SCI_SETCARETSTYLE: u32 = 2512;
 /// Hide the caret entirely. Pairs with [`SCI_SETREADONLY`] on
 /// non-editable views like the Document Map.
 pub const CARETSTYLE_INVISIBLE: usize = 0;
+/// `SCI_GETCARETSTYLE` — the `CARETSTYLE_*` value set by
+/// [`SCI_SETCARETSTYLE`], its low nibble ([`CARETSTYLE_INS_MASK`]) the
+/// insert-mode shape and the bits above it flags.
+pub const SCI_GETCARETSTYLE: u32 = 2513;
+/// The line caret, Scintilla's default insert-mode shape.
+pub const CARETSTYLE_LINE: usize = 1;
+/// The bits of a caret style that give the insert-mode shape.
+pub const CARETSTYLE_INS_MASK: usize = 0xF;
+/// `SCI_SETCARETPERIOD(ms)` — the caret's blink period; 0 stops the blink.
+pub const SCI_SETCARETPERIOD: u32 = 2076;
+/// `SCI_GETCARETPERIOD` — the blink period set by [`SCI_SETCARETPERIOD`].
+pub const SCI_GETCARETPERIOD: u32 = 2075;
+/// `SCI_GETCARETWIDTH` — the line caret's width in pixels.
+pub const SCI_GETCARETWIDTH: u32 = 2189;
+/// `SCI_GETFOCUS` — whether Scintilla takes itself to have the focus,
+/// which is when it shows its caret.
+pub const SCI_GETFOCUS: u32 = 2381;
+/// `SCI_GETSELECTIONHIDDEN` — whether `SCI_HIDESELECTION` hid the
+/// selection, and the caret with it.
+pub const SCI_GETSELECTIONHIDDEN: u32 = 2088;
+/// `SCI_GETELEMENTCOLOUR(element)` — an element's colour as `0xAABBGGRR`.
+pub const SCI_GETELEMENTCOLOUR: u32 = 2754;
+/// The main caret's colour element.
+pub const SC_ELEMENT_CARET: usize = 40;
+/// `SCI_GETMARGINLEFT` — the blank strip before the text, which is
+/// where the text area's client x starts.
+pub const SCI_GETMARGINLEFT: u32 = 2156;
+/// `SCI_GETBIDIRECTIONAL` — non-zero when bidirectional text is laid
+/// out, in which case the caret's x comes from another path.
+pub const SCI_GETBIDIRECTIONAL: u32 = 2708;
+/// `SCI_GETMAINSELECTION` — the index of the main selection.
+pub const SCI_GETMAINSELECTION: u32 = 2575;
+/// `SCI_GETSELECTIONNCARETVIRTUALSPACE(n)` — how far selection `n`'s
+/// caret is into virtual space.
+pub const SCI_GETSELECTIONNCARETVIRTUALSPACE: u32 = 2581;
+/// `SCN_FOCUSIN` — the view gained the focus.
+pub const SCN_FOCUSIN: u32 = 2028;
+/// `SCN_FOCUSOUT` — the view lost the focus.
+pub const SCN_FOCUSOUT: u32 = 2029;
 /// `SCI_SETHSCROLLBAR(visible)` — non-zero shows the horizontal
 /// scrollbar. The Document Map view hides it (0) so the miniature
 /// view is chrome-free.
@@ -10281,6 +10330,48 @@ mod tests {
             ("SCI_GETSELECTIONNEND", i64::from(SCI_GETSELECTIONNEND)),
             ("SCI_GETEOLMODE", i64::from(SCI_GETEOLMODE)),
             ("SCI_GETCOLUMN", i64::from(SCI_GETCOLUMN)),
+            // The caret messages (`ui_cocoa::caret`).
+            ("SCI_SETCARETSTYLE", i64::from(SCI_SETCARETSTYLE)),
+            ("SCI_GETCARETSTYLE", i64::from(SCI_GETCARETSTYLE)),
+            (
+                "CARETSTYLE_INVISIBLE",
+                i64::try_from(CARETSTYLE_INVISIBLE).expect("a small value"),
+            ),
+            (
+                "CARETSTYLE_LINE",
+                i64::try_from(CARETSTYLE_LINE).expect("a small value"),
+            ),
+            (
+                "CARETSTYLE_INS_MASK",
+                i64::try_from(CARETSTYLE_INS_MASK).expect("a small value"),
+            ),
+            ("SCI_SETCARETPERIOD", i64::from(SCI_SETCARETPERIOD)),
+            ("SCI_GETCARETPERIOD", i64::from(SCI_GETCARETPERIOD)),
+            ("SCI_GETCARETWIDTH", i64::from(SCI_GETCARETWIDTH)),
+            ("SCI_GETFOCUS", i64::from(SCI_GETFOCUS)),
+            ("SCI_GETSELECTIONHIDDEN", i64::from(SCI_GETSELECTIONHIDDEN)),
+            ("SCI_GETELEMENTCOLOUR", i64::from(SCI_GETELEMENTCOLOUR)),
+            (
+                "SC_ELEMENT_CARET",
+                i64::try_from(SC_ELEMENT_CARET).expect("a small value"),
+            ),
+            ("SCI_POINTYFROMPOSITION", i64::from(SCI_POINTYFROMPOSITION)),
+            ("SCI_GETMARGINLEFT", i64::from(SCI_GETMARGINLEFT)),
+            ("SCI_GETXOFFSET", i64::from(SCI_GETXOFFSET)),
+            ("SCI_GETDIRECTPOINTER", i64::from(SCI_GETDIRECTPOINTER)),
+            ("SCI_GETBIDIRECTIONAL", i64::from(SCI_GETBIDIRECTIONAL)),
+            ("SCI_GETMAINSELECTION", i64::from(SCI_GETMAINSELECTION)),
+            (
+                "SCI_GETSELECTIONNCARETVIRTUALSPACE",
+                i64::from(SCI_GETSELECTIONNCARETVIRTUALSPACE),
+            ),
+            ("SCI_GETOVERTYPE", i64::from(SCI_GETOVERTYPE)),
+            ("SCI_TEXTHEIGHT", i64::from(SCI_TEXTHEIGHT)),
+            ("SCI_LINEFROMPOSITION", i64::from(SCI_LINEFROMPOSITION)),
+            ("SCI_POSITIONFROMLINE", i64::from(SCI_POSITIONFROMLINE)),
+            ("SCI_GETCURRENTPOS", i64::from(SCI_GETCURRENTPOS)),
+            ("SCN_FOCUSIN", i64::from(SCN_FOCUSIN)),
+            ("SCN_FOCUSOUT", i64::from(SCN_FOCUSOUT)),
         ] {
             assert_eq!(defined(name), value, "{name}");
         }

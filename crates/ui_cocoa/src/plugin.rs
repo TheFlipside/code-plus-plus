@@ -313,12 +313,19 @@ fn send_sci_on_main(hwnd: *mut c_void, msg: u32, wparam: usize, lparam: isize) -
             // compile. Naming the whole `MainThreadPtr` captures the
             // wrapper that carries the `unsafe impl Send`.
             let ptr = ptr;
+            // The caret's style and period go to the layer caret first,
+            // which answers them for the main view (`crate::caret`).
+            //
             // SAFETY: `ptr.0` passed `is_known_scintilla` on the calling
             // thread and addresses a permanently-live `ScintillaView*` of
             // the host's making (see `MainThreadPtr`). This block runs on
             // the main thread, which is the affinity AppKit requires and
             // the reason the message was marshaled here at all.
-            *slot = Some(unsafe { scintilla_cocoa_send_message(ptr.0, msg, wparam, lparam) });
+            *slot = Some(
+                crate::caret::intercept(ptr.0, msg, wparam).unwrap_or_else(|| unsafe {
+                    scintilla_cocoa_send_message(ptr.0, msg, wparam, lparam)
+                }),
+            );
         });
     });
     answer.unwrap_or_else(|| {
@@ -353,13 +360,18 @@ extern "C" fn plugin_dispatch(hwnd: *mut c_void, msg: u32, wparam: usize, lparam
             // *before* the affinity check so an unknown handle is refused
             // rather than marshaled.
             if on_main_thread() {
+                // The caret's style and period go to the layer caret
+                // first, which answers them for the main view.
+                //
                 // SAFETY: `hwnd` is identity-checked to be a live
                 // `ScintillaView*` of the host's making, which is never
                 // released (see `MainThreadPtr`), this is the thread that
                 // owns it, and `scintilla_cocoa_send_message` is its
                 // documented entry point. The message-argument contract is
                 // the plugin's responsibility, exactly as it is on Win32.
-                unsafe { scintilla_cocoa_send_message(hwnd, msg, wparam, lparam) }
+                crate::caret::intercept(hwnd, msg, wparam).unwrap_or_else(|| unsafe {
+                    scintilla_cocoa_send_message(hwnd, msg, wparam, lparam)
+                })
             } else {
                 // A plugin calling from its own thread: hop to the main
                 // queue and block, restoring the affinity the Win32 pump
