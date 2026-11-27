@@ -96,6 +96,7 @@ mod dialog_text;
 mod dlgtemplate;
 mod dock_panels;
 mod instance;
+mod menu_bar_plus;
 mod preferences;
 mod print;
 mod print_preview;
@@ -220,16 +221,17 @@ use windows::Win32::UI::Controls::{
     LVITEMW, LVM_DELETEALLITEMS, LVM_GETITEMCOUNT, LVM_INSERTCOLUMNW, LVM_INSERTITEMW,
     LVM_SETEXTENDEDLISTVIEWSTYLE, LVM_SETITEMSTATE, LVM_SETITEMTEXTW, LVN_ITEMCHANGED,
     LVS_EX_CHECKBOXES, LVS_EX_DOUBLEBUFFER, LVS_EX_FULLROWSELECT, LVS_REPORT, LVS_SHOWSELALWAYS,
-    LVS_SINGLESEL, NMCUSTOMDRAW, NMHDR, NMITEMACTIVATE, NMLISTVIEW, NMTREEVIEWW, NM_CUSTOMDRAW,
-    NM_DBLCLK, NM_RCLICK, ODT_TAB, TCHITTESTINFO, TCIF_TEXT, TCITEMW, TCM_DELETEALLITEMS,
-    TCM_GETCURSEL, TCM_GETITEMRECT, TCM_HITTEST, TCM_INSERTITEMW, TCM_SETCURSEL, TCM_SETITEMW,
-    TCM_SETPADDING, TCN_SELCHANGE, TCS_OWNERDRAWFIXED, TVE_COLLAPSE, TVE_EXPAND, TVGN_CARET,
-    TVGN_CHILD, TVGN_NEXT, TVGN_PARENT, TVGN_ROOT, TVHITTESTINFO, TVHITTESTINFO_FLAGS, TVHT_ONITEM,
-    TVHT_ONITEMRIGHT, TVIF_CHILDREN, TVIF_IMAGE, TVIF_PARAM, TVIF_SELECTEDIMAGE, TVIF_TEXT,
-    TVINSERTSTRUCTW, TVITEMW, TVI_LAST, TVI_ROOT, TVM_DELETEITEM, TVM_ENSUREVISIBLE, TVM_EXPAND,
-    TVM_GETITEMW, TVM_GETNEXTITEM, TVM_HITTEST, TVM_INSERTITEMW, TVM_SELECTITEM, TVM_SETIMAGELIST,
-    TVM_SETITEMW, TVN_ITEMEXPANDINGW, TVSIL_NORMAL, TVS_HASBUTTONS, TVS_HASLINES, TVS_LINESATROOT,
-    TVS_SHOWSELALWAYS, WC_COMBOBOX, WC_LISTVIEWW, WC_TABCONTROL, WC_TREEVIEWW, WM_MOUSELEAVE,
+    LVS_SINGLESEL, MEASUREITEMSTRUCT, NMCUSTOMDRAW, NMHDR, NMITEMACTIVATE, NMLISTVIEW, NMTREEVIEWW,
+    NM_CUSTOMDRAW, NM_DBLCLK, NM_RCLICK, ODT_MENU, ODT_TAB, TCHITTESTINFO, TCIF_TEXT, TCITEMW,
+    TCM_DELETEALLITEMS, TCM_GETCURSEL, TCM_GETITEMRECT, TCM_HITTEST, TCM_INSERTITEMW,
+    TCM_SETCURSEL, TCM_SETITEMW, TCM_SETPADDING, TCN_SELCHANGE, TCS_OWNERDRAWFIXED, TVE_COLLAPSE,
+    TVE_EXPAND, TVGN_CARET, TVGN_CHILD, TVGN_NEXT, TVGN_PARENT, TVGN_ROOT, TVHITTESTINFO,
+    TVHITTESTINFO_FLAGS, TVHT_ONITEM, TVHT_ONITEMRIGHT, TVIF_CHILDREN, TVIF_IMAGE, TVIF_PARAM,
+    TVIF_SELECTEDIMAGE, TVIF_TEXT, TVINSERTSTRUCTW, TVITEMW, TVI_LAST, TVI_ROOT, TVM_DELETEITEM,
+    TVM_ENSUREVISIBLE, TVM_EXPAND, TVM_GETITEMW, TVM_GETNEXTITEM, TVM_HITTEST, TVM_INSERTITEMW,
+    TVM_SELECTITEM, TVM_SETIMAGELIST, TVM_SETITEMW, TVN_ITEMEXPANDINGW, TVSIL_NORMAL,
+    TVS_HASBUTTONS, TVS_HASLINES, TVS_LINESATROOT, TVS_SHOWSELALWAYS, WC_COMBOBOX, WC_LISTVIEWW,
+    WC_TABCONTROL, WC_TREEVIEWW, WM_MOUSELEAVE,
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     EnableWindow, GetKeyState, ReleaseCapture, SetCapture, SetFocus, TrackMouseEvent, TME_LEAVE,
@@ -262,21 +264,21 @@ use windows::Win32::UI::WindowsAndMessaging::{
     GWL_EXSTYLE, GWL_STYLE, HACCEL, HICON, HMENU, IDCANCEL, IDC_ARROW, IDC_HAND, IDC_SIZENS, IDNO,
     IDOK, IDYES, IMAGE_ICON, LR_DEFAULTCOLOR, LWA_ALPHA, MB_DEFBUTTON2, MB_ICONQUESTION,
     MB_ICONWARNING, MB_OK, MB_OKCANCEL, MB_YESNO, MB_YESNOCANCEL, MENUITEMINFOW, MENU_ITEM_FLAGS,
-    MFS_CHECKED, MFS_UNCHECKED, MFT_RADIOCHECK, MFT_RIGHTJUSTIFY, MFT_SEPARATOR, MF_BYCOMMAND,
-    MF_BYPOSITION, MF_CHECKED, MF_ENABLED, MF_GRAYED, MF_POPUP, MF_SEPARATOR, MF_STRING,
-    MF_UNCHECKED, MIIM_FTYPE, MIIM_STATE, MSG, PRF_CLIENT, PRF_ERASEBKGND, SHOW_WINDOW_CMD,
+    MFS_CHECKED, MFS_UNCHECKED, MFT_RADIOCHECK, MFT_SEPARATOR, MF_BYCOMMAND, MF_BYPOSITION,
+    MF_CHECKED, MF_ENABLED, MF_GRAYED, MF_POPUP, MF_SEPARATOR, MF_STRING, MF_UNCHECKED, MIIM_FTYPE,
+    MIIM_STATE, MSG, PRF_CLIENT, PRF_ERASEBKGND, SHOW_WINDOW_CMD, SPI_SETNONCLIENTMETRICS,
     SWP_FRAMECHANGED, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SW_HIDE, SW_SHOW, SW_SHOWMAXIMIZED,
     SW_SHOWNORMAL, TPM_BOTTOMALIGN, TPM_LEFTALIGN, TPM_RETURNCMD, TPM_RIGHTBUTTON, WINDOW_EX_STYLE,
     WINDOW_LONG_PTR_INDEX, WINDOW_STYLE, WM_APP, WM_CAPTURECHANGED, WM_CHAR, WM_CLOSE, WM_COMMAND,
-    WM_COPYDATA, WM_CTLCOLOREDIT, WM_CTLCOLORLISTBOX, WM_CTLCOLORSTATIC, WM_DESTROY, WM_DRAWITEM,
-    WM_DROPFILES, WM_ERASEBKGND, WM_HSCROLL, WM_INITDIALOG, WM_INITMENUPOPUP, WM_LBUTTONDOWN,
-    WM_LBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NCCREATE, WM_NCDESTROY, WM_NOTIFY, WM_PAINT,
-    WM_PRINTCLIENT, WM_QUIT, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SETCURSOR, WM_SETFOCUS, WM_SETFONT,
-    WM_SETREDRAW, WM_SETTINGCHANGE, WM_SIZE, WM_TIMER, WNDCLASSEXW, WS_BORDER, WS_CAPTION,
-    WS_CHILD, WS_CLIPCHILDREN, WS_EX_APPWINDOW, WS_EX_CLIENTEDGE, WS_EX_CONTROLPARENT,
-    WS_EX_DLGMODALFRAME, WS_EX_LAYERED, WS_EX_STATICEDGE, WS_EX_TOOLWINDOW, WS_EX_WINDOWEDGE,
-    WS_GROUP, WS_HSCROLL, WS_MAXIMIZEBOX, WS_MINIMIZEBOX, WS_OVERLAPPEDWINDOW, WS_POPUP,
-    WS_SYSMENU, WS_TABSTOP, WS_THICKFRAME, WS_VISIBLE, WS_VSCROLL,
+    WM_COPYDATA, WM_CTLCOLOREDIT, WM_CTLCOLORLISTBOX, WM_CTLCOLORSTATIC, WM_DESTROY, WM_DPICHANGED,
+    WM_DRAWITEM, WM_DROPFILES, WM_ERASEBKGND, WM_HSCROLL, WM_INITDIALOG, WM_INITMENUPOPUP,
+    WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MEASUREITEM, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NCCREATE,
+    WM_NCDESTROY, WM_NOTIFY, WM_PAINT, WM_PRINTCLIENT, WM_QUIT, WM_RBUTTONDOWN, WM_RBUTTONUP,
+    WM_SETCURSOR, WM_SETFOCUS, WM_SETFONT, WM_SETREDRAW, WM_SETTINGCHANGE, WM_SIZE, WM_TIMER,
+    WNDCLASSEXW, WS_BORDER, WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN, WS_EX_APPWINDOW,
+    WS_EX_CLIENTEDGE, WS_EX_CONTROLPARENT, WS_EX_DLGMODALFRAME, WS_EX_LAYERED, WS_EX_STATICEDGE,
+    WS_EX_TOOLWINDOW, WS_EX_WINDOWEDGE, WS_GROUP, WS_HSCROLL, WS_MAXIMIZEBOX, WS_MINIMIZEBOX,
+    WS_OVERLAPPEDWINDOW, WS_POPUP, WS_SYSMENU, WS_TABSTOP, WS_THICKFRAME, WS_VISIBLE, WS_VSCROLL,
 };
 
 // --- Built-in menu command ids ----------------------------------------
@@ -6870,15 +6872,15 @@ fn build_main_menu() -> windows::core::Result<BuiltMenuBar> {
         // so the entries use the same `ID_WINDOW_BASE + idx` cmd
         // ids and the same tab-switch handler.
         //
-        // Right-justification: `MFT_RIGHTJUSTIFY` on the first of
-        // the three items right-aligns it and every subsequent
-        // top-level item — so the three appear `+ ▼ X` left-to-right
-        // hugging the menu bar's right edge.
-        // U+FF0B FULLWIDTH PLUS SIGN — drawn at the menu font's full
-        // em-square height, so the cross visually matches the `X`
-        // letter to its right. ASCII `+` sits at x-height and looks
-        // half the size of the neighbouring glyphs.
-        AppendMenuW(bar, MF_STRING, ID_FILE_NEW as usize, w!("\u{FF0B}"))?;
+        // Right-justification: the `+` is appended right-justified,
+        // which right-aligns it and every later top-level item, so the
+        // three appear `+ ▼ X` left-to-right hugging the menu bar's
+        // right edge.
+        //
+        // The `+` is an ASCII plus drawn at 120% of the menu font, as
+        // GTK draws it, so that it stands about as tall as the `X`.
+        // That takes an owner-drawn item, which `menu_bar_plus` draws.
+        menu_bar_plus::append(bar, ID_FILE_NEW)?;
         // RAII-wrap the freshly-allocated popup so a `?`-propagated
         // failure on the upcoming attach `AppendMenuW(MF_POPUP)` —
         // before Win32 takes ownership — frees the orphan instead
@@ -6897,26 +6899,6 @@ fn build_main_menu() -> windows::core::Result<BuiltMenuBar> {
         // cascade becomes the sole owner of the popup HMENU.
         let right_shortcuts_menu = right_shortcuts_guard.take();
         AppendMenuW(bar, MF_STRING, ID_FILE_CLOSE as usize, w!("X"))?;
-
-        // Flip the `+` item to right-justified. `GetMenuItemCount`
-        // returns the post-append total; the `+` we just appended is
-        // at position `count - 3`. A failure here only affects
-        // alignment (the three entries still work, they just appear
-        // mixed with the left-justified menu items) — log and carry
-        // on rather than failing the menu build.
-        let item_count = GetMenuItemCount(Some(bar));
-        if item_count >= 3 {
-            let plus_pos = (item_count - 3) as u32;
-            let mut mii = MENUITEMINFOW {
-                cbSize: std::mem::size_of::<MENUITEMINFOW>() as u32,
-                fMask: MIIM_FTYPE,
-                fType: MFT_RIGHTJUSTIFY,
-                ..Default::default()
-            };
-            if let Err(e) = SetMenuItemInfoW(bar, plus_pos, true, &raw mut mii) {
-                tracing::warn!(error = ?e, "SetMenuItemInfoW(MFT_RIGHTJUSTIFY) failed");
-            }
-        }
 
         Ok(BuiltMenuBar {
             bar,
@@ -28445,6 +28427,11 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                         }));
                     }
                 }
+                // The menu font may have changed: the menu bar's `+` is
+                // drawn in it, at 120%, and was measured in the old one.
+                if wparam.0 == SPI_SETNONCLIENTMETRICS.0 as usize {
+                    remeasure_menu_bar_plus(hwnd);
+                }
                 DefWindowProcW(hwnd, msg, wparam, lparam)
             }
             WM_TIMER => {
@@ -29424,6 +29411,17 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                 let dis_ptr = lparam.0 as *const DRAWITEMSTRUCT;
                 if !dis_ptr.is_null() {
                     let dis = &*dis_ptr;
+                    // The menu bar's `+`, the one owner-drawn menu item.
+                    // It needs no state, so it is drawn under any borrow.
+                    if dis.CtlType == ODT_MENU && menu_bar_plus::is_menu_message(wparam.0) {
+                        let drawn = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                            menu_bar_plus::draw(hwnd, dis)
+                        }))
+                        .unwrap_or(false);
+                        if drawn {
+                            return LRESULT(1);
+                        }
+                    }
                     if dis.CtlType == ODT_TAB {
                         let painted = if let Some(state) = state_from_hwnd(hwnd) {
                             std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -29440,8 +29438,42 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                 }
                 DefWindowProcW(hwnd, msg, wparam, lparam)
             }
+            WM_MEASUREITEM => {
+                // The menu bar's `+` (see `menu_bar_plus`). It can be
+                // measured before the window has its state, at creation.
+                let mis_ptr = lparam.0 as *mut MEASUREITEMSTRUCT;
+                if !mis_ptr.is_null() && menu_bar_plus::is_menu_message(wparam.0) {
+                    let mis = &mut *mis_ptr;
+                    let measured = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        menu_bar_plus::measure(hwnd, mis)
+                    }))
+                    .unwrap_or(false);
+                    if measured {
+                        return LRESULT(1);
+                    }
+                }
+                DefWindowProcW(hwnd, msg, wparam, lparam)
+            }
+            WM_DPICHANGED => {
+                // The `+` is measured in the window's DPI, and Windows
+                // does not measure an owner-drawn item again by itself.
+                remeasure_menu_bar_plus(hwnd);
+                DefWindowProcW(hwnd, msg, wparam, lparam)
+            }
             _ => DefWindowProcW(hwnd, msg, wparam, lparam),
         }
+    }
+}
+
+/// Has Windows measure the menu bar's `+` again, and redraws the bar,
+/// after the window's DPI or the menu font changed. The bar is the one
+/// `menu_bar_plus` recorded when it built the `+`, so this takes no state
+/// borrow and reaches a bar that is hidden too.
+fn remeasure_menu_bar_plus(hwnd: HWND) {
+    menu_bar_plus::remeasure_recorded();
+    // SAFETY: `hwnd` is the main window.
+    unsafe {
+        let _ = DrawMenuBar(hwnd);
     }
 }
 

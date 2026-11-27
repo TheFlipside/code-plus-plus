@@ -106,9 +106,10 @@ fn build_right_shortcuts() -> gtk::MenuBar {
     let bar = gtk::MenuBar::new();
 
     // + new untitled: ASCII '+' at 120%, so it looks about as tall as
-    // the `X` beside it. Win32 draws U+FF0B FULLWIDTH PLUS SIGN for that, but few
-    // Linux UI fonts have it, and fontconfig then maps a CJK fallback font
-    // for this one glyph: 2.5 MB PSS on a Cinnamon desktop (DESIGN.md §7.4).
+    // the `X` beside it. U+FF0B FULLWIDTH PLUS SIGN was used for that
+    // once, but few Linux UI fonts have it, and fontconfig then maps a CJK
+    // fallback font for this one glyph: 2.5 MB PSS on a Cinnamon desktop
+    // (DESIGN.md §7.4). Win32 draws the same 120% ASCII '+'.
     let new_item = gtk::MenuItem::new();
     let plus = gtk::Label::new(None);
     plus.set_markup("<span size=\"120%\">+</span>");
