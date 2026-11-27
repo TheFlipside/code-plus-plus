@@ -615,8 +615,8 @@ pub trait UiPlatform {
     /// tab strip's tints), and swaps plugin toolbar images. Required
     /// rather than defaulted: a no-op default would leave a backend that
     /// draws a dark scheme half-switched while looking implemented. A
-    /// backend that never reports a dark scheme (Win32, and Cocoa until it
-    /// detects one) implements it as nothing to do, and says so.
+    /// backend that never reports a dark scheme (Win32, until it detects
+    /// one) implements it as nothing to do, and says so.
     fn set_colour_scheme(&mut self, scheme: ColourScheme);
 
     /// Write the colours the host draws its own chrome with in the dark

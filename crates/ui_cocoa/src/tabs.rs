@@ -1027,7 +1027,9 @@ fn rgb_color(rgb: u32) -> Retained<NSColor> {
 /// Paint a tab's color, as Win32's strip does: the active tab gets a bar
 /// along its top edge in its color, or the default orange
 /// ([`codepp_shell::DEFAULT_TAB_BAR_RGB`]) when it has none; an inactive
-/// tab with a color takes the light tint as its background, with no bar.
+/// tab with a color takes a tint of it as its background, with no bar:
+/// laid over white in the light scheme and over the window background in
+/// the dark one ([`crate::scheme::tint_base`]).
 ///
 /// The tint goes **below** the button's other subviews, as
 /// [`TabBackdrop`] does, so it backs the title, the pin and the close
@@ -1063,7 +1065,11 @@ fn paint_tab_color(
         // under the tint, which is opaque and does the backdrop's job; if
         // the tint were ever made translucent, the backdrop would have to
         // go on top of it instead.
-        let tint = ColorFill::new(bounds, color.tint_rgb(), mtm);
+        // Over the window background in the dark scheme, so a tinted tab
+        // stays dark there; over white in the light one.
+        let rgb =
+            crate::scheme::tint_base().map_or_else(|| color.tint_rgb(), |b| color.tint_over(b));
+        let tint = ColorFill::new(bounds, rgb, mtm);
         button.addSubview_positioned_relativeTo(&tint, NSWindowOrderingMode::Below, None);
     }
 }

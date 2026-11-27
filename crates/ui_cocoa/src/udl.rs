@@ -43,6 +43,7 @@ pub(crate) fn apply_lang(
     editor: &EditorHandle,
     registry: *const codepp_udl::UdlRegistry,
     lang: LangType,
+    scheme: codepp_shell::ColourScheme,
 ) -> bool {
     if !codepp_udl::is_udl_lang_id(lang.as_npp_id()) {
         return false;
@@ -66,15 +67,8 @@ pub(crate) fn apply_lang(
     let styles = entry.definition.styles.clone();
     let compiled = std::sync::Arc::clone(&entry.compiled);
     let made_for_dark = entry.definition.dark_mode_theme;
-    // A UDL made for a dark editor is shown in its light variant: this
-    // backend draws the light scheme only so far.
-    codepp_editor::udl_paint::apply_udl_lang(
-        editor,
-        &styles,
-        &compiled,
-        made_for_dark,
-        codepp_shell::ColourScheme::Light,
-    );
+    // As made in its own scheme, and in a computed variant in the other.
+    codepp_editor::udl_paint::apply_udl_lang(editor, &styles, &compiled, made_for_dark, scheme);
     true
 }
 

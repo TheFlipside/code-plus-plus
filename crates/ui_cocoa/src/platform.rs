@@ -13,7 +13,7 @@
 //! call sequence that drifts between backends is a bug the user sees as
 //! "the same file behaves differently on my Mac".
 
-use codepp_core::styles::{parse_rgb_hex, Styles};
+use codepp_core::styles::Styles;
 use codepp_core::{Encoding, Eol, LangType};
 use codepp_editor::{sc_eol_mode, EditorHandle};
 use codepp_scintilla_sys::{
@@ -52,9 +52,50 @@ const CHANGE_HISTORY_MARGIN: u32 = 4;
 /// slice, matching the other backends.
 const CHANGE_HISTORY_MARGIN_PX: i32 = 4;
 
-/// Pack an `(r, g, b)` triple into Scintilla's BGR colour word.
-const fn rgb_to_scintilla_colour((r, g, b): (u8, u8, u8)) -> u32 {
-    (b as u32) << 16 | (g as u32) << 8 | (r as u32)
+/// Selection background in the light scheme, in Scintilla's `0xAABBGGRR`
+/// element-colour layout: opaque light grey (`#C8C8C8`).
+///
+/// **Set explicitly because the Cocoa backend picks its own, and its
+/// choice is wrong for a code editor.** `ScintillaCocoa::UpdateBaseElements`
+/// derives `Element::SelectionBack` from the system's selected-text
+/// colour — the accent blue — which is right for prose in a text field
+/// and poor over syntax-highlighted code, where it swamps the foreground
+/// colours the lexer just assigned. Win32 and GTK install no such base,
+/// so they keep Scintilla's neutral grey; this brings macOS to the same
+/// place rather than leaving one backend visibly different.
+///
+/// An explicit `SCI_SETELEMENTCOLOUR` is what it takes: the Cocoa value
+/// is installed as the element *base*, and a base is only overridden by
+/// an explicit element colour, not by the older `SCI_SETSELBACK`.
+const SELECTION_BACK: usize = 0xFF_C8_C8_C8;
+
+/// The inactive-view selection, a shade lighter so an unfocused editor
+/// reads as unfocused — the same relationship the platform defaults have.
+const SELECTION_BACK_INACTIVE: usize = 0xFF_DC_DC_DC;
+
+/// The caret's and the selection's colours: the dark palette's own, or,
+/// in the light one, Scintilla's caret and [`SELECTION_BACK`]'s greys in
+/// place of the accent colour this backend's Scintilla would take.
+fn apply_caret_and_selection(editor: &EditorHandle, palette: &codepp_editor::theme::Palette) {
+    codepp_editor::theme::apply_caret_and_selection(editor, palette);
+    if palette.selection_back.is_some() {
+        return;
+    }
+    for element in [
+        codepp_scintilla_sys::SC_ELEMENT_SELECTION_BACK,
+        codepp_scintilla_sys::SC_ELEMENT_SELECTION_ADDITIONAL_BACK,
+    ] {
+        editor.send(
+            codepp_scintilla_sys::SCI_SETELEMENTCOLOUR,
+            element as usize,
+            SELECTION_BACK as isize,
+        );
+    }
+    editor.send(
+        codepp_scintilla_sys::SCI_SETELEMENTCOLOUR,
+        codepp_scintilla_sys::SC_ELEMENT_SELECTION_INACTIVE_BACK as usize,
+        SELECTION_BACK_INACTIVE as isize,
+    );
 }
 
 impl CocoaUi {
@@ -220,14 +261,14 @@ impl CocoaUi {
 /// Configure the predefined 32-39 styles that `SCI_STYLECLEARALL`
 /// resets — the line-number margin, the change-history strip's
 /// definitions, the brace-highlight pair, and the indent-guide colour.
-pub(crate) fn apply_predefined_styles(editor: &EditorHandle) {
+pub(crate) fn apply_predefined_styles(
+    editor: &EditorHandle,
+    palette: &codepp_editor::theme::Palette,
+) {
     // Styles STYLE_LINENUMBER (fore/back) and configures margin 0 as
     // Scintilla's built-in `SC_MARGIN_NUMBER`, as wide as the numbers
     // on screen — identical on all three backends.
-    //
-    // In the light palette only: this backend draws the light scheme until
-    // it detects the system's (DESIGN.md §7.4, the dark-mode entry).
-    codepp_editor::theme::apply_line_number_margin(editor, &codepp_editor::theme::LIGHT);
+    codepp_editor::theme::apply_line_number_margin(editor, palette);
     // The change-history "edit indicator" strip. Shared config, so it
     // looks and behaves identically on all three backends;
     // per-document *enablement* happens in `activate_tab`.
@@ -242,8 +283,11 @@ pub(crate) fn apply_predefined_styles(editor: &EditorHandle) {
     // Both were likewise missing here while present on the other two
     // backends, so brace matching and indent guides rendered with
     // Scintilla's defaults instead of Code++'s palette.
-    codepp_editor::theme::apply_brace_styles(editor, &codepp_editor::theme::LIGHT);
-    codepp_editor::theme::apply_indent_guide_style(editor, &codepp_editor::theme::LIGHT);
+    codepp_editor::theme::apply_brace_styles(editor, palette);
+    codepp_editor::theme::apply_indent_guide_style(editor, palette);
+    // View-level, so `SCI_STYLECLEARALL` leaves them, but set here so the
+    // startup styling and every change of scheme both reach them.
+    apply_caret_and_selection(editor, palette);
 }
 
 /// Read the whole buffer out of Scintilla as a `String`.
@@ -363,12 +407,25 @@ impl UiPlatform for CocoaUi {
         self.editor.send(SCI_SETSAVEPOINT, 0, 0);
     }
 
-    fn set_colour_scheme(&mut self, _scheme: codepp_shell::ColourScheme) {
-        // Nothing to do yet: this backend reports no scheme but the light
-        // one, so the shell never changes it here. Detecting the system's
-        // appearance, taking the dark palette and swapping plugin toolbar
-        // images is the macOS half of step 1 (DESIGN.md §7.4, the
-        // dark-mode entry).
+    fn set_colour_scheme(&mut self, scheme: codepp_shell::ColourScheme) {
+        // The palette `apply_default_style` and `apply_lang` use next, which
+        // the shell calls straight after this. The tab strip is repainted
+        // in the scheme's tints by the drain that follows the change
+        // (`crate::scheme`), which rebuilds every tab.
+        self.colour_scheme = scheme;
+        self.toolbar.show_plugin_images_for(scheme);
+    }
+
+    fn dark_mode_colors(&self, out: &mut codepp_plugin_host::NppDarkModeColors) -> bool {
+        // The appearance's own colours while it is dark; the shell answers
+        // with Code++'s own otherwise.
+        match crate::scheme::dark_colours() {
+            Some(colours) => {
+                *out = colours;
+                true
+            }
+            None => false,
+        }
     }
 
     fn apply_lang(&mut self, lang: LangType) {
@@ -380,23 +437,29 @@ impl UiPlatform for CocoaUi {
         //
         // SAFETY: `self.udl_registry` is the pointer `CocoaUiState::split`
         // captured from `Shell.udl_registry`, read-only, per its doc.
-        if crate::udl::apply_lang(&self.editor, self.udl_registry, lang) {
+        if crate::udl::apply_lang(&self.editor, self.udl_registry, lang, self.colour_scheme) {
             return;
         }
         // The shared Lexilla theme table, exactly as GTK uses it. Both
         // branches route through `apply_default_styles`, whose
         // `apply_line_number_margin` re-configures the built-in number
         // margin after the style clear — no per-backend fixup needed.
-        codepp_editor::theme::apply_lang_theme(&self.editor, lang, &codepp_editor::theme::LIGHT);
+        codepp_editor::theme::apply_lang_theme(
+            &self.editor,
+            lang,
+            codepp_editor::theme::palette(self.colour_scheme),
+        );
     }
 
     fn apply_default_style(&mut self, styles: &Styles) {
         let entry = styles.effective_default();
-        // Same fallbacks as the other backends: black on white if the
-        // user's styles.xml carries an unparseable colour, rather than
-        // refusing to style at all.
-        let fg = rgb_to_scintilla_colour(parse_rgb_hex(&entry.fg).unwrap_or((0, 0, 0)));
-        let bg = rgb_to_scintilla_colour(parse_rgb_hex(&entry.bg).unwrap_or((0xFF, 0xFF, 0xFF)));
+        // The scheme's own pair from styles.xml, each colour falling back
+        // to the scheme's default where it does not parse
+        // (`StyleEntry::colours`), rather than refusing to style at all.
+        let (fg_rgb, bg_rgb) = entry.colours(self.colour_scheme);
+        let fg = codepp_core::colour::to_colorref(fg_rgb);
+        let bg = codepp_core::colour::to_colorref(bg_rgb);
+        let palette = codepp_editor::theme::palette(self.colour_scheme);
 
         self.editor.style_set_font(STYLE_DEFAULT, &entry.font_name);
         self.editor
@@ -411,7 +474,14 @@ impl UiPlatform for CocoaUi {
         // Propagate to every other index, then put back the predefined
         // 32-39 styles that `SCI_STYLECLEARALL` just reset.
         self.editor.style_clear_all();
-        apply_predefined_styles(&self.editor);
+        apply_predefined_styles(&self.editor, palette);
+
+        // The Document Map's miniature takes the same pair, so in the dark
+        // scheme it is not a white strip beside a dark editor. Its margins
+        // are collapsed and its caret hidden, so the pair is all it shows.
+        self.docmap_editor.style_set_fore(STYLE_DEFAULT, fg);
+        self.docmap_editor.style_set_back(STYLE_DEFAULT, bg);
+        self.docmap_editor.style_clear_all();
 
         // Win32 applies window transparency via `WS_EX_LAYERED` and GTK
         // via the toplevel's opacity; `NSWindow.alphaValue` is the direct
@@ -946,18 +1016,18 @@ impl UiPlatform for CocoaUi {
         &mut self,
         cmd_id: i32,
         hicon: codepp_plugin_host::Hwnd,
-        _dark_hicon: codepp_plugin_host::Hwnd,
+        dark_hicon: codepp_plugin_host::Hwnd,
     ) -> bool {
-        // `hicon` is an `NSImage*` on this backend. Adding the button
-        // touches AppKit from inside the dispatch's borrow, which is safe
-        // for the reason `set_npp_menu_item_check` gives.
-        //
-        // The dark image (`NPPM_ADDTOOLBARICON_FORDARKMODE`) is not kept
-        // yet: this backend draws the light scheme only, so the light
-        // image is the one it shows. Keeping both, retained, and swapping
-        // them with the scheme comes with its dark scheme (DESIGN.md §7.4,
-        // the dark-mode entry).
-        crate::plugin::add_toolbar_icon(&self.toolbar, cmd_id, hicon)
+        // `hicon` and `dark_hicon` are `NSImage*`s on this backend. Adding
+        // the button touches AppKit from inside the dispatch's borrow,
+        // which is safe for the reason `set_npp_menu_item_check` gives.
+        crate::plugin::add_toolbar_icon(
+            &self.toolbar,
+            cmd_id,
+            hicon,
+            dark_hicon,
+            self.colour_scheme,
+        )
     }
 
     fn create_plugin_scintilla(

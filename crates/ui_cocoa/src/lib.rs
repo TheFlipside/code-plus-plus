@@ -52,6 +52,7 @@ mod platform;
 mod plugin;
 mod preferences;
 mod print;
+mod scheme;
 mod search;
 mod state;
 mod status;
@@ -439,6 +440,8 @@ pub fn run(initial_path: Option<PathBuf>, perf: Perf) -> Result<(), CocoaUiError
     PERF.with(|p| *p.borrow_mut() = Some(Rc::new(perf)));
 
     // --- Startup work ---------------------------------------------
+    // The scheme first: the startup styling below is in its colours.
+    scheme::init(mtm);
     apply_startup_styles();
     apply_editor_appearance();
     seed_horizontal_scroll(&editor);
@@ -1612,29 +1615,9 @@ fn text_area_width(sci_view: &NSView) -> Option<f64> {
     editor_scroll_view(sci_view).map(|scroll| scroll.contentView().bounds().size.width)
 }
 
-/// Selection background, in Scintilla's `0xAABBGGRR` element-colour
-/// layout: opaque light grey (`#C8C8C8`).
-///
-/// **Set explicitly because the Cocoa backend picks its own, and its
-/// choice is wrong for a code editor.** `ScintillaCocoa::UpdateBaseElements`
-/// derives `Element::SelectionBack` from the system's selected-text
-/// colour — the accent blue — which is right for prose in a text field
-/// and poor over syntax-highlighted code, where it swamps the foreground
-/// colours the lexer just assigned. Win32 and GTK install no such base,
-/// so they keep Scintilla's neutral grey; this brings macOS to the same
-/// place rather than leaving one backend visibly different.
-///
-/// An explicit `SCI_SETELEMENTCOLOUR` is what it takes: the Cocoa value
-/// is installed as the element *base*, and a base is only overridden by
-/// an explicit element colour, not by the older `SCI_SETSELBACK`.
-const SELECTION_BACK: usize = 0xFF_C8_C8_C8;
-
-/// The inactive-view selection, a shade lighter so an unfocused editor
-/// reads as unfocused — the same relationship the platform defaults have.
-const SELECTION_BACK_INACTIVE: usize = 0xFF_DC_DC_DC;
-
-/// Give the editor the selection colours, and stop its subviews painting
-/// outside its band.
+/// Stop the editor's subviews painting outside its band. (Its selection
+/// colours are the scheme's, set with the rest of its styling by
+/// `platform::apply_predefined_styles`.)
 ///
 /// Also forces permanently visible scrollers and repairs the layout
 /// that breaks — see [`enforce_scroller_layout`].
@@ -1655,21 +1638,6 @@ const SELECTION_BACK_INACTIVE: usize = 0xFF_DC_DC_DC;
 fn apply_editor_appearance() {
     let mtm = MainThreadMarker::new();
     with_state(|st| {
-        for element in [
-            codepp_scintilla_sys::SC_ELEMENT_SELECTION_BACK,
-            codepp_scintilla_sys::SC_ELEMENT_SELECTION_ADDITIONAL_BACK,
-        ] {
-            st.editor.send(
-                codepp_scintilla_sys::SCI_SETELEMENTCOLOUR,
-                element as usize,
-                SELECTION_BACK as isize,
-            );
-        }
-        st.editor.send(
-            codepp_scintilla_sys::SCI_SETELEMENTCOLOUR,
-            codepp_scintilla_sys::SC_ELEMENT_SELECTION_INACTIVE_BACK as usize,
-            SELECTION_BACK_INACTIVE as isize,
-        );
         st.sci_view.setClipsToBounds(true);
         // Permanent bars, matching Win32 and GTK. The layout this then
         // breaks is repaired below and after every paint.
@@ -7385,17 +7353,72 @@ let msg = \"found scintilla_cocoa_new() calls\";
             Some(i) => &src[..i],
             None => src,
         };
-        let body = fn_body(src, "well_to_hex");
+        let body = fn_body(src, "well_to_rgb");
         let convert = body
             .find("colorUsingColorSpace(")
-            .expect("`well_to_hex` no longer converts the picked colour's space");
+            .expect("`well_to_rgb` no longer converts the picked colour's space");
         let read = body
             .find("redComponent()")
-            .expect("`well_to_hex` no longer reads the colour's components");
+            .expect("`well_to_rgb` no longer reads the colour's components");
         assert!(
             convert < read,
-            "`well_to_hex` reads colour components before converting to sRGB; a catalog \
+            "`well_to_rgb` reads colour components before converting to sRGB; a catalog \
              or pattern colour then raises an ObjC exception across the FFI boundary"
+        );
+    }
+
+    /// The colour scheme's two hazards, which no runtime test can see.
+    ///
+    /// The check that restyles the editor is queued, never run, from the
+    /// appearance notification, which can arrive under a borrow of the
+    /// window's state; and it is queued in the default run-loop mode
+    /// only, so it never runs inside a modal or a tracked gesture. And
+    /// every system colour is converted to sRGB before a component is
+    /// read: a catalog or pattern colour raises an Objective-C exception
+    /// from `redComponent`, which across the FFI boundary is undefined
+    /// behaviour (the Style Configurator's `well_to_rgb` has the same
+    /// rule, checked above).
+    #[test]
+    fn the_scheme_check_is_queued_in_the_default_mode_and_converts_its_colours() {
+        let cut = |src: &'static str| match src.find("#[cfg(test)]") {
+            Some(i) => &src[..i],
+            None => src,
+        };
+        let hook = fn_body(
+            include_str!("dropview.rs"),
+            "view_did_change_effective_appearance",
+        );
+        assert!(
+            hook.contains("crate::scheme::queue_check"),
+            "the appearance notification no longer queues the scheme check"
+        );
+        assert!(
+            !hook.contains("with_state") && !hook.contains("set_colour_scheme"),
+            "the appearance notification restyles in place; it can arrive under a state borrow"
+        );
+        let scheme = cut(include_str!("scheme.rs"));
+        let schedule = fn_body(scheme, "schedule");
+        assert!(
+            schedule.contains("NSDefaultRunLoopMode")
+                && !schedule.contains("NSModalPanelRunLoopMode")
+                && !schedule.contains("NSRunLoopCommonModes")
+                && !schedule.contains("scheduledTimer"),
+            "the scheme check is no longer queued in the default run-loop mode alone"
+        );
+        let srgb = fn_body(scheme, "srgb");
+        let convert = srgb
+            .find("colorUsingColorSpace(")
+            .expect("`srgb` no longer converts the colour's space");
+        let read = srgb
+            .find("Component()")
+            .expect("`srgb` no longer reads the colour's components");
+        assert!(
+            convert < read,
+            "`srgb` reads colour components before converting to sRGB"
+        );
+        assert!(
+            !fn_body(scheme, "resolve_colours").contains("Component()"),
+            "`resolve_colours` reads a colour's components without going through `srgb`"
         );
     }
 

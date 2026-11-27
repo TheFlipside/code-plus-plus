@@ -1378,12 +1378,22 @@ pub(crate) fn register_modeless_dialog(
 /// the button runs its command through the plugin commands' own path,
 /// which knows no other. Asking again for the same command replaces the
 /// image rather than adding a second button.
+///
+/// `dark_icon` is `NPPM_ADDTOOLBARICON_FORDARKMODE`'s image for the dark
+/// scheme, or null for none, when `icon` is shown in both. It is checked
+/// as `icon` is, and one that fails refuses the whole request. The host
+/// retains both and shows the one for `scheme`, the scheme it is in now;
+/// `Toolbar::show_plugin_images_for` swaps them when the scheme changes.
 pub(crate) fn add_toolbar_icon(
     toolbar: &crate::toolbar::Toolbar,
     cmd_id: i32,
     icon: *mut c_void,
+    dark_icon: *mut c_void,
+    scheme: codepp_shell::ColourScheme,
 ) -> bool {
-    if icon.is_null() || std::ptr::eq(icon, npp_sentinel()) || is_known_scintilla(icon) {
+    let not_an_image =
+        |p: *mut c_void| p.is_null() || std::ptr::eq(p, npp_sentinel()) || is_known_scintilla(p);
+    if not_an_image(icon) || (!dark_icon.is_null() && not_an_image(dark_icon)) {
         tracing::warn!(
             cmd_id,
             "NPPM_ADDTOOLBARICON: refused: not an image's handle"
@@ -1398,16 +1408,39 @@ pub(crate) fn add_toolbar_icon(
         return false;
     };
     // SAFETY: not one of the host's non-object handles; by the ABI's
-    // contract on this backend the icon is a live `NSImage`.
-    let object: &AnyObject = unsafe { &*icon.cast::<AnyObject>() };
-    let Some(image) = object.downcast_ref::<NSImage>() else {
+    // contract on this backend each icon is a live `NSImage`. Retained, so
+    // the plugin may release its own reference once this returns.
+    let image = |p: *mut c_void| -> Option<Retained<NSImage>> {
+        let object: &AnyObject = unsafe { &*p.cast::<AnyObject>() };
+        object.downcast_ref::<NSImage>().map(NSImage::retain)
+    };
+    let Some(light) = image(icon) else {
         tracing::warn!(cmd_id, "NPPM_ADDTOOLBARICON: refused: not an NSImage");
         return false;
+    };
+    let dark = if dark_icon.is_null() {
+        None
+    } else {
+        let Some(dark) = image(dark_icon) else {
+            tracing::warn!(
+                cmd_id,
+                "NPPM_ADDTOOLBARICON_FORDARKMODE: refused: the dark image is not an NSImage"
+            );
+            return false;
+        };
+        Some(dark)
     };
     let Some(mtm) = MainThreadMarker::new() else {
         return false;
     };
-    match toolbar.add_plugin_button(cmd_id, image, &label, menu_mark(cmd_id), mtm) {
+    match toolbar.add_plugin_button(
+        cmd_id,
+        (light, dark),
+        scheme,
+        &label,
+        menu_mark(cmd_id),
+        mtm,
+    ) {
         Ok(()) => true,
         Err(why) => {
             tracing::warn!(cmd_id, why, "NPPM_ADDTOOLBARICON: refused");
@@ -1464,6 +1497,15 @@ pub mod smoke_support {
     /// The router itself, as a plugin's route hands a message to it.
     pub fn dispatch(hwnd: *mut c_void, msg: u32, wparam: usize, lparam: isize) -> isize {
         super::plugin_dispatch(hwnd, msg, wparam, lparam)
+    }
+
+    /// The colour scheme follows the application's appearance: Dark Aqua
+    /// reads as dark and Aqua as light, the colours handed to plugins are
+    /// the appearance's own, and following the system takes the
+    /// application's own choice away again. Panics on the first failed
+    /// check.
+    pub fn the_scheme_follows_the_appearance() {
+        crate::scheme::smoke::the_scheme_follows_the_appearance();
     }
 
     /// Plugin dock panels, driven for real: a dock installed around a
@@ -2207,7 +2249,15 @@ pub mod smoke_support {
             let before = toolbar.container.subviews().len();
             let image = NSImage::initWithSize(NSImage::alloc(), NSSize::new(16.0, 16.0));
             let other = NSImage::initWithSize(NSImage::alloc(), NSSize::new(16.0, 16.0));
-            let add = |icon: *mut c_void| super::super::add_toolbar_icon(&toolbar, SMOKE_CMD, icon);
+            let add = |icon: *mut c_void| {
+                super::super::add_toolbar_icon(
+                    &toolbar,
+                    SMOKE_CMD,
+                    icon,
+                    std::ptr::null_mut(),
+                    codepp_shell::ColourScheme::Light,
+                )
+            };
             assert!(
                 !add(handle_of(&image)),
                 "a button for an unknown command was added"
@@ -2285,7 +2335,73 @@ pub mod smoke_support {
             // And a mark set through `NPPM_SETMENUITEMCHECK` reaches it.
             toolbar.set_plugin_button_state(SMOKE_CMD, false);
             assert_eq!(button.state(), 0);
+
+            dark_images(&toolbar, &button, (&image, &other), &not_an_image, before);
             std::mem::forget((actions, toolbar, image, other));
+        }
+
+        /// `NPPM_ADDTOOLBARICON_FORDARKMODE` on the button `plugin_toolbar_buttons`
+        /// made: both images kept, the one for the scheme in effect shown,
+        /// and swapped with the scheme.
+        fn dark_images(
+            toolbar: &crate::toolbar::Toolbar,
+            button: &NSButton,
+            (image, other): (&NSImage, &NSImage),
+            not_an_image: &NSObject,
+            before: usize,
+        ) {
+            let shows = |want: &NSImage| {
+                button
+                    .image()
+                    .is_some_and(|i| std::ptr::eq(Retained::as_ptr(&i), std::ptr::from_ref(want)))
+            };
+            let add_pair = |light: *mut c_void, dark: *mut c_void, scheme| {
+                super::super::add_toolbar_icon(toolbar, SMOKE_CMD, light, dark, scheme)
+            };
+            assert!(
+                !add_pair(
+                    handle_of(image),
+                    handle_of(not_an_image),
+                    codepp_shell::ColourScheme::Light
+                ),
+                "a dark image that is no NSImage was taken"
+            );
+            assert!(shows(other), "a refused request changed the image");
+            assert!(add_pair(
+                handle_of(image),
+                handle_of(other),
+                codepp_shell::ColourScheme::Light
+            ));
+            assert!(
+                shows(image),
+                "the light image is not shown in the light scheme"
+            );
+            toolbar.show_plugin_images_for(codepp_shell::ColourScheme::Dark);
+            assert!(
+                shows(other),
+                "the dark image is not shown in the dark scheme"
+            );
+            toolbar.show_plugin_images_for(codepp_shell::ColourScheme::Light);
+            assert!(shows(image), "the swap back failed");
+            assert!(add_pair(
+                handle_of(other),
+                handle_of(image),
+                codepp_shell::ColourScheme::Dark
+            ));
+            assert!(
+                shows(image),
+                "a request in the dark scheme does not show its dark image"
+            );
+            assert!(add_pair(
+                handle_of(other),
+                std::ptr::null_mut(),
+                codepp_shell::ColourScheme::Dark
+            ));
+            assert!(
+                shows(other),
+                "with no dark image the light one is not shown"
+            );
+            assert_eq!(toolbar.container.subviews().len(), before + 2);
         }
 
         /// A plugin command that is never run: the scenario loads no

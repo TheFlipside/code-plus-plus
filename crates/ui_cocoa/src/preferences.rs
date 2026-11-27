@@ -1,13 +1,16 @@
 //! The Preferences dialog for the Cocoa backend.
 //!
 //! Mirrors `ui_gtk::preferences` and the Win32 `preferences` module, and
-//! edits the same three categories: **Recent Files History**
+//! edits the same categories: **Recent Files History**
 //! ([`codepp_core::preferences::RecentFilesHistoryConfig`]), which shapes
 //! the File menu's recent-files region; **Security**
 //! ([`codepp_core::preferences::SecurityConfig`]), the guard on plugin
 //! panels' startup commands; and **MISC.**
 //! ([`codepp_core::preferences::MiscConfig`]), the "Auto-updater"
-//! pop-up (DESIGN.md §11.5). On Close the controls are read back and
+//! pop-up (DESIGN.md §11.5); and, here alone, **Dark Mode**
+//! ([`codepp_core::preferences::DarkModeConfig`]), the "Appearance" pop-up,
+//! which only this platform can honour in all three choices (DESIGN.md
+//! §7.4, the dark-mode entry). On Close the controls are read back and
 //! written through `Shell::set_preferences`, which clamps and persists
 //! them; the File menu picks the change up the next time it opens, since
 //! that region is rebuilt on every open, and the guard is consulted at
@@ -36,8 +39,9 @@ use objc2_app_kit::{
 use objc2_foundation::{MainThreadMarker, NSPoint, NSRect, NSSize, NSString};
 
 use codepp_core::preferences::{
-    Preferences, RecentFileDisplayMode, RecentFilesHistoryConfig, AUTO_UPDATER_CHOICES,
-    AUTO_UPDATER_HELP, AUTO_UPDATER_UNAVAILABLE, CUSTOM_MAX_LENGTH_LIMIT, MAX_ENTRIES_LIMIT,
+    Preferences, RecentFileDisplayMode, RecentFilesHistoryConfig, APPEARANCE_CHOICES,
+    APPEARANCE_HELP, AUTO_UPDATER_CHOICES, AUTO_UPDATER_HELP, AUTO_UPDATER_UNAVAILABLE,
+    CUSTOM_MAX_LENGTH_LIMIT, MAX_ENTRIES_LIMIT,
 };
 
 use crate::menu::Actions;
@@ -98,6 +102,9 @@ pub(crate) struct Controls {
     /// The MISC. page's "Auto-updater" pop-up, one item for each row of
     /// [`AUTO_UPDATER_CHOICES`].
     auto_updater: Retained<NSPopUpButton>,
+    /// The Dark Mode page's "Appearance" pop-up, one item for each row of
+    /// [`APPEARANCE_CHOICES`].
+    appearance: Retained<NSPopUpButton>,
 }
 
 /// The Recent Files History page's controls.
@@ -135,10 +142,21 @@ pub(crate) fn show() {
     if let Ok(row) = usize::try_from(controls.auto_updater.indexOfSelectedItem()) {
         updated.misc.set_auto_updater_row(row);
     }
+    if let Ok(row) = usize::try_from(controls.appearance.indexOfSelectedItem()) {
+        updated.dark_mode.set_appearance_row(row);
+    }
     if updated != current {
+        let appearance = updated.dark_mode.appearance;
         with_state(|st| st.shell.set_preferences(updated));
         // "Enable" takes effect now, not at the next hour.
         crate::updater::preferences_changed();
+        if appearance != current.dark_mode.appearance {
+            // Every window follows at once. The editor follows from the
+            // content view's appearance notification, and from this
+            // check, which costs nothing when nothing changed.
+            crate::scheme::apply_appearance(appearance, mtm);
+            crate::scheme::queue_check();
+        }
     }
     // The recent-files region is rebuilt on the next File-menu open, so
     // nothing else has to be told. Matches `ui_gtk`.
@@ -177,6 +195,9 @@ pub(crate) fn build_dialog(
     );
     let required_misc_height =
         security_page_height(fit_to_width(&updater_help, WIDTH - HELP_WIDTH_ALLOWANCE));
+    let appearance_help = help_label(APPEARANCE_HELP, mtm);
+    let required_dark_mode_height =
+        security_page_height(fit_to_width(&appearance_help, WIDTH - HELP_WIDTH_ALLOWANCE));
     let tabs = NSTabView::initWithFrame(
         NSTabView::alloc(mtm),
         NSRect::new(
@@ -186,6 +207,7 @@ pub(crate) fn build_dialog(
                 HISTORY_HEIGHT
                     .max(required_security_height)
                     .max(required_misc_height)
+                    .max(required_dark_mode_height)
                     + TAB_CHROME,
             ),
         ),
@@ -209,12 +231,32 @@ pub(crate) fn build_dialog(
     );
 
     let (misc_page, misc_height) = crate::search::tab_page("MISC.", &tabs, mtm);
-    let auto_updater = build_misc_page(
+    let auto_updater = build_popup_page(
         &misc_page,
         misc_height,
         &updater_help,
-        prefs.misc.auto_updater_row(),
-        can_self_update,
+        PopupPage {
+            title: "Updates",
+            label: "Auto-updater:",
+            items: &AUTO_UPDATER_CHOICES.map(|(title, _)| title),
+            row: prefs.misc.auto_updater_row(),
+            enabled: can_self_update,
+        },
+        mtm,
+    );
+
+    let (dark_mode_page, dark_mode_height) = crate::search::tab_page("Dark Mode", &tabs, mtm);
+    let appearance = build_popup_page(
+        &dark_mode_page,
+        dark_mode_height,
+        &appearance_help,
+        PopupPage {
+            title: "Appearance",
+            label: "Appearance:",
+            items: &APPEARANCE_CHOICES.map(|(title, _)| title),
+            row: prefs.dark_mode.appearance_row(),
+            enabled: true,
+        },
         mtm,
     );
 
@@ -225,6 +267,7 @@ pub(crate) fn build_dialog(
             history,
             verify_panel_commands,
             auto_updater,
+            appearance,
         },
     )
 }
@@ -360,30 +403,39 @@ fn build_security_page(
     switch
 }
 
-/// The MISC. page: one "Updates" box holding the "Auto-updater" pop-up,
-/// with an item for each row of [`AUTO_UPDATER_CHOICES`] and item `row`
-/// selected, and what the field means below it. While this copy of
-/// Code++ cannot update itself the pop-up is disabled: it shows the
-/// stored choice and cannot change it. Returns the pop-up.
-fn build_misc_page(
+/// What a page with one pop-up shows: its box's title, the pop-up's
+/// label, its items, which is selected, and whether it can be changed.
+#[derive(Clone, Copy)]
+struct PopupPage<'a> {
+    title: &'a str,
+    label: &'a str,
+    items: &'a [&'a str],
+    row: usize,
+    enabled: bool,
+}
+
+/// A page with one box holding a labelled pop-up and what the field means
+/// below it: the MISC. page's "Auto-updater" (disabled, showing the stored
+/// choice, while this copy of Code++ cannot update itself) and the Dark
+/// Mode page's "Appearance". Returns the pop-up.
+fn build_popup_page(
     page: &NSView,
     height: f64,
     help: &NSTextField,
-    row: usize,
-    can_self_update: bool,
+    spec: PopupPage<'_>,
     mtm: MainThreadMarker,
 ) -> Retained<NSPopUpButton> {
-    /// Width of the "Auto-updater:" label ahead of the pop-up.
+    /// Width of the label ahead of the pop-up.
     const LABEL_WIDTH: f64 = 100.0;
     /// Width of the pop-up, enough for its longest item.
-    const POPUP_WIDTH: f64 = 120.0;
+    const POPUP_WIDTH: f64 = 140.0;
 
     let width = page.frame().size.width;
     let frame = NSBox::initWithFrame(
         NSBox::alloc(mtm),
         NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(width, height)),
     );
-    frame.setTitle(&NSString::from_str("Updates"));
+    frame.setTitle(&NSString::from_str(spec.title));
     page.addSubview(&frame);
     // As in `build_security_page`: the box is the fallback only so that
     // there is no panic path in a dialog.
@@ -398,7 +450,7 @@ fn build_misc_page(
     // A label is `GAP` shorter than the pop-up's row, so it is raised by
     // half of that to sit level with the pop-up's text.
     inside.addSubview(&label(
-        "Auto-updater:",
+        spec.label,
         BOX_PAD,
         row_y + GAP / 2.0,
         LABEL_WIDTH,
@@ -412,11 +464,11 @@ fn build_misc_page(
         ),
         false,
     );
-    for (title, _) in AUTO_UPDATER_CHOICES {
+    for title in spec.items {
         popup.addItemWithTitle(&NSString::from_str(title));
     }
-    popup.selectItemAtIndex(isize::try_from(row).unwrap_or(0));
-    popup.setEnabled(can_self_update);
+    popup.selectItemAtIndex(isize::try_from(spec.row).unwrap_or(0));
+    popup.setEnabled(spec.enabled);
     inside.addSubview(&popup);
     help.setFrameOrigin(NSPoint::new(BOX_PAD, help_y));
     inside.addSubview(help);

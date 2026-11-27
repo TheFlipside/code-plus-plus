@@ -99,6 +99,18 @@ macro_rules! icon {
 
 type IconPair = (&'static [u8], &'static [u8]);
 
+/// The image of a plugin button's `images` (light, dark) to show in
+/// `scheme`.
+fn image_for(
+    images: &(Retained<NSImage>, Option<Retained<NSImage>>),
+    scheme: codepp_shell::ColourScheme,
+) -> &Retained<NSImage> {
+    match (scheme, &images.1) {
+        (codepp_shell::ColourScheme::Dark, Some(dark)) => dark,
+        _ => &images.0,
+    }
+}
+
 /// Handle to the toolbar.
 ///
 /// `Clone` is a refcount bump per field — this is read on every drain, so
@@ -134,6 +146,12 @@ struct PluginButtons {
     next_x: f64,
     /// Each button, with the command it runs.
     buttons: Vec<(i32, Retained<NSButton>)>,
+    /// Each button's images, by its index in [`Self::buttons`]: the light
+    /// one, and the dark one or `None` to show the light one in both
+    /// schemes. Retained here, so the plugin may release its own once
+    /// `NPPM_ADDTOOLBARICON_FORDARKMODE` returns, and a swap of images
+    /// ([`Toolbar::show_plugin_images_for`]) reads nothing it owns.
+    images: Vec<(Retained<NSImage>, Option<Retained<NSImage>>)>,
     /// The target every button's click goes to — the built-in buttons'
     /// target, held so a button added later can be given it. A control
     /// holds its target weakly; this is not what keeps it alive.
@@ -262,6 +280,7 @@ impl Toolbar {
         let plugin = Rc::new(RefCell::new(PluginButtons {
             next_x: bar.x,
             buttons: Vec::new(),
+            images: Vec::new(),
             actions: actions.retain(),
         }));
         Self {
@@ -285,22 +304,28 @@ impl Toolbar {
     /// The image is drawn at its own size, scaled down if it is larger
     /// than a button: a plugin's icon is whatever size the plugin made it,
     /// where the built-in ones are all the same.
+    ///
+    /// `images` is the light image and the dark one, or `None` to show the
+    /// light one in both; the button shows the one for `scheme`.
     pub fn add_plugin_button(
         &self,
         cmd_id: i32,
-        image: &NSImage,
+        images: (Retained<NSImage>, Option<Retained<NSImage>>),
+        scheme: codepp_shell::ColourScheme,
         tip: &str,
         checked: bool,
         mtm: MainThreadMarker,
     ) -> Result<(), &'static str> {
+        let image = image_for(&images, scheme).clone();
         let Ok(mut plugin) = self.plugin.try_borrow_mut() else {
             return Err("the toolbar's plugin buttons are being changed already");
         };
         let commands: Vec<i32> = plugin.buttons.iter().map(|(id, _)| *id).collect();
         match plugin_toolbar_button_slot(&commands, cmd_id) {
             PluginToolbarButtonSlot::Existing(index) => {
-                let button = &plugin.buttons[index].1;
-                button.setImage(Some(image));
+                let button = plugin.buttons[index].1.clone();
+                button.setImage(Some(&image));
+                plugin.images[index] = images;
                 button.setToolTip(Some(&NSString::from_str(tip)));
                 button.setState(isize::from(checked));
                 return Ok(());
@@ -316,7 +341,7 @@ impl Toolbar {
             }
         }
         let button = new_button(plugin.next_x, tip, mtm);
-        button.setImage(Some(image));
+        button.setImage(Some(&image));
         button.setImageScaling(NSImageScaling::ScaleProportionallyDown);
         // Push-on/push-off, so the button can show the command's check
         // mark. AppKit flips the state on a click, before the action runs;
@@ -329,7 +354,20 @@ impl Toolbar {
         self.container.addSubview(&button);
         plugin.next_x += BUTTON_SIZE + BUTTON_GAP;
         plugin.buttons.push((cmd_id, button));
+        plugin.images.push(images);
         Ok(())
+    }
+
+    /// Show each plugin button's image for `scheme`: its dark one in the
+    /// dark scheme, where it has one, and its light one otherwise.
+    pub fn show_plugin_images_for(&self, scheme: codepp_shell::ColourScheme) {
+        let Ok(plugin) = self.plugin.try_borrow() else {
+            tracing::debug!("toolbar: plugin images not swapped: the buttons are being changed");
+            return;
+        };
+        for ((_, button), images) in plugin.buttons.iter().zip(&plugin.images) {
+            button.setImage(Some(image_for(images, scheme)));
+        }
     }
 
     /// Show plugin command `cmd_id`'s check mark on its button, if it has

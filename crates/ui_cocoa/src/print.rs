@@ -43,7 +43,10 @@
 //! Print settings mirror both other backends: colours preserved but
 //! default-coloured backgrounds forced to white
 //! (`SC_PRINT_COLOURONWHITEDEFAULTBG`), no magnification, word wrap on so
-//! long lines are not clipped at the margin.
+//! long lines are not clipped at the margin. In the dark scheme every
+//! colour's lightness is turned over instead, on white
+//! (`SC_PRINT_INVERTLIGHT`), so its light text prints dark
+//! ([`print_colour_mode`]).
 
 use std::cell::RefCell;
 use std::ffi::c_void;
@@ -63,7 +66,7 @@ use codepp_editor::EditorHandle;
 use codepp_scintilla_sys::{
     sptr_t, Sci_CharacterRangeFull, Sci_RangeToFormatFull, Sci_Rectangle, SCI_FORMATRANGEFULL,
     SCI_GETLENGTH, SCI_SETPRINTCOLOURMODE, SCI_SETPRINTMAGNIFICATION, SCI_SETPRINTWRAPMODE,
-    SC_PRINT_COLOURONWHITEDEFAULTBG, SC_WRAP_WORD,
+    SC_PRINT_COLOURONWHITEDEFAULTBG, SC_PRINT_INVERTLIGHT, SC_WRAP_WORD,
 };
 
 use crate::state::with_state;
@@ -244,15 +247,29 @@ pub(crate) fn show() {
 
 /// Colour and wrap settings for the printed page, identical on all three
 /// backends: keep syntax colours, but force a default-coloured background
-/// to white so a dark theme does not flood the page with toner.
+/// to white so a dark theme does not flood the page with toner
+/// ([`print_colour_mode`]).
 fn apply_print_settings(editor: &EditorHandle) {
     editor.send(
         SCI_SETPRINTCOLOURMODE,
-        SC_PRINT_COLOURONWHITEDEFAULTBG as usize,
+        print_colour_mode(crate::scheme::current()),
         0,
     );
     editor.send(SCI_SETPRINTMAGNIFICATION, 0, 0);
     editor.send(SCI_SETPRINTWRAPMODE, SC_WRAP_WORD, 0);
+}
+
+/// How Scintilla renders colour on paper in `scheme`, as on GTK. The light
+/// scheme prints each style in its own colour on white
+/// (`SC_PRINT_COLOURONWHITEDEFAULTBG`). The dark scheme's light text would
+/// be faint on white, so it prints with every colour's lightness turned
+/// over, on white (`SC_PRINT_INVERTLIGHT`): dark text of the same hues.
+fn print_colour_mode(scheme: codepp_shell::ColourScheme) -> usize {
+    let mode = match scheme {
+        codepp_shell::ColourScheme::Light => SC_PRINT_COLOURONWHITEDEFAULTBG,
+        codepp_shell::ColourScheme::Dark => SC_PRINT_INVERTLIGHT,
+    };
+    usize::try_from(mode).unwrap_or(0)
 }
 
 /// `SCI_FORMATRANGEFULL(0, NULL)` — releases the format cache Scintilla
@@ -677,6 +694,19 @@ fn draw_header(job: &Job, index: usize, rect: NSRect, mtm: MainThreadMarker) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_dark_scheme_prints_with_its_lightness_turned_over() {
+        use codepp_shell::ColourScheme;
+        assert_eq!(
+            super::print_colour_mode(ColourScheme::Light),
+            SC_PRINT_COLOURONWHITEDEFAULTBG as usize
+        );
+        assert_eq!(
+            super::print_colour_mode(ColourScheme::Dark),
+            SC_PRINT_INVERTLIGHT as usize
+        );
+    }
+
     use super::*;
 
     #[test]

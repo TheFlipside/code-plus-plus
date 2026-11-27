@@ -200,8 +200,9 @@ pub const NPPM_GETBOOKMARKID: u32 = NPPMSG + 111;
 /// whether the host is actually following the system flip (the
 /// user can override host-level dark mode independently of the
 /// system setting). Code++ answers from the shell's stored colour
-/// scheme: TRUE on GTK while its theme is dark, FALSE on Win32 and
-/// macOS, which draw the light scheme only so far (DESIGN.md §7.4).
+/// scheme: TRUE on GTK while its theme is dark and on macOS while the
+/// application's appearance is, FALSE on Win32, which draws the light
+/// scheme only so far (DESIGN.md §7.4).
 pub const NPPM_ISDARKMODEENABLED: u32 = NPPMSG + 107;
 /// wparam: size of the plugin's `NppDarkModeColors` struct
 ///         (host validates against `sizeof(NppDarkModeColors)`).

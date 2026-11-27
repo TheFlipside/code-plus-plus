@@ -540,10 +540,10 @@ impl Palette {
 /// Scintilla's own back where it has none. View-level, and not touched by
 /// `SCI_STYLECLEARALL`, so set once per change of scheme.
 ///
-/// Not called by the Cocoa backend while it stays in the light scheme:
-/// its Scintilla takes the selection's base colour from the system, and
-/// it sets an explicit one of its own instead (`ui_cocoa`'s
-/// `SELECTION_BACK`), which putting Scintilla's own back would undo.
+/// The light palette sets no selection colour, so on the Cocoa backend,
+/// whose Scintilla takes the selection's base colour from the system's
+/// accent, that accent would show; there the backend follows this with
+/// selection greys of its own (`ui_cocoa`'s `SELECTION_BACK`).
 pub fn apply_caret_and_selection(editor: &EditorHandle, palette: &Palette) {
     let set = |element: usize, colour: Option<u32>| match colour {
         Some(c) => {

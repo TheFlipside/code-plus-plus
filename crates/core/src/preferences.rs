@@ -9,8 +9,8 @@
 //! the schema can never lock the user out of the app.
 //!
 //! **Scope note.** Only the sections that back live UI are
-//! populated: [`RecentFilesHistoryConfig`], [`SecurityConfig`] and
-//! [`MiscConfig`].
+//! populated: [`RecentFilesHistoryConfig`], [`SecurityConfig`],
+//! [`MiscConfig`] and [`DarkModeConfig`].
 //! Other Preferences panes land one by one and each adds a new
 //! field with a `#[serde(default)]` attribute so downgrading a
 //! config from a future version keeps working.
@@ -33,6 +33,9 @@
 //!   <misc>
 //!     <auto-updater>true</auto-updater>
 //!   </misc>
+//!   <dark-mode>
+//!     <appearance>follow-system</appearance>
+//!   </dark-mode>
 //! </preferences>
 //! ```
 
@@ -58,6 +61,71 @@ pub struct Preferences {
     /// existed gets the defaults: the auto-updater enabled.
     #[serde(default)]
     pub misc: MiscConfig,
+    /// Preferences → Dark Mode panel. A `config.xml` written before it
+    /// existed gets the default: follow the system.
+    #[serde(rename = "dark-mode", default)]
+    pub dark_mode: DarkModeConfig,
+}
+
+/// The Preferences → Dark Mode panel's persisted controls (DESIGN.md
+/// §7.4, the dark-mode entry). Offered only where the platform can honour
+/// all three choices: macOS today. GTK follows its theme and shows no
+/// such panel, so there the field is kept and changes nothing.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DarkModeConfig {
+    /// Light, dark, or whatever the system's appearance is.
+    #[serde(default)]
+    pub appearance: Appearance,
+}
+
+/// The appearance the user chose for Code++.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Appearance {
+    /// Always light, whatever the system's appearance.
+    Light,
+    /// Always dark, whatever the system's appearance.
+    Dark,
+    /// Light or dark as the system is, and changing with it. Also what a
+    /// value no choice has reads as, so a hand edit costs only this field.
+    #[default]
+    #[serde(other)]
+    FollowSystem,
+}
+
+/// The rows of the Dark Mode panel's "Appearance" pop-up, in order: each
+/// row's label and the [`Appearance`] it stands for. Notepad++ words its
+/// three the same way, with "Windows" where this says "system".
+pub const APPEARANCE_CHOICES: [(&str, Appearance); 3] = [
+    ("Light mode", Appearance::Light),
+    ("Dark mode", Appearance::Dark),
+    ("Follow system", Appearance::FollowSystem),
+];
+
+/// What the "Appearance" field means, shown beside it.
+pub const APPEARANCE_HELP: &str = "\
+Light mode and Dark mode keep Code++ in that mode whatever the system's \
+appearance. Follow system switches with the system's own setting.";
+
+impl DarkModeConfig {
+    /// The row of [`APPEARANCE_CHOICES`] that stands for this
+    /// configuration.
+    #[must_use]
+    pub fn appearance_row(&self) -> usize {
+        APPEARANCE_CHOICES
+            .iter()
+            .position(|&(_, a)| a == self.appearance)
+            .unwrap_or(0)
+    }
+
+    /// Take the choice of row `row` of [`APPEARANCE_CHOICES`]. A row the
+    /// table does not have, as a pop-up with nothing selected reports,
+    /// changes nothing.
+    pub fn set_appearance_row(&mut self, row: usize) {
+        if let Some(&(_, a)) = APPEARANCE_CHOICES.get(row) {
+            self.appearance = a;
+        }
+    }
 }
 
 /// The Preferences → MISC. panel's persisted controls.
@@ -602,6 +670,9 @@ mod tests {
             misc: MiscConfig {
                 auto_updater: false,
             },
+            dark_mode: DarkModeConfig {
+                appearance: Appearance::Dark,
+            },
         };
         p.save(&path).expect("save");
         let back = Preferences::load(&path).expect("load");
@@ -644,5 +715,75 @@ mod tests {
         let p = Preferences::load(&path).expect("load");
         assert_eq!(p.recent_files_history.max_entries, MAX_ENTRIES_LIMIT);
         assert_eq!(p.recent_files_history.custom_max_length, 1);
+    }
+
+    /// A `config.xml` from before the Dark Mode pane follows the system,
+    /// each choice is read back, and a value no choice has keeps the
+    /// rest of the file rather than costing it.
+    #[test]
+    fn the_appearance_is_read_and_defaults_to_the_system() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("config.xml");
+        for xml in [
+            "<?xml version=\"1.0\"?><preferences></preferences>",
+            "<?xml version=\"1.0\"?><preferences><dark-mode/></preferences>",
+            "<?xml version=\"1.0\"?><preferences><dark-mode><appearance/></dark-mode></preferences>",
+            "<?xml version=\"1.0\"?><preferences><dark-mode><appearance></appearance></dark-mode></preferences>",
+        ] {
+            std::fs::write(&path, xml).expect("write");
+            let p = Preferences::load(&path).expect("load");
+            assert_eq!(p.dark_mode.appearance, Appearance::FollowSystem, "{xml}");
+        }
+        for (name, want) in [
+            ("light", Appearance::Light),
+            ("dark", Appearance::Dark),
+            ("follow-system", Appearance::FollowSystem),
+            ("purple", Appearance::FollowSystem),
+        ] {
+            std::fs::write(
+                &path,
+                format!(
+                    "<?xml version=\"1.0\"?><preferences><misc>\
+                     <auto-updater>false</auto-updater></misc><dark-mode>\
+                     <appearance>{name}</appearance></dark-mode></preferences>"
+                ),
+            )
+            .expect("write");
+            let p = Preferences::load(&path).expect("load");
+            assert_eq!(p.dark_mode.appearance, want, "{name}");
+            assert!(!p.misc.auto_updater, "{name}: the rest of the file kept");
+        }
+        for (appearance, name) in [
+            (Appearance::Light, "light"),
+            (Appearance::Dark, "dark"),
+            (Appearance::FollowSystem, "follow-system"),
+        ] {
+            let p = Preferences {
+                dark_mode: DarkModeConfig { appearance },
+                ..Default::default()
+            };
+            p.save(&path).expect("save");
+            let raw = std::fs::read_to_string(&path).expect("read");
+            assert!(
+                raw.contains(&format!("<appearance>{name}</appearance>")),
+                "{raw}"
+            );
+            assert_eq!(Preferences::load(&path).expect("load"), p);
+        }
+    }
+
+    /// Each row of the pop-up stands for its own choice, both ways, and a
+    /// row the table lacks changes nothing.
+    #[test]
+    fn the_appearance_rows_map_both_ways() {
+        for (row, &(_, appearance)) in APPEARANCE_CHOICES.iter().enumerate() {
+            let mut d = DarkModeConfig::default();
+            d.set_appearance_row(row);
+            assert_eq!(d.appearance, appearance);
+            assert_eq!(d.appearance_row(), row);
+            d.set_appearance_row(APPEARANCE_CHOICES.len());
+            d.set_appearance_row(usize::MAX);
+            assert_eq!(d.appearance, appearance);
+        }
     }
 }

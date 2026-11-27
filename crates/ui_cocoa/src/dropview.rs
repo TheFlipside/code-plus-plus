@@ -21,15 +21,33 @@ use objc2_foundation::{MainThreadMarker, NSArray, NSCopying, NSObjectProtocol, N
 use std::path::PathBuf;
 
 define_class!(
-    // SAFETY: an `NSView` subclass that overrides nothing of `NSView`'s
-    // own behaviour — it only adds the dragging-destination protocol
-    // methods. Main-thread-only because every callback arrives there.
+    // SAFETY: an `NSView` subclass that adds the dragging-destination
+    // protocol methods and overrides one `NSView` method, which it chains
+    // to `super`. Main-thread-only because every callback arrives there.
     #[unsafe(super(NSView))]
     #[thread_kind = MainThreadOnly]
     #[name = "CodeppContentView"]
     pub struct ContentView;
 
     unsafe impl NSObjectProtocol for ContentView {}
+
+    impl ContentView {
+        /// The effective appearance changed, for a change in System
+        /// Settings or of `NSApp.appearance`: have the colour scheme read
+        /// again (`crate::scheme`), from the default run-loop mode, since
+        /// this can arrive under a borrow of the window's state.
+        #[unsafe(method(viewDidChangeEffectiveAppearance))]
+        fn view_did_change_effective_appearance(&self) {
+            // SAFETY: `NSView` implements the method; chaining keeps
+            // whatever it does.
+            let () = unsafe { msg_send![super(self), viewDidChangeEffectiveAppearance] };
+            crate::at_callback_boundary(
+                "viewDidChangeEffectiveAppearance",
+                (),
+                crate::scheme::queue_check,
+            );
+        }
+    }
 
     unsafe impl NSDraggingDestination for ContentView {
         #[unsafe(method(draggingEntered:))]

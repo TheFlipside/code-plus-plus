@@ -33,7 +33,8 @@ use objc2_app_kit::{
 };
 use objc2_foundation::{MainThreadMarker, NSPoint, NSRect, NSSize, NSString};
 
-use codepp_core::styles::{format_rgb_hex, parse_rgb_hex, StyleEntry, Styles, Transparency};
+use codepp_core::colour::{pack, unpack};
+use codepp_core::styles::{ColourScheme, StyleEntry, Styles, Transparency};
 
 use crate::state::with_state;
 
@@ -89,7 +90,9 @@ pub(crate) fn show() {
     let Some(mtm) = MainThreadMarker::new() else {
         return;
     };
-    let Some(current) = with_state(|st| st.shell.styles.clone()) else {
+    let Some((current, scheme)) =
+        with_state(|st| (st.shell.styles.clone(), st.shell.colour_scheme()))
+    else {
         return;
     };
     let entry = current.effective_default();
@@ -98,12 +101,12 @@ pub(crate) fn show() {
     // A nested modal session services the GCD main-queue source, so it
     // takes the same freeze every other modal on this backend does.
     let _freeze = crate::DrainFreeze::new();
-    let (alert, controls) = build_dialog(&entry, &transparency, mtm);
+    let (alert, controls) = build_dialog(&entry, &transparency, scheme, mtm);
     // `NSAlertFirstButtonReturn` is 1000 — "Save & Close".
     if alert.runModal() != 1000 {
         return;
     }
-    let new_styles = read_styles(&controls, &entry);
+    let new_styles = read_styles(&controls, &entry, scheme);
 
     with_state(|st| {
         let (shell, mut ui) = st.split();
@@ -123,9 +126,13 @@ pub(crate) fn show() {
 /// Split from [`show`] so the wiring can be checked without entering a
 /// modal session — `runModal` cannot return without a human. Same split
 /// as `search::build_goto_alert` and `preferences::build_dialog`.
+///
+/// The two colour wells are `scheme`'s pair, the scheme the editor is
+/// drawn in now, and their labels say which.
 pub(crate) fn build_dialog(
     entry: &StyleEntry,
     transparency: &Transparency,
+    scheme: ColourScheme,
     mtm: MainThreadMarker,
 ) -> (Retained<NSAlert>, Controls) {
     let alert = NSAlert::new(mtm);
@@ -151,14 +158,11 @@ pub(crate) fn build_dialog(
     y -= ROW * 1.5;
 
     // --- the editable Default Style --------------------------------
-    add_label("Foreground colour:", y, &view, mtm);
-    let fg = color_well(&entry.fg, (0, 0, 0), y, mtm);
-    view.addSubview(&fg);
+    let (fg_rgb, bg_rgb) = entry.colours(scheme);
+    let (fg_label, bg_label) = colour_labels(scheme);
+    let fg = colour_row(fg_label, fg_rgb, y, &view, mtm);
     y -= ROW;
-
-    add_label("Background colour:", y, &view, mtm);
-    let bg = color_well(&entry.bg, (0xFF, 0xFF, 0xFF), y, mtm);
-    view.addSubview(&bg);
+    let bg = colour_row(bg_label, bg_rgb, y, &view, mtm);
     y -= ROW;
 
     add_label("Font:", y, &view, mtm);
@@ -252,10 +256,21 @@ pub(crate) fn build_dialog(
     )
 }
 
+/// The two colour fields' labels, which say which scheme's colours they
+/// are, as on GTK.
+fn colour_labels(scheme: ColourScheme) -> (&'static str, &'static str) {
+    match scheme {
+        ColourScheme::Light => ("Foreground colour (light):", "Background colour (light):"),
+        ColourScheme::Dark => ("Foreground colour (dark):", "Background colour (dark):"),
+    }
+}
+
 /// Read the controls into a fresh `Styles`. `prior` supplies the
-/// fallbacks: the font face when the popup has no selection, and the
-/// size when the field holds something that is not a size.
-fn read_styles(c: &Controls, prior: &StyleEntry) -> Styles {
+/// fallbacks: the font face when the popup has no selection, the size
+/// when the field holds something that is not a size, and the other
+/// scheme's colours, which the dialog does not show and leaves as they
+/// are; the two colour wells are `scheme`'s.
+fn read_styles(c: &Controls, prior: &StyleEntry, scheme: ColourScheme) -> Styles {
     // Read back from the side table by index — never from the item's
     // title, which is the sanitized label rather than the face.
     let font_name = usize::try_from(c.font.indexOfSelectedItem())
@@ -263,23 +278,24 @@ fn read_styles(c: &Controls, prior: &StyleEntry) -> Styles {
         .and_then(|i| c.font_faces.get(i))
         .cloned()
         .unwrap_or_else(|| prior.font_name.clone());
+    let mut entry = StyleEntry {
+        font_name,
+        font_size: parse_size(&c.size.stringValue().to_string())
+            .unwrap_or(prior.font_size)
+            .clamp(SIZE_MIN, SIZE_MAX),
+        bold: c.bold.state() != 0,
+        italic: c.italic.state() != 0,
+        underline: c.underline.state() != 0,
+        ..prior.clone()
+    };
+    let (was_fore, was_back) = prior.colours(scheme);
+    entry.set_colours(
+        scheme,
+        well_to_rgb(&c.fg, was_fore),
+        well_to_rgb(&c.bg, was_back),
+    );
     Styles {
-        default: Some(StyleEntry {
-            font_name,
-            font_size: parse_size(&c.size.stringValue().to_string())
-                .unwrap_or(prior.font_size)
-                .clamp(SIZE_MIN, SIZE_MAX),
-            bold: c.bold.state() != 0,
-            italic: c.italic.state() != 0,
-            underline: c.underline.state() != 0,
-            fg: well_to_hex(&c.fg, &prior.fg),
-            bg: well_to_hex(&c.bg, &prior.bg),
-            // The dark pair is kept as it was: Cocoa draws the light scheme
-            // only so far, and the dialog edits the light pair (DESIGN.md
-            // §7.4, the dark-mode entry).
-            dark_fg: prior.dark_fg.clone(),
-            dark_bg: prior.dark_bg.clone(),
-        }),
+        default: Some(entry),
         transparency: Some(Transparency {
             enabled: c.transparency.state() != 0,
             // `f64 as u8` saturates in Rust, and the slider is bounded
@@ -301,7 +317,8 @@ fn parse_size(text: &str) -> Option<u16> {
     text.trim().parse::<u16>().ok()
 }
 
-/// The colour a well holds, as canonical `RRGGBB`.
+/// The colour a well holds, as `0xRRGGBB`, or `fallback` for one with no
+/// sRGB form.
 ///
 /// **Converted to sRGB first, and that is required rather than tidy.**
 /// `NSColorWell` hands back an `NSColor` in whatever space the picker
@@ -310,13 +327,13 @@ fn parse_size(text: &str) -> Option<u16> {
 /// crosses the FFI boundary as undefined behaviour rather than a
 /// catchable Rust panic. `usingColorSpace:` returns `None` when the
 /// conversion is impossible, which is the case this falls back on.
-fn well_to_hex(well: &NSColorWell, fallback: &str) -> String {
+fn well_to_rgb(well: &NSColorWell, fallback: u32) -> u32 {
     let color = well.color();
     let Some(srgb) = color.colorUsingColorSpace(&NSColorSpace::sRGBColorSpace()) else {
-        return fallback.to_string();
+        return fallback;
     };
     let to_u8 = |c: f64| (c.clamp(0.0, 1.0) * 255.0).round() as u8;
-    format_rgb_hex(
+    pack(
         to_u8(srgb.redComponent()),
         to_u8(srgb.greenComponent()),
         to_u8(srgb.blueComponent()),
@@ -394,17 +411,26 @@ fn check(
     button
 }
 
-fn color_well(
-    hex: &str,
-    fallback: (u8, u8, u8),
+/// A labelled colour well at row `y` of `view`, holding `rgb`.
+fn colour_row(
+    text: &str,
+    rgb: u32,
     y: f64,
+    view: &NSView,
     mtm: MainThreadMarker,
 ) -> Retained<NSColorWell> {
+    add_label(text, y, view, mtm);
+    let well = color_well(rgb, y, mtm);
+    view.addSubview(&well);
+    well
+}
+
+fn color_well(rgb: u32, y: f64, mtm: MainThreadMarker) -> Retained<NSColorWell> {
     let well = NSColorWell::initWithFrame(
         NSColorWell::alloc(mtm),
         NSRect::new(NSPoint::new(FIELD_X, y), NSSize::new(60.0, ROW - 4.0)),
     );
-    let (r, g, b) = parse_rgb_hex(hex).unwrap_or(fallback);
+    let (r, g, b) = unpack(rgb);
     let scale = |c: u8| f64::from(c) / 255.0;
     well.setColor(&NSColor::colorWithSRGBRed_green_blue_alpha(
         scale(r),
