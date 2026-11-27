@@ -44,9 +44,13 @@
 //!    in it reaches the plugin as `SCN_MODIFIED` at `messageProc`, and the
 //!    status bar reports the notes' length. Where the host makes none, the
 //!    panel carries a label instead.
-//! 6. **On Linux and macOS, "Show Dock Panel" has a toolbar button**
-//!    (`NPPM_ADDTOOLBARICON`), added at `NPPN_TBMODIFICATION`. It runs
-//!    the command and shows its check mark as pressed.
+//! 6. **On Linux and macOS, "Show Dock Panel" has a toolbar button**,
+//!    added at `NPPN_TBMODIFICATION`. It runs the command and shows its
+//!    check mark as pressed. On Linux it is asked for with
+//!    `NPPM_ADDTOOLBARICON_FORDARKMODE` and two images, dark ink for the
+//!    light scheme and light ink for the dark one, so a change of GTK
+//!    theme swaps them; on macOS with `NPPM_ADDTOOLBARICON` and an SF
+//!    Symbol, which follows the appearance by itself.
 //! 7. **Switching between the two panels' tabs**, dragging a panel out
 //!    to float or resizing its band reports what the host sends on the
 //!    status bar: `DMN_SWITCHIN` for the panel coming in,
@@ -287,7 +291,8 @@ Drag my tab onto the other panel.";
         sdk::set_status(done);
     }
 
-    /// Give "Show Dock Panel" a toolbar button — `NPPM_ADDTOOLBARICON`.
+    /// Give "Show Dock Panel" a toolbar button: `NPPM_ADDTOOLBARICON_FORDARKMODE`
+    /// on Linux, `NPPM_ADDTOOLBARICON` on macOS.
     /// Called from `NPPN_TBMODIFICATION`, the moment the ABI sets aside for
     /// it.
     pub fn add_toolbar_button() {
@@ -534,7 +539,7 @@ Drag my tab onto the other panel.";
 /// hide. The GTK calls come from [`crate::gtk`].
 #[cfg(target_os = "linux")]
 mod gtk_view {
-    use codepp_plugin_sdk::{self as sdk, Hwnd, ToolbarIcons};
+    use codepp_plugin_sdk::{self as sdk, Hwnd, ToolbarIconsWithDarkMode};
     use core::ffi::{c_uint, CStr};
 
     use crate::gtk::{
@@ -675,34 +680,47 @@ mod gtk_view {
         sci
     }
 
+    /// Dark ink, for the light scheme's toolbar.
+    const LIGHT_SCHEME_INK: [u8; 4] = [0x40, 0x40, 0x40, 0xFF];
+    /// Light ink, for the dark scheme's toolbar.
+    const DARK_SCHEME_INK: [u8; 4] = [0xD8, 0xD8, 0xD8, 0xFF];
+
     /// Ask the host for a toolbar button that runs command `cmd_id` —
-    /// `NPPM_ADDTOOLBARICON` — showing an icon drawn here
-    /// ([`toolbar_icon`]). The host takes a reference of its own, so this
-    /// one is dropped once the host has answered.
+    /// `NPPM_ADDTOOLBARICON_FORDARKMODE` — showing an icon drawn here
+    /// ([`toolbar_icon`]) in dark ink, and in light ink when the host is
+    /// in its dark scheme. The host keeps copies of its own, so these are
+    /// dropped once it has answered.
     pub(super) fn add_toolbar_button(cmd_id: i32) {
-        let icon = toolbar_icon();
-        if icon.is_null() {
+        let light = toolbar_icon(LIGHT_SCHEME_INK);
+        let dark = toolbar_icon(DARK_SCHEME_INK);
+        if light.is_null() {
             sdk::set_status("Example Hello: could not make the toolbar icon");
-            return;
+        } else {
+            // A null dark image means the light one in both schemes.
+            let icons = ToolbarIconsWithDarkMode {
+                h_toolbar_bmp: core::ptr::null_mut(),
+                h_toolbar_icon: light,
+                h_toolbar_icon_dark_mode: dark,
+            };
+            // SAFETY: `icons` outlives the call, which reads it and copies
+            // the pixbufs.
+            let added = unsafe {
+                sdk::SendMessageW(
+                    sdk::npp_handle(),
+                    sdk::NPPM_ADDTOOLBARICON_FORDARKMODE,
+                    cmd_id as usize,
+                    (&raw const icons) as isize,
+                ) != 0
+            };
+            if !added {
+                sdk::set_status("Example Hello: the host added no toolbar button");
+            }
         }
-        let icons = ToolbarIcons {
-            h_toolbar_bmp: core::ptr::null_mut(),
-            h_toolbar_icon: icon,
-        };
-        // SAFETY: `icons` outlives the call, which reads it and takes a
-        // reference to the pixbuf.
-        let added = unsafe {
-            sdk::SendMessageW(
-                sdk::npp_handle(),
-                sdk::NPPM_ADDTOOLBARICON,
-                cmd_id as usize,
-                (&raw const icons) as isize,
-            ) != 0
-        };
-        // SAFETY: the pixbuf made above, whose own reference this was.
-        unsafe { g_object_unref(icon) };
-        if !added {
-            sdk::set_status("Example Hello: the host added no toolbar button");
+        for icon in [light, dark] {
+            if !icon.is_null() {
+                // SAFETY: a pixbuf made above, whose own reference this was.
+                unsafe { g_object_unref(icon) };
+            }
         }
     }
 
@@ -711,7 +729,7 @@ mod gtk_view {
     /// panel — the picture the macOS side takes from an SF Symbol. Drawn
     /// rather than looked up, so it does not depend on the icon theme.
     /// Null if GDK could not make it.
-    fn toolbar_icon() -> Hwnd {
+    fn toolbar_icon(ink: [u8; 4]) -> Hwnd {
         // SAFETY: a plain GDK call; a new pixbuf, owned here.
         let pixbuf = unsafe { gdk_pixbuf_new(COLORSPACE_RGB, 1, 8, ICON_PX, ICON_PX) };
         if pixbuf.is_null() {
@@ -750,7 +768,7 @@ mod gtk_view {
             for x in 0..ICON_PX {
                 let at = y as usize * stride + x as usize * 4;
                 if let Some(pixel) = pixels.get_mut(at..at + 4) {
-                    pixel.copy_from_slice(&icon_pixel(x, y));
+                    pixel.copy_from_slice(&icon_pixel(x, y, ink));
                 }
             }
         }
@@ -758,17 +776,16 @@ mod gtk_view {
     }
 
     /// The toolbar icon's pixel at (`x`, `y`), as RGBA: a 2-pixel
-    /// outline of a window, its bottom half filled; transparent
+    /// outline of a window, its bottom half filled, in `ink`; transparent
     /// elsewhere.
-    fn icon_pixel(x: i32, y: i32) -> [u8; 4] {
-        const INK: [u8; 4] = [0x40, 0x40, 0x40, 0xFF];
+    fn icon_pixel(x: i32, y: i32, ink: [u8; 4]) -> [u8; 4] {
         const CLEAR: [u8; 4] = [0, 0, 0, 0];
         let inside_frame = (2..=21).contains(&x) && (4..=19).contains(&y);
         let on_outline =
             inside_frame && (matches!(x, 2 | 3 | 20 | 21) || matches!(y, 4 | 5 | 18 | 19));
         let in_panel = (5..=18).contains(&x) && (12..=16).contains(&y);
         if on_outline || in_panel {
-            INK
+            ink
         } else {
             CLEAR
         }
@@ -776,7 +793,7 @@ mod gtk_view {
 
     #[cfg(test)]
     mod tests {
-        use super::{icon_pixel, toolbar_icon, ICON_PX};
+        use super::{icon_pixel, toolbar_icon, DARK_SCHEME_INK, ICON_PX, LIGHT_SCHEME_INK};
         use crate::gtk::{
             g_object_unref, gdk_pixbuf_get_byte_length, gdk_pixbuf_get_pixels,
             gdk_pixbuf_get_rowstride,
@@ -787,7 +804,7 @@ mod gtk_view {
         /// so this runs headless.
         #[test]
         fn the_icon_is_drawn_into_the_whole_pixbuf() {
-            let icon = toolbar_icon();
+            let icon = toolbar_icon(DARK_SCHEME_INK);
             assert!(!icon.is_null(), "GDK made no pixbuf");
             // SAFETY: the pixbuf just made and owned here, every byte of
             // it written by `toolbar_icon`; read only, as long as GDK
@@ -806,7 +823,7 @@ mod gtk_view {
                     let at = y as usize * stride + x as usize * 4;
                     assert_eq!(
                         pixels[at..at + 4],
-                        icon_pixel(x, y),
+                        icon_pixel(x, y, DARK_SCHEME_INK),
                         "the pixel at ({x}, {y}) is not the picture's"
                     );
                 }
@@ -819,7 +836,7 @@ mod gtk_view {
         /// space around and above the panel left clear.
         #[test]
         fn the_icon_is_a_window_with_a_bottom_panel() {
-            let ink = |x, y| icon_pixel(x, y)[3] == 0xFF;
+            let ink = |x, y| icon_pixel(x, y, LIGHT_SCHEME_INK)[3] == 0xFF;
             assert!(
                 !ink(0, 0) && !ink(ICON_PX - 1, ICON_PX - 1),
                 "a corner is drawn"

@@ -238,6 +238,27 @@ pub struct ToolbarIcons {
     pub h_toolbar_icon: *mut c_void,
 }
 
+/// Mirror of Notepad++'s `toolbarIconsWithDarkMode`, the lParam of
+/// `NPPM_ADDTOOLBARICON_FORDARKMODE`: [`ToolbarIcons`] with an image for
+/// the dark scheme after it. Field order and types as upstream's
+/// `Notepad_plus_msgs.h` declares them (`HBITMAP hToolbarBmp; HICON
+/// hToolbarIcon; HICON hToolbarIconDarkMode;`), three pointer-sized
+/// handles with no padding, which a size assertion pins.
+///
+/// Off Windows each image is the platform's (a `GdkPixbuf*` on GTK, an
+/// `NSImage*` on macOS), as for [`ToolbarIcons`].
+#[repr(C)]
+pub struct ToolbarIconsWithDarkMode {
+    /// Legacy bitmap. **Ignored by Code++**, as in [`ToolbarIcons`].
+    pub h_toolbar_bmp: *mut c_void,
+    /// The image for the light scheme. Must be non-null; the dispatcher
+    /// refuses the request otherwise.
+    pub h_toolbar_icon: *mut c_void,
+    /// The image for the dark scheme, or null for none, in which case the
+    /// light one is shown in both.
+    pub h_toolbar_icon_dark_mode: *mut c_void,
+}
+
 /// Mirror of Notepad++'s `CommunicationInfo` struct used by
 /// `NPPM_MSGTOPLUGIN` for inter-plugin messaging. The source
 /// plugin populates this and passes a pointer to it in `lParam`;
@@ -321,11 +342,10 @@ pub struct TbRect {
 /// against the public ABI parse the fields by offset, so any
 /// reorder here is an ABI break.
 ///
-/// The host writes the 12 colours through this struct when
-/// dark mode is active. Code++ today returns FALSE from
-/// `NPPM_ISDARKMODEENABLED` and `NPPM_GETDARKMODECOLORS` —
-/// no backend has dark-mode rendering yet (tracked in
-/// DESIGN.md §7.4) — so the buffer is never written.
+/// The host writes the 12 colours through this struct in either
+/// scheme, as Notepad++ does: the colours a backend draws with while it
+/// is dark, and [`Self::codepp`] otherwise (DESIGN.md §7.4, the
+/// dark-mode entry).
 #[repr(C)]
 #[derive(Clone, Copy, Default, Debug, PartialEq, Eq)]
 pub struct NppDarkModeColors {
@@ -341,6 +361,36 @@ pub struct NppDarkModeColors {
     pub edge: u32,
     pub hot_edge: u32,
     pub disabled_edge: u32,
+}
+
+impl NppDarkModeColors {
+    /// Code++'s own dark colours (`COLORREF`s): what
+    /// `NPPM_GETDARKMODECOLORS` answers whenever a backend does not supply
+    /// the colours it draws with, which is always on Win32, and in the
+    /// light scheme everywhere. Notepad++ answers with its dark colours
+    /// whether dark mode is on or not (read in its `NppBigSwitch.cpp`, not
+    /// measured). The background and text are the editor's dark defaults
+    /// ([`codepp_core::styles::DARK_DEFAULT_BG`],
+    /// [`codepp_core::styles::DARK_DEFAULT_FG`]).
+    #[must_use]
+    pub fn codepp() -> Self {
+        use codepp_core::colour::to_colorref;
+        use codepp_core::styles::{DARK_DEFAULT_BG, DARK_DEFAULT_FG};
+        Self {
+            background: to_colorref(DARK_DEFAULT_BG),
+            ctrl_background: to_colorref(0x2D_2D_30),
+            hot_background: to_colorref(0x3E_3E_42),
+            dlg_background: to_colorref(0x25_25_26),
+            error_background: to_colorref(0xB0_00_00),
+            text: to_colorref(DARK_DEFAULT_FG),
+            darker_text: to_colorref(0xC0_C0_C0),
+            disabled_text: to_colorref(0x80_80_80),
+            link_text: to_colorref(0x4F_C1_FF),
+            edge: to_colorref(0x0064_6464),
+            hot_edge: to_colorref(0x9B_9B_9B),
+            disabled_edge: to_colorref(0x48_48_48),
+        }
+    }
 }
 
 /// Mirror of Notepad++'s `tTbData` — the registration payload for
@@ -652,6 +702,24 @@ mod tests {
     fn toolbar_icons_total_size_x86() {
         // 4 + 4 = 8 bytes; pointer-sized handles, no padding.
         assert_eq!(core::mem::size_of::<ToolbarIcons>(), 8);
+    }
+
+    #[test]
+    fn toolbar_icons_with_dark_mode_is_three_handles_in_upstream_order() {
+        let ptr = core::mem::size_of::<*mut c_void>();
+        assert_eq!(core::mem::size_of::<ToolbarIconsWithDarkMode>(), 3 * ptr);
+        assert_eq!(
+            core::mem::offset_of!(ToolbarIconsWithDarkMode, h_toolbar_bmp),
+            0
+        );
+        assert_eq!(
+            core::mem::offset_of!(ToolbarIconsWithDarkMode, h_toolbar_icon),
+            ptr
+        );
+        assert_eq!(
+            core::mem::offset_of!(ToolbarIconsWithDarkMode, h_toolbar_icon_dark_mode),
+            2 * ptr
+        );
     }
 
     #[cfg(target_pointer_width = "64")]

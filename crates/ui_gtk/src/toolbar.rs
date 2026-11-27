@@ -369,11 +369,32 @@ fn add_view_tools_macros(
     (word_wrap, show_all_chars, indent_guide)
 }
 
+/// A button a plugin added: the command it runs, and the host's own
+/// copies of its images, the light one and the dark one if the plugin
+/// gave one (`NPPM_ADDTOOLBARICON_FORDARKMODE`), so the button can show
+/// the scheme's when the scheme changes ([`show_plugin_images_for`]).
+struct PluginButton {
+    cmd_id: i32,
+    button: gtk::ToggleToolButton,
+    light: Pixbuf,
+    dark: Option<Pixbuf>,
+}
+
+impl PluginButton {
+    /// The image for `scheme`: the dark one in the dark scheme if there is
+    /// one, the light one otherwise.
+    fn image_for(&self, scheme: codepp_shell::ColourScheme) -> &Pixbuf {
+        match (scheme, &self.dark) {
+            (codepp_shell::ColourScheme::Dark, Some(dark)) => dark,
+            _ => &self.light,
+        }
+    }
+}
+
 thread_local! {
-    /// The buttons plugins added, each with the command it runs, in the
-    /// order added. See [`add_plugin_button`].
-    static PLUGIN_BUTTONS: RefCell<Vec<(i32, gtk::ToggleToolButton)>> =
-        const { RefCell::new(Vec::new()) };
+    /// The buttons plugins added, in the order added. See
+    /// [`add_plugin_button`].
+    static PLUGIN_BUTTONS: RefCell<Vec<PluginButton>> = const { RefCell::new(Vec::new()) };
     /// Set while the host itself changes a plugin button's state. GTK 3's
     /// `gtk_toggle_tool_button_set_active` clicks the button to change it,
     /// so `toggled` runs again, and without this that would run the
@@ -392,6 +413,13 @@ thread_local! {
 /// Add a button that runs plugin command `cmd_id`, showing `icon` —
 /// `NPPM_ADDTOOLBARICON` — or give the button that command already has
 /// this icon, keeping the one it has if this one cannot be drawn.
+///
+/// `dark` is the image for the dark scheme, if the plugin gave one
+/// (`NPPM_ADDTOOLBARICON_FORDARKMODE`); the button shows the one for
+/// `scheme`, and [`show_plugin_images_for`] swaps it when the scheme
+/// changes. Both are the host's own copies: the caller copies the
+/// plugin's pixbufs before handing them here, so the plugin may free its
+/// own once its call returns.
 /// `label` is its tooltip, and its name in the bar's overflow menu, shown
 /// as given: the caller passes the command's menu label, which
 /// `crate::plugin` sanitized for display when it recorded it. `checked`
@@ -410,15 +438,17 @@ thread_local! {
 pub(crate) fn add_plugin_button(
     toolbar: &gtk::Toolbar,
     cmd_id: i32,
-    icon: &Pixbuf,
+    images: (Pixbuf, Option<Pixbuf>),
+    scheme: codepp_shell::ColourScheme,
     label: &str,
     checked: bool,
 ) -> Result<(), &'static str> {
+    let (light, dark) = images;
     let Some(commands) = PLUGIN_BUTTONS.with(|buttons| {
         buttons
             .try_borrow()
             .ok()
-            .map(|buttons| buttons.iter().map(|(id, _)| *id).collect::<Vec<i32>>())
+            .map(|buttons| buttons.iter().map(|b| b.cmd_id).collect::<Vec<i32>>())
     }) else {
         return Err("the toolbar's plugin buttons are being changed already");
     };
@@ -426,15 +456,25 @@ pub(crate) fn add_plugin_button(
         PluginToolbarButtonSlot::Existing(index) => {
             // The same list the slot was asked about, and nothing has been
             // added to it since.
+            let shown = match (scheme, &dark) {
+                (codepp_shell::ColourScheme::Dark, Some(dark)) => dark.clone(),
+                _ => light.clone(),
+            };
+            let image = plugin_icon_image(&shown, toolbar.scale_factor());
             let Some(button) = PLUGIN_BUTTONS.with(|buttons| {
-                buttons
-                    .try_borrow()
-                    .ok()
-                    .and_then(|buttons| buttons.get(index).map(|(_, b)| b.clone()))
+                let mut buttons = buttons.try_borrow_mut().ok()?;
+                let entry = buttons.get_mut(index)?;
+                // Keep the images it has if this one cannot be drawn, as
+                // it keeps the one it shows.
+                if image.is_some() {
+                    entry.light = light;
+                    entry.dark = dark;
+                }
+                Some(entry.button.clone())
             }) else {
                 return Err("the toolbar's plugin buttons are being changed already");
             };
-            if let Some(image) = plugin_icon_image(icon, toolbar.scale_factor()) {
+            if let Some(image) = image {
                 ToolButtonExt::set_icon_widget(&button, Some(&image));
                 image.show();
             }
@@ -446,7 +486,11 @@ pub(crate) fn add_plugin_button(
         PluginToolbarButtonSlot::Full => Err("the toolbar has as many plugin buttons as it takes"),
         PluginToolbarButtonSlot::New { first } => {
             let button = gtk::ToggleToolButton::new();
-            let image = plugin_icon_image(icon, toolbar.scale_factor());
+            let shown = match (scheme, &dark) {
+                (codepp_shell::ColourScheme::Dark, Some(dark)) => dark,
+                _ => &light,
+            };
+            let image = plugin_icon_image(shown, toolbar.scale_factor());
             ToolButtonExt::set_icon_widget(&button, image.as_ref());
             WidgetExt::set_tooltip_text(&button, Some(label));
             ToolButtonExt::set_label(&button, Some(label));
@@ -459,7 +503,12 @@ pub(crate) fn add_plugin_button(
             });
             let recorded = PLUGIN_BUTTONS.with(|buttons| {
                 let mut buttons = buttons.try_borrow_mut().ok()?;
-                buttons.push((cmd_id, button.clone()));
+                buttons.push(PluginButton {
+                    cmd_id,
+                    button: button.clone(),
+                    light,
+                    dark,
+                });
                 Some(())
             });
             if recorded.is_none() {
@@ -486,12 +535,37 @@ pub(crate) fn set_plugin_button_state(cmd_id: i32, checked: bool) {
         buttons.try_borrow().ok().and_then(|buttons| {
             buttons
                 .iter()
-                .find(|(id, _)| *id == cmd_id)
-                .map(|(_, b)| b.clone())
+                .find(|b| b.cmd_id == cmd_id)
+                .map(|b| b.button.clone())
         })
     });
     if let Some(button) = button {
         set_state_quietly(&button, checked);
+    }
+}
+
+/// Show every plugin button's image for `scheme`: the dark one, where the
+/// plugin gave one, in the dark scheme, and the light one otherwise. Each
+/// button is found by its command, never by an image's handle. A button
+/// whose image cannot be drawn at this scale keeps the one it shows.
+pub(crate) fn show_plugin_images_for(scheme: codepp_shell::ColourScheme, scale: i32) {
+    let swaps = PLUGIN_BUTTONS.with(|buttons| {
+        buttons.try_borrow().ok().map(|buttons| {
+            buttons
+                .iter()
+                .map(|b| (b.button.clone(), b.image_for(scheme).clone()))
+                .collect::<Vec<_>>()
+        })
+    });
+    let Some(swaps) = swaps else {
+        tracing::debug!("plugin toolbar images not swapped: the buttons are being changed");
+        return;
+    };
+    for (button, pixbuf) in swaps {
+        if let Some(image) = plugin_icon_image(&pixbuf, scale) {
+            ToolButtonExt::set_icon_widget(&button, Some(&image));
+            image.show();
+        }
     }
 }
 
@@ -579,7 +653,7 @@ mod plugin_cap_guard {
     fn the_plugin_toolbar_cap_is_applied_before_a_button_is_made() {
         let toolbar = strip_test_modules(&code_only(include_str!("toolbar.rs")));
         let add = fn_body(&toolbar, "add_plugin_button");
-        let counted = "buttons.iter().map(|(id, _)| *id).collect::<Vec<i32>>()";
+        let counted = "buttons.iter().map(|b| b.cmd_id).collect::<Vec<i32>>()";
         let asked = "match plugin_toolbar_button_slot(&commands, cmd_id) {";
         let commands = add
             .find(counted)
@@ -610,24 +684,26 @@ mod plugin_cap_guard {
             add.matches(made).count() == 1 && occurs_at_depth_one(&new, made),
             "a plugin button is made somewhere besides where the cap says a new one goes"
         );
-        let recorded = ".push((cmd_id,";
+        let recorded = ".push(PluginButton {";
         assert!(
             add.matches(recorded).count() == 1 && new.contains(recorded),
             "a plugin button is recorded somewhere besides where the cap says a new one goes"
         );
-        // And nowhere else in the module: the table's one mutable borrow
-        // is that one, so no other function can add to it past the cap,
-        // whatever it names its variables.
-        for (what, needle) in [
-            ("borrows the table mutably", "borrow_mut("),
-            ("pushes a pair", ".push(("),
-        ] {
-            assert_eq!(
-                toolbar.matches(needle).count(),
-                1,
-                "toolbar.rs {what} somewhere besides `add_plugin_button`"
-            );
-        }
+        // And nowhere else in the module: the table is borrowed mutably
+        // only in `add_plugin_button` (to record a new button, and to give
+        // an existing one its new images), and a button is pushed once, so
+        // no other function can add to it past the cap, whatever it names
+        // its variables.
+        assert_eq!(
+            toolbar.matches("borrow_mut(").count(),
+            add.matches("borrow_mut(").count(),
+            "toolbar.rs borrows the table mutably somewhere besides `add_plugin_button`"
+        );
+        assert_eq!(
+            toolbar.matches(".push(").count(),
+            1,
+            "toolbar.rs pushes somewhere besides where `add_plugin_button` records a button"
+        );
         assert!(
             add.contains("PluginToolbarButtonSlot::Full => Err("),
             "a full bar no longer refuses the button"

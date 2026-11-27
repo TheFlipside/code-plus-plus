@@ -130,6 +130,7 @@ use codepp_editor::{sc_eol_mode, EditorHandle};
 use codepp_core::dock::DockPanel;
 use codepp_editor::theme::{
     apply_brace_styles, apply_default_styles, apply_indent_guide_style, apply_line_number_margin,
+    LIGHT,
 };
 use codepp_plugin_host::ffi::SCNotification;
 // The Notepad++ menu-command ids (IDM_*) plugins pass to
@@ -2554,6 +2555,13 @@ impl UiPlatform for Win32Ui {
         self.editor.send(SCI_SETSAVEPOINT, 0, 0);
     }
 
+    fn set_colour_scheme(&mut self, _scheme: codepp_core::colour::ColourScheme) {
+        // Nothing to do: Win32 reports no scheme but the light one, so the
+        // shell never changes it here. Its chrome cannot be drawn dark yet
+        // (DESIGN.md §7.4, the dark-mode entry); this is where taking the
+        // dark palette and swapping plugin toolbar images will go.
+    }
+
     fn apply_lang(&mut self, lang: LangType) {
         // Phase 4.6 m1c-3b-1: UDL container-lexer routing. When the
         // target LangType is a UDL id (dynamically assigned at startup
@@ -2573,7 +2581,9 @@ impl UiPlatform for Win32Ui {
         // with the GTK backend — see `codepp_editor::theme` for the
         // ordering contract between lexer swap, style-clear and the
         // per-slot colours.
-        codepp_editor::theme::apply_lang_theme(&self.editor, lang);
+        // Win32 draws the light scheme only, until it can draw its chrome
+        // dark (DESIGN.md §7.4, the dark-mode entry).
+        codepp_editor::theme::apply_lang_theme(&self.editor, lang, &LIGHT);
     }
 
     fn apply_default_style(&mut self, styles: &codepp_core::styles::Styles) {
@@ -2610,9 +2620,9 @@ impl UiPlatform for Win32Ui {
         // style range that `SCI_STYLECLEARALL` resets to
         // `STYLE_DEFAULT`, losing their per-slot colour pairs).
         self.editor.style_clear_all();
-        apply_line_number_margin(&self.editor);
-        apply_brace_styles(&self.editor);
-        apply_indent_guide_style(&self.editor);
+        apply_line_number_margin(&self.editor, &LIGHT);
+        apply_brace_styles(&self.editor, &LIGHT);
+        apply_indent_guide_style(&self.editor, &LIGHT);
 
         // Transparency. WS_EX_LAYERED is required for
         // `SetLayeredWindowAttributes` to take effect; when
@@ -3203,7 +3213,16 @@ impl UiPlatform for Win32Ui {
         true
     }
 
-    fn add_toolbar_icon(&mut self, cmd_id: i32, hicon: codepp_plugin_host::Hwnd) -> bool {
+    fn add_toolbar_icon(
+        &mut self,
+        cmd_id: i32,
+        hicon: codepp_plugin_host::Hwnd,
+        _dark_hicon: codepp_plugin_host::Hwnd,
+    ) -> bool {
+        // The dark image (`NPPM_ADDTOOLBARICON_FORDARKMODE`) is not kept:
+        // Win32 draws the light scheme only, so the light image is the
+        // one it shows. Keeping both, and swapping them with the scheme,
+        // comes with its dark chrome (DESIGN.md §7.4, the dark-mode entry).
         // Add the plugin's HICON to the toolbar's HIMAGELIST,
         // then append a TBBUTTON bound to `cmd_id` so a click
         // posts `WM_COMMAND` with the plugin's id — the same
@@ -4213,15 +4232,16 @@ impl Win32Ui {
                 (
                     entry.definition.styles.clone(),
                     std::sync::Arc::clone(&entry.compiled),
+                    entry.definition.dark_mode_theme,
                 )
             });
-        let Some((styles, compiled_rules)) = styles_and_rules else {
+        let Some((styles, compiled_rules, made_for_dark)) = styles_and_rules else {
             tracing::warn!(
                 lang = lang.as_npp_id(),
                 "UDL LangType not in registry; falling back to plain text"
             );
             self.editor.clear_lexer();
-            apply_default_styles(&self.editor);
+            apply_default_styles(&self.editor, &LIGHT);
             self.editor.send(SCI_COLOURISE, 0, -1);
             return;
         };
@@ -4232,7 +4252,14 @@ impl Win32Ui {
         // helper puts Scintilla in container mode, installs the
         // palette, and does the bounded initial paint (see its
         // docstring for the `endStyled` / §8 rationale).
-        udl_paint::apply_udl_lang(&self.editor, &styles, &compiled_rules);
+        // A UDL made for a dark editor is shown in its light variant here.
+        udl_paint::apply_udl_lang(
+            &self.editor,
+            &styles,
+            &compiled_rules,
+            made_for_dark,
+            codepp_core::colour::ColourScheme::Light,
+        );
     }
 }
 
@@ -18688,7 +18715,7 @@ pub fn run(initial_path: Option<PathBuf>, perf: codepp_core::perf::Perf) -> Resu
         // colours that `SCI_STYLECLEARALL` clobbers. The margin is
         // as wide as the largest line number on screen, measured on
         // each call and fitted again after every paint.
-        apply_line_number_margin(&editor);
+        apply_line_number_margin(&editor, &LIGHT);
 
         // Caret-line highlight: paints the line containing the
         // caret in `BG_CARET_LINE`. Lives on view state, not on
@@ -18713,7 +18740,7 @@ pub fn run(initial_path: Option<PathBuf>, perf: codepp_core::perf::Perf) -> Resu
         // SCN_UPDATEUI handler then paints the caret's bracket + its
         // mate (or the caret's bracket alone when unmatched) as the
         // cursor moves.
-        apply_brace_styles(&editor);
+        apply_brace_styles(&editor, &LIGHT);
 
         // Indent-guide visual: initialise STYLE_INDENTGUIDE (37) with
         // N++'s light-grey (`#BEBEBE`) so the vertical dotted guide
@@ -18722,7 +18749,7 @@ pub fn run(initial_path: Option<PathBuf>, perf: codepp_core::perf::Perf) -> Resu
         // range that `SCI_STYLECLEARALL` resets, so this must also
         // fire from the tail of `apply_default_styles` — same
         // re-application pattern as line-number and brace styles.
-        apply_indent_guide_style(&editor);
+        apply_indent_guide_style(&editor, &LIGHT);
 
         // Tab-width + implicit indent-level width for the indent-
         // guide algorithm on the initial implicit document. Per-
@@ -36856,6 +36883,56 @@ mod new_document_eol_guards {
             lib.matches("codepp_shell::NEW_DOCUMENT_EOL").count(),
             2,
             "the startup document and the empty window"
+        );
+    }
+}
+
+#[cfg(test)]
+mod caret_and_selection_tests {
+    //! The dark palette's caret and selection colours, against a real
+    //! Scintilla control: `apply_caret_and_selection` sets them opaque,
+    //! and the light palette, which has none, puts Scintilla's own back.
+    //! Every backend calls the same function; Win32 only passes the light
+    //! palette so far (DESIGN.md §7.4, the dark-mode entry).
+
+    use codepp_editor::theme::{apply_caret_and_selection, DARK, LIGHT};
+    use codepp_scintilla_sys::{
+        SCI_GETELEMENTCOLOUR, SC_ELEMENT_CARET, SC_ELEMENT_SELECTION_ADDITIONAL_BACK,
+        SC_ELEMENT_SELECTION_BACK, SC_ELEMENT_SELECTION_INACTIVE_BACK,
+    };
+
+    use super::view_position_tests::scintilla;
+
+    #[test]
+    fn the_dark_palette_sets_them_and_the_light_one_puts_scintilla_s_back() {
+        let control = scintilla(400, 300, b"x");
+        let editor = &control.editor;
+        let elements = [
+            SC_ELEMENT_CARET,
+            SC_ELEMENT_SELECTION_BACK as usize,
+            SC_ELEMENT_SELECTION_ADDITIONAL_BACK as usize,
+            SC_ELEMENT_SELECTION_INACTIVE_BACK as usize,
+        ];
+        // `ColourRGBA` as an `int`, sign-extended: the low 32 bits.
+        let get = |element: usize| editor.send(SCI_GETELEMENTCOLOUR, element, 0) & 0xFFFF_FFFF;
+        let scintilla_s_own: Vec<isize> = elements.iter().map(|&e| get(e)).collect();
+
+        apply_caret_and_selection(editor, &DARK);
+        let opaque = |c: Option<u32>| 0xFF00_0000_isize | c.map_or(0, |c| c as isize);
+        assert_eq!(get(SC_ELEMENT_CARET), opaque(DARK.caret), "caret");
+        for &element in &elements[1..] {
+            assert_eq!(
+                get(element),
+                opaque(DARK.selection_back),
+                "element {element}"
+            );
+        }
+
+        apply_caret_and_selection(editor, &LIGHT);
+        let after: Vec<isize> = elements.iter().map(|&e| get(e)).collect();
+        assert_eq!(
+            after, scintilla_s_own,
+            "the light palette leaves Scintilla's own"
         );
     }
 }

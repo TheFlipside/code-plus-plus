@@ -996,6 +996,37 @@ typedef struct CommunicationInfo_ {
 #ifndef LINENUMWIDTH_CONSTANT
 #define LINENUMWIDTH_CONSTANT 1
 #endif
+
+/* v3: NPPM_ADDTOOLBARICON with an image for the dark scheme as well.
+ *     wParam: cmd id, as for NPPM_ADDTOOLBARICON.
+ *     lParam: pointer to a `toolbarIconsWithDarkMode` struct
+ *             ({ HBITMAP hToolbarBmp; HICON hToolbarIcon;
+ *                HICON hToolbarIconDarkMode; }).
+ *     Returns: TRUE if the button was added, FALSE otherwise.
+ *     The refusals are NPPM_ADDTOOLBARICON's: a plugin command only,
+ *     no NULL lParam, no NULL hToolbarIcon. hToolbarBmp is ignored.
+ *     A NULL hToolbarIconDarkMode means hToolbarIcon in both schemes;
+ *     a dark image that is not an image refuses the whole request.
+ *     Notepad++ registers nothing unless all three handles are set,
+ *     and answers TRUE either way (read in its source, not measured).
+ *     On Linux (GTK) both images are GdkPixbuf*s, of which the host
+ *     draws copies, so the plugin may drop its references once this
+ *     returns; the button shows the image for the scheme the host is
+ *     in, and swaps it when the GTK theme turns light or dark. On
+ *     macOS both are NSImage*s, and the host shows hToolbarIcon in
+ *     both schemes for now. On Windows the host shows hToolbarIcon:
+ *     it draws no dark scheme yet (DESIGN.md §7.4, the dark-mode
+ *     entry). */
+#define NPPM_ADDTOOLBARICON_FORDARKMODE   (NPPMSG + 101)
+/* Plugin-supplied icon payload for `NPPM_ADDTOOLBARICON_FORDARKMODE`. */
+#ifndef NPP_TOOLBAR_ICONS_WITH_DARK_MODE_DEFINED
+#define NPP_TOOLBAR_ICONS_WITH_DARK_MODE_DEFINED
+typedef struct toolbarIconsWithDarkMode_ {
+    HBITMAP hToolbarBmp;          /* legacy 16-color bitmap (ignored by Code++) */
+    HICON   hToolbarIcon;         /* the light scheme's icon */
+    HICON   hToolbarIconDarkMode; /* the dark scheme's icon, or NULL */
+} toolbarIconsWithDarkMode;
+#endif
 /* v3: returns the Scintilla marker number reserved for bookmarks.
  *     Code++ uses N++'s convention of marker 24, so plugins that
  *     install a bookmark via `SCI_MARKERADD(line, 24)` work the
@@ -1011,19 +1042,20 @@ typedef struct CommunicationInfo_ {
  * out here rather than cross-referenced; a Rust plugin gets it as
  * `codepp_plugin_sdk::CODEPPM_GETZOOMLEVEL`. */
 
-/* Dark-mode query family. Plugins observe a system theme flip
+/* Dark-mode query family. Plugins observe a change of scheme
  * via `NPPN_DARKMODECHANGED` then re-read the live host state
- * via these two queries. Code++ Phase 4 has no host-side dark
- * mode yet (DESIGN.md §7.4), so both queries return FALSE; the
- * notifications still fire so dark-mode-aware plugins can react
- * to the system flip immediately. */
+ * via these two queries. On Linux (GTK) Code++ follows the GTK
+ * theme: dark when the theme's text is lighter than its window
+ * background. On Windows and macOS it draws the light scheme
+ * only, so far (DESIGN.md §7.4, the dark-mode entry). */
 
 /* v3: returns BOOL — TRUE iff the host is currently rendering
  *     its own chrome in dark mode. The user can override the
  *     system theme independently of the system setting, so
  *     plugins should re-read this on every NPPN_DARKMODECHANGED
  *     rather than caching from the system signal alone.
- *     Code++ Phase 4: always FALSE. */
+ *     Code++: TRUE on Linux while the GTK theme is dark; FALSE on
+ *     Windows and macOS. */
 #define NPPM_ISDARKMODEENABLED            (NPPMSG + 107)
 
 /* Plugin-side payload struct for NPPM_GETDARKMODECOLORS — 12 ×
@@ -1055,10 +1087,11 @@ typedef struct NppDarkModeColors_ {
  *             on mismatch (layout-drift defence).
  *     lParam: pointer to the plugin's NppDarkModeColors.
  *     Returns: BOOL — TRUE if 12 COLORREFs were written,
- *             FALSE otherwise. Code++ Phase 4: always FALSE
- *             (no dark mode active → no palette to share).
- *             Plugins that gate on NPPM_ISDARKMODEENABLED
- *             skip the call and never observe the gap. */
+ *             FALSE otherwise (a wrong size, a NULL lParam).
+ *             Code++ writes them in either scheme, as Notepad++
+ *             does (read in its source, not measured): on Linux
+ *             in the dark scheme, the GTK theme's colours; in any
+ *             other case, Code++'s own dark colours. */
 #define NPPM_GETDARKMODECOLORS            (NPPMSG + 108)
 
 /* v3: asks the host to subclass and theme a plugin dialog so it
@@ -1425,12 +1458,14 @@ typedef enum LangType_ {
  *     `"ImmersiveColorSet"`. Plugins that paint their own
  *     chrome (a docked panel, a custom dialog, themed
  *     tooltips) re-read the system colour state and repaint
- *     when they observe this notification. Code++ does not
- *     yet ship its own dark-mode rendering — the
- *     notification is forwarded as informational only so
- *     dark-mode-aware plugins can light up without the host
- *     holding them up. Carries no payload; `nmhdr.idFrom`
- *     is 0. */
+ *     when they observe this notification. Windows draws no
+ *     dark scheme of its own yet, so there the notification
+ *     is informational. On Linux (GTK) it is sent when the
+ *     GTK theme turns dark or light, once the host has
+ *     restyled the editor, so NPPM_ISDARKMODEENABLED and
+ *     NPPM_GETDARKMODECOLORS already answer for the new
+ *     scheme. macOS does not send it yet. Carries no
+ *     payload; `nmhdr.idFrom` is 0. */
 #define NPPN_DARKMODECHANGED       (NPPN_FIRST + 27)
 #define NPPN_CMDLINEPLUGINMSG      (NPPN_FIRST + 28)
 #define NPPN_EXTERNALLEXERBUFFER   (NPPN_FIRST + 29)

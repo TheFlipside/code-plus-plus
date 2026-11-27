@@ -80,7 +80,9 @@ pub use codepp_plugin_host::{
 
 /// The messages a plugin sends to have the host make something for it —
 /// a Scintilla view (`NPPM_CREATESCINTILLAHANDLE`), a toolbar button
-/// (`NPPM_ADDTOOLBARICON`, whose payload is a [`ToolbarIcons`]) — or to
+/// (`NPPM_ADDTOOLBARICON`, whose payload is a [`ToolbarIcons`], or
+/// `NPPM_ADDTOOLBARICON_FORDARKMODE`, which takes an image for the dark
+/// scheme as well, in a [`ToolbarIconsWithDarkMode`]) — or to
 /// register a modeless dialog (`NPPM_MODELESSDIALOG` with
 /// [`MODELESSDIALOGADD`] or [`MODELESSDIALOGREMOVE`]), and the
 /// notification a plugin undoes such registrations on
@@ -92,10 +94,10 @@ pub use codepp_plugin_host::{
 /// `NSWindow*` on macOS; a `GtkContainer*`, a `GdkPixbuf*`, a
 /// `GtkWindow*` on GTK — is in `Notepad_plus_msgs.h`.
 pub use codepp_plugin_host::dispatch::{
-    MODELESSDIALOGADD, MODELESSDIALOGREMOVE, NPPM_ADDTOOLBARICON, NPPM_CREATESCINTILLAHANDLE,
-    NPPM_MODELESSDIALOG, NPPN_SHUTDOWN,
+    MODELESSDIALOGADD, MODELESSDIALOGREMOVE, NPPM_ADDTOOLBARICON, NPPM_ADDTOOLBARICON_FORDARKMODE,
+    NPPM_CREATESCINTILLAHANDLE, NPPM_MODELESSDIALOG, NPPN_SHUTDOWN,
 };
-pub use codepp_plugin_host::ffi::ToolbarIcons;
+pub use codepp_plugin_host::ffi::{ToolbarIcons, ToolbarIconsWithDarkMode};
 
 /// `NPPN_FILEBEFORESAVE`: a buffer is about to be saved, and
 /// `nmhdr.idFrom` carries its id. The host delivers it before it reads

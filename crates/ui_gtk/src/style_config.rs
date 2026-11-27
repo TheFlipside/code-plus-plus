@@ -13,6 +13,11 @@
 //! model. Native GTK pickers (`ColorButton`, a font-family combo, a size
 //! spin) stand in for Win32's owner-drawn colour squares and custom popup.
 //!
+//! The two colours are the scheme in effect's (DESIGN.md §7.4, the dark-mode
+//! entry): `styles.xml` keeps a light pair and a dark pair, and the dialog
+//! edits the pair of the scheme the theme is in, saying which, and leaves
+//! the other as it is. The font and its flags are shared by both.
+//!
 //! On Save & Close the controls are read back into a fresh `Styles`, then
 //! `Shell::set_styles` persists it and `apply_default_style` + `apply_lang`
 //! push it to the live editor — the same sequence, and the same reasoning
@@ -22,7 +27,10 @@
 
 use std::str::FromStr;
 
-use codepp_core::styles::{format_rgb_hex, parse_rgb_hex, StyleEntry, Styles, Transparency};
+use codepp_core::colour::unpack;
+use codepp_core::styles::{
+    format_rgb_hex, parse_rgb_hex, ColourScheme, StyleEntry, Styles, Transparency,
+};
 use gtk::prelude::*;
 
 use crate::state::with_state;
@@ -62,7 +70,9 @@ struct Controls {
 /// the Default-Style controls, and on "Save & Close" persists + applies the
 /// edited style. A no-op on Cancel / Esc / close.
 pub(crate) fn show(window: &gtk::Window) {
-    let Some(current) = with_state(|st| st.shell.styles.clone()) else {
+    let Some((current, scheme)) =
+        with_state(|st| (st.shell.styles.clone(), st.shell.colour_scheme()))
+    else {
         return;
     };
     let entry = current.effective_default();
@@ -85,11 +95,12 @@ pub(crate) fn show(window: &gtk::Window) {
     content.set_margin_start(10);
     content.set_margin_end(10);
 
-    let controls = build_content(window, &content, &entry, &transparency);
+    let controls = build_content(window, &content, &entry, &transparency, scheme);
 
     dialog.show_all();
     let response = dialog.run();
-    let result = (response == gtk::ResponseType::Accept).then(|| read_styles(&controls, &entry));
+    let result =
+        (response == gtk::ResponseType::Accept).then(|| read_styles(&controls, &entry, scheme));
 
     // SAFETY: created here and never handed out — same idiom as the other
     // GTK modals (Preferences, About, Plugin Manager).
@@ -122,6 +133,7 @@ fn build_content(
     content: &gtk::Box,
     entry: &StyleEntry,
     transparency: &Transparency,
+    scheme: ColourScheme,
 ) -> Controls {
     // --- Theme row (chrome) ---
     let theme_row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
@@ -160,14 +172,16 @@ fn build_content(
     grid.set_row_spacing(6);
     grid.set_column_spacing(8);
 
-    let (r, g, b) = parse_rgb_hex(&entry.fg).unwrap_or((0, 0, 0));
+    let (fg, bg) = entry.colours(scheme);
+    let (fg_label, bg_label) = colour_labels(scheme);
+    let (r, g, b) = unpack(fg);
     let fg_button = color_button(r, g, b);
-    grid.attach(&left_label("Foreground colour:"), 0, 0, 1, 1);
+    grid.attach(&left_label(fg_label), 0, 0, 1, 1);
     grid.attach(&fg_button, 1, 0, 1, 1);
 
-    let (r, g, b) = parse_rgb_hex(&entry.bg).unwrap_or((0xFF, 0xFF, 0xFF));
+    let (r, g, b) = unpack(bg);
     let bg_button = color_button(r, g, b);
-    grid.attach(&left_label("Background colour:"), 0, 1, 1, 1);
+    grid.attach(&left_label(bg_label), 0, 1, 1, 1);
     grid.attach(&bg_button, 1, 1, 1, 1);
 
     let (font_combo, font_faces) = build_font_combo(window, &entry.font_name);
@@ -226,9 +240,20 @@ fn build_content(
     }
 }
 
+/// The two colour fields' labels, which say which scheme's colours they
+/// are.
+fn colour_labels(scheme: ColourScheme) -> (&'static str, &'static str) {
+    match scheme {
+        ColourScheme::Light => ("Foreground colour (light):", "Background colour (light):"),
+        ColourScheme::Dark => ("Foreground colour (dark):", "Background colour (dark):"),
+    }
+}
+
 /// Read the controls into a fresh `Styles`. `prior` supplies the fallback
-/// font face if the combo has no active entry.
-fn read_styles(c: &Controls, prior: &StyleEntry) -> Styles {
+/// font face if the combo has no active entry, and the other scheme's
+/// colours, which the dialog does not show and leaves as they are; the two
+/// colour fields are `scheme`'s.
+fn read_styles(c: &Controls, prior: &StyleEntry, scheme: ColourScheme) -> Styles {
     // Read the face back from the side table by index — never from the
     // combo's active *text*, which is the sanitized label rather than the
     // real face name.
@@ -239,19 +264,24 @@ fn read_styles(c: &Controls, prior: &StyleEntry) -> Styles {
         .and_then(|i| c.font_faces.get(i))
         .cloned()
         .unwrap_or_else(|| prior.font_name.clone());
+    let mut entry = StyleEntry {
+        font_name,
+        font_size: c
+            .size_spin
+            .value_as_int()
+            .clamp(SIZE_MIN as i32, SIZE_MAX as i32) as u16,
+        bold: c.bold.is_active(),
+        italic: c.italic.is_active(),
+        underline: c.underline.is_active(),
+        ..prior.clone()
+    };
+    let rgb = |button: &gtk::ColorButton| {
+        let (r, g, b) = parse_rgb_hex(&rgba_to_hex(&button.rgba())).unwrap_or((0, 0, 0));
+        codepp_core::colour::pack(r, g, b)
+    };
+    entry.set_colours(scheme, rgb(&c.fg_button), rgb(&c.bg_button));
     Styles {
-        default: Some(StyleEntry {
-            font_name,
-            font_size: c
-                .size_spin
-                .value_as_int()
-                .clamp(SIZE_MIN as i32, SIZE_MAX as i32) as u16,
-            bold: c.bold.is_active(),
-            italic: c.italic.is_active(),
-            underline: c.underline.is_active(),
-            fg: rgba_to_hex(&c.fg_button.rgba()),
-            bg: rgba_to_hex(&c.bg_button.rgba()),
-        }),
+        default: Some(entry),
         transparency: Some(Transparency {
             enabled: c.transp_check.is_active(),
             percent: c.transp_scale.value().clamp(OPACITY_MIN, OPACITY_MAX) as u8,

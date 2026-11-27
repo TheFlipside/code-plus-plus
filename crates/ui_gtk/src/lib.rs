@@ -44,6 +44,7 @@ mod platform;
 mod plugin;
 mod preferences;
 mod print;
+mod scheme;
 mod search;
 mod state;
 mod status;
@@ -335,6 +336,8 @@ pub fn run(initial_path: Option<PathBuf>, perf: Perf) -> Result<(), GtkUiError> 
     connect_tab_strip_signals(&tab_strip);
 
     // --- Startup work ---------------------------------------------
+    // The scheme first: the startup styling below is in its colours.
+    scheme::init(&window);
     apply_startup_styles();
     menu::connect();
     restore_session(initial_path);
@@ -5671,5 +5674,6 @@ mod display_tests {
         crate::toolbar::icon_display_tests::built_in_icons_keep_their_cell();
         crate::tabs::icon_display_tests::tab_icons_keep_their_square();
         crate::tab_menu::display_tests::the_menu_is_the_shells_tree();
+        crate::scheme::display_tests::the_scheme_follows_the_theme();
     }
 }

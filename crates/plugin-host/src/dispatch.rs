@@ -127,6 +127,11 @@ pub const NPPM_SAVECURRENTFILE: u32 = NPPMSG + 38;
 pub const NPPM_SAVEALLFILES: u32 = NPPMSG + 39;
 pub const NPPM_SETMENUITEMCHECK: u32 = NPPMSG + 40;
 pub const NPPM_ADDTOOLBARICON: u32 = NPPMSG + 41;
+/// `NPPM_ADDTOOLBARICON` with an image for the dark scheme as well:
+/// lParam is a [`crate::ffi::ToolbarIconsWithDarkMode`]. Upstream's
+/// replacement for `NPPM_ADDTOOLBARICON`, which its header now calls
+/// `NPPM_ADDTOOLBARICON_DEPRECATED`.
+pub const NPPM_ADDTOOLBARICON_FORDARKMODE: u32 = NPPMSG + 101;
 pub const NPPM_GETWINDOWSVERSION: u32 = NPPMSG + 42;
 pub const NPPM_MAKECURRENTBUFFERDIRTY: u32 = NPPMSG + 44;
 pub const NPPM_GETPLUGINSCONFIGDIR: u32 = NPPMSG + 46;
@@ -194,9 +199,9 @@ pub const NPPM_GETBOOKMARKID: u32 = NPPMSG + 111;
 /// [`NPPN_DARKMODECHANGED`] then re-read this value to know
 /// whether the host is actually following the system flip (the
 /// user can override host-level dark mode independently of the
-/// system setting). Code++ returns FALSE today, on every
-/// backend — host-side dark-mode rendering is unimplemented
-/// (tracked in DESIGN.md §7.4).
+/// system setting). Code++ answers from the shell's stored colour
+/// scheme: TRUE on GTK while its theme is dark, FALSE on Win32 and
+/// macOS, which draw the light scheme only so far (DESIGN.md §7.4).
 pub const NPPM_ISDARKMODEENABLED: u32 = NPPMSG + 107;
 /// wparam: size of the plugin's `NppDarkModeColors` struct
 ///         (host validates against `sizeof(NppDarkModeColors)`).
@@ -204,12 +209,11 @@ pub const NPPM_ISDARKMODEENABLED: u32 = NPPMSG + 107;
 /// Returns `BOOL` — TRUE if the host wrote 12 `COLORREF`s into
 /// the buffer, FALSE otherwise.
 ///
-/// Code++ today returns FALSE because the host has no dark-mode
-/// palette to share (no dark-mode rendering on any backend yet;
-/// tracked in DESIGN.md §7.4).
-/// Plugins that gate on [`NPPM_ISDARKMODEENABLED`] (which also
-/// returns FALSE) skip the call entirely and never observe the
-/// gap.
+/// Code++ answers TRUE in either scheme, as Notepad++ does (read in
+/// its source, not measured): on GTK in the dark scheme with colours
+/// from the GTK theme, and otherwise with Code++'s own dark colours
+/// ([`crate::ffi::NppDarkModeColors::codepp`]), which are what a
+/// plugin's dark path would draw with (DESIGN.md §7.4).
 pub const NPPM_GETDARKMODECOLORS: u32 = NPPMSG + 108;
 /// wparam: `dmFlags` — `dmfInit` (`0x0B`) once a plugin dialog's
 ///         children exist, `dmfHandleChange` (`0x0C`) from
@@ -488,8 +492,7 @@ pub const NPPN_BEFORESHUTDOWN: u32 = NPPN_FIRST + 19;
 ///
 /// 8.4.1 is the newest Notepad++ release whose plugin-facing API
 /// Code++ actually implements — it is the release that introduced
-/// `NPPM_ISDARKMODEENABLED` and `NPPM_GETDARKMODECOLORS`, the two
-/// newest messages in the dispatcher. Under-claiming is the safe
+/// `NPPM_ISDARKMODEENABLED` and `NPPM_GETDARKMODECOLORS`. Under-claiming is the safe
 /// direction for the feature-gate shape (a plugin simply does not use
 /// something newer), so the rule when raising this is: report the
 /// newest release whose messages are all implemented, never a newer
@@ -1850,25 +1853,32 @@ pub trait HostServices {
     /// On macOS `hicon` is an `NSImage*`, which the host retains, and
     /// on GTK a `GdkPixbuf*`, which it draws a copy of; there the
     /// button is added only for a command a loaded plugin published.
-    fn add_toolbar_icon(&mut self, cmd_id: i32, hicon: crate::ffi::Hwnd) -> bool;
+    ///
+    /// `dark_hicon` is the image for the dark scheme, from
+    /// [`NPPM_ADDTOOLBARICON_FORDARKMODE`], or null for none, which
+    /// means `hicon` in both schemes; [`NPPM_ADDTOOLBARICON`] always
+    /// passes null. A host that draws a dark scheme checks it as it
+    /// checks `hicon`, and refuses the whole request if it fails.
+    fn add_toolbar_icon(
+        &mut self,
+        cmd_id: i32,
+        hicon: crate::ffi::Hwnd,
+        dark_hicon: crate::ffi::Hwnd,
+    ) -> bool;
 
-    /// Returns `true` iff the host is currently rendering its
-    /// own chrome in dark mode. Drives
-    /// [`NPPM_ISDARKMODEENABLED`]. Code++ returns `false` on
-    /// every backend — host-side dark-mode rendering is not
-    /// implemented anywhere yet (tracked in DESIGN.md §7.4).
-    /// When it lands, the impl reads the host's live theme
-    /// state.
+    /// Whether the editor is drawn in its dark scheme. Drives
+    /// [`NPPM_ISDARKMODEENABLED`]. The shell answers from the scheme a
+    /// backend detected: GTK follows its theme, and Win32 and Cocoa
+    /// report the light scheme until they can draw a dark one (DESIGN.md
+    /// §7.4, the dark-mode entry).
     fn is_dark_mode_enabled(&self) -> bool;
 
-    /// Write the host's live dark-mode palette into `out` if
-    /// dark mode is active, otherwise return `false` without
-    /// touching `out`. Drives [`NPPM_GETDARKMODECOLORS`].
-    /// Code++ returns `false` on every backend — the host has
-    /// no dark-mode palette to share (no dark-mode rendering
-    /// yet; tracked in DESIGN.md §7.4). Plugins gating on
-    /// [`Self::is_dark_mode_enabled`] (which also returns
-    /// `false`) never reach this call in production.
+    /// Write the dark colours into `out`, and return whether it did.
+    /// Drives [`NPPM_GETDARKMODECOLORS`]. The shell writes the colours
+    /// the backend draws with while the scheme is dark, and Code++'s own
+    /// dark colours otherwise, so it answers `true` in either scheme, as
+    /// Notepad++ does (read in its source, not measured). The dispatcher
+    /// has checked `out`'s size and pointer before this is called.
     fn dark_mode_colors(&self, out: &mut crate::ffi::NppDarkModeColors) -> bool;
 
     /// Code++ extension for [`CODEPPM_SETCLIPBOARD`].
@@ -2375,7 +2385,51 @@ pub unsafe fn dispatch_nppm<S: HostServices>(
                 );
                 return Some(0);
             }
-            isize::from(services.add_toolbar_icon(wparam as i32, h_icon as crate::ffi::Hwnd))
+            isize::from(services.add_toolbar_icon(
+                wparam as i32,
+                h_icon as crate::ffi::Hwnd,
+                core::ptr::null_mut(),
+            ))
+        }
+
+        NPPM_ADDTOOLBARICON_FORDARKMODE => {
+            // `NPPM_ADDTOOLBARICON` with an image for the dark scheme as
+            // well. lparam: a `toolbarIconsWithDarkMode`
+            // (`{ hToolbarBmp, hToolbarIcon, hToolbarIconDarkMode }`).
+            // The same refusals as `NPPM_ADDTOOLBARICON`: a plugin
+            // command only, no NULL or kernel-range lparam, and no null
+            // light image. A null dark image means the light one in both
+            // schemes; Notepad++ instead registers nothing unless all
+            // three handles are set, and answers TRUE either way (read in
+            // its `ToolBar::registerDynBtnDM`, not measured). The legacy
+            // bitmap is ignored, as it is for `NPPM_ADDTOOLBARICON`.
+            if !is_plugin_cmd_id(wparam as i32) || lparam <= 0 {
+                return Some(0);
+            }
+            let icons = lparam as *const crate::ffi::ToolbarIconsWithDarkMode;
+            // SAFETY: the plugin promises `icons` is a valid
+            // `toolbarIconsWithDarkMode` it owns for the duration of the
+            // call; each field is read unaligned, as for `ToolbarIcons`.
+            let (h_icon, h_dark) = unsafe {
+                (
+                    core::ptr::read_unaligned(core::ptr::addr_of!((*icons).h_toolbar_icon)),
+                    core::ptr::read_unaligned(core::ptr::addr_of!(
+                        (*icons).h_toolbar_icon_dark_mode
+                    )),
+                )
+            };
+            if h_icon.is_null() {
+                tracing::trace!(
+                    cmd = wparam,
+                    "NPPM_ADDTOOLBARICON_FORDARKMODE: null h_toolbar_icon"
+                );
+                return Some(0);
+            }
+            isize::from(services.add_toolbar_icon(
+                wparam as i32,
+                h_icon as crate::ffi::Hwnd,
+                h_dark as crate::ffi::Hwnd,
+            ))
         }
 
         NPPM_GETWINDOWSVERSION => {
@@ -3258,12 +3312,10 @@ pub unsafe fn dispatch_nppm<S: HostServices>(
 
         NPPM_ISDARKMODEENABLED => {
             // No args. Returns BOOL — TRUE iff the host renders
-            // its own chrome in dark mode. Code++ has no
-            // dark-mode rendering on any backend yet, so this
-            // always returns FALSE (the trait default); plugins
-            // watching `NPPN_DARKMODECHANGED` and gating on
-            // this query gracefully skip their dark-mode code
-            // paths.
+            // its own chrome in dark mode. The host answers from
+            // the shell's stored colour scheme, so a plugin
+            // re-reading it from `NPPN_DARKMODECHANGED` sees the
+            // scheme that notification announced.
             isize::from(services.is_dark_mode_enabled())
         }
 
@@ -3272,8 +3324,8 @@ pub unsafe fn dispatch_nppm<S: HostServices>(
             //         struct (must equal `sizeof(NppDarkModeColors)`).
             // lparam: pointer to the plugin's
             //         `NppDarkModeColors` buffer.
-            // Returns: TRUE if 12 COLORREFs were written,
-            //         FALSE for bad args / dark mode not active.
+            // Returns: TRUE if 12 COLORREFs were written, in
+            //         either scheme; FALSE for bad args.
             //
             // Reject NULL / negative lparam (kernel-mode pointer
             // guard), then validate `wparam` against the
@@ -4425,7 +4477,7 @@ mod tests {
         /// `(cmd_id, hicon)` pairs the mock has accepted via
         /// `NPPM_ADDTOOLBARICON`. `hicon` stored as `usize` for
         /// the same reason as `modeless_dialogs`.
-        toolbar_icons: Vec<(i32, usize)>,
+        toolbar_icons: Vec<(i32, usize, usize)>,
         /// Whether `add_toolbar_icon` reports success. Defaults
         /// to `true`; tests that exercise the failure path flip
         /// it to simulate `ImageList_ReplaceIcon` returning -1.
@@ -4993,12 +5045,18 @@ mod tests {
             }
             true
         }
-        fn add_toolbar_icon(&mut self, cmd_id: i32, hicon: crate::ffi::Hwnd) -> bool {
+        fn add_toolbar_icon(
+            &mut self,
+            cmd_id: i32,
+            hicon: crate::ffi::Hwnd,
+            dark_hicon: crate::ffi::Hwnd,
+        ) -> bool {
             self.record(format!(
-                "add_toolbar_icon(cmd={cmd_id},hicon=0x{:x})",
-                hicon as usize
+                "add_toolbar_icon(cmd={cmd_id},hicon=0x{:x},dark=0x{:x})",
+                hicon as usize, dark_hicon as usize
             ));
-            self.toolbar_icons.push((cmd_id, hicon as usize));
+            self.toolbar_icons
+                .push((cmd_id, hicon as usize, dark_hicon as usize));
             self.toolbar_icon_succeeds
         }
         fn is_dark_mode_enabled(&self) -> bool {
@@ -9317,7 +9375,7 @@ mod tests {
         let icons_ptr = &raw const icons as isize;
         let r = unsafe { dispatch_nppm(&mut s, NPPM_ADDTOOLBARICON, 61_001, icons_ptr) };
         assert_eq!(r, Some(1));
-        assert_eq!(s.toolbar_icons, vec![(61_001, 0xCAFE_BABE_usize)]);
+        assert_eq!(s.toolbar_icons, vec![(61_001, 0xCAFE_BABE_usize, 0)]);
     }
 
     #[test]
@@ -9375,6 +9433,107 @@ mod tests {
         // allocators / shortcut messages.
         let mut s = MockServices::default();
         let r = unsafe { dispatch_nppm(&mut s, NPPM_ADDTOOLBARICON, 61_001, -1isize) };
+        assert_eq!(r, Some(0));
+    }
+
+    // --- NPPM_ADDTOOLBARICON_FORDARKMODE ---
+
+    fn dark_icons(light: usize, dark: usize) -> crate::ffi::ToolbarIconsWithDarkMode {
+        crate::ffi::ToolbarIconsWithDarkMode {
+            h_toolbar_bmp: 0xB0B0_usize as *mut core::ffi::c_void,
+            h_toolbar_icon: light as *mut core::ffi::c_void,
+            h_toolbar_icon_dark_mode: dark as *mut core::ffi::c_void,
+        }
+    }
+
+    #[test]
+    fn add_toolbar_icon_for_dark_mode_hands_over_both_images() {
+        let mut s = MockServices {
+            toolbar_icon_succeeds: true,
+            ..Default::default()
+        };
+        let icons = dark_icons(0xCAFE, 0xD00D);
+        let r = unsafe {
+            dispatch_nppm(
+                &mut s,
+                NPPM_ADDTOOLBARICON_FORDARKMODE,
+                61_001,
+                &raw const icons as isize,
+            )
+        };
+        assert_eq!(r, Some(1));
+        assert_eq!(s.toolbar_icons, vec![(61_001, 0xCAFE, 0xD00D)]);
+    }
+
+    #[test]
+    fn add_toolbar_icon_for_dark_mode_takes_a_null_dark_image() {
+        let mut s = MockServices {
+            toolbar_icon_succeeds: true,
+            ..Default::default()
+        };
+        let icons = dark_icons(0xCAFE, 0);
+        let r = unsafe {
+            dispatch_nppm(
+                &mut s,
+                NPPM_ADDTOOLBARICON_FORDARKMODE,
+                61_001,
+                &raw const icons as isize,
+            )
+        };
+        assert_eq!(r, Some(1));
+        assert_eq!(s.toolbar_icons, vec![(61_001, 0xCAFE, 0)]);
+    }
+
+    #[test]
+    fn add_toolbar_icon_for_dark_mode_refuses_what_add_toolbar_icon_refuses() {
+        let mut s = MockServices {
+            toolbar_icon_succeeds: true,
+            ..Default::default()
+        };
+        // No light image.
+        let icons = dark_icons(0, 0xD00D);
+        let r = unsafe {
+            dispatch_nppm(
+                &mut s,
+                NPPM_ADDTOOLBARICON_FORDARKMODE,
+                61_001,
+                &raw const icons as isize,
+            )
+        };
+        assert_eq!(r, Some(0));
+        // NULL and kernel-range lparam.
+        for lparam in [0, -1isize] {
+            let r =
+                unsafe { dispatch_nppm(&mut s, NPPM_ADDTOOLBARICON_FORDARKMODE, 61_001, lparam) };
+            assert_eq!(r, Some(0));
+        }
+        // A command id that is not a plugin's.
+        let icons = dark_icons(0xCAFE, 0xD00D);
+        let r = unsafe {
+            dispatch_nppm(
+                &mut s,
+                NPPM_ADDTOOLBARICON_FORDARKMODE,
+                1000,
+                &raw const icons as isize,
+            )
+        };
+        assert_eq!(r, Some(0));
+        assert!(
+            s.toolbar_icons.is_empty(),
+            "the host was asked: {:?}",
+            s.toolbar_icons
+        );
+        // The host's refusal is passed on.
+        s.toolbar_icon_succeeds = false;
+        let icons = dark_icons(0xCAFE, 0xD00D);
+        let r = unsafe {
+            dispatch_nppm(
+                &mut s,
+                NPPM_ADDTOOLBARICON_FORDARKMODE,
+                61_001,
+                &raw const icons as isize,
+            )
+        };
         assert_eq!(r, Some(0));
     }
 

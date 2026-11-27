@@ -962,7 +962,7 @@ impl HostServices for Bridge<'_> {
             .map_or(core::ptr::null_mut(), |d| d.h_client as Hwnd)
     }
 
-    fn add_toolbar_icon(&mut self, cmd_id: i32, _hicon: Hwnd) -> bool {
+    fn add_toolbar_icon(&mut self, cmd_id: i32, _hicon: Hwnd, _dark_hicon: Hwnd) -> bool {
         // A second request for a command replaces its button's image, as
         // in the editor, so it adds nothing.
         if self.0.rec.toolbar_icons.contains(&cmd_id) {
@@ -980,8 +980,11 @@ impl HostServices for Bridge<'_> {
         false
     }
 
-    fn dark_mode_colors(&self, _out: &mut NppDarkModeColors) -> bool {
-        false
+    fn dark_mode_colors(&self, out: &mut NppDarkModeColors) -> bool {
+        // As the editor answers in its light scheme, which is the only one
+        // Win32 draws: Code++'s own dark colours.
+        *out = NppDarkModeColors::codepp();
+        true
     }
 
     fn set_clipboard(&mut self, payloads: &[(u32, Vec<u8>)]) -> bool {

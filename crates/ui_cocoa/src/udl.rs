@@ -65,7 +65,16 @@ pub(crate) fn apply_lang(
     // the Scintilla calls.
     let styles = entry.definition.styles.clone();
     let compiled = std::sync::Arc::clone(&entry.compiled);
-    codepp_editor::udl_paint::apply_udl_lang(editor, &styles, &compiled);
+    let made_for_dark = entry.definition.dark_mode_theme;
+    // A UDL made for a dark editor is shown in its light variant: this
+    // backend draws the light scheme only so far.
+    codepp_editor::udl_paint::apply_udl_lang(
+        editor,
+        &styles,
+        &compiled,
+        made_for_dark,
+        codepp_shell::ColourScheme::Light,
+    );
     true
 }
 

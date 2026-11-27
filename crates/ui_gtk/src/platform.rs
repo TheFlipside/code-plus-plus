@@ -14,7 +14,7 @@
 //! the same sequence of messages in the same order, deliberately, so
 //! the two backends cannot drift.
 
-use codepp_core::styles::{parse_rgb_hex, Styles};
+use codepp_core::styles::Styles;
 use codepp_core::{Encoding, Eol, LangType};
 use codepp_editor::{sc_eol_mode, EditorHandle};
 use codepp_scintilla_sys::{
@@ -45,17 +45,6 @@ use codepp_shell::{ClipboardData, SearchFlags, UiPlatform};
 use gtk::prelude::*;
 
 use crate::state::GtkUi;
-
-/// Pack `(r, g, b)` into Scintilla's colour encoding, `0x00BBGGRR`.
-///
-/// Byte-identical to a Win32 `COLORREF`, which is why `ui_win32` can
-/// reuse its own packer for both — but this is the *Scintilla* encoding
-/// (documented in `Scintilla.h`), reachable on every backend, so the
-/// GTK side names it for what it is rather than borrowing a Win32 type
-/// name it has no business knowing.
-const fn rgb_to_scintilla_colour((r, g, b): (u8, u8, u8)) -> u32 {
-    (b as u32) << 16 | (g as u32) << 8 | (r as u32)
-}
 
 impl GtkUi {
     /// Run `f` with `doc` temporarily bound to the view, restoring the
@@ -135,17 +124,22 @@ impl GtkUi {
 /// Configure the predefined 32-39 styles that `SCI_STYLECLEARALL`
 /// resets — the line-number margin, the change-history strip's
 /// definitions, the brace-highlight pair, and the indent-guide colour.
-fn apply_predefined_styles(editor: &EditorHandle) {
+fn apply_predefined_styles(editor: &EditorHandle, palette: &codepp_editor::theme::Palette) {
     // Styles STYLE_LINENUMBER (fore/back) and configures margin 0 as
     // Scintilla's built-in `SC_MARGIN_NUMBER`, as wide as the numbers
     // on screen — identical on all three backends.
-    codepp_editor::theme::apply_line_number_margin(editor);
+    codepp_editor::theme::apply_line_number_margin(editor, palette);
     // The change-history "edit indicator" strip. Shared config so it looks
     // and behaves identically to Win32 (and the coming Cocoa backend);
     // per-document enablement happens in `activate_tab`.
     editor.configure_change_history_margin(CHANGE_HISTORY_MARGIN, CHANGE_HISTORY_MARGIN_PX);
-    codepp_editor::theme::apply_brace_styles(editor);
-    codepp_editor::theme::apply_indent_guide_style(editor);
+    codepp_editor::theme::apply_brace_styles(editor, palette);
+    codepp_editor::theme::apply_indent_guide_style(editor, palette);
+    // The caret and the selection: the dark palette's own, or Scintilla's
+    // back in the light one. View-level, so `SCI_STYLECLEARALL` leaves
+    // them, but set here so the startup styling and every change of
+    // scheme both reach them.
+    codepp_editor::theme::apply_caret_and_selection(editor, palette);
 }
 
 /// Read the whole document out of `editor` as a `String`.
@@ -279,22 +273,28 @@ impl UiPlatform for GtkUi {
         // host-side `SCN_STYLENEEDED` painting via `crate::udl`); every
         // other language uses the shared Lexilla theme table. `apply_lang`
         // returns `false` for a non-UDL id, falling through below.
-        if crate::udl::apply_lang(&self.editor, self.udl_registry, lang) {
+        if crate::udl::apply_lang(&self.editor, self.udl_registry, lang, self.colour_scheme) {
             return;
         }
         // Both branches route through `apply_default_styles`, whose
         // `apply_line_number_margin` re-configures the built-in number
         // margin after the style clear — no per-backend fixup needed.
-        codepp_editor::theme::apply_lang_theme(&self.editor, lang);
+        codepp_editor::theme::apply_lang_theme(
+            &self.editor,
+            lang,
+            codepp_editor::theme::palette(self.colour_scheme),
+        );
     }
 
     fn apply_default_style(&mut self, styles: &Styles) {
         let entry = styles.effective_default();
-        // Same fallbacks as the Win32 backend: black on white if the
-        // user's styles.xml carries an unparseable colour, rather than
-        // refusing to style at all.
-        let fg = rgb_to_scintilla_colour(parse_rgb_hex(&entry.fg).unwrap_or((0, 0, 0)));
-        let bg = rgb_to_scintilla_colour(parse_rgb_hex(&entry.bg).unwrap_or((0xFF, 0xFF, 0xFF)));
+        // The scheme's own pair from styles.xml, each colour falling back
+        // to the scheme's default where it does not parse
+        // (`StyleEntry::colours`), rather than refusing to style at all.
+        let (fg_rgb, bg_rgb) = entry.colours(self.colour_scheme);
+        let fg = codepp_core::colour::to_colorref(fg_rgb);
+        let bg = codepp_core::colour::to_colorref(bg_rgb);
+        let palette = codepp_editor::theme::palette(self.colour_scheme);
 
         self.editor.style_set_font(STYLE_DEFAULT, &entry.font_name);
         self.editor
@@ -309,7 +309,14 @@ impl UiPlatform for GtkUi {
         // Propagate to every other index, then put back the predefined
         // 32-39 styles that `SCI_STYLECLEARALL` just reset.
         self.editor.style_clear_all();
-        apply_predefined_styles(&self.editor);
+        apply_predefined_styles(&self.editor, palette);
+
+        // The Document Map's miniature takes the same pair, so in the dark
+        // scheme it is not a white strip beside a dark editor. Its margins
+        // are collapsed and its caret hidden, so the pair is all it shows.
+        self.docmap_editor.style_set_fore(STYLE_DEFAULT, fg);
+        self.docmap_editor.style_set_back(STYLE_DEFAULT, bg);
+        self.docmap_editor.style_clear_all();
 
         // Win32 applies window transparency via WS_EX_LAYERED; the GTK
         // equivalent is the toplevel's opacity, which the compositor
@@ -800,11 +807,44 @@ impl UiPlatform for GtkUi {
         crate::plugin::register_modeless_dialog(dlg, register, &self.window)
     }
 
-    fn add_toolbar_icon(&mut self, cmd_id: i32, hicon: codepp_plugin_host::Hwnd) -> bool {
-        // `hicon` is a `GdkPixbuf*` on this backend. Adding the button
-        // touches the toolbar from inside the dispatch's borrow, which is
-        // safe for the reason `set_npp_menu_item_check` gives.
-        crate::plugin::add_toolbar_icon(&self.toolbar, cmd_id, hicon)
+    fn add_toolbar_icon(
+        &mut self,
+        cmd_id: i32,
+        hicon: codepp_plugin_host::Hwnd,
+        dark_hicon: codepp_plugin_host::Hwnd,
+    ) -> bool {
+        // `hicon` and `dark_hicon` are `GdkPixbuf*`s on this backend.
+        // Adding the button touches the toolbar from inside the dispatch's
+        // borrow, which is safe for the reason `set_npp_menu_item_check`
+        // gives.
+        crate::plugin::add_toolbar_icon(
+            &self.toolbar,
+            cmd_id,
+            hicon,
+            dark_hicon,
+            self.colour_scheme,
+        )
+    }
+
+    fn set_colour_scheme(&mut self, scheme: codepp_shell::ColourScheme) {
+        // The palette `apply_default_style` and `apply_lang` use next, which
+        // the shell calls straight after this. The tab strip is repainted
+        // in the scheme's tints by the drain that follows the change
+        // (`crate::scheme`), which rebuilds every label.
+        self.colour_scheme = scheme;
+        crate::toolbar::show_plugin_images_for(scheme, self.toolbar.scale_factor());
+    }
+
+    fn dark_mode_colors(&self, out: &mut codepp_plugin_host::NppDarkModeColors) -> bool {
+        // The theme's own colours while it is dark; the shell answers with
+        // Code++'s own otherwise.
+        match crate::scheme::dark_colours() {
+            Some(colours) => {
+                *out = colours;
+                true
+            }
+            None => false,
+        }
     }
 
     fn create_plugin_scintilla(
@@ -964,6 +1004,9 @@ pub(crate) mod doc_binding_tests {
             // pointer is never dereferenced (apply_lang short-circuits on
             // non-UDL ids before reaching it).
             udl_registry: std::ptr::null(),
+            colour_scheme: codepp_shell::ColourScheme::Light,
+            // The tests have no Document Map; the main view stands in.
+            docmap_editor: editor,
         }
     }
 
@@ -1147,6 +1190,8 @@ pub(crate) mod doc_binding_tests {
             toolbar: ui.toolbar.clone(),
             tabs: ui.tabs.clone(),
             udl_registry: ui.udl_registry,
+            colour_scheme: ui.colour_scheme,
+            docmap_editor: ui.docmap_editor,
         }
     }
 

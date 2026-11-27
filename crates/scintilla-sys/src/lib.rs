@@ -637,6 +637,10 @@ pub const SCI_SETHSCROLLBAR: u32 = 2130;
 /// green, red. Note the byte order is the reverse of the `0xRRGGBB` hex
 /// used in the theme tables.
 pub const SCI_SETELEMENTCOLOUR: u32 = 2753;
+/// `SCI_RESETELEMENTCOLOUR(element)` — drop an explicit element colour
+/// set with [`SCI_SETELEMENTCOLOUR`], so the platform layer's base, or
+/// Scintilla's own default, shows again.
+pub const SCI_RESETELEMENTCOLOUR: u32 = 2755;
 /// `SC_ELEMENT_SELECTION_BACK` — the background behind selected text in
 /// the focused view.
 pub const SC_ELEMENT_SELECTION_BACK: u32 = 11;

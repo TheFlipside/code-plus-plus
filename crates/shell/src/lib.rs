@@ -93,6 +93,7 @@ pub mod tab_menu;
 pub mod updater;
 #[cfg(any(target_os = "windows", target_os = "macos"))]
 pub mod updater_state;
+pub use codepp_core::colour::ColourScheme;
 pub use codepp_core::ViewPosition;
 pub use codepp_editor::CursorText;
 pub use fif::{FifError, FifEvent, FifJobId, FifRequest, FifStats, OpenBufferOutcome};
@@ -591,26 +592,40 @@ pub trait UiPlatform {
     /// Win32, an `NSImage*` on Cocoa and a `GdkPixbuf*` on GTK. The
     /// default, `false`, is what a backend without plugin toolbar
     /// buttons answers.
-    fn add_toolbar_icon(&mut self, _cmd_id: i32, _hicon: codepp_plugin_host::Hwnd) -> bool {
+    ///
+    /// `dark_hicon` is the image for the dark scheme, from
+    /// `NPPM_ADDTOOLBARICON_FORDARKMODE`, or null for none, in which case
+    /// `hicon` is shown in both. A backend that draws a dark scheme keeps
+    /// both, each checked as `hicon` is, and shows the one for the scheme
+    /// in effect, finding the button by `cmd_id` when the scheme changes;
+    /// a dark image that fails its check refuses the whole request.
+    fn add_toolbar_icon(
+        &mut self,
+        _cmd_id: i32,
+        _hicon: codepp_plugin_host::Hwnd,
+        _dark_hicon: codepp_plugin_host::Hwnd,
+    ) -> bool {
         false
     }
 
-    /// Whether the host is currently rendering its own chrome
-    /// in dark mode. Drives `NPPM_ISDARKMODEENABLED`. Code++
-    /// has no host-side dark-mode rendering on any backend
-    /// (tracked in DESIGN.md §7.4), so this default `false` is
-    /// the production answer everywhere — no backend overrides
-    /// it. A backend implements it only once it actually
-    /// renders dark chrome, reading its live theme state.
-    fn is_dark_mode_enabled(&self) -> bool {
-        false
-    }
+    /// The colour scheme changed ([`Shell::set_colour_scheme`], which then
+    /// re-applies the default style and the active tab's language through
+    /// this UI). A backend takes the new scheme's palette for its styling
+    /// from here on, repaints what it draws in the scheme's colours (the
+    /// tab strip's tints), and swaps plugin toolbar images. Required
+    /// rather than defaulted: a no-op default would leave a backend that
+    /// draws a dark scheme half-switched while looking implemented. A
+    /// backend that never reports a dark scheme (Win32, and Cocoa until it
+    /// detects one) implements it as nothing to do, and says so.
+    fn set_colour_scheme(&mut self, scheme: ColourScheme);
 
-    /// Write the host's dark-mode palette into `out` if dark
-    /// mode is active. Drives `NPPM_GETDARKMODECOLORS`. Same
-    /// status as [`Self::is_dark_mode_enabled`]: no host-side
-    /// dark mode yet, so the default `false` (out-buffer left
-    /// untouched) is the production answer on every backend.
+    /// Write the colours the host draws its own chrome with in the dark
+    /// scheme into `out`. Drives `NPPM_GETDARKMODECOLORS` while the scheme
+    /// is dark; the shell answers with Code++'s own dark colours
+    /// (`NppDarkModeColors::codepp`) when this returns `false`, and whenever
+    /// the scheme is light, as Notepad++ answers with its dark colours in
+    /// either mode. The default, `false`, is what a backend that does not
+    /// take its colours from the platform answers.
     fn dark_mode_colors(&self, _out: &mut codepp_plugin_host::NppDarkModeColors) -> bool {
         false
     }
@@ -2775,6 +2790,13 @@ pub struct Shell {
     /// `UiPlatform::apply_default_style` on this value after the
     /// editor is up to seed the visible appearance.
     pub styles: codepp_core::styles::Styles,
+    /// Whether the editor is drawn light or dark. A backend detects it
+    /// and reports it ([`Self::set_initial_colour_scheme`] at startup,
+    /// [`Self::set_colour_scheme`] on a change); until one does it is
+    /// [`ColourScheme::Light`], which is what Win32 keeps until it can draw
+    /// its chrome dark (DESIGN.md §7.4, the dark-mode entry). Answers
+    /// `NPPM_ISDARKMODEENABLED`.
+    colour_scheme: ColourScheme,
     /// Runtime registry of User Defined Languages loaded from
     /// `<config_dir>/userDefineLangs/` at startup (Phase 4.6 m1b).
     /// The UI (m1d) reads [`codepp_udl::UdlRegistry::entries`] to
@@ -3255,6 +3277,7 @@ impl Shell {
             first_loads: HashMap::new(),
             file_change_debounce: std::collections::HashMap::new(),
             styles: load_styles(),
+            colour_scheme: ColourScheme::Light,
             udl_registry,
             plugin_shortcuts: load_plugin_shortcuts(),
             plugin_chord_index: std::cell::RefCell::new(None),
@@ -8498,6 +8521,46 @@ impl Shell {
         ui.update_status(tab.lang, &tab.encoding, tab.eol, tab.byte_len);
     }
 
+    /// Whether the editor is drawn light or dark.
+    #[must_use]
+    pub fn colour_scheme(&self) -> ColourScheme {
+        self.colour_scheme
+    }
+
+    /// Record the scheme a backend detected at startup, before anything
+    /// is styled or any plugin is loaded: nothing is restyled and no
+    /// plugin is told, since nothing was drawn in another scheme.
+    pub fn set_initial_colour_scheme(&mut self, scheme: ColourScheme) {
+        self.colour_scheme = scheme;
+    }
+
+    /// The scheme changed: the backend detected that the system's (on
+    /// GTK, the theme's) went from light to dark or back.
+    ///
+    /// Records it, tells the UI ([`UiPlatform::set_colour_scheme`]), puts
+    /// the default style back in the new scheme's colours and the tab in
+    /// front's language with it, and queues `NPPN_DARKMODECHANGED`, which
+    /// reaches plugins from the drain that follows, with no borrow held, so
+    /// a plugin that asks about the scheme from its handler is answered.
+    /// The same scheme again changes nothing. Returns whether it changed.
+    ///
+    /// A backend calls this from code that holds no state borrow of its
+    /// own, never from inside a callback that can run under one.
+    pub fn set_colour_scheme<U: UiPlatform>(&mut self, ui: &mut U, scheme: ColourScheme) -> bool {
+        if scheme == self.colour_scheme {
+            return false;
+        }
+        tracing::info!(scheme = scheme.name(), "colour scheme changed");
+        self.colour_scheme = scheme;
+        ui.set_colour_scheme(scheme);
+        let styles = self.styles.clone();
+        ui.apply_default_style(&styles);
+        self.reapply_active_lang(ui);
+        self.pending_notifications
+            .push(Notification::DarkModeChanged);
+        true
+    }
+
     /// Set the active tab's display name — File → Rename on an *untitled*
     /// buffer, which has no path to move. The name feeds
     /// [`tab_display_name`] (which prefers `custom_name` over the
@@ -12581,19 +12644,31 @@ impl<U: UiPlatform> HostServices for HostBridge<'_, U> {
         self.ui.register_modeless_dialog(dlg, register)
     }
 
-    fn add_toolbar_icon(&mut self, cmd_id: i32, hicon: codepp_plugin_host::Hwnd) -> bool {
+    fn add_toolbar_icon(
+        &mut self,
+        cmd_id: i32,
+        hicon: codepp_plugin_host::Hwnd,
+        dark_hicon: codepp_plugin_host::Hwnd,
+    ) -> bool {
         // `cmd_id` is a plugin command id: the dispatcher refuses any
         // other, so Win32 never adds a button that runs something else.
         // GTK and Cocoa take only a loaded plugin's command anyway.
-        self.ui.add_toolbar_icon(cmd_id, hicon)
+        self.ui.add_toolbar_icon(cmd_id, hicon, dark_hicon)
     }
 
     fn is_dark_mode_enabled(&self) -> bool {
-        self.ui.is_dark_mode_enabled()
+        self.shell.colour_scheme() == ColourScheme::Dark
     }
 
     fn dark_mode_colors(&self, out: &mut codepp_plugin_host::NppDarkModeColors) -> bool {
-        self.ui.dark_mode_colors(out)
+        // The colours the backend draws with while it is dark; Code++'s
+        // own otherwise, as Notepad++ answers with its dark colours in
+        // either mode.
+        if self.shell.colour_scheme() == ColourScheme::Dark && self.ui.dark_mode_colors(out) {
+            return true;
+        }
+        *out = codepp_plugin_host::NppDarkModeColors::codepp();
+        true
     }
 
     fn create_plugin_scintilla(
@@ -14056,6 +14131,11 @@ mod tests {
         panic_reading_the_buffer: bool,
         apply_lang_calls: Vec<LangType>,
         apply_default_style_calls: Vec<codepp_core::styles::Styles>,
+        /// Every scheme the shell told the UI about, in order.
+        colour_scheme_calls: Vec<ColourScheme>,
+        /// What `dark_mode_colors` writes, or `None` for a backend that
+        /// does not supply its colours.
+        dark_mode_colors: Option<codepp_plugin_host::NppDarkModeColors>,
         search_calls: Vec<(String, SearchFlags, String)>,
         replace_calls: Vec<(String, String, SearchFlags, String)>,
         /// Counter incremented each time `mark_saved` is called —
@@ -14615,16 +14695,30 @@ mod tests {
             // shape without involving the shell layer.
             true
         }
-        fn add_toolbar_icon(&mut self, cmd_id: i32, _hicon: codepp_plugin_host::Hwnd) -> bool {
+        fn add_toolbar_icon(
+            &mut self,
+            cmd_id: i32,
+            _hicon: codepp_plugin_host::Hwnd,
+            _dark_hicon: codepp_plugin_host::Hwnd,
+        ) -> bool {
             // FakeUi has no toolbar; it records the command and
             // answers success, so a test can tell an id the shell
             // refused from one it passed on.
             self.toolbar_buttons.push(cmd_id);
             true
         }
-        // `is_dark_mode_enabled` / `dark_mode_colors`: FakeUi
-        // uses the trait defaults (`false`), exactly like every
-        // production backend — no host-side dark mode exists.
+        fn set_colour_scheme(&mut self, scheme: ColourScheme) {
+            self.colour_scheme_calls.push(scheme);
+        }
+        fn dark_mode_colors(&self, out: &mut codepp_plugin_host::NppDarkModeColors) -> bool {
+            match self.dark_mode_colors {
+                Some(colours) => {
+                    *out = colours;
+                    true
+                }
+                None => false,
+            }
+        }
         #[cfg(target_os = "windows")]
         fn create_plugin_scintilla(
             &mut self,
@@ -15002,6 +15096,137 @@ mod tests {
         assert!(!shell.set_active_lang(&mut ui, codepp_core::lang::L_CPP));
         assert!(ui.apply_lang_calls.is_empty());
         assert!(shell.take_notifications().is_empty());
+    }
+
+    /// A change of scheme tells the UI first, then puts the default style
+    /// back and the tab in front's language with it, and queues
+    /// `NPPN_DARKMODECHANGED` once. The same scheme again does nothing.
+    #[test]
+    fn a_change_of_scheme_restyles_and_tells_plugins_once() {
+        use codepp_core::lang::L_CPP;
+        let mut shell = shell_with_synthetic_tabs(2, Some(1));
+        let mut ui = FakeUi::default();
+        shell.tabs[1].lang = L_CPP;
+        assert_eq!(shell.colour_scheme(), ColourScheme::Light);
+
+        assert!(shell.set_colour_scheme(&mut ui, ColourScheme::Dark));
+        assert_eq!(shell.colour_scheme(), ColourScheme::Dark);
+        assert_eq!(ui.colour_scheme_calls, [ColourScheme::Dark]);
+        assert_eq!(ui.apply_default_style_calls, [shell.styles.clone()]);
+        assert_eq!(ui.apply_lang_calls, [L_CPP], "the tab in front's language");
+        let queued = shell.take_notifications();
+        assert!(
+            matches!(queued.as_slice(), [Notification::DarkModeChanged]),
+            "{queued:?}"
+        );
+
+        assert!(!shell.set_colour_scheme(&mut ui, ColourScheme::Dark));
+        assert_eq!(ui.colour_scheme_calls.len(), 1);
+        assert_eq!(ui.apply_default_style_calls.len(), 1);
+        assert!(shell.take_notifications().is_empty());
+
+        assert!(shell.set_colour_scheme(&mut ui, ColourScheme::Light));
+        assert_eq!(
+            ui.colour_scheme_calls,
+            [ColourScheme::Dark, ColourScheme::Light]
+        );
+        assert!(matches!(
+            shell.take_notifications().as_slice(),
+            [Notification::DarkModeChanged]
+        ));
+    }
+
+    /// The scheme found at startup is recorded without restyling or
+    /// telling anyone.
+    #[test]
+    fn the_startup_scheme_is_recorded_quietly() {
+        let mut shell = shell_with_synthetic_tabs(1, Some(0));
+        shell.set_initial_colour_scheme(ColourScheme::Dark);
+        assert_eq!(shell.colour_scheme(), ColourScheme::Dark);
+        assert!(shell.take_notifications().is_empty());
+    }
+
+    /// `NPPM_ISDARKMODEENABLED` follows the shell's scheme, and
+    /// `NPPM_GETDARKMODECOLORS` answers in either: the backend's colours
+    /// while it is dark, Code++'s own otherwise, or when the backend has
+    /// none.
+    #[test]
+    fn the_dark_mode_messages_follow_the_scheme() {
+        use codepp_plugin_host::dispatch::{NPPM_GETDARKMODECOLORS, NPPM_ISDARKMODEENABLED};
+        use codepp_plugin_host::NppDarkModeColors;
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let backend = NppDarkModeColors {
+            background: 0x11_11_11,
+            text: 0xEE_EE_EE,
+            ..NppDarkModeColors::default()
+        };
+        let mut ui = FakeUi {
+            dark_mode_colors: Some(backend),
+            ..FakeUi::default()
+        };
+        let size = std::mem::size_of::<NppDarkModeColors>();
+        let ask = |shell: &mut Shell, ui: &mut FakeUi| {
+            let mut out = NppDarkModeColors::default();
+            // SAFETY: `out` is a live `NppDarkModeColors` of the size passed.
+            let answer = unsafe {
+                shell.dispatch_plugin_message(
+                    ui,
+                    HostHandles::null(),
+                    NPPM_GETDARKMODECOLORS,
+                    size,
+                    std::ptr::addr_of_mut!(out) as isize,
+                )
+            };
+            // SAFETY: integer arguments only.
+            let enabled = unsafe {
+                shell.dispatch_plugin_message(ui, HostHandles::null(), NPPM_ISDARKMODEENABLED, 0, 0)
+            };
+            (enabled, answer, out)
+        };
+
+        let (enabled, answer, out) = ask(&mut shell, &mut ui);
+        assert_eq!((enabled, answer), (Some(0), Some(1)));
+        assert_eq!(
+            out,
+            NppDarkModeColors::codepp(),
+            "light: Code++'s own dark colours"
+        );
+
+        shell.set_initial_colour_scheme(ColourScheme::Dark);
+        let (enabled, answer, out) = ask(&mut shell, &mut ui);
+        assert_eq!((enabled, answer), (Some(1), Some(1)));
+        assert_eq!(out, backend, "dark: the backend's own");
+
+        ui.dark_mode_colors = None;
+        let (_, answer, out) = ask(&mut shell, &mut ui);
+        assert_eq!(answer, Some(1));
+        assert_eq!(
+            out,
+            NppDarkModeColors::codepp(),
+            "dark, no backend colours: Code++'s own"
+        );
+    }
+
+    /// Code++'s own dark colours: text that reads on the background, and
+    /// the editor's dark defaults.
+    #[test]
+    fn codepp_dark_colours_read() {
+        use codepp_core::colour::{contrast_ratio, to_colorref, MIN_TEXT_CONTRAST};
+        let c = codepp_plugin_host::NppDarkModeColors::codepp();
+        assert_eq!(
+            to_colorref(c.background),
+            codepp_core::styles::DARK_DEFAULT_BG
+        );
+        assert_eq!(to_colorref(c.text), codepp_core::styles::DARK_DEFAULT_FG);
+        for (name, fg) in [
+            ("text", c.text),
+            ("darker", c.darker_text),
+            ("link", c.link_text),
+        ] {
+            let ratio = contrast_ratio(to_colorref(fg), to_colorref(c.background));
+            assert!(ratio >= MIN_TEXT_CONTRAST, "{name}: {ratio:.2}");
+        }
     }
 
     #[test]

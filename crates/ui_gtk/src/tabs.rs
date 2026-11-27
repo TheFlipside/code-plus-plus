@@ -126,11 +126,21 @@ notebook#codepp-tab-strip > header > tabs > tab:checked { box-shadow: none; }
 /// the active tab, in the tab's color or `codepp_shell::DEFAULT_TAB_BAR_RGB`,
 /// and the light tint of an inactive tab's color as its background. As
 /// `0xRRGGBB` values: `(bar, tint)`.
-pub(crate) fn tab_paint(active: bool, color: Option<TabColor>) -> (Option<u32>, Option<u32>) {
+///
+/// `tint_base` is the background the tint is laid over: `None` in the
+/// light scheme, where it is white (`TabColor::tint_rgb`), and the theme's
+/// window background in the dark one (`crate::scheme::tint_base`), so a
+/// tinted tab stays dark there.
+pub(crate) fn tab_paint(
+    active: bool,
+    color: Option<TabColor>,
+    tint_base: Option<u32>,
+) -> (Option<u32>, Option<u32>) {
     if active {
         (Some(tab_bar_rgb(color)), None)
     } else {
-        (None, color.map(TabColor::tint_rgb))
+        let tint = |c: TabColor| tint_base.map_or_else(|| c.tint_rgb(), |base| c.tint_over(base));
+        (None, color.map(tint))
     }
 }
 
@@ -556,7 +566,7 @@ fn build_tab_label(tab: &Tab, scale: i32, active: bool) -> gtk::Widget {
 
     // The tab's color (`tab_paint`), painted before the contents: the
     // signal's own handler draws the children after this one returns.
-    let (bar, tint) = tab_paint(active, tab.color);
+    let (bar, tint) = tab_paint(active, tab.color, crate::scheme::tint_base());
     if bar.is_some() || tint.is_some() {
         ebox.connect_draw(move |area, cr| {
             crate::at_callback_boundary("tabs:ebox:draw", glib::Propagation::Proceed, || {
@@ -628,11 +638,31 @@ mod css_tests {
     /// has a color, and never a bar.
     #[test]
     fn a_tab_paints_a_bar_when_active_and_a_tint_when_not() {
-        assert_eq!(tab_paint(true, None), (Some(DEFAULT_TAB_BAR_RGB), None));
+        assert_eq!(
+            tab_paint(true, None, None),
+            (Some(DEFAULT_TAB_BAR_RGB), None)
+        );
         let blue = TabColor::Blue;
-        assert_eq!(tab_paint(true, Some(blue)), (Some(blue.bar_rgb()), None));
-        assert_eq!(tab_paint(false, Some(blue)), (None, Some(blue.tint_rgb())));
-        assert_eq!(tab_paint(false, None), (None, None));
+        assert_eq!(
+            tab_paint(true, Some(blue), None),
+            (Some(blue.bar_rgb()), None)
+        );
+        assert_eq!(
+            tab_paint(false, Some(blue), None),
+            (None, Some(blue.tint_rgb()))
+        );
+        assert_eq!(tab_paint(false, None, None), (None, None));
+        // In the dark scheme the tint is laid over the theme's background,
+        // and the active tab's bar is its color as before.
+        let base = 0x35_35_35;
+        assert_eq!(
+            tab_paint(false, Some(blue), Some(base)),
+            (None, Some(blue.tint_over(base)))
+        );
+        assert_eq!(
+            tab_paint(true, Some(blue), Some(base)),
+            (Some(blue.bar_rgb()), None)
+        );
     }
 
     /// The stylesheet names no tab by its place, which GTK cannot do

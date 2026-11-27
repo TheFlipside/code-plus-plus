@@ -1580,8 +1580,23 @@ pub(crate) fn register_modeless_dialog(
 /// button runs its command through the plugin commands' own path, which
 /// knows no other. Asking again for the same command replaces the image
 /// rather than adding a second button.
-pub(crate) fn add_toolbar_icon(toolbar: &gtk::Toolbar, cmd_id: i32, icon: *mut c_void) -> bool {
-    if icon.is_null() || std::ptr::eq(icon, npp_sentinel()) || is_known_scintilla(icon) {
+///
+/// `dark_icon` is `NPPM_ADDTOOLBARICON_FORDARKMODE`'s image for the dark
+/// scheme, or null for none, when `icon` is shown in both. It is checked
+/// as `icon` is, and one that fails refuses the whole request. The host
+/// keeps a copy of each and shows the one for `scheme`, the scheme the
+/// host is in now; [`crate::toolbar::show_plugin_images_for`] swaps them
+/// when the scheme changes.
+pub(crate) fn add_toolbar_icon(
+    toolbar: &gtk::Toolbar,
+    cmd_id: i32,
+    icon: *mut c_void,
+    dark_icon: *mut c_void,
+    scheme: codepp_shell::ColourScheme,
+) -> bool {
+    let not_an_image =
+        |p: *mut c_void| p.is_null() || std::ptr::eq(p, npp_sentinel()) || is_known_scintilla(p);
+    if not_an_image(icon) || (!dark_icon.is_null() && not_an_image(dark_icon)) {
         tracing::warn!(
             cmd_id,
             "NPPM_ADDTOOLBARICON: refused: not an image's handle"
@@ -1602,15 +1617,47 @@ pub(crate) fn add_toolbar_icon(toolbar: &gtk::Toolbar, cmd_id: i32, icon: *mut c
         return false;
     };
     // SAFETY: not one of the host's non-object handles; by the ABI's
-    // contract on this backend the icon is a live `GdkPixbuf`.
-    if !unsafe { is_instance_of(icon, Pixbuf::static_type()) } {
+    // contract on this backend each icon is a live `GdkPixbuf`.
+    let is_pixbuf = |p: *mut c_void| unsafe { is_instance_of(p, Pixbuf::static_type()) };
+    if !is_pixbuf(icon) || (!dark_icon.is_null() && !is_pixbuf(dark_icon)) {
         tracing::warn!(cmd_id, "NPPM_ADDTOOLBARICON: refused: not a GdkPixbuf");
         return false;
     }
-    // SAFETY: a live `GdkPixbuf`, per the check above, which is never
-    // floating; `from_glib_none` takes the host's own reference.
-    let pixbuf: Pixbuf = unsafe { from_glib_none(icon.cast::<gtk::gdk_pixbuf::ffi::GdkPixbuf>()) };
-    match crate::toolbar::add_plugin_button(toolbar, cmd_id, &pixbuf, &label, menu_mark(cmd_id)) {
+    // The host's own copies, so the plugin may free its pixbufs once this
+    // returns, and a later swap of images reads nothing the plugin owns.
+    // SAFETY: live `GdkPixbuf`s, per the checks above, never floating;
+    // `from_glib_none` takes a reference only for the copy.
+    let own = |p: *mut c_void| -> Option<Pixbuf> {
+        let pixbuf: Pixbuf = unsafe { from_glib_none(p.cast::<gtk::gdk_pixbuf::ffi::GdkPixbuf>()) };
+        pixbuf.copy()
+    };
+    let Some(light) = own(icon) else {
+        tracing::warn!(
+            cmd_id,
+            "NPPM_ADDTOOLBARICON: refused: the image could not be copied"
+        );
+        return false;
+    };
+    let dark = if dark_icon.is_null() {
+        None
+    } else {
+        let Some(dark) = own(dark_icon) else {
+            tracing::warn!(
+                cmd_id,
+                "NPPM_ADDTOOLBARICON_FORDARKMODE: refused: the dark image could not be copied"
+            );
+            return false;
+        };
+        Some(dark)
+    };
+    match crate::toolbar::add_plugin_button(
+        toolbar,
+        cmd_id,
+        (light, dark),
+        scheme,
+        &label,
+        menu_mark(cmd_id),
+    ) {
         Ok(()) => true,
         Err(why) => {
             tracing::warn!(cmd_id, why, "NPPM_ADDTOOLBARICON: refused");
@@ -4468,6 +4515,7 @@ pub(crate) mod host_made_tests {
         a_destroyed_widget_is_routed_nothing();
         modeless_dialogs_are_checked_and_made_transient(&main, host_sci);
         plugin_toolbar_buttons();
+        plugin_toolbar_dark_images();
         plugin_icons_are_drawn_at_the_screens_pixels();
     }
 
@@ -5146,7 +5194,7 @@ pub(crate) mod host_made_tests {
         let before_items = toolbar.n_items();
         let small = Pixbuf::new(Colorspace::Rgb, true, 8, 16, 16).expect("a 16 px pixbuf");
         let large = Pixbuf::new(Colorspace::Rgb, true, 8, 48, 48).expect("a 48 px pixbuf");
-        let add = |icon: *mut c_void| add_toolbar_icon(&toolbar, SMOKE_CMD, icon);
+        let add = |icon: *mut c_void| add_light(&toolbar, SMOKE_CMD, icon);
         assert!(
             !add(handle_of(&small)),
             "a button for an unknown command was added"
@@ -5231,11 +5279,141 @@ pub(crate) mod host_made_tests {
                 .borrow_mut()
                 .insert(SMOKE_CMD_2, "Smoke Command 2".to_owned())
         });
-        assert!(add_toolbar_icon(&toolbar, SMOKE_CMD_2, handle_of(&small)));
+        assert!(add_light(&toolbar, SMOKE_CMD_2, handle_of(&small)));
         assert_eq!(toolbar.n_items(), before_items + 3);
         assert!(toolbar
             .nth_item(before_items + 2)
             .is_some_and(|item| item.is::<gtk::ToggleToolButton>()));
+    }
+
+    /// `NPPM_ADDTOOLBARICON`: a button with one image, in the light scheme.
+    fn add_light(toolbar: &gtk::Toolbar, cmd_id: i32, icon: *mut c_void) -> bool {
+        add_toolbar_icon(
+            toolbar,
+            cmd_id,
+            icon,
+            std::ptr::null_mut(),
+            codepp_shell::ColourScheme::Light,
+        )
+    }
+
+    /// `NPPM_ADDTOOLBARICON_FORDARKMODE`: a button keeps both images and
+    /// shows the scheme's, swapping them when the scheme changes; with no
+    /// dark image it shows the light one in both; a dark image that is not
+    /// a pixbuf refuses the whole request; and the plugin's pixbufs are the
+    /// plugin's to free once the call returns. Told apart by size: the
+    /// light image is 16 pixels, the dark one 20.
+    fn plugin_toolbar_dark_images() {
+        use codepp_shell::ColourScheme;
+        const DARK_CMD: i32 = 52_003;
+        const LIGHT_ONLY_CMD: i32 = 52_004;
+        let toolbar = gtk::Toolbar::new();
+        COMMAND_LABELS.with(|labels| {
+            let mut labels = labels.borrow_mut();
+            labels.insert(DARK_CMD, "Dark Command".to_owned());
+            labels.insert(LIGHT_ONLY_CMD, "Light-only Command".to_owned());
+        });
+        let light = Pixbuf::new(Colorspace::Rgb, true, 8, 16, 16).expect("a 16 px pixbuf");
+        let dark = Pixbuf::new(Colorspace::Rgb, true, 8, 20, 20).expect("a 20 px pixbuf");
+        let width = |cmd: i32| {
+            (0..toolbar.n_items())
+                .filter_map(|i| toolbar.nth_item(i))
+                .filter_map(|item| item.downcast::<gtk::ToggleToolButton>().ok())
+                .find(|b| {
+                    ToolButtonExt::label(b).as_deref().is_some_and(|l| {
+                        l == if cmd == DARK_CMD {
+                            "Dark Command"
+                        } else {
+                            "Light-only Command"
+                        }
+                    })
+                })
+                .and_then(|b| ToolButtonExt::icon_widget(&b))
+                .map(|icon| icon.preferred_width().1)
+        };
+
+        // A dark image that is not a pixbuf refuses the whole request.
+        let not_an_image = gtk::Label::new(None);
+        assert!(
+            !add_toolbar_icon(
+                &toolbar,
+                DARK_CMD,
+                handle_of(&light),
+                handle_of(&not_an_image),
+                ColourScheme::Dark
+            ),
+            "a label was taken as the dark image"
+        );
+        assert_eq!(toolbar.n_items(), 0, "a refused request added a button");
+        // So does one that is no object at all: the npp handle, which is
+        // screened before anything asks what it is.
+        assert!(
+            !add_toolbar_icon(
+                &toolbar,
+                DARK_CMD,
+                handle_of(&light),
+                npp_sentinel(),
+                ColourScheme::Dark
+            ),
+            "the npp handle was taken as the dark image"
+        );
+        assert_eq!(toolbar.n_items(), 0, "a refused request added a button");
+
+        // Added in the dark scheme, the dark image shows.
+        assert!(add_toolbar_icon(
+            &toolbar,
+            DARK_CMD,
+            handle_of(&light),
+            handle_of(&dark),
+            ColourScheme::Dark
+        ));
+        assert!(add_light(&toolbar, LIGHT_ONLY_CMD, handle_of(&light)));
+        assert_eq!(
+            width(DARK_CMD),
+            Some(20),
+            "the dark image is not shown in the dark scheme"
+        );
+        assert_eq!(width(LIGHT_ONLY_CMD), Some(16));
+
+        // The plugin frees its pixbufs; the host's copies stay.
+        drop((light, dark));
+        let scale = toolbar.scale_factor();
+        crate::toolbar::show_plugin_images_for(ColourScheme::Light, scale);
+        assert_eq!(
+            width(DARK_CMD),
+            Some(16),
+            "the light image is not shown in the light scheme"
+        );
+        assert_eq!(width(LIGHT_ONLY_CMD), Some(16));
+        crate::toolbar::show_plugin_images_for(ColourScheme::Dark, scale);
+        assert_eq!(width(DARK_CMD), Some(20), "the swap back to dark failed");
+        assert_eq!(
+            width(LIGHT_ONLY_CMD),
+            Some(16),
+            "a button with no dark image shows its light one in the dark scheme"
+        );
+
+        // A second request replaces both images, and shows the scheme's.
+        let light = Pixbuf::new(Colorspace::Rgb, true, 8, 18, 18).expect("an 18 px pixbuf");
+        let dark = Pixbuf::new(Colorspace::Rgb, true, 8, 12, 12).expect("a 12 px pixbuf");
+        assert!(add_toolbar_icon(
+            &toolbar,
+            DARK_CMD,
+            handle_of(&light),
+            handle_of(&dark),
+            ColourScheme::Dark
+        ));
+        assert_eq!(
+            width(DARK_CMD),
+            Some(12),
+            "the replaced dark image is not shown"
+        );
+        crate::toolbar::show_plugin_images_for(ColourScheme::Light, scale);
+        assert_eq!(
+            width(DARK_CMD),
+            Some(18),
+            "the replaced light image is not kept"
+        );
     }
 
     /// A click on `button` runs its command once and leaves the plugin's

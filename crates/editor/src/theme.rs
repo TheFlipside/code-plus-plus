@@ -80,6 +80,7 @@
 )]
 
 use crate::EditorHandle;
+pub use codepp_core::colour::ColourScheme;
 use codepp_core::lang::{
     ADA_KEYWORDS, ASM_CPU_KEYWORDS, ASM_DIRECTIVE_KEYWORDS, ASM_DIRECTIVE_OP_KEYWORDS,
     ASM_EXT_KEYWORDS, ASM_FPU_KEYWORDS, ASM_REG_KEYWORDS, ASN1_ATTRIBUTES, ASN1_DESCRIPTORS,
@@ -358,6 +359,11 @@ use codepp_scintilla_sys::{
     SCE_YAML_REFERENCE, SCE_YAML_TEXT, SCI_COLOURISE, STYLE_BRACEBAD, STYLE_BRACELIGHT,
     STYLE_INDENTGUIDE, STYLE_LINENUMBER,
 };
+use codepp_scintilla_sys::{
+    SCI_RESETELEMENTCOLOUR, SCI_SETELEMENTCOLOUR, SC_ELEMENT_CARET,
+    SC_ELEMENT_SELECTION_ADDITIONAL_BACK, SC_ELEMENT_SELECTION_BACK,
+    SC_ELEMENT_SELECTION_INACTIVE_BACK,
+};
 
 // --- Phase 4 m1 default theme -------------------------------------------
 //
@@ -402,6 +408,160 @@ const FG_LINE_NUMBER: u32 = 0x00_70_70_70; // ~RGB(112,112,112) medium grey
 /// all of which live in the 32-39 predefined range Scintilla
 /// resets on clear.
 const FG_INDENT_GUIDE: u32 = 0x00_BE_BE_BE;
+
+/// Every colour the editor sets itself, for one [`ColourScheme`]: the
+/// lexer palette's slots, the line-number margin, brace highlight, the
+/// indent guide, the caret and the selection. `STYLE_DEFAULT`'s own pair
+/// is the user's, from `styles.xml` (`StyleEntry::colours`), and the
+/// change-history bars keep their colours in both schemes: solid bars of
+/// saturated colour read on either margin.
+///
+/// [`LIGHT`] is the editor as it was before the dark scheme existed, to
+/// the last value; [`DARK`] is its counterpart (DESIGN.md §7.4, the
+/// dark-mode entry). Colours are Scintilla's `0x00BBGGRR`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Palette {
+    /// [`StyleSlot::Comment`].
+    pub comment: u32,
+    /// [`StyleSlot::Keyword`].
+    pub keyword: u32,
+    /// [`StyleSlot::Keyword2`].
+    pub keyword2: u32,
+    /// [`StyleSlot::String`].
+    pub string: u32,
+    /// [`StyleSlot::Number`].
+    pub number: u32,
+    /// [`StyleSlot::Preprocessor`].
+    pub preprocessor: u32,
+    /// [`StyleSlot::Operator`].
+    pub operator: u32,
+    /// [`StyleSlot::Lifetime`].
+    pub lifetime: u32,
+    /// [`StyleSlot::Macro`].
+    pub macro_: u32,
+    /// The line numbers (`STYLE_LINENUMBER`'s foreground).
+    pub line_number_fg: u32,
+    /// The line-number margin, which the other symbol margins share
+    /// (`STYLE_LINENUMBER`'s background).
+    pub line_number_bg: u32,
+    /// A brace whose partner is highlighted (`STYLE_BRACELIGHT`).
+    pub brace_light_fg: u32,
+    /// The background of both brace styles.
+    pub brace_bg: u32,
+    /// A brace with no partner (`STYLE_BRACEBAD`).
+    pub brace_bad_fg: u32,
+    /// The indent guides (`STYLE_INDENTGUIDE`).
+    pub indent_guide: u32,
+    /// The caret, or `None` for Scintilla's own (black).
+    pub caret: Option<u32>,
+    /// The selection's background, focused or not, or `None` for
+    /// Scintilla's own.
+    pub selection_back: Option<u32>,
+}
+
+/// The light scheme: the editor's colours as they have always been.
+pub const LIGHT: Palette = Palette {
+    comment: FG_COMMENT,
+    keyword: FG_KEYWORD,
+    keyword2: FG_KEYWORD2,
+    string: FG_STRING,
+    number: FG_NUMBER,
+    preprocessor: FG_PREPROC,
+    operator: FG_OPERATOR,
+    lifetime: FG_LIFETIME,
+    macro_: FG_MACRO,
+    line_number_fg: FG_LINE_NUMBER,
+    line_number_bg: BG_LINE_NUMBER,
+    brace_light_fg: FG_BRACE_LIGHT,
+    brace_bg: BG_BRACE_LIGHT,
+    brace_bad_fg: FG_BRACE_BAD,
+    indent_guide: FG_INDENT_GUIDE,
+    caret: None,
+    selection_back: None,
+};
+
+/// The dark scheme. Code++'s own choice, in the manner of VS Code's
+/// Dark+ (whose theme is MIT), not taken from Notepad++'s theme files:
+/// every slot reads at [`codepp_core::colour::MIN_TEXT_CONTRAST`] or
+/// better against the dark default background
+/// ([`codepp_core::styles::DARK_DEFAULT_BG`]), which a test checks.
+/// Selected text keeps its own colours, as in VS Code and Notepad++
+/// (`SC_ELEMENT_SELECTION_TEXT` is not set), and only the default
+/// foreground is held to that contrast on the selection: a comment or a
+/// keyword reads at about 2.6:1 to 3.5:1 there.
+pub const DARK: Palette = Palette {
+    comment: 0x00_55_99_6A,      // #6A9955 green
+    keyword: 0x00_D6_9C_56,      // #569CD6 blue
+    keyword2: 0x00_B0_C9_4E,     // #4EC9B0 teal
+    string: 0x00_78_91_CE,       // #CE9178 salmon
+    number: 0x00_A8_CE_B5,       // #B5CEA8 pale green
+    preprocessor: 0x00_C0_86_C5, // #C586C0 orchid
+    operator: 0x00_D4_D4_D4,     // #D4D4D4 light grey
+    lifetime: 0x00_7D_BA_D7,     // #D7BA7D sand
+    macro_: 0x00_AA_DC_DC,       // #DCDCAA pale yellow
+    line_number_fg: 0x00_8C_8C_8C,
+    line_number_bg: 0x00_26_25_25, // #252526
+    brace_light_fg: 0x00_72_7B_FF, // #FF7B72
+    brace_bg: 0x00_1E_1E_1E,       // the dark default background
+    brace_bad_fg: 0x00_47_47_F4,   // #F44747
+    indent_guide: 0x00_40_40_40,
+    caret: Some(0x00_DC_DC_DC),
+    selection_back: Some(0x00_78_4F_26), // #264F78
+};
+
+/// The palette of `scheme`.
+#[must_use]
+pub const fn palette(scheme: ColourScheme) -> &'static Palette {
+    match scheme {
+        ColourScheme::Light => &LIGHT,
+        ColourScheme::Dark => &DARK,
+    }
+}
+
+impl Palette {
+    /// The colour of `slot` in this palette.
+    #[must_use]
+    pub const fn slot(&self, slot: StyleSlot) -> u32 {
+        match slot {
+            StyleSlot::Comment => self.comment,
+            StyleSlot::Keyword => self.keyword,
+            StyleSlot::Keyword2 => self.keyword2,
+            StyleSlot::String => self.string,
+            StyleSlot::Number => self.number,
+            StyleSlot::Preprocessor => self.preprocessor,
+            StyleSlot::Operator => self.operator,
+            StyleSlot::Lifetime => self.lifetime,
+            StyleSlot::Macro => self.macro_,
+        }
+    }
+}
+
+/// Set the caret's and the selection's colours from `palette`, or put
+/// Scintilla's own back where it has none. View-level, and not touched by
+/// `SCI_STYLECLEARALL`, so set once per change of scheme.
+///
+/// Not called by the Cocoa backend while it stays in the light scheme:
+/// its Scintilla takes the selection's base colour from the system, and
+/// it sets an explicit one of its own instead (`ui_cocoa`'s
+/// `SELECTION_BACK`), which putting Scintilla's own back would undo.
+pub fn apply_caret_and_selection(editor: &EditorHandle, palette: &Palette) {
+    let set = |element: usize, colour: Option<u32>| match colour {
+        Some(c) => {
+            editor.send(SCI_SETELEMENTCOLOUR, element, (0xFF00_0000 | c) as isize);
+        }
+        None => {
+            editor.send(SCI_RESETELEMENTCOLOUR, element, 0);
+        }
+    };
+    set(SC_ELEMENT_CARET, palette.caret);
+    for element in [
+        SC_ELEMENT_SELECTION_BACK,
+        SC_ELEMENT_SELECTION_ADDITIONAL_BACK,
+        SC_ELEMENT_SELECTION_INACTIVE_BACK,
+    ] {
+        set(element as usize, palette.selection_back);
+    }
+}
 /// Margin index for line numbers. Scintilla exposes 5 margins;
 /// margin 0 is the conventional line-number slot, with margin 1
 /// reserved for symbols/bookmarks and margin 2 for fold markers
@@ -412,7 +572,7 @@ const LINE_NUMBER_MARGIN: u32 = 0;
 /// sequence and stops the previous lexer's colours from leaking through
 /// on lexer switch. Editor must already be bound to the document the
 /// caller wants to style.
-pub fn apply_default_styles(editor: &EditorHandle) {
+pub fn apply_default_styles(editor: &EditorHandle, palette: &Palette) {
     // Propagate the current `STYLE_DEFAULT` to every other style
     // index, then re-apply the line-number margin.
     //
@@ -437,9 +597,9 @@ pub fn apply_default_styles(editor: &EditorHandle) {
     // highlight pair (STYLE_BRACELIGHT = 34, STYLE_BRACEBAD = 35)
     // and the indent-guide colour (STYLE_INDENTGUIDE = 37) — all
     // live inside the 32-39 range `SCI_STYLECLEARALL` resets.
-    apply_line_number_margin(editor);
-    apply_brace_styles(editor);
-    apply_indent_guide_style(editor);
+    apply_line_number_margin(editor, palette);
+    apply_brace_styles(editor, palette);
+    apply_indent_guide_style(editor, palette);
 }
 /// Configure the line-number margin: the `STYLE_LINENUMBER` colour
 /// pair, then Scintilla's built-in `SC_MARGIN_NUMBER` type + width via
@@ -464,9 +624,9 @@ pub fn apply_default_styles(editor: &EditorHandle) {
 /// "show line numbers" view toggle becomes
 /// `editor.set_margin_width(LINE_NUMBER_MARGIN, 0)` to hide (Scintilla
 /// hides a margin via width-zero without resetting its type or styles).
-pub fn apply_line_number_margin(editor: &EditorHandle) {
-    editor.style_set_fore(STYLE_LINENUMBER, FG_LINE_NUMBER);
-    editor.style_set_back(STYLE_LINENUMBER, BG_LINE_NUMBER);
+pub fn apply_line_number_margin(editor: &EditorHandle, palette: &Palette) {
+    editor.style_set_fore(STYLE_LINENUMBER, palette.line_number_fg);
+    editor.style_set_back(STYLE_LINENUMBER, palette.line_number_bg);
     editor.enable_line_number_margin(LINE_NUMBER_MARGIN);
 }
 // --- Brace-match highlight colours ----------------------------------
@@ -486,12 +646,12 @@ pub const BG_BRACE_LIGHT: u32 = 0x00_FF_FF_FF;
 /// `STYLE_BRACELIGHT` / `STYLE_BRACEBAD` are in the 32-39 predefined
 /// range that `SCI_STYLECLEARALL` resets to `STYLE_DEFAULT` — same
 /// re-application pattern as `STYLE_LINENUMBER`.
-pub fn apply_brace_styles(editor: &EditorHandle) {
-    editor.style_set_fore(STYLE_BRACELIGHT, FG_BRACE_LIGHT);
-    editor.style_set_back(STYLE_BRACELIGHT, BG_BRACE_LIGHT);
+pub fn apply_brace_styles(editor: &EditorHandle, palette: &Palette) {
+    editor.style_set_fore(STYLE_BRACELIGHT, palette.brace_light_fg);
+    editor.style_set_back(STYLE_BRACELIGHT, palette.brace_bg);
     editor.style_set_bold(STYLE_BRACELIGHT, true);
-    editor.style_set_fore(STYLE_BRACEBAD, FG_BRACE_BAD);
-    editor.style_set_back(STYLE_BRACEBAD, BG_BRACE_LIGHT);
+    editor.style_set_fore(STYLE_BRACEBAD, palette.brace_bad_fg);
+    editor.style_set_back(STYLE_BRACEBAD, palette.brace_bg);
     editor.style_set_bold(STYLE_BRACEBAD, false);
 }
 /// Configure the `STYLE_INDENTGUIDE` (37) foreground colour for
@@ -510,8 +670,8 @@ pub fn apply_brace_styles(editor: &EditorHandle) {
 /// mode itself is view state (not a style-index), so it doesn't
 /// need re-application here — its toggle is handled entirely by
 /// the toolbar's `ID_VIEW_SHOW_INDENT_GUIDE` handler.
-pub fn apply_indent_guide_style(editor: &EditorHandle) {
-    editor.style_set_fore(STYLE_INDENTGUIDE, FG_INDENT_GUIDE);
+pub fn apply_indent_guide_style(editor: &EditorHandle, palette: &Palette) {
+    editor.style_set_fore(STYLE_INDENTGUIDE, palette.indent_guide);
 }
 /// One slot in the shared per-language palette. Each variant maps
 /// to a single `0x00BBGGRR` colour via [`slot_color`]; the colour
@@ -561,24 +721,15 @@ pub enum StyleSlot {
     /// reason as [`StyleSlot::Lifetime`].
     Macro,
 }
-/// Resolve a [`StyleSlot`] to its `0x00BBGGRR` colour. The
+/// Resolve a [`StyleSlot`] to its `0x00BBGGRR` colour in the light
+/// scheme ([`LIGHT`]); [`Palette::slot`] answers for either. The
 /// individual `FG_*` constants are defined above with the rest
 /// of the editor's visual palette so a coordinated theme change
 /// is a single edit. Marked `const` so a future palette refactor
 /// to compile-time table lookup is mechanical.
 #[must_use]
 pub const fn slot_color(slot: StyleSlot) -> u32 {
-    match slot {
-        StyleSlot::Comment => FG_COMMENT,
-        StyleSlot::Keyword => FG_KEYWORD,
-        StyleSlot::Keyword2 => FG_KEYWORD2,
-        StyleSlot::String => FG_STRING,
-        StyleSlot::Number => FG_NUMBER,
-        StyleSlot::Preprocessor => FG_PREPROC,
-        StyleSlot::Operator => FG_OPERATOR,
-        StyleSlot::Lifetime => FG_LIFETIME,
-        StyleSlot::Macro => FG_MACRO,
-    }
+    LIGHT.slot(slot)
 }
 /// One row of the per-language theme table. Carries everything
 /// the host needs to install for a given language's editor
@@ -9052,17 +9203,17 @@ pub fn lang_theme(lang: LangType) -> Option<&'static LangTheme> {
 /// Callers handling User Defined Languages must route those to their
 /// own container-lexer path *before* calling this; a UDL id has no
 /// Lexilla lexer and would land in the plain-text fallback.
-pub fn apply_lang_theme(editor: &EditorHandle, lang: LangType) {
+pub fn apply_lang_theme(editor: &EditorHandle, lang: LangType, palette: &Palette) {
     let Some(name) = lang.lexer_name() else {
         editor.clear_lexer();
-        apply_default_styles(editor);
+        apply_default_styles(editor, palette);
         editor.send(SCI_COLOURISE, 0, -1);
         return;
     };
     if !editor.set_lexer_by_name(name) {
         tracing::warn!(lexer = name, "CreateLexer returned NULL");
         editor.clear_lexer();
-        apply_default_styles(editor);
+        apply_default_styles(editor, palette);
         editor.send(SCI_COLOURISE, 0, -1);
         return;
     }
@@ -9070,9 +9221,9 @@ pub fn apply_lang_theme(editor: &EditorHandle, lang: LangType) {
         for &(class, words) in theme.keywords {
             editor.set_keywords(class, words);
         }
-        apply_default_styles(editor);
+        apply_default_styles(editor, palette);
         for &(style, slot) in theme.styles {
-            editor.style_set_fore(style, slot_color(slot));
+            editor.style_set_fore(style, palette.slot(slot));
         }
         for &style in theme.italic {
             editor.style_set_italic(style, true);
@@ -9081,7 +9232,7 @@ pub fn apply_lang_theme(editor: &EditorHandle, lang: LangType) {
             editor.style_set_bold(style, true);
         }
     } else {
-        apply_default_styles(editor);
+        apply_default_styles(editor, palette);
     }
     editor.set_property("fold", "1");
     editor.set_property("fold.compact", "0");
@@ -31542,5 +31693,140 @@ mod lang_theme_tests {
         assert_eq!(slot_color(StyleSlot::Comment), FG_COMMENT);
         assert_eq!(slot_color(StyleSlot::Keyword), FG_KEYWORD);
         assert_eq!(slot_color(StyleSlot::Macro), FG_MACRO);
+    }
+}
+
+#[cfg(test)]
+mod palette_tests {
+    //! The two palettes: the light one is the editor as it was, and every
+    //! slot of either reads against its default background.
+    use super::{
+        palette, ColourScheme, Palette, StyleSlot, BG_BRACE_LIGHT, BG_LINE_NUMBER, DARK,
+        FG_BRACE_BAD, FG_BRACE_LIGHT, FG_COMMENT, FG_INDENT_GUIDE, FG_KEYWORD, FG_KEYWORD2,
+        FG_LIFETIME, FG_LINE_NUMBER, FG_MACRO, FG_NUMBER, FG_OPERATOR, FG_PREPROC, FG_STRING,
+        LIGHT,
+    };
+    use codepp_core::colour::{contrast_ratio, to_colorref, MIN_TEXT_CONTRAST};
+    use codepp_core::styles::{DARK_DEFAULT_BG, LIGHT_DEFAULT_BG};
+
+    const SLOTS: [StyleSlot; 9] = [
+        StyleSlot::Comment,
+        StyleSlot::Keyword,
+        StyleSlot::Keyword2,
+        StyleSlot::String,
+        StyleSlot::Number,
+        StyleSlot::Preprocessor,
+        StyleSlot::Operator,
+        StyleSlot::Lifetime,
+        StyleSlot::Macro,
+    ];
+
+    /// Contrast between two Scintilla colours (`0x00BBGGRR`).
+    fn contrast(a: u32, b: u32) -> f64 {
+        contrast_ratio(to_colorref(a), to_colorref(b))
+    }
+
+    /// The light scheme is the editor as it was before the dark one
+    /// existed, to the last value: a change here changes light mode.
+    #[test]
+    fn the_light_palette_is_the_editor_as_it_was() {
+        assert_eq!(
+            LIGHT,
+            Palette {
+                comment: FG_COMMENT,
+                keyword: FG_KEYWORD,
+                keyword2: FG_KEYWORD2,
+                string: FG_STRING,
+                number: FG_NUMBER,
+                preprocessor: FG_PREPROC,
+                operator: FG_OPERATOR,
+                lifetime: FG_LIFETIME,
+                macro_: FG_MACRO,
+                line_number_fg: FG_LINE_NUMBER,
+                line_number_bg: BG_LINE_NUMBER,
+                brace_light_fg: FG_BRACE_LIGHT,
+                brace_bg: BG_BRACE_LIGHT,
+                brace_bad_fg: FG_BRACE_BAD,
+                indent_guide: FG_INDENT_GUIDE,
+                caret: None,
+                selection_back: None,
+            }
+        );
+        // The values themselves, so moving a constant fails here too.
+        assert_eq!(
+            (FG_COMMENT, FG_KEYWORD, FG_KEYWORD2, FG_STRING, FG_NUMBER),
+            (0x00_80_00, 0xFF_00_00, 0xC0_60_00, 0x22_22_99, 0x80_00_80)
+        );
+        assert_eq!(
+            (FG_PREPROC, FG_OPERATOR, FG_LIFETIME, FG_MACRO),
+            (0x80_40_80, 0x30_30_30, 0x00_60_C0, 0x80_30_80)
+        );
+        assert_eq!(
+            (BG_LINE_NUMBER, FG_LINE_NUMBER, FG_INDENT_GUIDE),
+            (0xE4_E4_E4, 0x70_70_70, 0xBE_BE_BE)
+        );
+        assert_eq!(palette(ColourScheme::Light), &LIGHT);
+        assert_eq!(palette(ColourScheme::Dark), &DARK);
+    }
+
+    /// Every slot of the dark palette reads against the dark default
+    /// background, and so do the line numbers and the braces against
+    /// theirs.
+    #[test]
+    fn every_dark_slot_reads_on_the_dark_background() {
+        let bg = to_colorref(DARK_DEFAULT_BG);
+        for slot in SLOTS {
+            let ratio = contrast(DARK.slot(slot), bg);
+            assert!(ratio >= MIN_TEXT_CONTRAST, "{slot:?}: {ratio:.2}");
+        }
+        assert_eq!(
+            DARK.brace_bg, bg,
+            "the brace background is the dark default"
+        );
+        for (name, fg, on) in [
+            ("line number", DARK.line_number_fg, DARK.line_number_bg),
+            ("brace", DARK.brace_light_fg, DARK.brace_bg),
+            ("bad brace", DARK.brace_bad_fg, DARK.brace_bg),
+        ] {
+            let ratio = contrast(fg, on);
+            assert!(ratio >= MIN_TEXT_CONTRAST, "{name}: {ratio:.2}");
+        }
+    }
+
+    /// The light palette, checked the same way. One slot falls short and
+    /// is recorded rather than changed, since changing it would change
+    /// light mode: the amber of Rust lifetimes, about 4.3:1 on white.
+    #[test]
+    fn every_light_slot_reads_on_white_but_one() {
+        let bg = to_colorref(LIGHT_DEFAULT_BG);
+        for slot in SLOTS {
+            let ratio = contrast(LIGHT.slot(slot), bg);
+            if slot == StyleSlot::Lifetime {
+                assert!(
+                    ratio < MIN_TEXT_CONTRAST,
+                    "the exception now reads: drop it"
+                );
+                continue;
+            }
+            assert!(ratio >= MIN_TEXT_CONTRAST, "{slot:?}: {ratio:.2}");
+        }
+    }
+
+    /// The dark palette sets its own caret and selection; the light one
+    /// leaves Scintilla's.
+    #[test]
+    fn only_the_dark_palette_sets_the_caret_and_selection() {
+        assert_eq!((LIGHT.caret, LIGHT.selection_back), (None, None));
+        let (Some(caret), Some(selection)) = (DARK.caret, DARK.selection_back) else {
+            panic!("the dark palette must set both");
+        };
+        let bg = to_colorref(DARK_DEFAULT_BG);
+        assert!(contrast(caret, bg) >= MIN_TEXT_CONTRAST);
+        // Selected text, in the default foreground, reads on the selection.
+        // Selected tokens keep their own colours and are not checked
+        // (the palette's doc says so).
+        let fg = to_colorref(codepp_core::styles::DARK_DEFAULT_FG);
+        let ratio = contrast(fg, selection);
+        assert!(ratio >= MIN_TEXT_CONTRAST, "selected text: {ratio:.2}");
     }
 }

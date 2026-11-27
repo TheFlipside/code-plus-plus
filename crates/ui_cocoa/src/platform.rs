@@ -224,7 +224,10 @@ pub(crate) fn apply_predefined_styles(editor: &EditorHandle) {
     // Styles STYLE_LINENUMBER (fore/back) and configures margin 0 as
     // Scintilla's built-in `SC_MARGIN_NUMBER`, as wide as the numbers
     // on screen — identical on all three backends.
-    codepp_editor::theme::apply_line_number_margin(editor);
+    //
+    // In the light palette only: this backend draws the light scheme until
+    // it detects the system's (DESIGN.md §7.4, the dark-mode entry).
+    codepp_editor::theme::apply_line_number_margin(editor, &codepp_editor::theme::LIGHT);
     // The change-history "edit indicator" strip. Shared config, so it
     // looks and behaves identically on all three backends;
     // per-document *enablement* happens in `activate_tab`.
@@ -239,8 +242,8 @@ pub(crate) fn apply_predefined_styles(editor: &EditorHandle) {
     // Both were likewise missing here while present on the other two
     // backends, so brace matching and indent guides rendered with
     // Scintilla's defaults instead of Code++'s palette.
-    codepp_editor::theme::apply_brace_styles(editor);
-    codepp_editor::theme::apply_indent_guide_style(editor);
+    codepp_editor::theme::apply_brace_styles(editor, &codepp_editor::theme::LIGHT);
+    codepp_editor::theme::apply_indent_guide_style(editor, &codepp_editor::theme::LIGHT);
 }
 
 /// Read the whole buffer out of Scintilla as a `String`.
@@ -360,6 +363,14 @@ impl UiPlatform for CocoaUi {
         self.editor.send(SCI_SETSAVEPOINT, 0, 0);
     }
 
+    fn set_colour_scheme(&mut self, _scheme: codepp_shell::ColourScheme) {
+        // Nothing to do yet: this backend reports no scheme but the light
+        // one, so the shell never changes it here. Detecting the system's
+        // appearance, taking the dark palette and swapping plugin toolbar
+        // images is the macOS half of step 1 (DESIGN.md §7.4, the
+        // dark-mode entry).
+    }
+
     fn apply_lang(&mut self, lang: LangType) {
         // A UDL has no Lexilla lexer, so it takes the container-lexer
         // path instead of the theme table: `SCLEX_CONTAINER` plus its own
@@ -376,7 +387,7 @@ impl UiPlatform for CocoaUi {
         // branches route through `apply_default_styles`, whose
         // `apply_line_number_margin` re-configures the built-in number
         // margin after the style clear — no per-backend fixup needed.
-        codepp_editor::theme::apply_lang_theme(&self.editor, lang);
+        codepp_editor::theme::apply_lang_theme(&self.editor, lang, &codepp_editor::theme::LIGHT);
     }
 
     fn apply_default_style(&mut self, styles: &Styles) {
@@ -931,10 +942,21 @@ impl UiPlatform for CocoaUi {
         crate::plugin::register_modeless_dialog(dlg, register, &self.window)
     }
 
-    fn add_toolbar_icon(&mut self, cmd_id: i32, hicon: codepp_plugin_host::Hwnd) -> bool {
+    fn add_toolbar_icon(
+        &mut self,
+        cmd_id: i32,
+        hicon: codepp_plugin_host::Hwnd,
+        _dark_hicon: codepp_plugin_host::Hwnd,
+    ) -> bool {
         // `hicon` is an `NSImage*` on this backend. Adding the button
         // touches AppKit from inside the dispatch's borrow, which is safe
         // for the reason `set_npp_menu_item_check` gives.
+        //
+        // The dark image (`NPPM_ADDTOOLBARICON_FORDARKMODE`) is not kept
+        // yet: this backend draws the light scheme only, so the light
+        // image is the one it shows. Keeping both, retained, and swapping
+        // them with the scheme comes with its dark scheme (DESIGN.md §7.4,
+        // the dark-mode entry).
         crate::plugin::add_toolbar_icon(&self.toolbar, cmd_id, hicon)
     }
 

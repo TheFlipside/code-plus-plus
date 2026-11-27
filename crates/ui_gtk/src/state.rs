@@ -172,6 +172,13 @@ pub struct GtkUi {
     /// held, as Win32's `refresh_udl_registry` does. Win32 relies on the
     /// same hand-maintained discipline — see its field doc.
     pub udl_registry: *const codepp_udl::UdlRegistry,
+    /// The shell's colour scheme when this view was split off, and the
+    /// new one from [`codepp_shell::UiPlatform::set_colour_scheme`] on: the
+    /// palette `apply_default_style` and `apply_lang` style with.
+    pub colour_scheme: codepp_shell::ColourScheme,
+    /// The Document Map's miniature view, given the scheme's default
+    /// colours with the main view's ([`GtkUiState::docmap_editor`]).
+    pub docmap_editor: EditorHandle,
 }
 
 impl GtkUiState {
@@ -192,6 +199,8 @@ impl GtkUiState {
             toolbar: self.toolbar.clone(),
             tabs: self.tabs.clone(),
             udl_registry,
+            colour_scheme: self.shell.colour_scheme(),
+            docmap_editor: self.docmap_editor,
         };
         (&mut self.shell, ui)
     }

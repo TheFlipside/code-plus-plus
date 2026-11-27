@@ -91,6 +91,16 @@ impl TabColor {
         tint_of(self.bar_rgb())
     }
 
+    /// The tint an inactive tab with this color takes over the background
+    /// `base` (`0xRRGGBB`): the same share of the color as
+    /// [`Self::tint_rgb`], laid over `base` rather than white. A backend
+    /// in the dark scheme passes its tab strip's own background, so the
+    /// tint is a dark one; over white it is [`Self::tint_rgb`].
+    #[must_use]
+    pub fn tint_over(self, base: u32) -> u32 {
+        codepp_core::colour::mix(self.bar_rgb(), base, TINT_PERCENT)
+    }
+
     /// The label of the entry that applies it: "Apply Color 1" and so on.
     #[must_use]
     pub fn menu_label(self) -> &'static str {
@@ -627,6 +637,21 @@ mod tests {
         }
         let numbers: Vec<u8> = TabColor::ALL.iter().map(|c| c.number()).collect();
         assert_eq!(numbers, [1, 2, 3, 4, 5]);
+    }
+
+    #[test]
+    fn a_tint_over_white_is_the_light_tint_and_over_dark_is_dark() {
+        for c in TabColor::ALL {
+            assert_eq!(c.tint_over(0x00FF_FFFF), c.tint_rgb(), "{c:?}");
+            let dark = c.tint_over(0x0020_2020);
+            assert!(codepp_core::colour::is_dark(dark), "{c:?}: {dark:06X}");
+            // Each channel is the color's share laid over the base's.
+            for shift in [16, 8, 0] {
+                let bar = (c.bar_rgb() >> shift) & 0xFF;
+                let want = (bar * super::TINT_PERCENT + 0x20 * (100 - super::TINT_PERCENT)) / 100;
+                assert_eq!((dark >> shift) & 0xFF, want, "{c:?}, shift {shift}");
+            }
+        }
     }
 
     #[test]

@@ -20,8 +20,10 @@
 //! the registry lookup and the backend's borrow discipline — stay in
 //! each UI crate.
 
+use crate::theme::Palette;
 use crate::EditorHandle;
-use codepp_scintilla_sys::SCI_GETLENGTH;
+use codepp_core::colour::{invert_lightness, readable_on, to_colorref, ColourScheme};
+use codepp_scintilla_sys::{SCI_GETLENGTH, SCI_STYLEGETBACK, SCI_STYLEGETFORE, STYLE_DEFAULT};
 use codepp_udl::{Tokeniser, UdlCompiledRules, UdlStyleSlot};
 
 /// Cap on the initial synchronous paint in [`apply_udl_lang`], and on the
@@ -128,6 +130,100 @@ pub fn apply_udl_styles(editor: &EditorHandle, styles: &[codepp_udl::UdlStyle]) 
         editor.style_set_italic(idx, (style.font_style & UDL_FONT_STYLE_ITALIC) != 0);
         editor.style_set_underline(idx, (style.font_style & UDL_FONT_STYLE_UNDERLINE) != 0);
     }
+}
+
+/// What a UDL is shown against: the scheme in effect, its palette, and
+/// its default foreground and background (`StyleEntry::colours`), as
+/// `0xRRGGBB`.
+#[derive(Clone, Copy, Debug)]
+pub struct UdlTarget<'a> {
+    /// The scheme the editor is drawn in.
+    pub scheme: ColourScheme,
+    /// That scheme's palette, for the margins and braces.
+    pub palette: &'a Palette,
+    /// `STYLE_DEFAULT`'s foreground in that scheme.
+    pub default_fg: u32,
+    /// `STYLE_DEFAULT`'s background in that scheme.
+    pub default_bg: u32,
+}
+
+impl UdlTarget<'static> {
+    /// The target for `editor` as it is styled now: `scheme`'s palette,
+    /// and the view's `STYLE_DEFAULT` pair, which the backend set from
+    /// `styles.xml` for `scheme`.
+    #[must_use]
+    pub fn of_editor(editor: &EditorHandle, scheme: ColourScheme) -> Self {
+        let read = |message| {
+            // A COLORREF in the low 24 bits; the outer bytes swap it back.
+            let colorref =
+                u32::try_from(editor.send(message, STYLE_DEFAULT, 0) & 0xFF_FF_FF).unwrap_or(0);
+            to_colorref(colorref)
+        };
+        Self {
+            scheme,
+            palette: crate::theme::palette(scheme),
+            default_fg: read(SCI_STYLEGETFORE),
+            default_bg: read(SCI_STYLEGETBACK),
+        }
+    }
+}
+
+/// `styles` as they are shown in `target`'s scheme.
+///
+/// A UDL carries one set of colours, made for a light editor or, with
+/// `darkModeTheme="yes"` (`made_for_dark`), for a dark one. In its own
+/// scheme it is shown as its author made it. In the other it is given a
+/// variant for that scheme, so that a UDL is readable whichever scheme
+/// the editor is in (DESIGN.md §7.4, the dark-mode entry):
+///
+/// * the UDL's own default colours (its `DEFAULT` style's) become the
+///   editor's, `target.default_fg` on `target.default_bg`, so a UDL buffer
+///   looks like any other;
+/// * every other background turns its lightness over, keeping its hue
+///   ([`invert_lightness`]): a pale highlight becomes a dark one;
+/// * every foreground keeps its hue and moves lightness, by the least it
+///   must, until it has `MIN_TEXT_CONTRAST` against its new background
+///   ([`readable_on`]).
+///
+/// Colours are `0xRRGGBB`, as [`codepp_udl::UdlStyle`] holds them.
+#[must_use]
+pub fn adapt_udl_styles(
+    styles: &[codepp_udl::UdlStyle],
+    made_for_dark: bool,
+    target: &UdlTarget<'_>,
+) -> Vec<codepp_udl::UdlStyle> {
+    if made_for_dark == (target.scheme == ColourScheme::Dark) {
+        return styles.to_vec();
+    }
+    let udl_default = styles
+        .iter()
+        .find(|s| s.name == "DEFAULT")
+        .map(|s| (s.fg_color, s.bg_color));
+    styles
+        .iter()
+        .map(|style| {
+            let mut out = style.clone();
+            if udl_default == Some((style.fg_color, style.bg_color)) {
+                out.fg_color = target.default_fg;
+                out.bg_color = target.default_bg;
+                return out;
+            }
+            let udl_text = udl_default.map(|(fg, _)| fg);
+            let udl_paper = udl_default.map(|(_, bg)| bg);
+            out.bg_color = if udl_paper == Some(style.bg_color) {
+                target.default_bg
+            } else {
+                invert_lightness(style.bg_color)
+            };
+            let fg = if udl_text == Some(style.fg_color) {
+                target.default_fg
+            } else {
+                style.fg_color
+            };
+            out.fg_color = readable_on(fg, out.bg_color);
+            out
+        })
+        .collect()
 }
 
 /// Tokenise `text_range` of the editor's document via the
@@ -276,14 +372,23 @@ fn capped_end(
 /// The caller must have reset styles first — this does that via
 /// [`crate::theme::apply_default_styles`] so any prior lexer's per-style
 /// colours don't bleed onto indices the UDL doesn't populate.
+///
+/// `made_for_dark` is the UDL's `darkModeTheme` attribute
+/// (`UdlDefinition::dark_mode_theme`). A UDL made for the other scheme
+/// than `scheme` is shown in its variant for this one
+/// ([`adapt_udl_styles`]), against the view's own default colours, which
+/// the backend's `apply_default_style` has set for `scheme`.
 pub fn apply_udl_lang(
     editor: &EditorHandle,
     styles: &[codepp_udl::UdlStyle],
     rules: &UdlCompiledRules,
+    made_for_dark: bool,
+    scheme: ColourScheme,
 ) {
+    let target = UdlTarget::of_editor(editor, scheme);
     editor.clear_lexer();
-    crate::theme::apply_default_styles(editor);
-    apply_udl_styles(editor, styles);
+    crate::theme::apply_default_styles(editor, target.palette);
+    apply_udl_styles(editor, &adapt_udl_styles(styles, made_for_dark, &target));
     let doc_len = editor.send(SCI_GETLENGTH, 0, 0).max(0) as usize;
     // Line-aligned, cap-preserving end (see `capped_end`): bounds the
     // initial synchronous paint at ~64 KiB even for a huge single line.
@@ -448,5 +553,141 @@ mod tests {
         assert_eq!(UDL_FONT_STYLE_BOLD, 1);
         assert_eq!(UDL_FONT_STYLE_ITALIC, 2);
         assert_eq!(UDL_FONT_STYLE_UNDERLINE, 4);
+    }
+
+    fn style(name: &str, fg: u32, bg: u32) -> codepp_udl::UdlStyle {
+        codepp_udl::UdlStyle {
+            name: name.to_string(),
+            fg_color: fg,
+            bg_color: bg,
+            font_name: String::new(),
+            font_style: 0,
+            nesting: 0,
+        }
+    }
+
+    fn dark_target() -> UdlTarget<'static> {
+        UdlTarget {
+            scheme: ColourScheme::Dark,
+            palette: &crate::theme::DARK,
+            default_fg: 0xDC_DC_DC,
+            default_bg: 0x1E_1E_1E,
+        }
+    }
+
+    fn light_target() -> UdlTarget<'static> {
+        UdlTarget {
+            scheme: ColourScheme::Light,
+            palette: &crate::theme::LIGHT,
+            default_fg: 0,
+            default_bg: 0xFF_FF_FF,
+        }
+    }
+
+    fn assert_every_style_reads(styles: &[codepp_udl::UdlStyle], what: &str) {
+        for s in styles {
+            let ratio = codepp_core::colour::contrast_ratio(s.fg_color, s.bg_color);
+            assert!(
+                ratio >= codepp_core::colour::MIN_TEXT_CONTRAST,
+                "{what}: {}: {:06X} on {:06X} is {ratio:.2}",
+                s.name,
+                s.fg_color,
+                s.bg_color
+            );
+        }
+    }
+
+    /// A light UDL in the light scheme, and a dark one in the dark
+    /// scheme, are shown as their authors made them.
+    #[test]
+    fn a_udl_in_its_own_scheme_is_unchanged() {
+        let styles = vec![
+            style("DEFAULT", 0, 0xFF_FF_FF),
+            style("KEYWORDS1", 0x00_00_FF, 0xFF_FF_FF),
+        ];
+        assert_eq!(adapt_udl_styles(&styles, false, &light_target()), styles);
+        let dark_styles = vec![style("DEFAULT", 0xEE_EE_EE, 0x10_10_10)];
+        assert_eq!(
+            adapt_udl_styles(&dark_styles, true, &dark_target()),
+            dark_styles
+        );
+    }
+
+    /// A light UDL in the dark scheme: its default pair becomes the
+    /// editor's, its other backgrounds turn dark, and every foreground
+    /// reads against its background, keeping its hue.
+    #[test]
+    fn a_light_udl_gets_a_readable_dark_variant() {
+        let styles = vec![
+            style("DEFAULT", 0, 0xFF_FF_FF),
+            style("KEYWORDS1", 0x00_00_80, 0xFF_FF_FF),
+            style("COMMENTS", 0x00_80_00, 0xFF_FF_FF),
+            style("DELIMITERS1", 0x80_00_00, 0xFF_FF_C0),
+            style("NUMBERS", 0, 0xFF_FF_FF),
+        ];
+        let out = adapt_udl_styles(&styles, false, &dark_target());
+        assert_eq!((out[0].fg_color, out[0].bg_color), (0xDC_DC_DC, 0x1E_1E_1E));
+        for s in &out {
+            assert!(
+                codepp_core::colour::is_dark(s.bg_color),
+                "{}: {:06X}",
+                s.name,
+                s.bg_color
+            );
+        }
+        assert_every_style_reads(&out, "dark variant");
+        // The keyword is still blue, the comment still green.
+        let (r, g, b) = codepp_core::colour::unpack(out[1].fg_color);
+        assert!(b > r && b > g, "{:06X}", out[1].fg_color);
+        let (r, g, b) = codepp_core::colour::unpack(out[2].fg_color);
+        assert!(g > r && g > b, "{:06X}", out[2].fg_color);
+        // The default foreground on the default background becomes the
+        // editor's default foreground.
+        assert_eq!(out[4].fg_color, 0xDC_DC_DC);
+        // Names are kept, in order.
+        let names =
+            |v: &[codepp_udl::UdlStyle]| v.iter().map(|s| s.name.clone()).collect::<Vec<_>>();
+        assert_eq!(names(&out), names(&styles));
+    }
+
+    /// A dark UDL in the light scheme gets a light variant the same way.
+    #[test]
+    fn a_dark_udl_gets_a_readable_light_variant() {
+        let styles = vec![
+            style("DEFAULT", 0xEE_EE_EE, 0x10_10_10),
+            style("KEYWORDS1", 0xFF_FF_80, 0x10_10_10),
+            style("DELIMITERS1", 0xA0_C0_FF, 0x30_20_00),
+        ];
+        let out = adapt_udl_styles(&styles, true, &light_target());
+        assert_eq!((out[0].fg_color, out[0].bg_color), (0, 0xFF_FF_FF));
+        for s in &out {
+            assert!(
+                !codepp_core::colour::is_dark(s.bg_color),
+                "{}: {:06X}",
+                s.name,
+                s.bg_color
+            );
+        }
+        assert_every_style_reads(&out, "light variant");
+    }
+
+    /// The preinstalled UDLs, shown in the dark scheme, read in every
+    /// style.
+    #[test]
+    fn the_preinstalled_udls_read_in_the_dark_scheme() {
+        let dir =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/preinstalled-udls");
+        let mut checked = 0;
+        for entry in std::fs::read_dir(&dir).expect("the preinstalled UDLs") {
+            let path = entry.unwrap().path();
+            if !path.to_string_lossy().ends_with(".udl.xml") {
+                continue;
+            }
+            let udl = codepp_udl::UdlDefinition::from_file(&path).expect("a preinstalled UDL");
+            let out = adapt_udl_styles(&udl.styles, udl.dark_mode_theme, &dark_target());
+            assert_every_style_reads(&out, &path.display().to_string());
+            checked += 1;
+        }
+        assert!(checked > 0, "no preinstalled UDL in {}", dir.display());
     }
 }

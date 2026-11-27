@@ -31,6 +31,9 @@
 //! Print settings mirror `ui_win32`: colours preserved but default-coloured
 //! backgrounds forced to white (`SC_PRINT_COLOURONWHITEDEFAULTBG`), no
 //! magnification, word-wrap on so long lines are not clipped at the margin.
+//! In the dark scheme every colour's lightness is turned over instead, on
+//! white (`SC_PRINT_INVERTLIGHT`), so its light text prints dark
+//! ([`print_colour_mode`]).
 
 use std::cell::RefCell;
 use std::ffi::c_void;
@@ -40,7 +43,7 @@ use codepp_editor::EditorHandle;
 use codepp_scintilla_sys::{
     sptr_t, Sci_CharacterRangeFull, Sci_RangeToFormatFull, Sci_Rectangle, SCI_FORMATRANGEFULL,
     SCI_GETLENGTH, SCI_SETPRINTCOLOURMODE, SCI_SETPRINTMAGNIFICATION, SCI_SETPRINTWRAPMODE,
-    SC_PRINT_COLOURONWHITEDEFAULTBG, SC_WRAP_WORD,
+    SC_PRINT_COLOURONWHITEDEFAULTBG, SC_PRINT_INVERTLIGHT, SC_WRAP_WORD,
 };
 use gtk::prelude::*;
 use gtk::PrintOperationAction;
@@ -164,6 +167,20 @@ fn run_operation(action: PrintOperationAction, error_title: &str, no_dialog: boo
     }
 }
 
+/// How Scintilla renders colour on paper in `scheme`. The light scheme
+/// prints each style in its own colour on white
+/// (`SC_PRINT_COLOURONWHITEDEFAULTBG`), as it always has. The dark scheme's
+/// light text would be faint on white, so it prints with every colour's
+/// lightness turned over, on white (`SC_PRINT_INVERTLIGHT`): dark text of
+/// the same hues, which is what Scintilla offers for a dark screen.
+fn print_colour_mode(scheme: codepp_shell::ColourScheme) -> usize {
+    let mode = match scheme {
+        codepp_shell::ColourScheme::Light => SC_PRINT_COLOURONWHITEDEFAULTBG,
+        codepp_shell::ColourScheme::Dark => SC_PRINT_INVERTLIGHT,
+    };
+    usize::try_from(mode).unwrap_or(0)
+}
+
 /// Build and fully wire a `GtkPrintOperation` for `editor`'s current
 /// document, ready to `run`. Extracted from [`show`] so the render path can
 /// be exercised by an EXPORT run in tests, without the interactive dialog.
@@ -177,7 +194,7 @@ fn build_print_operation(editor: EditorHandle, doc_name: &str) -> gtk::PrintOper
     let doc_len = editor.send(SCI_GETLENGTH, 0, 0);
     editor.send(
         SCI_SETPRINTCOLOURMODE,
-        SC_PRINT_COLOURONWHITEDEFAULTBG as usize,
+        print_colour_mode(crate::scheme::current()),
         0,
     );
     editor.send(SCI_SETPRINTMAGNIFICATION, 0, 0);
@@ -407,11 +424,29 @@ fn draw_header_inner(
 
 #[cfg(test)]
 pub(crate) mod tests {
-    use super::{build_print_operation, paginate, sptr_t, EditorHandle, MAX_PAGES};
+    use super::{
+        build_print_operation, paginate, print_colour_mode, sptr_t, EditorHandle, MAX_PAGES,
+        SC_PRINT_COLOURONWHITEDEFAULTBG, SC_PRINT_INVERTLIGHT,
+    };
     use codepp_scintilla_sys::{scintilla_new, SCI_INSERTTEXT};
     use gtk::glib::translate::FromGlibPtrNone;
     use gtk::prelude::*;
     use std::ffi::CString;
+
+    // --- colour (pure, no display) ------------------------------------
+
+    #[test]
+    fn the_dark_scheme_prints_with_its_lightness_turned_over() {
+        use codepp_shell::ColourScheme;
+        assert_eq!(
+            print_colour_mode(ColourScheme::Light),
+            SC_PRINT_COLOURONWHITEDEFAULTBG as usize
+        );
+        assert_eq!(
+            print_colour_mode(ColourScheme::Dark),
+            SC_PRINT_INVERTLIGHT as usize
+        );
+    }
 
     // --- pagination logic (pure, no display) -------------------------
 

@@ -21,10 +21,15 @@
 //! <styles>
 //!   <default font_name="Courier New" font_size="10"
 //!            bold="false" italic="false" underline="false"
-//!            fg="000000" bg="FFFFFF"/>
+//!            fg="000000" bg="FFFFFF" dark_fg="DCDCDC" dark_bg="1E1E1E"/>
 //!   <transparency enabled="false" percent="80"/>
 //! </styles>
 //! ```
+//!
+//! `fg` and `bg` are the light scheme's colours, `dark_fg` and `dark_bg`
+//! the dark scheme's; the two dark attributes are left out until the
+//! dark colours are set, and the defaults stand in for them
+//! ([`StyleEntry::colours`]). The font and its flags are shared.
 //!
 //! Colours are serialised as 6-hex-digit `RRGGBB` strings (not the
 //! Win32 `0xBBGGRR` `COLORREF` byte order) so the persisted file
@@ -35,6 +40,8 @@ use std::io::Write;
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
+
+pub use crate::colour::ColourScheme;
 
 /// One style row (today: only the `<default>` entry — future
 /// per-language style rows reuse this shape).
@@ -65,6 +72,111 @@ pub struct StyleEntry {
     /// Background colour as `RRGGBB` hex. Defaults to `FFFFFF`.
     #[serde(rename = "@bg", default = "default_bg")]
     pub bg: String,
+    /// Foreground colour in the dark scheme, as `RRGGBB` hex. `None`, the
+    /// default, means [`DARK_DEFAULT_FG`]. [`Self::fg`] and [`Self::bg`]
+    /// are the light scheme's; the font and its flags are shared by both.
+    #[serde(rename = "@dark_fg", default, skip_serializing_if = "Option::is_none")]
+    pub dark_fg: Option<String>,
+    /// Background colour in the dark scheme, as `RRGGBB` hex. `None`, the
+    /// default, means [`DARK_DEFAULT_BG`].
+    #[serde(rename = "@dark_bg", default, skip_serializing_if = "Option::is_none")]
+    pub dark_bg: Option<String>,
+}
+
+/// The light scheme's foreground when `styles.xml` names none, or one
+/// that does not parse: black.
+pub const LIGHT_DEFAULT_FG: u32 = 0x00_00_00;
+/// The light scheme's background when `styles.xml` names none, or one
+/// that does not parse: white.
+pub const LIGHT_DEFAULT_BG: u32 = 0xFF_FF_FF;
+/// The dark scheme's foreground when `styles.xml` names none, or one
+/// that does not parse.
+pub const DARK_DEFAULT_FG: u32 = 0xDC_DC_DC;
+/// The dark scheme's background when `styles.xml` names none, or one
+/// that does not parse.
+pub const DARK_DEFAULT_BG: u32 = 0x1E_1E_1E;
+
+impl StyleEntry {
+    /// The foreground and background of `scheme`, as `0xRRGGBB`.
+    ///
+    /// The light pair falls back to black on white, each colour on its
+    /// own, where it does not parse. The dark pair falls back the same way
+    /// to [`DARK_DEFAULT_FG`] on [`DARK_DEFAULT_BG`], and a dark pair whose
+    /// two colours are the same falls back whole, since it would leave the
+    /// editor unreadable. [`Styles::clamp`] drops such values from the
+    /// file; this keeps an entry that never went through it readable too.
+    #[must_use]
+    pub fn colours(&self, scheme: ColourScheme) -> (u32, u32) {
+        let parse = |s: &str| parse_rgb_hex(s).map(|(r, g, b)| crate::colour::pack(r, g, b));
+        match scheme {
+            ColourScheme::Light => (
+                parse(&self.fg).unwrap_or(LIGHT_DEFAULT_FG),
+                parse(&self.bg).unwrap_or(LIGHT_DEFAULT_BG),
+            ),
+            ColourScheme::Dark => {
+                let fg = self
+                    .dark_fg
+                    .as_deref()
+                    .and_then(parse)
+                    .unwrap_or(DARK_DEFAULT_FG);
+                let bg = self
+                    .dark_bg
+                    .as_deref()
+                    .and_then(parse)
+                    .unwrap_or(DARK_DEFAULT_BG);
+                if fg == bg {
+                    (DARK_DEFAULT_FG, DARK_DEFAULT_BG)
+                } else {
+                    (fg, bg)
+                }
+            }
+        }
+    }
+
+    /// Set the foreground and background of `scheme` from `0xRRGGBB`
+    /// values, leaving the other scheme's as they are.
+    pub fn set_colours(&mut self, scheme: ColourScheme, fg: u32, bg: u32) {
+        let hex = |rgb: u32| {
+            let (r, g, b) = crate::colour::unpack(rgb);
+            format_rgb_hex(r, g, b)
+        };
+        match scheme {
+            ColourScheme::Light => {
+                self.fg = hex(fg);
+                self.bg = hex(bg);
+            }
+            ColourScheme::Dark => {
+                self.dark_fg = Some(hex(fg));
+                self.dark_bg = Some(hex(bg));
+            }
+        }
+    }
+
+    /// Drop a dark colour that does not parse, and a dark pair whose two
+    /// colours are the same, with a warning; the scheme's default then
+    /// stands in ([`Self::colours`]).
+    fn clamp_dark_colours(&mut self) {
+        for (name, value) in [
+            ("dark_fg", &mut self.dark_fg),
+            ("dark_bg", &mut self.dark_bg),
+        ] {
+            if value.as_deref().is_some_and(|v| parse_rgb_hex(v).is_none()) {
+                tracing::warn!(
+                    attribute = name,
+                    "styles.xml: dark colour is not RRGGBB; using the default"
+                );
+                *value = None;
+            }
+        }
+        let parsed = |v: &Option<String>| v.as_deref().and_then(parse_rgb_hex);
+        if let (Some(fg), Some(bg)) = (parsed(&self.dark_fg), parsed(&self.dark_bg)) {
+            if fg == bg {
+                tracing::warn!("styles.xml: the dark pair is one colour; using the defaults");
+                self.dark_fg = None;
+                self.dark_bg = None;
+            }
+        }
+    }
 }
 
 impl Default for StyleEntry {
@@ -77,6 +189,8 @@ impl Default for StyleEntry {
             underline: false,
             fg: default_fg(),
             bg: default_bg(),
+            dark_fg: None,
+            dark_bg: None,
         }
     }
 }
@@ -199,7 +313,7 @@ impl Styles {
     /// Clamp fields that the load path bounds, so the *save* path can never
     /// produce a `styles.xml` the load path would then refuse, and so a
     /// hand-edited file can't drive the UI outside a field's documented
-    /// range. Two fields today:
+    /// range. Three fields today:
     ///
     ///   * The default entry's [`StyleEntry::font_name`], truncated to
     ///     [`FONT_NAME_MAX_LEN`] chars: a pathological system font family
@@ -215,12 +329,18 @@ impl Styles {
     ///     one remembering it (the two non-Windows backends previously
     ///     clamped to `0..=100`, ignoring the floor; DESIGN.md §7.4).
     ///
+    ///   * The default entry's dark colours ([`StyleEntry::dark_fg`],
+    ///     [`StyleEntry::dark_bg`]): one that does not parse is dropped, and
+    ///     so is a pair of two equal colours, which would leave the editor
+    ///     unreadable in the dark scheme. The scheme's default stands in.
+    ///
     /// Called by [`Self::load_from_xml`] (so a hand-edited file is bounded on
     /// read) and by the shell's `set_styles` (so the Configurator's output is
     /// bounded on write). Single-sources the rule for all three backends.
     pub fn clamp(&mut self) {
         if let Some(entry) = &mut self.default {
             truncate_font_name(&mut entry.font_name);
+            entry.clamp_dark_colours();
         }
         if let Some(t) = &mut self.transparency {
             let floored = t
@@ -516,12 +636,137 @@ mod tests {
                 underline: true,
                 fg: "1E1E1E".into(),
                 bg: "F5F5F5".into(),
+                dark_fg: Some("E0E0E0".into()),
+                dark_bg: Some("202124".into()),
             }),
             transparency: None,
         };
         s.save_to_xml(&path).unwrap();
         let loaded = Styles::load_from_xml(&path).unwrap();
         assert_eq!(s, loaded);
+    }
+
+    #[test]
+    fn dark_colours_are_left_out_until_they_are_set() {
+        let (_dir, path) = temp_path();
+        let s = Styles {
+            default: Some(StyleEntry::default()),
+            transparency: None,
+        };
+        s.save_to_xml(&path).unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(!text.contains("dark_"), "{text}");
+        // A file written before the dark colours existed reads as it did.
+        assert_eq!(Styles::load_from_xml(&path).unwrap(), s);
+    }
+
+    #[test]
+    fn each_scheme_has_its_own_colours_and_its_own_defaults() {
+        let mut e = StyleEntry::default();
+        assert_eq!(
+            e.colours(ColourScheme::Light),
+            (LIGHT_DEFAULT_FG, LIGHT_DEFAULT_BG)
+        );
+        assert_eq!(
+            e.colours(ColourScheme::Dark),
+            (DARK_DEFAULT_FG, DARK_DEFAULT_BG)
+        );
+        e.set_colours(ColourScheme::Dark, 0xE0_E0_E0, 0x20_21_24);
+        assert_eq!(e.dark_fg.as_deref(), Some("E0E0E0"));
+        assert_eq!(e.colours(ColourScheme::Dark), (0xE0_E0_E0, 0x20_21_24));
+        // Setting the dark pair leaves the light one alone, and back.
+        assert_eq!(
+            e.colours(ColourScheme::Light),
+            (LIGHT_DEFAULT_FG, LIGHT_DEFAULT_BG)
+        );
+        e.set_colours(ColourScheme::Light, 0x11_22_33, 0xF0_F0_F0);
+        assert_eq!((e.fg.as_str(), e.bg.as_str()), ("112233", "F0F0F0"));
+        assert_eq!(e.colours(ColourScheme::Dark), (0xE0_E0_E0, 0x20_21_24));
+    }
+
+    #[test]
+    fn a_dark_pair_of_one_colour_or_that_does_not_parse_falls_back() {
+        // One colour, written two ways: no text could be read on it.
+        let e = StyleEntry {
+            dark_fg: Some("123456".into()),
+            dark_bg: Some("#123456".into()),
+            ..StyleEntry::default()
+        };
+        assert_eq!(
+            e.colours(ColourScheme::Dark),
+            (DARK_DEFAULT_FG, DARK_DEFAULT_BG)
+        );
+        // A colour that does not parse falls back on its own.
+        let e = StyleEntry {
+            dark_fg: Some("nope".into()),
+            dark_bg: Some("101010".into()),
+            ..StyleEntry::default()
+        };
+        assert_eq!(e.colours(ColourScheme::Dark), (DARK_DEFAULT_FG, 0x10_10_10));
+    }
+
+    #[test]
+    fn clamp_drops_dark_colours_that_do_not_parse_or_cannot_be_read() {
+        let mut s = Styles {
+            default: Some(StyleEntry {
+                dark_fg: Some("zzzzzz".into()),
+                dark_bg: Some("101010".into()),
+                ..StyleEntry::default()
+            }),
+            transparency: None,
+        };
+        s.clamp();
+        let e = s.default.as_ref().unwrap();
+        assert_eq!(
+            (e.dark_fg.as_deref(), e.dark_bg.as_deref()),
+            (None, Some("101010"))
+        );
+        let mut s = Styles {
+            default: Some(StyleEntry {
+                dark_fg: Some("abcdef".into()),
+                dark_bg: Some("ABCDEF".into()),
+                ..StyleEntry::default()
+            }),
+            transparency: None,
+        };
+        s.clamp();
+        let e = s.default.as_ref().unwrap();
+        assert_eq!((e.dark_fg.as_deref(), e.dark_bg.as_deref()), (None, None));
+        // Read from a file, the same rule.
+        let (_dir, path) = temp_path();
+        std::fs::write(
+            &path,
+            r#"<styles><default dark_fg="0A0A0A" dark_bg="0a0a0a"/></styles>"#,
+        )
+        .unwrap();
+        let e = Styles::load_from_xml(&path).unwrap().effective_default();
+        assert_eq!((e.dark_fg, e.dark_bg), (None, None));
+    }
+
+    #[test]
+    fn the_longest_style_file_stays_under_the_cap() {
+        let (_dir, path) = temp_path();
+        let s = Styles {
+            default: Some(StyleEntry {
+                font_name: "\u{FFFD}".repeat(FONT_NAME_MAX_LEN),
+                font_size: u16::MAX,
+                bold: true,
+                italic: true,
+                underline: true,
+                fg: "FFFFFF".into(),
+                bg: "FFFFFF".into(),
+                dark_fg: Some("FFFFFF".into()),
+                dark_bg: Some("000000".into()),
+            }),
+            transparency: Some(Transparency {
+                enabled: true,
+                percent: 100,
+            }),
+        };
+        s.save_to_xml(&path).unwrap();
+        let len = std::fs::metadata(&path).unwrap().len();
+        assert!(len <= STYLES_XML_MAX_BYTES, "{len} bytes");
+        assert_eq!(Styles::load_from_xml(&path).unwrap(), s);
     }
 
     /// A font name with a tab or a line break comes back as itself:

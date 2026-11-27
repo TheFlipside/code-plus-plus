@@ -274,6 +274,11 @@ fn read_styles(c: &Controls, prior: &StyleEntry) -> Styles {
             underline: c.underline.state() != 0,
             fg: well_to_hex(&c.fg, &prior.fg),
             bg: well_to_hex(&c.bg, &prior.bg),
+            // The dark pair is kept as it was: Cocoa draws the light scheme
+            // only so far, and the dialog edits the light pair (DESIGN.md
+            // §7.4, the dark-mode entry).
+            dark_fg: prior.dark_fg.clone(),
+            dark_bg: prior.dark_bg.clone(),
         }),
         transparency: Some(Transparency {
             enabled: c.transparency.state() != 0,
