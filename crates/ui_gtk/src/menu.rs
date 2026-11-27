@@ -105,10 +105,14 @@ pub fn build() -> MenuBarParts {
 fn build_right_shortcuts() -> gtk::MenuBar {
     let bar = gtk::MenuBar::new();
 
-    // ＋ new untitled. U+FF0B FULLWIDTH PLUS SIGN, as on Win32, so the glyph
-    // sits at the menu font's full em height rather than ASCII '+'s
-    // x-height. `with_label` (not `with_mnemonic`) so the glyph is literal.
-    let new_item = gtk::MenuItem::with_label("\u{FF0B}");
+    // + new untitled: ASCII '+' at 120%, so it looks about as tall as
+    // the `X` beside it. Win32 draws U+FF0B FULLWIDTH PLUS SIGN for that, but few
+    // Linux UI fonts have it, and fontconfig then maps a CJK fallback font
+    // for this one glyph: 2.5 MB PSS on a Cinnamon desktop (DESIGN.md §7.4).
+    let new_item = gtk::MenuItem::new();
+    let plus = gtk::Label::new(None);
+    plus.set_markup("<span size=\"120%\">+</span>");
+    new_item.add(&plus);
     new_item.set_tooltip_text(Some("New"));
     new_item
         .connect_activate(|_| crate::at_callback_boundary("menu:new_item:activate", (), on_new));
